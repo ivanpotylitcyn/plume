@@ -1,0 +1,27 @@
+# Локальная БД для разработки. MySQL 8.0.25 — как на целевом хостинге (reg.ru).
+# Прод/деплой — вне волны 1; это только для локального «посмотреть в UI».
+services:
+  db:
+    image: mysql:8.0.25
+    # У образа 8.0.25 нет arm64-манифеста — на Apple Silicon запускаем amd64 под
+    # эмуляцией (Rosetta), чтобы сохранить ровно ту версию, что на хостинге.
+    platform: linux/amd64
+    container_name: plume-mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: plume
+      MYSQL_USER: plume
+      MYSQL_PASSWORD: plume
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+    volumes:
+      - plume_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  plume_mysql_data:
