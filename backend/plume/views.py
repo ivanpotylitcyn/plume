@@ -1,12 +1,47 @@
-"""API волны 1 — только read-only проекции движка (ввод данных идёт через admin).
+"""API движка plume.
 
-Проекции отдаём как есть из engine.py; редактирование — в документах, не в линзе.
+Волна 1 — read-only проекции (дефицит, карта остатков, экран изделия).
+Волна 2 — записываемое ядро: кокпит комплектации (пайка = промоушн призрачной
+строки в `KittingLine`, автосейв qty, закрытие/переоткрытие). Правила мутаций
+живут в `engine.py`; вьюхи только разбирают запрос и маппят ошибки в 400.
 """
+from decimal import Decimal, InvalidOperation
+
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import status as http
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import engine, models
+
+
+def _dec(value):
+    """Разобрать количество в Decimal (через str — без float-погрешности)."""
+    if value is None or value == '':
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError):
+        return None
+
+
+def _actor(request):
+    """Автор документа: залогиненный пользователь или дефолтный суперюзер.
+
+    Логин-экран — отдельная волна; во MVP пишем от суперюзера, чтобы кокпит
+    работал без формы входа. Авторство остаётся «на документах».
+    """
+    if request.user and request.user.is_authenticated:
+        return request.user
+    User = get_user_model()
+    return User.objects.filter(is_superuser=True).order_by('id').first()
+
+
+def _bad(exc):
+    return Response({'detail': str(exc)}, status=http.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])
@@ -70,3 +105,97 @@ def item_detail(request, pk):
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'stock_map': engine.stock_map(item),
     })
+
+
+# --------------------------------------------------------------------------- #
+#  Кокпит комплектации (волна 2 — записываемое ядро)
+# --------------------------------------------------------------------------- #
+def _kitting_row(k):
+    """Строка списка комплектаций для дерева навигации."""
+    return {
+        'id': k.id, 'project_code': k.project.code,
+        'target_code': k.target_item.code, 'target_name': k.target_item.name,
+        'qty': k.qty, 'status': k.status, 'date': k.date,
+    }
+
+
+@api_view(['GET', 'POST'])
+def kittings(request):
+    """Список комплектаций (дерево) / создание новой (призрачная строка)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+            target = models.Item.objects.get(pk=d['target_item_id'])
+            k = models.Kitting.objects.create(
+                project=project, target_item=target, user=_actor(request),
+                qty=d.get('qty') or 1, date=timezone.localdate(),
+                status=models.Kitting.Status.WIP)
+        except (KeyError, models.Project.DoesNotExist, models.Item.DoesNotExist) as e:
+            return _bad(f'Нужны project_id и target_item_id ({e}).')
+        return Response(engine.kitting_cockpit(k), status=http.HTTP_201_CREATED)
+
+    rows = [_kitting_row(k) for k in models.Kitting.objects
+            .select_related('project', 'target_item').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET'])
+def kitting_detail(request, pk):
+    """Кокпит комплектации: BOM 1 уровень, реальные + призрачные строки."""
+    k = get_object_or_404(models.Kitting, pk=pk)
+    return Response(engine.kitting_cockpit(k))
+
+
+@api_view(['POST'])
+def kitting_lines(request, pk):
+    """Пайка: промоушн призрачной строки в реальную `KittingLine`."""
+    k = get_object_or_404(models.Kitting, pk=pk)
+    d = request.data
+    try:
+        component = models.Item.objects.get(pk=d['component_id'])
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        engine.add_kitting_line(k, component, lot, _dec(d.get('qty')),
+                                date=timezone.localdate())
+    except (KeyError, models.Item.DoesNotExist, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны component_id, lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.kitting_cockpit(k), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def kitting_line_detail(request, pk):
+    """Автосейв количества пайки (PATCH) / удаление строки (DELETE)."""
+    line = get_object_or_404(models.KittingLine.objects.select_related('kitting', 'lot'), pk=pk)
+    kitting = line.kitting
+    try:
+        if request.method == 'DELETE':
+            engine.remove_kitting_line(line)
+        else:
+            engine.update_kitting_line(line, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.kitting_cockpit(kitting))
+
+
+@api_view(['POST'])
+def kitting_close(request, pk):
+    """Закрыть комплектацию — рождается лот-прибор (`+RECEIPT`)."""
+    k = get_object_or_404(models.Kitting, pk=pk)
+    try:
+        engine.close_kitting(k)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.kitting_cockpit(k))
+
+
+@api_view(['POST'])
+def kitting_reopen(request, pk):
+    """Переоткрыть комплектацию (мягкий замок, guard по потомкам)."""
+    k = get_object_or_404(models.Kitting, pk=pk)
+    try:
+        engine.reopen_kitting(k)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.kitting_cockpit(k))

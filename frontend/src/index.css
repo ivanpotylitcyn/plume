@@ -153,3 +153,41 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .empty { color: var(--fg-dim); padding: 40px 0; text-align: center; }
 a.link { color: var(--st-info); cursor: pointer; text-decoration: none; }
 a.link:hover { text-decoration: underline; }
+
+/* ---- кокпит комплектации (волна 2 — записываемое ядро) ---- */
+.tree-item.new .code { color: var(--st-info); }
+
+.kit-actions { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; }
+.btn { background: var(--bg-hover); color: var(--fg); border: 1px solid var(--border);
+  padding: 4px 12px; border-radius: 3px; cursor: pointer; font-family: var(--font-base);
+  font-size: 12px; }
+.btn:hover:not(:disabled) { border-color: var(--fg-dim); color: var(--fg-bright); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.sm { padding: 1px 8px; font-size: 11px; }
+
+.born { color: var(--fg-dim); margin: 6px 0 4px; font-size: 12px; }
+.born .seg { color: var(--st-ok); margin-left: 8px; }
+
+.kit-comp { margin: 14px 0 4px; }
+.kit-comp-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.kit-comp-h .name { font-weight: 600; color: var(--fg-bright); }
+.kit-comp-h .triple { color: var(--fg-dim); font-size: 12px; }
+
+/* призрачная строка — приглушённая, покрашена полосой слева как обычная строка */
+tr.row.ghost td { color: var(--fg-dim); }
+tr.row.ghost .glyph { opacity: 1; }
+
+/* поля прямого редактирования (автосейв) — компактные, моно для чисел */
+.qty-in { width: 60px; background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 4px; font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; text-align: right; font-size: 12px; }
+.qty-in:focus { outline: none; border-color: var(--st-info); }
+.qty-in:disabled { opacity: .5; }
+.lot-sel { background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 4px; font-family: var(--font-mono); font-size: 12px; max-width: 320px; }
+.lot-sel:focus { outline: none; border-color: var(--st-info); }
+
+.x { background: none; border: none; color: var(--fg-dim); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 0 4px; }
+.x:hover:not(:disabled) { color: var(--st-order); }
+.x:disabled { opacity: .4; cursor: default; }

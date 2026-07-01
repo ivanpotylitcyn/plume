@@ -5,6 +5,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from plume import models
@@ -193,3 +194,132 @@ class StockMapTests(EngineTestBase):
         lot = self.receipt_lot(item, self.prj, 0)
         m = engine.stock_map(item)
         self.assertEqual(m['rows'], [])
+
+
+class KittingCockpitTests(EngineTestBase):
+    """Волна 2: кокпит комплектации — призрачные строки, пайка, закрытие."""
+
+    def setUp(self):
+        super().setUp()
+        self.device = self.make_item('DEV', manufactured=True,
+                                     kind=models.Item.Kind.DEVICE)
+        self.case = self.make_item('CASE')
+        self.res = self.make_item('RES')
+        # прибор из 1 корпуса и 2 резисторов
+        models.BomLine.objects.create(parent=self.device, component=self.case, qty=D(1))
+        models.BomLine.objects.create(parent=self.device, component=self.res, qty=D(2))
+
+    def make_kitting(self, qty=2):
+        return models.Kitting.objects.create(
+            project=self.prj, target_item=self.device, user=self.user,
+            qty=D(qty), status=models.Kitting.Status.WIP)
+
+    def test_ghost_rows_before_piercing(self):
+        # склад пуст → обе призрачные строки красные (▲ to_order)
+        k = self.make_kitting(qty=2)
+        c = engine.kitting_cockpit(k)
+        rows = {r['component_code']: r for r in c['rows']}
+        self.assertEqual(rows['CASE']['need'], D(2))     # 1×2
+        self.assertEqual(rows['RES']['need'], D(4))      # 2×2
+        self.assertEqual(rows['CASE']['pierced'], D(0))
+        self.assertEqual(rows['CASE']['ghost']['status'], 'to_order')
+        self.assertEqual(c['cockpit_status'], 'to_order')
+
+    def test_ghost_available_when_stock_exists(self):
+        # есть лот корпуса → призрачная строка зелёная + лот-кандидат
+        self.receipt_lot(self.case, self.prj, 10)
+        k = self.make_kitting(qty=2)
+        c = engine.kitting_cockpit(k)
+        row = {r['component_code']: r for r in c['rows']}['CASE']
+        self.assertEqual(row['ghost']['status'], 'available')
+        self.assertEqual(len(row['ghost']['candidate_lots']), 1)
+        self.assertEqual(row['ghost']['candidate_lots'][0]['live_qty'], D(10))
+
+    def test_pierce_creates_line_and_issue(self):
+        lot = self.receipt_lot(self.case, self.prj, 10)
+        k = self.make_kitting(qty=2)
+        engine.add_kitting_line(k, self.case, lot, D(2))
+        # лот просел на 2 (ISSUE), строка BOM закрыта
+        self.assertEqual(engine.lot_live_qty(lot), D(8))
+        c = engine.kitting_cockpit(k)
+        row = {r['component_code']: r for r in c['rows']}['CASE']
+        self.assertEqual(row['pierced'], D(2))
+        self.assertEqual(row['remaining'], D(0))
+        self.assertIsNone(row['ghost'])          # покрыто — призрака нет
+        self.assertEqual(len(row['real_lines']), 1)
+
+    def test_pierce_rejects_foreign_project_lot(self):
+        other = models.Project.objects.create(code='P2', name='Другой')
+        lot = self.receipt_lot(self.case, other, 10)
+        k = self.make_kitting(qty=1)
+        with self.assertRaises(ValidationError):
+            engine.add_kitting_line(k, self.case, lot, D(1))
+
+    def test_pierce_rejects_wrong_component_lot(self):
+        lot = self.receipt_lot(self.res, self.prj, 10)   # лот резистора
+        k = self.make_kitting(qty=1)
+        with self.assertRaises(ValidationError):
+            engine.add_kitting_line(k, self.case, lot, D(1))   # ждём корпус
+
+    def test_update_line_qty_rebuilds(self):
+        lot = self.receipt_lot(self.case, self.prj, 10)
+        k = self.make_kitting(qty=2)
+        line = engine.add_kitting_line(k, self.case, lot, D(2))
+        engine.update_kitting_line(line, D(5))
+        self.assertEqual(engine.lot_live_qty(lot), D(5))
+
+    def test_remove_line_restores_qty(self):
+        lot = self.receipt_lot(self.case, self.prj, 10)
+        k = self.make_kitting(qty=2)
+        line = engine.add_kitting_line(k, self.case, lot, D(3))
+        self.assertEqual(engine.lot_live_qty(lot), D(7))
+        engine.remove_kitting_line(line)
+        self.assertEqual(engine.lot_live_qty(lot), D(10))
+
+    def test_close_births_device_lot_with_cost_snapshot(self):
+        case_lot = self.receipt_lot(self.case, self.prj, 10)
+        case_lot.unit_cost = D(800); case_lot.save()
+        res_lot = self.receipt_lot(self.res, self.prj, 100)
+        res_lot.unit_cost = D(1); res_lot.save()
+        k = self.make_kitting(qty=2)
+        engine.add_kitting_line(k, self.case, case_lot, D(2))   # 2×800
+        engine.add_kitting_line(k, self.res, res_lot, D(4))     # 4×1
+        lot = engine.close_kitting(k)
+        k.refresh_from_db()
+        self.assertEqual(k.status, models.Kitting.Status.CLOSED)
+        self.assertEqual(lot.qty, D(2))
+        # (2×800 + 4×1) / 2 = 802
+        self.assertEqual(lot.unit_cost, D('802.00'))
+        self.assertEqual(engine.lot_live_qty(lot), D(2))
+
+    def test_close_only_wip(self):
+        k = self.make_kitting(qty=1)
+        engine.close_kitting(k)
+        with self.assertRaises(ValidationError):
+            engine.close_kitting(k)
+
+    def test_pierce_blocked_after_close(self):
+        lot = self.receipt_lot(self.case, self.prj, 10)
+        k = self.make_kitting(qty=1)
+        engine.close_kitting(k)
+        with self.assertRaises(ValidationError):
+            engine.add_kitting_line(k, self.case, lot, D(1))
+
+    def test_reopen_restores_wip_and_removes_lot(self):
+        k = self.make_kitting(qty=1)
+        lot = engine.close_kitting(k)
+        engine.reopen_kitting(k)
+        k.refresh_from_db()
+        self.assertEqual(k.status, models.Kitting.Status.WIP)
+        self.assertFalse(models.Lot.objects.filter(pk=lot.pk).exists())
+
+    def test_reopen_blocked_when_device_consumed(self):
+        k = self.make_kitting(qty=1)
+        device_lot = engine.close_kitting(k)
+        # прибор передан заказчику → потомок вниз, переоткрытие запрещено
+        transfer = models.Transfer.objects.create(
+            project=self.prj, user=self.user, date='2026-06-01', number='TN-1')
+        models.TransferLine.objects.create(transfer=transfer, lot=device_lot, qty=D(1))
+        engine.rebuild_movements(device_lot)
+        with self.assertRaises(ValidationError):
+            engine.reopen_kitting(k)

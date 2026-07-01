@@ -42,10 +42,65 @@ export interface ItemDetail {
   stock_map: StockMap
 }
 
+// ── Кокпит комплектации (волна 2 — записываемое ядро) ──
+export interface KittingRow {
+  id: number; project_code: string; target_code: string; target_name: string
+  qty: number; status: string; date: string | null
+}
+export interface CandidateLot {
+  lot_id: number; live_qty: number; unit_cost: number; serial_number: string
+  origin: string; received_name: string
+}
+export interface RealLine {
+  id: number; lot_id: number; lot_label: string; qty: number; date: string | null
+}
+export interface Ghost {
+  status: Status; have: number; on_order: number; to_order: number
+  candidate_lots: CandidateLot[]
+}
+export interface CockpitRow {
+  component_id: number; component_code: string; component_name: string; uom: string
+  need: number; pierced: number; remaining: number
+  real_lines: RealLine[]; ghost: Ghost | null
+}
+export interface BornLot {
+  id: number; qty: number; unit_cost: number; serial_number: string
+}
+export interface Cockpit {
+  id: number; status: string; project_id: number; project_code: string
+  target_id: number; target_code: string; target_name: string; uom: string
+  qty: number; date: string | null; cockpit_status: Status
+  rows: CockpitRow[]; born_lots: BornLot[]
+}
+
+function getCookie(name: string): string | null {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+  return m ? decodeURIComponent(m[2]) : null
+}
+
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { Accept: 'application/json' } })
   if (!r.ok) throw new Error(`${r.status} ${url}`)
   return r.json()
+}
+
+// Мутации: JSON + CSRF-токен из cookie (если есть). В dev фронт анонимен —
+// DRF не форсит CSRF; на проде (сессия admin) токен подхватится автоматически.
+async function send<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const csrf = getCookie('csrftoken')
+  if (csrf) headers['X-CSRFToken'] = csrf
+  const r = await fetch(url, {
+    method, headers, credentials: 'same-origin',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!r.ok) {
+    let msg = `${r.status} ${url}`
+    try { const j = await r.json(); if (j.detail) msg = j.detail } catch { /* no body */ }
+    throw new Error(msg)
+  }
+  return r.status === 204 ? (undefined as T) : r.json()
 }
 
 export const api = {
@@ -53,4 +108,16 @@ export const api = {
   items: () => get<ItemRow[]>('/api/items/'),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
+
+  kittings: () => get<KittingRow[]>('/api/kittings/'),
+  kitting: (id: number) => get<Cockpit>(`/api/kittings/${id}/`),
+  createKitting: (b: { project_id: number; target_item_id: number; qty: number }) =>
+    send<Cockpit>('POST', '/api/kittings/', b),
+  pierce: (id: number, b: { component_id: number; lot_id: number; qty: number }) =>
+    send<Cockpit>('POST', `/api/kittings/${id}/lines/`, b),
+  updateLine: (id: number, qty: number) =>
+    send<Cockpit>('PATCH', `/api/kitting-lines/${id}/`, { qty }),
+  deleteLine: (id: number) => send<Cockpit>('DELETE', `/api/kitting-lines/${id}/`),
+  closeKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/close/`),
+  reopenKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/reopen/`),
 }

@@ -1,18 +1,25 @@
-"""Движок-СППР plume — волна 1.
+"""Движок-СППР plume.
 
 Чистые функции-проекции над документами (один движок на всю линзу). Ничего не
 кэшируем: всё вычислимое держим свежим (данных мало, без Celery).
 
-Состав волны 1:
+Волна 1:
 - `rebuild_movements(lot)` — пересборка StockMovement партии из её документов.
 - `lot_live_qty` / `item_available` — живые остатки.
 - `project_deficit(project)` — дефицит проекта (надо − склад − заказано),
   1 уровень BOM, тройной разбор ✓/●/▲, worst-of цвет.
 - `stock_map(item)` — карта остатков Item по всем складам-проектам (north-star).
 
-Следующие волны: pegging, командный свод, бюджет/экономия, призрачный кокпит.
+Волна 2 (записываемое ядро + кокпит Kitting):
+- `kitting_cockpit(kitting)` — проекция кокпита сборки: BOM 1 уровень, реальные
+  (пробитые) строки + призрачные строки, покрашенные по доступности + лоты-кандидаты.
+- `close_kitting` / `reopen_kitting` — рождение/снятие лота-прибора (мягкий замок).
+
+Следующие волны: pegging, командный свод, бюджет/экономия.
 """
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+
+from django.core.exceptions import ValidationError
 from django.db.models import Sum
 
 from . import models
@@ -278,3 +285,167 @@ def stock_map(item):
         'uom': item.uom,
         'rows': rows,
     }
+
+
+# --------------------------------------------------------------------------- #
+#  Кокпит комплектации (волна 2): реальные строки + призрачные строки
+# --------------------------------------------------------------------------- #
+def available_lots(item, project):
+    """Лоты item в проекте с живым остатком > 0 — кандидаты под пайку."""
+    result = []
+    for lot in models.Lot.objects.filter(item=item, project=project).select_related('item'):
+        live = lot_live_qty(lot)
+        if live > 0:
+            result.append({
+                'lot_id': lot.id, 'live_qty': live, 'unit_cost': lot.unit_cost,
+                'serial_number': lot.serial_number,
+                'origin': lot.origin_kind, 'received_name': lot.received_name,
+            })
+    return result
+
+
+def kitting_cockpit(kitting):
+    """Проекция кокпита сборки (1 уровень BOM целевого прибора).
+
+    Каждая строка BOM: `надо = bom.qty × kitting.qty`, пробитые `KittingLine`
+    (реальные зелёные строки) и остаток → **призрачная строка**, покрашенная по
+    доступности компонента в проекте (`_coverage`, тот же словарь ✓/●/▲) с лотами-
+    кандидатами под пайку. Ничего не хранит — чистая проекция.
+    """
+    target = kitting.target_item
+    project = kitting.project
+    rows = []
+    statuses = []
+    is_wip = kitting.status == models.Kitting.Status.WIP
+    for bl in target.bom_lines.select_related('component'):
+        component = bl.component
+        need = bl.qty * kitting.qty
+        real_lines = []
+        pierced = ZERO
+        for kl in kitting.lines.filter(component=component).select_related('lot'):
+            pierced += kl.qty
+            real_lines.append({
+                'id': kl.id, 'lot_id': kl.lot_id,
+                'lot_label': f'#{kl.lot_id} {kl.lot.received_name or component.code}',
+                'qty': kl.qty, 'date': kl.date,
+            })
+        remaining = max(ZERO, need - pierced)
+        ghost = None
+        if remaining > 0 and is_wip:
+            cov = _coverage(remaining, item_available(component, project),
+                            item_on_order(component, project))
+            ghost = {
+                'status': cov['status'], 'have': cov['have'],
+                'on_order': cov['on_order'], 'to_order': cov['to_order'],
+                'candidate_lots': available_lots(component, project),
+            }
+            statuses.append(cov['status'])
+        rows.append({
+            'component_id': component.id, 'component_code': component.code,
+            'component_name': component.name, 'uom': component.uom,
+            'need': need, 'pierced': pierced, 'remaining': remaining,
+            'real_lines': real_lines, 'ghost': ghost,
+        })
+    born_lots = [
+        {'id': lot.id, 'qty': lot.qty, 'unit_cost': lot.unit_cost,
+         'serial_number': lot.serial_number}
+        for lot in kitting.lots.all()
+    ]
+    return {
+        'id': kitting.id, 'status': kitting.status,
+        'project_id': project.id, 'project_code': project.code,
+        'target_id': target.id, 'target_code': target.code,
+        'target_name': target.name, 'uom': target.uom,
+        'qty': kitting.qty, 'date': kitting.date,
+        'cockpit_status': _worst_of(statuses),   # worst-of призрачных строк
+        'rows': rows,
+        'born_lots': born_lots,   # рождённые лоты-приборы (после закрытия)
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  Мутации кокпита (единый источник правил + пересборка проекции склада)
+# --------------------------------------------------------------------------- #
+def _require_wip(kitting):
+    if kitting.status != models.Kitting.Status.WIP:
+        raise ValidationError('Правка возможна только в комплектации «в работе».')
+
+
+def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
+    """Пайка: промоушн призрачной строки в реальную `KittingLine` + `-ISSUE`."""
+    _require_wip(kitting)
+    if lot.item_id != component.id:
+        raise ValidationError('Лот не соответствует компоненту строки.')
+    if lot.project_id != kitting.project_id:
+        raise ValidationError('Лот из другого проекта (заём — отдельным требованием).')
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество пайки должно быть положительным.')
+    line = models.KittingLine.objects.create(
+        kitting=kitting, component=component, lot=lot,
+        location=location or _main_location(), qty=qty, date=date,
+    )
+    rebuild_movements(lot)
+    return line
+
+
+def update_kitting_line(line, qty):
+    """Автосейв количества пайки (правка провизорной строки до замка)."""
+    _require_wip(line.kitting)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество пайки должно быть положительным.')
+    line.qty = qty
+    line.save(update_fields=['qty'])
+    rebuild_movements(line.lot)
+
+
+def remove_kitting_line(line):
+    """Удалить пробитую строку (коррекция до замка) + пересобрать движения лота."""
+    _require_wip(line.kitting)
+    lot = line.lot
+    line.delete()
+    rebuild_movements(lot)
+
+
+def _device_unit_cost(kitting):
+    """Снимок себестоимости прибора на закрытии = Σ(qty×цена лотов) / кол-во."""
+    total = ZERO
+    for kl in kitting.lines.select_related('lot'):
+        total += kl.qty * kl.lot.unit_cost
+    if kitting.qty and kitting.qty != ZERO:
+        return (total / kitting.qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    return ZERO
+
+
+def close_kitting(kitting):
+    """Закрыть комплектацию: рождается лот-прибор (`+RECEIPT`), `wip → closed`."""
+    _require_wip(kitting)
+    if kitting.lots.exists():
+        raise ValidationError('У комплектации уже есть рождённый лот-прибор.')
+    lot = models.Lot.objects.create(
+        item=kitting.target_item, project=kitting.project, kitting=kitting,
+        qty=kitting.qty, unit_cost=_device_unit_cost(kitting),
+    )
+    kitting.status = models.Kitting.Status.CLOSED
+    kitting.save(update_fields=['status'])
+    rebuild_movements(lot)
+    return lot
+
+
+def reopen_kitting(kitting):
+    """Переоткрыть закрытую комплектацию: снять лот-прибор, `closed → wip`.
+
+    Guard: лот-прибор не должен быть потреблён/передан/отпочкован ниже.
+    """
+    if kitting.status != models.Kitting.Status.CLOSED:
+        raise ValidationError('Переоткрыть можно только закрытую комплектацию.')
+    for lot in kitting.lots.all():
+        if (lot.movements.filter(qty__lt=0).exists() or lot.successors.exists()
+                or lot.transfer_lines.exists() or lot.kitting_lines.exists()
+                or lot.writeoff_lines.exists() or lot.requisition_lines.exists()):
+            raise ValidationError(
+                'Лот-прибор уже потреблён/передан ниже — переоткрытие заблокировано.')
+    for lot in kitting.lots.all():
+        lot.movements.all().delete()
+        lot.delete()
+    kitting.status = models.Kitting.Status.WIP
+    kitting.save(update_fields=['status'])

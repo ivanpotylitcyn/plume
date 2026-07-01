@@ -1,0 +1,179 @@
+// Витрина волны 2: кокпит комплектации (записываемое ядро).
+// BOM целевого прибора (1 уровень): реальные (пробитые) строки — зелёные,
+// автосейв qty; остаток → призрачная строка, покрашенная по доступности, с
+// пикером лота. Пайка = промоушн призрака в реальную KittingLine (+ ISSUE).
+import { useEffect, useState } from 'react'
+import { api, type Cockpit, type CockpitRow } from './api'
+import { Glyph, Segment, num } from './status'
+
+const KIT_STATUS: Record<string, string> = {
+  wip: 'в работе', closed: 'закрыт', cancelled: 'отменён',
+}
+
+export function KittingView({ kittingId, openItem, onChanged }:
+  { kittingId: number; openItem: (id: number) => void; onChanged: () => void }) {
+  const [c, setC] = useState<Cockpit | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setC(null); setErr(null)
+    api.kitting(kittingId).then(setC).catch(e => setErr(String(e)))
+  }, [kittingId])
+
+  // Обёртка мутации: заменяет кокпит ответом сервера, дёргает обновление дерева.
+  const run = (p: Promise<Cockpit>) => {
+    setBusy(true); setErr(null)
+    p.then(next => { setC(next); onChanged() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  if (err && !c) return <div className="empty">Ошибка: {err}</div>
+  if (!c) return <div className="empty">Загрузка…</div>
+
+  const wip = c.status === 'wip'
+  return (
+    <div>
+      <h1 className="title">
+        <Glyph status={c.cockpit_status} />{' '}
+        <span className="pn">{c.target_code}</span>{' '}
+        <span className="lit">— {c.target_name}</span>
+      </h1>
+      <div className="subtitle">
+        Кокпит комплектации · проект {c.project_code} · образцов {num(c.qty)} ·{' '}
+        <span className={wip ? 'g-on_order' : 'g-available'}>{KIT_STATUS[c.status] ?? c.status}</span>
+      </div>
+
+      <div className="kit-actions">
+        {wip
+          ? <button className="btn" disabled={busy}
+              onClick={() => run(api.closeKitting(c.id))}>Закрыть (родить прибор)</button>
+          : <button className="btn" disabled={busy}
+              onClick={() => run(api.reopenKitting(c.id))}>Переоткрыть</button>}
+        {busy && <span className="hint">сохраняю…</span>}
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+
+      {c.born_lots.length > 0 && (
+        <div className="born">
+          Рождён лот-прибор:{' '}
+          {c.born_lots.map(l => (
+            <span key={l.id} className="seg">#{l.id} ×{num(l.qty)} · {num(l.unit_cost)} ₽/шт</span>
+          ))}
+        </div>
+      )}
+
+      {c.rows.map(row => (
+        <Component key={row.component_id} row={row} cockpit={c} wip={wip} busy={busy}
+          openItem={openItem} run={run} />
+      ))}
+    </div>
+  )
+}
+
+function Component({ row, cockpit, wip, busy, openItem, run }: {
+  row: CockpitRow; cockpit: Cockpit; wip: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<Cockpit>) => void
+}) {
+  const g = row.ghost
+  const status = g ? g.status : 'available'
+  return (
+    <div className="kit-comp">
+      <div className="kit-comp-h">
+        <Glyph status={status} />
+        <span className="name">
+          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a>
+          {' '}<span style={{ color: 'var(--fg-dim)' }}>{row.component_name}</span>
+        </span>
+        <span className="triple">надо {num(row.need)} {row.uom} · пробито {num(row.pierced)}
+          {row.remaining > 0 && <> · остаток <span className="g-to_order">{num(row.remaining)}</span></>}
+        </span>
+      </div>
+
+      <table className="grid">
+        <tbody>
+          {row.real_lines.map(ln => (
+            <tr key={ln.id} className="row s-available">
+              <td><span className="glyph g-available">✓</span> {ln.lot_label}</td>
+              <td className="num">
+                <QtyInput value={ln.qty} disabled={!wip || busy}
+                  onCommit={q => run(api.updateLine(ln.id, q))} /> {row.uom}
+              </td>
+              <td style={{ color: 'var(--fg-dim)' }}>{ln.date ?? ''}</td>
+              <td style={{ textAlign: 'right' }}>
+                {wip && <button className="x" title="убрать строку" disabled={busy}
+                  onClick={() => run(api.deleteLine(ln.id))}>×</button>}
+              </td>
+            </tr>
+          ))}
+          {wip && g && (
+            <GhostRow row={row} ghost={g} cockpit={cockpit} busy={busy} run={run} />
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// Призрачная строка: пайка (промоушн призрака в реальную KittingLine).
+function GhostRow({ row, ghost, cockpit, busy, run }: {
+  row: CockpitRow; ghost: NonNullable<CockpitRow['ghost']>; cockpit: Cockpit
+  busy: boolean; run: (p: Promise<Cockpit>) => void
+}) {
+  const lots = ghost.candidate_lots
+  const [lotId, setLotId] = useState<number | ''>(lots[0]?.lot_id ?? '')
+  const [qty, setQty] = useState(String(row.remaining))
+  useEffect(() => { setLotId(lots[0]?.lot_id ?? '') }, [lots.map(l => l.lot_id).join()])
+
+  const pierce = () => {
+    const n = Number(qty)
+    if (!lotId || !(n > 0)) return
+    run(api.pierce(cockpit.id, { component_id: row.component_id, lot_id: lotId, qty: n }))
+  }
+
+  return (
+    <tr className={`row ghost s-${ghost.status}`}>
+      <td>
+        <Glyph status={ghost.status} />{' '}
+        {lots.length === 0
+          ? <span style={{ color: 'var(--fg-dim)' }}>
+              нет своих лотов —{' '}
+              <Segment status="on_order" value={ghost.on_order} />
+              <Segment status="to_order" value={ghost.to_order} />
+            </span>
+          : <select className="lot-sel" value={lotId}
+              onChange={e => setLotId(Number(e.target.value))} disabled={busy}>
+              {lots.map(l => (
+                <option key={l.lot_id} value={l.lot_id}>
+                  #{l.lot_id} · остаток {num(l.live_qty)}{l.received_name ? ` · ${l.received_name}` : ''}
+                </option>
+              ))}
+            </select>}
+      </td>
+      <td className="num">
+        {lots.length > 0 &&
+          <input className="qty-in" value={qty} disabled={busy}
+            onChange={e => setQty(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') pierce() }} />} {row.uom}
+      </td>
+      <td colSpan={2} style={{ textAlign: 'right' }}>
+        {lots.length > 0 &&
+          <button className="btn sm" disabled={busy} onClick={pierce}>спаять</button>}
+      </td>
+    </tr>
+  )
+}
+
+// Автосейв количества: коммит по blur / Enter (без кнопки «сохранить»).
+function QtyInput({ value, onCommit, disabled }:
+  { value: number; onCommit: (q: number) => void; disabled?: boolean }) {
+  const [v, setV] = useState(String(value))
+  useEffect(() => { setV(String(value)) }, [value])
+  const commit = () => { const n = Number(v); if (n > 0 && n !== value) onCommit(n) }
+  return (
+    <input className="qty-in" value={v} disabled={disabled}
+      onChange={e => setV(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+  )
+}
