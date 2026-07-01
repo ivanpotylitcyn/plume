@@ -1,6 +1,55 @@
 /* Plume — тема витрин волны 1. VS Code-подобная: плотно, дозированный цвет.
    Цвет = только смысл (значок + цвет текста / тонкая полоса слева, не заливка). */
+
+/* ── Шрифты: Golos Text — текст, JetBrains Mono — моно/числа.
+   Файлы в public/fonts, лицензии OFL.txt лежат рядом. ── */
+@font-face {
+  font-family: 'Golos Text';
+  src: url('/fonts/golos/golos-text-regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Golos Text';
+  src: url('/fonts/golos/golos-text-medium.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Golos Text';
+  src: url('/fonts/golos/golos-text-bold.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono/jetbrains-mono-regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono/jetbrains-mono-medium.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono/jetbrains-mono-bold.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
 :root {
+  /* ── Шрифтовые стеки ── */
+  --font-base: 'Golos Text', -apple-system, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ── Фирменная палитра (нейтраль + акценты) — общий словарь цвета,
+     чтобы не выдумывать оттенки. Наша тёмная VS Code-поверхность (ниже)
+     остаётся своя; это резерв акцентов для смысловых пятен. ── */
+  --brand-white: #FCFCFC;
+  --brand-black: #0A0A0A;
+  --accent-blue:   #3C37FF;
+  --accent-pink:   #FF2C87;
+  --accent-orange: #FF8A37;
+  --accent-mint:   #3FF4E5;
+  --accent-green:  #01AB7B;
+
   --bg: #1e1e1e;
   --bg-side: #252526;
   --bg-activity: #333333;
@@ -19,7 +68,7 @@
   --st-lock: #858585;    /* 🔒 серый — заморожено */
   --st-info: #75beff;    /* ○ синий — информационный */
 
-  font-family: -apple-system, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-base);
   font-size: 13px;
   color: var(--fg);
   background: var(--bg);
@@ -62,6 +111,9 @@ body { overflow: hidden; }
 .props dd { margin: 0; color: var(--fg); }
 
 h1.title { font-size: 16px; font-weight: 600; margin: 0 0 2px; color: var(--fg-bright); }
+/* заголовок: партномер моно (акцент), литературное название — Golos не жирным */
+h1.title .pn { font-family: var(--font-mono); }
+h1.title .lit { font-family: var(--font-base); font-weight: 400; }
 .subtitle { color: var(--fg-dim); margin-bottom: 16px; }
 .section-h { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--fg-dim); margin: 20px 0 6px; border-bottom: 1px solid var(--border);
@@ -74,7 +126,8 @@ table.grid { border-collapse: collapse; width: 100%; max-width: 760px; }
 table.grid th { text-align: left; color: var(--fg-dim); font-weight: 400;
   font-size: 11px; padding: 2px 10px; border-bottom: 1px solid var(--border); }
 table.grid td { padding: 3px 10px; border-bottom: 1px solid #2a2a2a; }
-table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.grid td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tree-item .code, .seg { font-family: var(--font-mono); }
 tr.row { border-left: 2px solid transparent; }
 tr.row.s-to_order { border-left-color: var(--st-order); }
 tr.row.s-on_order { border-left-color: var(--st-wip); }

@@ -27,7 +27,7 @@ export function ItemView({ itemId, openItem }:
 
   return (
     <div>
-      <h1 className="title">{d.code} — {d.name}</h1>
+      <h1 className="title"><span className="pn">{d.code}</span> <span className="lit">— {d.name}</span></h1>
       <dl className="props">
         <dt>Вид</dt><dd>{KIND_RU[d.kind] ?? d.kind}{d.is_manufactured ? ' · производимое' : ''}</dd>
         <dt>Ед. изм.</dt><dd>{d.uom}</dd>

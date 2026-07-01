@@ -19,7 +19,7 @@ export function DeficitView({ projectId, openItem }:
 
   return (
     <div>
-      <h1 className="title">{data.project_code} — {data.project_name}</h1>
+      <h1 className="title"><span className="pn">{data.project_code}</span> <span className="lit">— {data.project_name}</span></h1>
       <div className="subtitle">Дефицит проекта · надо − склад − заказано · 1 уровень BOM</div>
       {data.demands.length === 0 && <div className="empty">Нет потребностей (ProjectDemand)</div>}
       {data.demands.map(d => <Demand key={d.demand_id} d={d} openItem={openItem} />)}
