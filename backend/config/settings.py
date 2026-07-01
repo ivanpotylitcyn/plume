@@ -18,6 +18,10 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Собранный React (Vite) фронт. Локально — plume/frontend/dist; на сервере тот же
+# относительный путь: site/backend/ (BASE_DIR) и site/frontend/dist рядом.
+FRONTEND_DIST = BASE_DIR.parent / 'frontend' / 'dist'
+
 # Локальная разработка: переменные окружения из backend/.env (не в репозитории).
 load_dotenv(BASE_DIR / '.env')
 
@@ -46,6 +50,8 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    # WhiteNoise: отключает раздачу статики dev-сервером, чтобы поведение совпадало с продом.
+    'whitenoise.runserver_nostatic',
     'django.contrib.staticfiles',
     # third-party
     'rest_framework',
@@ -56,6 +62,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # WhiteNoise сразу после SecurityMiddleware: раздаёт /static/ на shared-хостинге
+    # (Apache Alias на reg.ru shared недоступен — грабля соседнего проекта).
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -70,7 +79,8 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        # index.html собранного фронта — его отдаёт SPA catch-all во config/urls.py.
+        'DIRS': [FRONTEND_DIST],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -142,8 +152,25 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
+#
+# Vite собирает фронт с base='/static/' (см. frontend/vite.config.ts), поэтому весь
+# dist попадает под STATIC_URL и раздаётся WhiteNoise. Хранилище — БЕЗ манифеста:
+# у ассетов Vite уже свои контент-хэши в именах, а ManifestStaticFilesStorage
+# перехэшировал бы их (ссылки в index.html побились бы) и падал бы на url(...) внутри
+# CSS-комментариев (грабля соседнего проекта). Сжатие (gz/br) WhiteNoise оставляем.
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [FRONTEND_DIST]
 
-STATIC_URL = 'static/'
+# Django 5.1+ убрал STATICFILES_STORAGE/DEFAULT_FILE_STORAGE — только STORAGES.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -159,7 +186,25 @@ REST_FRAMEWORK = {
     ],
 }
 
-# CORS — локальный фронт Vite (см. frontend/).
-CORS_ALLOWED_ORIGINS = env(
-    'CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173'
-).split(',')
+# CORS — локальный фронт Vite (см. frontend/). На проде фронт отдаёт сам Django
+# (SPA с того же origin), так что CORS там не нужен — переменную можно оставить
+# пустой. Пустые элементы отсекаем, иначе '' даёт corsheaders.E013 и падает check.
+CORS_ALLOWED_ORIGINS = [
+    o for o in env(
+        'CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173'
+    ).split(',') if o
+]
+
+
+# --- Прод-настройки (включаются при DEBUG=False) ---
+# Reg.ru shared: сайт за Apache/Passenger с терминацией SSL на прокси. Django должен
+# понимать, что запрос пришёл по https (иначе secure-cookie и редиректы врут).
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # Django 4.2 требует https-origin в списке доверенных для POST в /admin/.
+    # Домен(ы) задаются в .env на сервере, в репозиторий не попадают.
+    CSRF_TRUSTED_ORIGINS = [
+        o for o in env('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',') if o
+    ]

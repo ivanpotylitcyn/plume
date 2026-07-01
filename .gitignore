@@ -26,6 +26,8 @@ db.sqlite3-journal
 /media/
 /staticfiles/
 /static_root/
+# STATIC_ROOT бэкенда (генерится collectstatic, на прод заливается пересборкой)
+backend/staticfiles/
 
 # тесты / покрытие
 .pytest_cache/

@@ -432,7 +432,7 @@ class Lot(models.Model):
         verbose_name = 'партия'
         verbose_name_plural = 'партии'
         constraints = [
-            models.CheckConstraint(check=_exactly_one_q(LOT_ORIGIN_FIELDS),
+            models.CheckConstraint(condition=_exactly_one_q(LOT_ORIGIN_FIELDS),
                                    name='lot_exactly_one_origin'),
         ]
 
@@ -614,7 +614,7 @@ class Attachment(models.Model):
         verbose_name = 'вложение'
         verbose_name_plural = 'вложения'
         constraints = [
-            models.CheckConstraint(check=_exactly_one_q(ATTACHMENT_OWNER_FIELDS),
+            models.CheckConstraint(condition=_exactly_one_q(ATTACHMENT_OWNER_FIELDS),
                                    name='attachment_exactly_one_owner'),
         ]
 
