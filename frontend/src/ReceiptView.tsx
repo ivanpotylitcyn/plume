@@ -48,7 +48,7 @@ export function ReceiptView({ receiptId, items, openItem, onChanged }: {
           ? <button className="btn" disabled={busy}
               onClick={() => run(api.unapproveReceipt(c.id))}>Снять замок</button>
           : <button className="btn" disabled={busy}
-              onClick={() => run(api.approveReceipt(c.id))}>Сверить со сканом (замок)</button>}
+              onClick={() => run(api.approveReceipt(c.id))}>Сверено со сканом</button>}
         {busy && <span className="hint">сохраняю…</span>}
         {err && <span className="anomaly">{err}</span>}
       </div>

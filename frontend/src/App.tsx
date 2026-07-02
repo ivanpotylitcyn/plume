@@ -1,7 +1,7 @@
 // Каркас витрин (VS Code-подобный): activity-bar + дерево + рабочая область
 // (одна, без вкладок) + статус-бар. Навигация по сущностям, проект — ось.
 // Волна 2: третий режим «Комплектации» — записываемый кокпит сборки.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
   type SupplierRow } from './api'
 import { DeficitView } from './DeficitView'
@@ -33,6 +33,14 @@ export default function App() {
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
 
+  // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
+  // единым эффектом (не трогая десятки call-sites); back() восстанавливает. Всё
+  // ведётся через window.history.back() → popstate, поэтому браузерный «Назад» и
+  // жест Cmd+[ тоже возвращают на предыдущую форму, а не уводят с сайта.
+  const [history, setHistory] = useState<{ mode: Mode; sel: Sel }[]>([])
+  const prevRef = useRef<{ mode: Mode; sel: Sel } | null>(null)
+  const skipRef = useRef(false)   // не записывать эту смену (back / автовыбор)
+
   const reloadKittings = useCallback(() => api.kittings().then(setKittings), [])
   const reloadReceipts = useCallback(() => api.receipts().then(setReceipts), [])
 
@@ -40,12 +48,59 @@ export default function App() {
     api.projects().then(ps => {
       setProjects(ps)
       const ext = ps.find(p => p.kind === 'external') ?? ps[0]
-      if (ext) setSel(s => s ?? { kind: 'project', id: ext.id })
+      setSel(s => {
+        if (s) return s
+        skipRef.current = true   // стартовый автовыбор — не пункт истории
+        return ext ? { kind: 'project', id: ext.id } : s
+      })
     })
     api.items().then(setItems)
     reloadKittings()
     reloadReceipts()
   }, [reloadKittings, reloadReceipts])
+
+  // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
+  // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
+  useEffect(() => {
+    const cur = { mode, sel }
+    if (skipRef.current) { skipRef.current = false; prevRef.current = cur; return }
+    const prev = prevRef.current
+    if (prev && (prev.mode !== mode || prev.sel !== sel)) {
+      setHistory(h => [...h, prev])
+      window.history.pushState(null, '')
+    }
+    prevRef.current = cur
+  }, [mode, sel])
+
+  const back = useCallback(() => {
+    setHistory(h => {
+      if (h.length === 0) return h
+      const last = h[h.length - 1]
+      skipRef.current = true
+      setMode(last.mode)
+      setSel(last.sel)
+      return h.slice(0, -1)
+    })
+  }, [])
+
+  // Браузерный «Назад» / Cmd+[ → popstate → откат на предыдущую форму.
+  useEffect(() => {
+    const onPop = () => back()
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [back])
+
+  // Клавиатурное сокращение: Alt+← (идёт через браузерную историю, синхронно).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === 'ArrowLeft' && history.length > 0) {
+        e.preventDefault()
+        window.history.back()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [history.length])
 
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
@@ -128,6 +183,11 @@ export default function App() {
       </div>
 
       <div className="work">
+        <div className="crumb">
+          <button className="back" disabled={history.length === 0}
+            title="Назад — предыдущая форма (⌥←)"
+            onClick={() => window.history.back()}>‹ Назад</button>
+        </div>
         {sel?.kind === 'project' && <DeficitView projectId={sel.id} openItem={openItem} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} openItem={openItem} />}
         {sel?.kind === 'kitting' &&
