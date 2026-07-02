@@ -142,10 +142,19 @@ def kittings(request):
     return Response(rows)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 def kitting_detail(request, pk):
-    """Кокпит комплектации: BOM 1 уровень, реальные + призрачные строки."""
+    """Кокпит комплектации: BOM 1 уровень, реальные + призрачные строки.
+    PATCH — правка шапки (кол-во образцов / дата) прямо в кокпите."""
     k = get_object_or_404(models.Kitting, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_kitting(
+                k, qty=_dec(d['qty']) if 'qty' in d else None,
+                date=d['date'] if 'date' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
     return Response(engine.kitting_cockpit(k))
 
 
@@ -255,10 +264,19 @@ def receipts(request):
     return Response(rows)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 def receipt_detail(request, pk):
-    """Кокпит прихода: строки-лоты УПД + живой остаток + сумма."""
+    """Кокпит прихода: строки-лоты УПД + живой остаток + сумма.
+    PATCH — правка шапки (№ УПД / дата) прямо в кокпите."""
     r = get_object_or_404(models.Receipt, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_receipt(
+                r, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
     return Response(engine.receipt_cockpit(r))
 
 
@@ -369,10 +387,19 @@ def purchases(request):
     return Response(rows)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 def purchase_detail(request, pk):
-    """Кокпит заказа: строки (заказано/поступило/остаток) + связанные приходы."""
+    """Кокпит заказа: строки (заказано/поступило/остаток) + связанные приходы.
+    PATCH — правка шапки (дата / примечание) прямо в кокпите."""
     p = get_object_or_404(models.Purchase, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_purchase(
+                p, date=d['date'] if 'date' in d else None,
+                note=d['note'] if 'note' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
     return Response(engine.purchase_cockpit(p))
 
 
@@ -506,10 +533,19 @@ def transfers(request):
     return Response(rows)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 def transfer_detail(request, pk):
-    """Кокпит передачи: строки-лоты накладной + живой остаток источника + итог."""
+    """Кокпит передачи: строки-лоты накладной + живой остаток источника + итог.
+    PATCH — правка шапки (№ накладной / дата) прямо в кокпите."""
     t = get_object_or_404(models.Transfer, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_transfer(
+                t, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
     return Response(engine.transfer_cockpit(t))
 
 
@@ -570,6 +606,230 @@ def transfer_unpost(request, pk):
 
 @api_view(['GET'])
 def project_available_lots(request, pk):
-    """Лоты проекта с остатком > 0 — пикер строки передачи."""
+    """Лоты проекта с остатком > 0 — пикер строки передачи/списания."""
     project = get_object_or_404(models.Project, pk=pk)
     return Response(engine.project_available_lots(project))
+
+
+# --------------------------------------------------------------------------- #
+#  Закрытие проекта (волна 6): списание / требование + панель + мягкий замок
+# --------------------------------------------------------------------------- #
+@api_view(['GET'])
+def available_lots(request):
+    """Лоты всех проектов с остатком > 0 — сквозной пикер источника требования."""
+    return Response(engine.all_available_lots())
+
+
+# ── Списание / Writeoff ──
+def _writeoff_row(w):
+    return {
+        'id': w.id, 'number': w.number, 'date': w.date,
+        'project_code': w.project.code, 'reason': w.reason, 'lines': w.lines.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def writeoffs(request):
+    """Список списаний (дерево) / создание нового акта (призрачная строка)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+            w = engine.create_writeoff(
+                project, _actor(request), d.get('number') or '',
+                date=d.get('date') or timezone.localdate(),
+                reason=d.get('reason') or '')
+        except (KeyError, models.Project.DoesNotExist) as e:
+            return _bad(f'Нужны project_id, number ({e}).')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.writeoff_cockpit(w), status=http.HTTP_201_CREATED)
+
+    rows = [_writeoff_row(w) for w in models.Writeoff.objects
+            .select_related('project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET', 'PATCH'])
+def writeoff_detail(request, pk):
+    """Кокпит списания: строки-лоты (`−ISSUE`) + живой остаток источника + итог.
+    PATCH — правка шапки (№ акта / дата / причина) прямо в кокпите."""
+    w = get_object_or_404(models.Writeoff, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_writeoff(
+                w, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None,
+                reason=d['reason'] if 'reason' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.writeoff_cockpit(w))
+
+
+@api_view(['POST'])
+def writeoff_lines(request, pk):
+    """Добавить строку списания — выбытие партии из проекта (`−ISSUE`)."""
+    w = get_object_or_404(models.Writeoff, pk=pk)
+    d = request.data
+    try:
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        engine.add_writeoff_line(w, lot, _dec(d.get('qty')))
+    except (KeyError, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.writeoff_cockpit(w), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def writeoff_line_detail(request, pk):
+    """Автосейв количества строки списания (PATCH) / удаление строки (DELETE)."""
+    line = get_object_or_404(
+        models.WriteoffLine.objects.select_related('writeoff', 'lot'), pk=pk)
+    writeoff = line.writeoff
+    try:
+        if request.method == 'DELETE':
+            engine.remove_writeoff_line(line)
+        else:
+            engine.update_writeoff_line(line, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.writeoff_cockpit(writeoff))
+
+
+# ── Требование / Requisition ──
+def _requisition_row(r):
+    return {
+        'id': r.id, 'number': r.number, 'date': r.date,
+        'project_code': r.project.code, 'lines': r.lines.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def requisitions(request):
+    """Список требований (дерево) / создание нового (проект-получатель)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+            r = engine.create_requisition(
+                project, _actor(request), d.get('number') or '',
+                date=d.get('date') or timezone.localdate())
+        except (KeyError, models.Project.DoesNotExist) as e:
+            return _bad(f'Нужны project_id, number ({e}).')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.requisition_cockpit(r), status=http.HTTP_201_CREATED)
+
+    rows = [_requisition_row(r) for r in models.Requisition.objects
+            .select_related('project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET', 'PATCH'])
+def requisition_detail(request, pk):
+    """Кокпит требования: строки (источник → потомок) + живой остаток источника.
+    PATCH — правка шапки (№ / дата) прямо в кокпите."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_requisition(
+                r, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_cockpit(r))
+
+
+@api_view(['POST'])
+def requisition_lines(request, pk):
+    """Добавить строку требования — отпочкование (`−ISSUE` источника + `+RECEIPT`)."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    d = request.data
+    try:
+        source = models.Lot.objects.get(pk=d['source_lot_id'])
+        engine.add_requisition_line(r, source, _dec(d.get('qty')))
+    except (KeyError, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны source_lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_cockpit(r), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def requisition_line_detail(request, pk):
+    """Автосейв количества строки требования (PATCH) / удаление строки (DELETE)."""
+    line = get_object_or_404(
+        models.RequisitionLine.objects.select_related('requisition', 'source_lot'),
+        pk=pk)
+    requisition = line.requisition
+    try:
+        if request.method == 'DELETE':
+            engine.remove_requisition_line(line)
+        else:
+            engine.update_requisition_line(line, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_cockpit(requisition))
+
+
+# ── Панель закрытия проекта + мосты + мягкий замок ──
+@api_view(['GET'])
+def project_closure(request, pk):
+    """Панель закрытия проекта: остаточные лоты (live≠0) + готовность к закрытию."""
+    project = get_object_or_404(models.Project, pk=pk)
+    return Response(engine.project_closure(project))
+
+
+@api_view(['POST'])
+def project_writeoff_lot(request, pk):
+    """Мост «списать остаток»: свести лот проекта в 0 актом списания (`−ISSUE`)."""
+    project = get_object_or_404(models.Project, pk=pk)
+    d = request.data
+    try:
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        engine.writeoff_lot(project, lot, _dec(d.get('qty')), _actor(request))
+    except (KeyError, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.project_closure(project))
+
+
+@api_view(['POST'])
+def project_stock_lot(request, pk):
+    """Мост «на баланс»: отпочковать остаток проекта в белый «Собственный склад»."""
+    project = get_object_or_404(models.Project, pk=pk)
+    d = request.data
+    try:
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        engine.requisition_lot(project, lot, _dec(d.get('qty')), _actor(request))
+    except (KeyError, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.project_closure(project))
+
+
+@api_view(['POST'])
+def project_close(request, pk):
+    """Закрыть проект (`active → closed`) — мягкий замок-веха (gate: остатков нет)."""
+    project = get_object_or_404(models.Project, pk=pk)
+    try:
+        engine.close_project(project)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.project_closure(project))
+
+
+@api_view(['POST'])
+def project_reopen(request, pk):
+    """Переоткрыть закрытый проект (`closed → active`)."""
+    project = get_object_or_404(models.Project, pk=pk)
+    try:
+        engine.reopen_project(project)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.project_closure(project))

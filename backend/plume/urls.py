@@ -13,6 +13,13 @@ urlpatterns = [
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
     path('projects/<int:pk>/order/', views.project_order, name='project-order'),
     path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),
+    # закрытие проекта (волна 6): панель сведения остатков + мосты + мягкий замок
+    path('projects/<int:pk>/closure/', views.project_closure, name='project-closure'),
+    path('projects/<int:pk>/writeoff-lot/', views.project_writeoff_lot, name='project-writeoff-lot'),
+    path('projects/<int:pk>/stock-lot/', views.project_stock_lot, name='project-stock-lot'),
+    path('projects/<int:pk>/close/', views.project_close, name='project-close'),
+    path('projects/<int:pk>/reopen/', views.project_reopen, name='project-reopen'),
+    path('available-lots/', views.available_lots, name='available-lots'),
     path('items/', views.items, name='items'),
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     # кокпит комплектации (записываемое ядро)
@@ -47,4 +54,14 @@ urlpatterns = [
     path('transfers/<int:pk>/post/', views.transfer_post, name='transfer-post'),
     path('transfers/<int:pk>/unpost/', views.transfer_unpost, name='transfer-unpost'),
     path('transfer-lines/<int:pk>/', views.transfer_line_detail, name='transfer-line'),
+    # списание / Writeoff (записываемое ядро, волна 6)
+    path('writeoffs/', views.writeoffs, name='writeoffs'),
+    path('writeoffs/<int:pk>/', views.writeoff_detail, name='writeoff-detail'),
+    path('writeoffs/<int:pk>/lines/', views.writeoff_lines, name='writeoff-lines'),
+    path('writeoff-lines/<int:pk>/', views.writeoff_line_detail, name='writeoff-line'),
+    # требование / Requisition (записываемое ядро, волна 6)
+    path('requisitions/', views.requisitions, name='requisitions'),
+    path('requisitions/<int:pk>/', views.requisition_detail, name='requisition-detail'),
+    path('requisitions/<int:pk>/lines/', views.requisition_lines, name='requisition-lines'),
+    path('requisition-lines/<int:pk>/', views.requisition_line_detail, name='requisition-line'),
 ]

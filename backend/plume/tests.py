@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import Client, TestCase
 
 from plume import models
 from plume import engine
@@ -672,3 +672,323 @@ class TransferCockpitTests(EngineTestBase):
         self.assertEqual(rows[0]['qty'], D(2))
         self.assertEqual(rows[0]['display_name'], 'Прибор №7')
         self.assertFalse(rows[0]['posted'])
+
+
+class WriteoffCockpitTests(EngineTestBase):
+    """Волна 6: списание — чистый `−ISSUE` из проекта (серый путь), guard чужого
+    проекта, коррекция строк, пересписание в минус (не клампим)."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.lot = self.receipt_lot(self.item, self.prj, 10)
+
+    def test_add_line_issues_from_lot(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='брак')
+        engine.add_writeoff_line(w, self.lot, D(4))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(6))
+        self.assertTrue(self.lot.movements.filter(type='ISSUE', qty=D(-4)).exists())
+
+    def test_cockpit_totals(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='брак')
+        engine.add_writeoff_line(w, self.lot, D(4))
+        c = engine.writeoff_cockpit(w)
+        self.assertEqual(c['number'], 'СП-1')
+        self.assertEqual(c['reason'], 'брак')
+        self.assertEqual(c['total_qty'], D(4))
+        self.assertEqual(c['lines'][0]['lot_live_qty'], D(6))
+
+    def test_create_rejects_empty_number(self):
+        with self.assertRaises(ValidationError):
+            engine.create_writeoff(self.prj, self.user, '  ')
+
+    def test_add_line_rejects_foreign_project(self):
+        other = models.Project.objects.create(
+            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        w = engine.create_writeoff(other, self.user, 'СП-2')
+        with self.assertRaises(ValidationError):
+            engine.add_writeoff_line(w, self.lot, D(1))
+
+    def test_add_line_rejects_nonpositive(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        with self.assertRaises(ValidationError):
+            engine.add_writeoff_line(w, self.lot, D(0))
+
+    def test_over_writeoff_negative_not_clamped(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        engine.add_writeoff_line(w, self.lot, D(14))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(-4))
+
+    def test_update_and_remove_restores(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        line = engine.add_writeoff_line(w, self.lot, D(4))
+        engine.update_writeoff_line(line, D(7))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(3))
+        engine.remove_writeoff_line(line)
+        self.assertEqual(engine.lot_live_qty(self.lot), D(10))
+
+
+class RequisitionCockpitTests(EngineTestBase):
+    """Волна 6: требование/отпочкование — `−ISSUE` источника + рождение
+    лота-потомка (`+RECEIPT`) у получателя с наследованием цены/провенанса."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.src = self.receipt_lot(self.item, self.prj, 10)
+        self.src.unit_cost = D('2.50')
+        self.src.serial_number = 'ЗН-9'
+        self.src.save(update_fields=['unit_cost', 'serial_number'])
+        self.white = models.Project.objects.create(
+            code='WHITE', name='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+
+    def test_add_line_issues_source_and_births_child(self):
+        req = engine.create_requisition(self.white, self.user, 'ТР-1')
+        engine.add_requisition_line(req, self.src, D(4))
+        self.assertEqual(engine.lot_live_qty(self.src), D(6))    # источник просел
+        born = engine._requisition_born_lot(req, self.src)
+        self.assertIsNotNone(born)
+        self.assertEqual(born.project_id, self.white.id)
+        self.assertEqual(born.qty, D(4))
+        self.assertEqual(born.unit_cost, D('2.50'))              # цена унаследована
+        self.assertEqual(born.predecessor_id, self.src.id)      # генеалогия
+        self.assertEqual(engine.lot_live_qty(born), D(4))       # +RECEIPT у потомка
+
+    def test_cockpit_shows_source_and_born(self):
+        req = engine.create_requisition(self.white, self.user, 'ТР-1')
+        engine.add_requisition_line(req, self.src, D(4))
+        c = engine.requisition_cockpit(req)
+        self.assertEqual(c['total_qty'], D(4))
+        row = c['lines'][0]
+        self.assertEqual(row['source_project_code'], self.prj.code)
+        self.assertEqual(row['source_live_qty'], D(6))
+        self.assertIsNotNone(row['born_lot_id'])
+
+    def test_same_project_rejected(self):
+        req = engine.create_requisition(self.prj, self.user, 'ТР-1')
+        with self.assertRaises(ValidationError):
+            engine.add_requisition_line(req, self.src, D(1))    # источник = получатель
+
+    def test_duplicate_source_rejected(self):
+        req = engine.create_requisition(self.white, self.user, 'ТР-1')
+        engine.add_requisition_line(req, self.src, D(2))
+        with self.assertRaises(ValidationError):
+            engine.add_requisition_line(req, self.src, D(1))
+
+    def test_update_syncs_source_and_child(self):
+        req = engine.create_requisition(self.white, self.user, 'ТР-1')
+        line = engine.add_requisition_line(req, self.src, D(4))
+        engine.update_requisition_line(line, D(7))
+        born = engine._requisition_born_lot(req, self.src)
+        self.assertEqual(engine.lot_live_qty(self.src), D(3))
+        self.assertEqual(engine.lot_live_qty(born), D(7))
+
+    def test_remove_restores_source_and_deletes_child(self):
+        req = engine.create_requisition(self.white, self.user, 'ТР-1')
+        line = engine.add_requisition_line(req, self.src, D(4))
+        engine.remove_requisition_line(line)
+        self.assertEqual(engine.lot_live_qty(self.src), D(10))
+        self.assertIsNone(engine._requisition_born_lot(req, self.src))
+
+    def test_all_available_lots_picker(self):
+        rows = engine.all_available_lots()
+        self.assertTrue(any(r['lot_id'] == self.src.id and
+                            r['project_code'] == self.prj.code for r in rows))
+
+
+class ProjectClosureTests(EngineTestBase):
+    """Волна 6: панель закрытия (остаточные лоты → 0) + мягкий замок статуса +
+    мосты «списать»/«на баланс»."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.lot = self.receipt_lot(self.item, self.prj, 10)
+
+    def test_closure_lists_residuals_and_blocks(self):
+        c = engine.project_closure(self.prj)
+        self.assertEqual(len(c['residuals']), 1)
+        self.assertEqual(c['residual_positive'], D(10))
+        self.assertFalse(c['can_close'])
+        with self.assertRaises(ValidationError):
+            engine.close_project(self.prj)
+
+    def test_writeoff_bridge_then_close(self):
+        engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
+        c = engine.project_closure(self.prj)
+        self.assertEqual(c['residuals'], [])
+        self.assertTrue(c['can_close'])
+        engine.close_project(self.prj)
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.status, models.Project.Status.CLOSED)
+        self.assertIsNotNone(self.prj.closed_at)
+
+    def test_requisition_bridge_moves_to_white(self):
+        engine.requisition_lot(self.prj, self.lot, D(10), self.user)
+        self.assertEqual(engine.lot_live_qty(self.lot), D(0))
+        white = engine._internal_project(models.Project.Kind.INTERNAL_STOCK)
+        moved = engine.item_available(self.item, white)
+        self.assertEqual(moved, D(10))                          # оказалось на балансе
+        self.assertTrue(engine.project_closure(self.prj)['can_close'])
+
+    def test_negative_residual_is_anomaly_and_blocks(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        engine.add_writeoff_line(w, self.lot, D(14))            # пересписали → −4
+        c = engine.project_closure(self.prj)
+        self.assertEqual(c['anomaly_count'], 1)
+        self.assertTrue(c['residuals'][0]['anomaly'])
+        self.assertFalse(c['can_close'])
+
+    def test_internal_project_not_closable(self):
+        white = models.Project.objects.create(
+            code='WHITE', name='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        c = engine.project_closure(white)
+        self.assertFalse(c['is_external'])
+        self.assertFalse(c['can_close'])
+        with self.assertRaises(ValidationError):
+            engine.close_project(white)
+
+    def test_reopen_restores_active(self):
+        engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
+        engine.close_project(self.prj)
+        engine.reopen_project(self.prj)
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.status, models.Project.Status.ACTIVE)
+        self.assertIsNone(self.prj.closed_at)
+
+
+class HeaderEditTests(EngineTestBase):
+    """Волна 6 (докрутка): правка шапки кокпитов — номер/дата/мягкие поля,
+    read-only под замком, nullable-дата очищается."""
+
+    def test_transfer_header_edit_and_lock(self):
+        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        lot = self.receipt_lot(dev, self.prj, 5)
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.update_transfer(t, number='Н-99', date='2026-06-15')
+        t.refresh_from_db()
+        self.assertEqual(t.number, 'Н-99')
+        self.assertEqual(str(t.date), '2026-06-15')
+        with self.assertRaises(ValidationError):
+            engine.update_transfer(t, number='   ')          # пустой номер
+        engine.add_transfer_line(t, lot, D(1))
+        engine.post_transfer(t)
+        with self.assertRaises(ValidationError):
+            engine.update_transfer(t, number='Н-100')        # под замком нельзя
+
+    def test_receipt_header_locked(self):
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+            supplier=self.supplier, project=self.prj, user=self.user)
+        engine.add_receipt_lot(r, self.make_item('A'), D(2))
+        engine.update_receipt(r, number='U-2')
+        r.refresh_from_db()
+        self.assertEqual(r.number, 'U-2')
+        engine.approve_receipt(r)
+        with self.assertRaises(ValidationError):
+            engine.update_receipt(r, number='U-3')
+
+    def test_purchase_note_and_clear_date(self):
+        p = engine.create_purchase(self.prj, self.user, date='2026-05-01', note='x')
+        engine.update_purchase(p, note='новое', date='')     # '' → NULL (nullable)
+        p.refresh_from_db()
+        self.assertEqual(p.note, 'новое')
+        self.assertIsNone(p.date)
+
+    def test_kitting_qty_rescales_needs(self):
+        comp = self.make_item('R')
+        self.receipt_lot(comp, self.prj, 100)
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+            user=self.user, qty=D(1), status=models.Kitting.Status.WIP)
+        self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(2))
+        engine.update_kitting(k, qty=D(3))
+        self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(6))
+        engine.close_kitting(k)
+        with self.assertRaises(ValidationError):
+            engine.update_kitting(k, qty=D(4))               # не wip — нельзя
+
+    def test_writeoff_and_requisition_header(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        engine.update_writeoff(w, number='СП-2', reason='брак')
+        w.refresh_from_db()
+        self.assertEqual((w.number, w.reason), ('СП-2', 'брак'))
+        white = models.Project.objects.create(code='WHITE', name='Склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        req = engine.create_requisition(white, self.user, 'ТР-1')
+        engine.update_requisition(req, number='ТР-2', date='2026-06-01')
+        req.refresh_from_db()
+        self.assertEqual(req.number, 'ТР-2')
+
+
+class ClosureHttpTests(TestCase):
+    """Волна 6: HTTP-путь через test Client — провязка urls/views + мапинг ошибок."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.item = models.Item.objects.create(code='R100', name='R100')
+        self.sup = models.Supplier.objects.create(name='П')
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+            supplier=self.sup, project=self.prj,
+            user=get_user_model().objects.first())
+        self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
+            receipt=r, qty=D(10))
+        engine.rebuild_movements(self.lot)
+        self.c = Client()
+
+    def test_writeoff_flow(self):
+        r = self.c.post('/api/writeoffs/', {'project_id': self.prj.id,
+            'number': 'СП-1', 'reason': 'брак'}, content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        wid = r.json()['id']
+        r = self.c.post(f'/api/writeoffs/{wid}/lines/',
+            {'lot_id': self.lot.id, 'qty': 4}, content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(float(r.json()['total_qty']), 4.0)
+        # чужой проект → 400
+        other = models.Project.objects.create(code='P2', name='П2',
+            kind=models.Project.Kind.EXTERNAL)
+        r2 = self.c.post('/api/writeoffs/', {'project_id': other.id, 'number': 'СП-2'},
+            content_type='application/json')
+        w2 = r2.json()['id']
+        bad = self.c.post(f'/api/writeoffs/{w2}/lines/',
+            {'lot_id': self.lot.id, 'qty': 1}, content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+
+    def test_closure_bridges_and_lock(self):
+        panel = self.c.get(f'/api/projects/{self.prj.id}/closure/').json()
+        self.assertFalse(panel['can_close'])
+        self.assertEqual(len(panel['residuals']), 1)
+        # мост «на баланс» → белый, остаток в 0, можно закрыть
+        r = self.c.post(f'/api/projects/{self.prj.id}/stock-lot/',
+            {'lot_id': self.lot.id, 'qty': 10}, content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()['can_close'])
+        # закрытие 200 + повторное закрытие → 400
+        c1 = self.c.post(f'/api/projects/{self.prj.id}/close/')
+        self.assertEqual(c1.status_code, 200)
+        self.assertEqual(c1.json()['status'], 'closed')
+        c2 = self.c.post(f'/api/projects/{self.prj.id}/close/')
+        self.assertEqual(c2.status_code, 400)
+        # переоткрытие
+        ro = self.c.post(f'/api/projects/{self.prj.id}/reopen/')
+        self.assertEqual(ro.json()['status'], 'active')
+
+    def test_requisition_flow(self):
+        white = models.Project.objects.create(code='WHITE', name='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        r = self.c.post('/api/requisitions/', {'project_id': white.id, 'number': 'ТР-1'},
+            content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        rid = r.json()['id']
+        line = self.c.post(f'/api/requisitions/{rid}/lines/',
+            {'source_lot_id': self.lot.id, 'qty': 3}, content_type='application/json')
+        self.assertEqual(line.status_code, 201)
+        self.assertIsNotNone(line.json()['lines'][0]['born_lot_id'])
+        picker = self.c.get('/api/available-lots/')
+        self.assertEqual(picker.status_code, 200)

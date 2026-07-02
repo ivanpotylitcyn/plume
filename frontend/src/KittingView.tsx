@@ -4,6 +4,7 @@
 // пикером лота. Пайка = промоушн призрака в реальную KittingLine (+ ISSUE).
 import { useEffect, useState } from 'react'
 import { api, type Cockpit, type CockpitRow } from './api'
+import { CommitInput } from './ReceiptView'
 import { Glyph, Segment, num } from './status'
 
 const KIT_STATUS: Record<string, string> = {
@@ -43,6 +44,14 @@ export function KittingView({ kittingId, openItem, onChanged }:
       <div className="subtitle">
         Кокпит комплектации · проект {c.project_code} · образцов {num(c.qty)} ·{' '}
         <span className={wip ? 'g-on_order' : 'g-available'}>{KIT_STATUS[c.status] ?? c.status}</span>
+      </div>
+
+      <div className="hdr-edit">
+        <label>образцов <CommitInput value={String(c.qty)} width={72} disabled={!wip || busy}
+          onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
+          validate={v => Number(v) > 0} /></label>
+        <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={!wip || busy}
+          onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></label>
       </div>
 
       <div className="kit-actions">

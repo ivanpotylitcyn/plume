@@ -56,6 +56,13 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
         {c.note && <> · {c.note}</>}
       </div>
 
+      <div className="hdr-edit">
+        <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
+          onCommit={v => run(api.updatePurchase(c.id, { date: v }))} /></label>
+        <label>примечание <CommitInput value={c.note} width={240} disabled={!editable || busy}
+          onCommit={v => run(api.updatePurchase(c.id, { note: v }))} /></label>
+      </div>
+
       <div className="kit-actions">
         {c.status === 'draft' && <>
           <button className="btn" disabled={busy}

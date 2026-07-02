@@ -120,6 +120,14 @@ h1.title .lit { font-family: var(--font-base); font-weight: 400; }
   padding-bottom: 4px; }
 .hint { color: var(--fg-dim); font-size: 11px; margin-left: 8px; text-transform: none;
   letter-spacing: 0; }
+/* панель закрытия проекта (под дашбордом дефицита) */
+.closure { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 4px; }
+.closure .section-h .lit { text-transform: none; letter-spacing: 0; }
+/* правка шапки прямо в кокпите (номер/дата/мягкие поля) */
+.hdr-edit { display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+  margin-bottom: 12px; }
+.hdr-edit label { color: var(--fg-dim); font-size: 12px; display: inline-flex;
+  align-items: center; gap: 6px; }
 
 /* ---- грид строк (плотный, без заливки; статус — полоса слева + значок) ---- */
 table.grid { border-collapse: collapse; width: 100%; max-width: 760px; }

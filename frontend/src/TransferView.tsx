@@ -54,6 +54,15 @@ export function TransferView({ transferId, openItem, onChanged }: {
         {' · отдано '}<span className="seg">{num(c.total_qty)}</span>
       </div>
 
+      <div className="hdr-edit">
+        <label>№ накладной <CommitInput value={c.number} width={140} disabled={locked || busy}
+          onCommit={v => run(api.updateTransfer(c.id, { number: v }))}
+          validate={v => v.trim().length > 0} /></label>
+        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
+          onCommit={v => run(api.updateTransfer(c.id, { date: v }))}
+          validate={v => v.trim().length > 0} /></label>
+      </div>
+
       <div className="kit-actions">
         {locked
           ? <button className="btn" disabled={busy}

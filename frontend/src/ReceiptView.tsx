@@ -49,6 +49,15 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         {' · сумма '}<span className="seg">{num(c.total_cost)} ₽</span>
       </div>
 
+      <div className="hdr-edit">
+        <label>№ УПД <CommitInput value={c.number} width={140} disabled={locked || busy}
+          onCommit={v => run(api.updateReceipt(c.id, { number: v }))}
+          validate={v => v.trim().length > 0} /></label>
+        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
+          onCommit={v => run(api.updateReceipt(c.id, { date: v }))}
+          validate={v => v.trim().length > 0} /></label>
+      </div>
+
       <div className="kit-actions">
         {locked
           ? <button className="btn" disabled={busy}
@@ -184,9 +193,9 @@ function GhostRow({ receiptId, items, busy, run }: {
 
 // Автосейв текстового/числового поля: коммит по blur / Enter (без кнопки).
 // Переиспуемый компонент (кокпиты прихода/заказа).
-export function CommitInput({ value, onCommit, disabled, width = 60, validate }: {
+export function CommitInput({ value, onCommit, disabled, width = 60, validate, type }: {
   value: string; onCommit: (v: string) => void; disabled?: boolean
-  width?: number; validate?: (v: string) => boolean
+  width?: number; validate?: (v: string) => boolean; type?: string
 }) {
   const [v, setV] = useState(value)
   useEffect(() => { setV(value) }, [value])
@@ -196,7 +205,7 @@ export function CommitInput({ value, onCommit, disabled, width = 60, validate }:
     onCommit(v)
   }
   return (
-    <input className="qty-in" style={{ width }} value={v} disabled={disabled}
+    <input className="qty-in" style={{ width }} value={v} disabled={disabled} type={type}
       onChange={e => setV(e.target.value)} onBlur={commit}
       onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
   )

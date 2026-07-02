@@ -138,6 +138,55 @@ export interface TransferCockpit {
   total_qty: number; lines: TransferCockpitLine[]
 }
 
+// ── Списание / Writeoff (волна 6 — записываемое ядро) ──
+export interface WriteoffRow {
+  id: number; number: string; date: string; project_code: string
+  reason: string; lines: number
+}
+export interface WriteoffCockpitLine {
+  id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
+  item_name: string; uom: string; qty: number; lot_live_qty: number
+  serial_number: string
+}
+export interface WriteoffCockpit {
+  id: number; number: string; date: string; reason: string
+  project_id: number; project_code: string; project_name: string
+  total_qty: number; lines: WriteoffCockpitLine[]
+}
+
+// ── Требование / Requisition (волна 6 — записываемое ядро) ──
+export interface RequisitionRow {
+  id: number; number: string; date: string; project_code: string; lines: number
+}
+export interface AllAvailableLot {
+  lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
+  live_qty: number; origin: string; project_id: number; project_code: string
+  serial_number: string; received_name: string
+}
+export interface RequisitionCockpitLine {
+  id: number; source_lot_id: number; lot_label: string; source_project_code: string
+  item_id: number; item_code: string; item_name: string; uom: string
+  qty: number; source_live_qty: number; born_lot_id: number | null
+  serial_number: string
+}
+export interface RequisitionCockpit {
+  id: number; number: string; date: string
+  project_id: number; project_code: string; project_name: string
+  total_qty: number; lines: RequisitionCockpitLine[]
+}
+
+// ── Панель закрытия проекта (волна 6) ──
+export interface ResidualLot {
+  lot_id: number; lot_label: string; item_id: number; item_code: string
+  item_name: string; uom: string; live_qty: number; anomaly: boolean
+}
+export interface ProjectClosure {
+  project_id: number; project_code: string; project_name: string; kind: string
+  status: string; closed_at: string | null; is_external: boolean
+  residuals: ResidualLot[]; residual_positive: number; anomaly_count: number
+  can_close: boolean; blocker: string
+}
+
 function getCookie(name: string): string | null {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
   return m ? decodeURIComponent(m[2]) : null
@@ -176,6 +225,8 @@ export const api = {
 
   kittings: () => get<KittingRow[]>('/api/kittings/'),
   kitting: (id: number) => get<Cockpit>(`/api/kittings/${id}/`),
+  updateKitting: (id: number, b: Partial<{ qty: number; date: string }>) =>
+    send<Cockpit>('PATCH', `/api/kittings/${id}/`, b),
   createKitting: (b: { project_id: number; target_item_id: number; qty: number }) =>
     send<Cockpit>('POST', '/api/kittings/', b),
   pierce: (id: number, b: { component_id: number; lot_id: number; qty: number }) =>
@@ -191,6 +242,8 @@ export const api = {
     send<SupplierRow>('POST', '/api/suppliers/', b),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptCockpit>(`/api/receipts/${id}/`),
+  updateReceipt: (id: number, b: Partial<{ number: string; date: string }>) =>
+    send<ReceiptCockpit>('PATCH', `/api/receipts/${id}/`, b),
   createReceipt: (b: { supplier_id: number; project_id: number; number: string; date: string }) =>
     send<ReceiptCockpit>('POST', '/api/receipts/', b),
   addReceiptLot: (id: number, b: {
@@ -208,6 +261,8 @@ export const api = {
 
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseCockpit>(`/api/purchases/${id}/`),
+  updatePurchase: (id: number, b: Partial<{ date: string; note: string }>) =>
+    send<PurchaseCockpit>('PATCH', `/api/purchases/${id}/`, b),
   createPurchase: (b: { project_id: number; date?: string; note?: string }) =>
     send<PurchaseCockpit>('POST', '/api/purchases/', b),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
@@ -226,6 +281,8 @@ export const api = {
 
   transfers: () => get<TransferRow[]>('/api/transfers/'),
   transfer: (id: number) => get<TransferCockpit>(`/api/transfers/${id}/`),
+  updateTransfer: (id: number, b: Partial<{ number: string; date: string }>) =>
+    send<TransferCockpit>('PATCH', `/api/transfers/${id}/`, b),
   createTransfer: (b: { project_id: number; number: string; date?: string }) =>
     send<TransferCockpit>('POST', '/api/transfers/', b),
   addTransferLine: (id: number, b: { lot_id: number; qty: number; display_name?: string }) =>
@@ -238,4 +295,39 @@ export const api = {
   unpostTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/unpost/`),
   projectAvailableLots: (id: number) =>
     get<AvailableLot[]>(`/api/projects/${id}/available-lots/`),
+
+  writeoffs: () => get<WriteoffRow[]>('/api/writeoffs/'),
+  writeoff: (id: number) => get<WriteoffCockpit>(`/api/writeoffs/${id}/`),
+  updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string }>) =>
+    send<WriteoffCockpit>('PATCH', `/api/writeoffs/${id}/`, b),
+  createWriteoff: (b: { project_id: number; number: string; date?: string; reason?: string }) =>
+    send<WriteoffCockpit>('POST', '/api/writeoffs/', b),
+  addWriteoffLine: (id: number, b: { lot_id: number; qty: number }) =>
+    send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/lines/`, b),
+  updateWriteoffLine: (id: number, qty: number) =>
+    send<WriteoffCockpit>('PATCH', `/api/writeoff-lines/${id}/`, { qty }),
+  deleteWriteoffLine: (id: number) =>
+    send<WriteoffCockpit>('DELETE', `/api/writeoff-lines/${id}/`),
+
+  requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
+  requisition: (id: number) => get<RequisitionCockpit>(`/api/requisitions/${id}/`),
+  updateRequisition: (id: number, b: Partial<{ number: string; date: string }>) =>
+    send<RequisitionCockpit>('PATCH', `/api/requisitions/${id}/`, b),
+  createRequisition: (b: { project_id: number; number: string; date?: string }) =>
+    send<RequisitionCockpit>('POST', '/api/requisitions/', b),
+  addRequisitionLine: (id: number, b: { source_lot_id: number; qty: number }) =>
+    send<RequisitionCockpit>('POST', `/api/requisitions/${id}/lines/`, b),
+  updateRequisitionLine: (id: number, qty: number) =>
+    send<RequisitionCockpit>('PATCH', `/api/requisition-lines/${id}/`, { qty }),
+  deleteRequisitionLine: (id: number) =>
+    send<RequisitionCockpit>('DELETE', `/api/requisition-lines/${id}/`),
+  allAvailableLots: () => get<AllAvailableLot[]>('/api/available-lots/'),
+
+  closure: (id: number) => get<ProjectClosure>(`/api/projects/${id}/closure/`),
+  writeoffLot: (id: number, b: { lot_id: number; qty: number }) =>
+    send<ProjectClosure>('POST', `/api/projects/${id}/writeoff-lot/`, b),
+  stockLot: (id: number, b: { lot_id: number; qty: number }) =>
+    send<ProjectClosure>('POST', `/api/projects/${id}/stock-lot/`, b),
+  closeProject: (id: number) => send<ProjectClosure>('POST', `/api/projects/${id}/close/`),
+  reopenProject: (id: number) => send<ProjectClosure>('POST', `/api/projects/${id}/reopen/`),
 }
