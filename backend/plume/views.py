@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status as http
@@ -833,3 +834,148 @@ def project_reopen(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.project_closure(project))
+
+
+# --------------------------------------------------------------------------- #
+#  Планирование закупок (волна 7): командный свод + записываемый Procurement
+# --------------------------------------------------------------------------- #
+@api_view(['GET'])
+def command_deficit(request):
+    """Командный свод: суммарный дефицит по оси Item через все активные внешние проекты."""
+    return Response(engine.command_deficit())
+
+
+@api_view(['POST'])
+def command_deficit_add(request):
+    """Мост «свод → закупка»: положить позицию в draft-`Procurement` (создаст при нужде).
+
+    Возвращает id закупки (UI ведёт в кокпит плана).
+    """
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        p = engine.add_to_procurement(item, _dec(d.get('qty')), _actor(request))
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response({'procurement_id': p.id}, status=http.HTTP_201_CREATED)
+
+
+def _procurement_row(p):
+    """Строка списка закупок-планов для дерева навигации."""
+    return {
+        'id': p.id, 'status': p.status, 'date': p.date, 'note': p.note,
+        'lines': p.lines.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def procurements(request):
+    """Список закупок-планов (дерево) / создание новой (призрачная строка)."""
+    if request.method == 'POST':
+        d = request.data
+        p = engine.create_procurement(_actor(request),
+                                      date=d.get('date') or None,
+                                      note=(d.get('note') or '').strip())
+        return Response(engine.procurement_cockpit(p), status=http.HTTP_201_CREATED)
+
+    # только закупки-планы (без 1:1-заглушек проектных заказов, см. engine)
+    rows = [_procurement_row(p)
+            for p in engine._plan_procurements().order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET', 'PATCH'])
+def procurement_detail(request, pk):
+    """Кокпит закупки-плана: строки (item, qty) + итог.
+    PATCH — правка шапки (дата / примечание) прямо в кокпите."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_procurement(
+                p, date=d['date'] if 'date' in d else None,
+                note=d['note'] if 'note' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_cockpit(p))
+
+
+@api_view(['POST'])
+def procurement_lines(request, pk):
+    """Добавить строку закупки-плана (только в черновике)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        engine.add_procurement_line(p, item, _dec(d.get('qty')))
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_cockpit(p), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def procurement_line_detail(request, pk):
+    """Автосейв количества строки закупки-плана (PATCH) / удаление (DELETE)."""
+    line = get_object_or_404(
+        models.ProcurementLine.objects.select_related('procurement'), pk=pk)
+    procurement = line.procurement
+    try:
+        if request.method == 'DELETE':
+            engine.remove_procurement_line(line)
+        else:
+            engine.update_procurement_line(line, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_cockpit(procurement))
+
+
+def _procurement_transition(request, pk, fn):
+    """Общий обработчик перехода статуса закупки-плана (send/unsend/cancel/restore)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    try:
+        fn(p)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_cockpit(p))
+
+
+@api_view(['POST'])
+def procurement_send(request, pk):
+    """Отправить закупку-план (draft → sent) — мягкий замок, строки read-only."""
+    return _procurement_transition(request, pk, engine.send_procurement)
+
+
+@api_view(['POST'])
+def procurement_unsend(request, pk):
+    """Вернуть закупку-план в черновик (sent → draft)."""
+    return _procurement_transition(request, pk, engine.unsend_procurement)
+
+
+@api_view(['POST'])
+def procurement_cancel(request, pk):
+    """Отменить закупку-план (не удаляет)."""
+    return _procurement_transition(request, pk, engine.cancel_procurement)
+
+
+@api_view(['POST'])
+def procurement_restore(request, pk):
+    """Восстановить отменённую закупку-план в черновик."""
+    return _procurement_transition(request, pk, engine.restore_procurement)
+
+
+@api_view(['GET'])
+def procurement_order_xlsx(request, pk):
+    """Выгрузка `order.xlsx` закупки-плана — файл поставщику (attachment)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    data = engine.procurement_xlsx(p)
+    resp = HttpResponse(
+        data,
+        content_type=('application/vnd.openxmlformats-officedocument'
+                      '.spreadsheetml.sheet'))
+    resp['Content-Disposition'] = (
+        f'attachment; filename="order-{p.id}.xlsx"')
+    return resp

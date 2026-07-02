@@ -45,8 +45,16 @@
   готовность; `close_project`/`reopen_project` — мягкий замок статуса (active↔closed).
 - Мосты панели: `writeoff_lot` (списать остаток) / `requisition_lot` (на баланс → белый).
 
-Следующие волны: инвентаризация (Inventory — «найденные» партии), командный свод +
-Procurement, pegging, бюджет/экономия, логин-экран, UI вложений.
+Волна 7 (планирование закупок — командный свод + записываемый Procurement):
+- `command_deficit()` — свод по оси Item через все активные внешние проекты
+  (`Σ` проектных дефицитов, без перенеттинга между проектами). Витрина.
+- `procurement_cockpit` / `create_procurement` / `add|update|remove_procurement_line`
+  / `send|unsend|cancel|restore_procurement` — записываемый план закупки (без проекта,
+  маркер командной высоты; мягкий замок `draft→sent`). Нарезка на `Purchase` — волна 8.
+- `add_to_procurement(...)` — мост «свод → закупка»; `procurement_xlsx(...)` — `order.xlsx`.
+
+Следующие волны: pegging (нарезка Procurement→Purchase), инвентаризация (Inventory —
+«найденные» партии), бюджет/экономия, логин-экран, UI вложений.
 """
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -1386,3 +1394,243 @@ def update_kitting(kitting, qty=None, date=None):
     if fields:
         kitting.save(update_fields=fields)
     return kitting
+
+
+# --------------------------------------------------------------------------- #
+#  Волна 7 — планирование закупок: командный свод + записываемый Procurement
+# --------------------------------------------------------------------------- #
+def command_deficit():
+    """Командный свод: суммарный дефицит по оси Item через все активные внешние проекты.
+
+    Консолидация-проекция (не таблица): для каждого проекта считаем потребность по
+    каждому компоненту (Σ через потребности BOM, 1 уровень) и покрываем её складом/
+    заказами **этого** проекта (`_coverage`, как дефицит проекта — покрытие на уровне
+    Item в проекте, агрегат), затем складываем сегменты по Item через проекты. Между
+    проектами **не** перенеттим (чужие ФЛС/склады не смешиваем): профицит проекта A не
+    гасит нужду проекта B. Итог по Item: `to_order` = сколько всего докупить (▲ красный
+    член), `have`/`on_order` — контекст. Только внешние проекты (внутренние склады —
+    источник покрытия, не потребитель). Read-only витрина.
+    """
+    acc = {}  # item_id → агрегат по Item через проекты
+    projects = (models.Project.objects
+                .filter(kind=models.Project.Kind.EXTERNAL,
+                        status=models.Project.Status.ACTIVE)
+                .order_by('code'))
+    for project in projects:
+        # потребность проекта по компоненту (Σ через потребности BOM, 1 уровень)
+        need_by_item = {}
+        for demand in project.demands.select_related('target_item'):
+            for bl in demand.target_item.bom_lines.select_related('component'):
+                need_by_item[bl.component] = (
+                    need_by_item.get(bl.component, ZERO) + bl.qty * demand.qty)
+        for component, need in need_by_item.items():
+            cov = _coverage(need, item_available(component, project),
+                            item_on_order(component, project))
+            row = acc.setdefault(component.id, {
+                'item_id': component.id, 'item_code': component.code,
+                'item_name': component.name, 'uom': component.uom,
+                'is_manufactured': component.is_manufactured,
+                'need': ZERO, 'have': ZERO, 'on_order': ZERO, 'to_order': ZERO,
+                'by_project': [],
+            })
+            row['need'] += cov['need']
+            row['have'] += cov['have']
+            row['on_order'] += cov['on_order']
+            row['to_order'] += cov['to_order']
+            row['by_project'].append({
+                'project_id': project.id, 'project_code': project.code,
+                'project_name': project.name, 'need': cov['need'],
+                'have': cov['have'], 'on_order': cov['on_order'],
+                'to_order': cov['to_order'], 'status': cov['status'],
+            })
+    rows = []
+    for row in acc.values():
+        # статус Item = тот же словарь по сегментам итога (worst-of)
+        if row['to_order'] > 0:
+            row['status'] = 'to_order'
+        elif row['on_order'] > 0:
+            row['status'] = 'on_order'
+        else:
+            row['status'] = 'available'
+        rows.append(row)
+    # худшее наверх (красное просит внимания), потом по артикулу
+    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['item_code']))
+    return {'rows': rows}
+
+
+def procurement_cockpit(procurement):
+    """Проекция кокпита закупки-плана: шапка + строки (`item`, `qty`) + итог.
+
+    `Procurement` в волне 7 — самостоятельный план без проекта (маркер командной
+    высоты); нарезка на проектные `Purchase` (pegging) — волна 8. Мягкий замок
+    `status` зеркалит заказ: строки правятся только в черновике. Чистая проекция.
+    """
+    is_draft = procurement.status == models.Procurement.Status.DRAFT
+    rows = []
+    total_qty = ZERO
+    for line in procurement.lines.select_related('item').order_by('id'):
+        total_qty += line.qty
+        rows.append({
+            'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
+            'item_name': line.item.name, 'uom': line.item.uom, 'qty': line.qty,
+        })
+    return {
+        'id': procurement.id, 'status': procurement.status,
+        'date': procurement.date, 'note': procurement.note,
+        'editable': is_draft,                       # строки правятся только в черновике
+        'total_qty': total_qty, 'lines': rows,
+    }
+
+
+def create_procurement(user, date=None, note=''):
+    """Создать закупку-план (черновик) без проекта."""
+    return models.Procurement.objects.create(
+        user=user, status=models.Procurement.Status.DRAFT,
+        date=date, note=(note or '').strip())
+
+
+def _require_procurement_draft(procurement):
+    if procurement.status != models.Procurement.Status.DRAFT:
+        raise ValidationError(
+            'Строки правятся только в черновике закупки — снимите отправку (unsend).')
+
+
+def add_procurement_line(procurement, item, qty):
+    """Добавить строку закупки-плана (только в черновике). `(procurement, item)` — одна строка."""
+    _require_procurement_draft(procurement)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество закупки должно быть положительным.')
+    if procurement.lines.filter(item=item).exists():
+        raise ValidationError(
+            f'Изделие {item.code} уже в закупке — правьте существующую строку.')
+    return models.ProcurementLine.objects.create(
+        procurement=procurement, item=item, qty=qty)
+
+
+def update_procurement_line(line, qty):
+    """Автосейв количества строки закупки-плана (только в черновике)."""
+    _require_procurement_draft(line.procurement)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество закупки должно быть положительным.')
+    line.qty = qty
+    line.save(update_fields=['qty'])
+    return line
+
+
+def remove_procurement_line(line):
+    """Удалить строку закупки-плана (только в черновике)."""
+    _require_procurement_draft(line.procurement)
+    line.delete()
+
+
+def send_procurement(procurement):
+    """Отправить закупку-план (`draft → sent`) — мягкий замок: строки read-only."""
+    if procurement.status == models.Procurement.Status.CANCELLED:
+        raise ValidationError('Отменённую закупку нельзя отправить — восстановите её.')
+    if not procurement.lines.exists():
+        raise ValidationError('Нельзя отправить пустую закупку — добавьте строку.')
+    procurement.status = models.Procurement.Status.SENT
+    procurement.save(update_fields=['status'])
+    return procurement
+
+
+def unsend_procurement(procurement):
+    """Вернуть закупку-план в черновик (`sent → draft`) — ничего не разрушает."""
+    procurement.status = models.Procurement.Status.DRAFT
+    procurement.save(update_fields=['status'])
+    return procurement
+
+
+def cancel_procurement(procurement):
+    """Отменить закупку-план (не удаляет)."""
+    procurement.status = models.Procurement.Status.CANCELLED
+    procurement.save(update_fields=['status'])
+    return procurement
+
+
+def restore_procurement(procurement):
+    """Восстановить отменённую закупку-план в черновик."""
+    procurement.status = models.Procurement.Status.DRAFT
+    procurement.save(update_fields=['status'])
+    return procurement
+
+
+def update_procurement(procurement, date=None, note=None):
+    """Правка шапки закупки-плана (дата / примечание). Только в черновике.
+
+    Дата закупки nullable — пустая строка очищает её в NULL (как заказ).
+    """
+    _require_procurement_draft(procurement)
+    fields = []
+    if date is not None:
+        procurement.date = date or None
+        fields.append('date')
+    if note is not None:
+        procurement.note = note.strip()
+        fields.append('note')
+    if fields:
+        procurement.save(update_fields=fields)
+    return procurement
+
+
+def _plan_procurements():
+    """Закупки-планы волны 7 = `Procurement` **без** привязанных проектных заказов.
+
+    Вырожденные 1:1-заглушки `_solo_procurement` (родитель проектного `Purchase`,
+    волна 4) всегда имеют ≥1 `Purchase` — отсекаем их, пока нарезка Procurement→Purchase
+    (pegging) не пришла волной 8 и не слила два уровня.
+    """
+    return models.Procurement.objects.filter(purchases__isnull=True)
+
+
+def add_to_procurement(item, qty, user):
+    """Мост «командный свод → закупка»: положить позицию в draft-закупку-план.
+
+    Находит последний черновик-план (или создаёт) и добавляет строку; если строка
+    item уже есть — инкрементит `qty` (как «дефицит → заказ»). Возвращает закупку
+    (UI ведёт в кокпит). Заглушки проектных заказов не трогаем (см. `_plan_procurements`).
+    """
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество должно быть положительным.')
+    procurement = (_plan_procurements()
+                   .filter(status=models.Procurement.Status.DRAFT)
+                   .order_by('-id').first())
+    if procurement is None:
+        procurement = create_procurement(user)
+    line = procurement.lines.filter(item=item).first()
+    if line:
+        line.qty = line.qty + qty
+        line.save(update_fields=['qty'])
+    else:
+        models.ProcurementLine.objects.create(
+            procurement=procurement, item=item, qty=qty)
+    return procurement
+
+
+def procurement_xlsx(procurement):
+    """Сгенерировать `order.xlsx` закупки-плана (bytes) — файл поставщику.
+
+    Базовый формат: артикул / наименование / кол-во / ед. Синхронно в запросе
+    (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт ленивый (зависимость
+    только ради экспорта).
+    """
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Заказ'
+    headers = ['Артикул', 'Наименование', 'Кол-во', 'Ед.']
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for line in procurement.lines.select_related('item').order_by('id'):
+        ws.append([line.item.code, line.item.name, float(line.qty), line.item.uom])
+    widths = [22, 48, 12, 8]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[chr(64 + i)].width = width
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

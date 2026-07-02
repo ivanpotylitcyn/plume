@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
   type PurchaseRow, type SupplierRow, type TransferRow, type WriteoffRow,
-  type RequisitionRow } from './api'
+  type RequisitionRow, type ProcurementRow } from './api'
 import { DeficitView } from './DeficitView'
 import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
@@ -12,12 +12,14 @@ import { ItemView } from './ItemView'
 import { KittingView } from './KittingView'
 import { ReceiptView } from './ReceiptView'
 import { PurchaseView, PURCH_ST } from './PurchaseView'
+import { ProcurementView } from './ProcurementView'
+import { CommandDeficitView } from './CommandDeficitView'
 import { TransferView } from './TransferView'
 import { WriteoffView } from './WriteoffView'
 import { RequisitionView } from './RequisitionView'
 
 type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases'
-  | 'transfers' | 'writeoffs' | 'requisitions'
+  | 'transfers' | 'writeoffs' | 'requisitions' | 'procurements'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'item'; id: number }
@@ -33,6 +35,9 @@ type Sel =
   | { kind: 'new-writeoff' }
   | { kind: 'requisition'; id: number }
   | { kind: 'new-requisition' }
+  | { kind: 'command' }
+  | { kind: 'procurement'; id: number }
+  | { kind: 'new-procurement' }
   | null
 
 const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
@@ -51,6 +56,7 @@ export default function App() {
   const [transfers, setTransfers] = useState<TransferRow[]>([])
   const [writeoffs, setWriteoffs] = useState<WriteoffRow[]>([])
   const [requisitions, setRequisitions] = useState<RequisitionRow[]>([])
+  const [procurements, setProcurements] = useState<ProcurementRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
 
   // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
@@ -67,6 +73,7 @@ export default function App() {
   const reloadTransfers = useCallback(() => api.transfers().then(setTransfers), [])
   const reloadWriteoffs = useCallback(() => api.writeoffs().then(setWriteoffs), [])
   const reloadRequisitions = useCallback(() => api.requisitions().then(setRequisitions), [])
+  const reloadProcurements = useCallback(() => api.procurements().then(setProcurements), [])
   const reloadProjects = useCallback(() => api.projects().then(setProjects), [])
 
   useEffect(() => {
@@ -86,8 +93,9 @@ export default function App() {
     reloadTransfers()
     reloadWriteoffs()
     reloadRequisitions()
+    reloadProcurements()
   }, [reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
-      reloadWriteoffs, reloadRequisitions])
+      reloadWriteoffs, reloadRequisitions, reloadProcurements])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
   // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
@@ -139,6 +147,7 @@ export default function App() {
   const openTransfer = (id: number) => { setMode('transfers'); setSel({ kind: 'transfer', id }) }
   const openWriteoff = (id: number) => { setMode('writeoffs'); setSel({ kind: 'writeoff', id }) }
   const openRequisition = (id: number) => { setMode('requisitions'); setSel({ kind: 'requisition', id }) }
+  const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
 
   return (
     <div className="app">
@@ -159,6 +168,8 @@ export default function App() {
           title="Списания — выбытие из проекта (серый путь)" onClick={() => setMode('writeoffs')}>🗑</button>
         <button className={mode === 'requisitions' ? 'active' : ''}
           title="Требования — отпочкование / постановка на баланс" onClick={() => setMode('requisitions')}>⇄</button>
+        <button className={mode === 'procurements' ? 'active' : ''}
+          title="Закупки-план — командный свод + order.xlsx" onClick={() => setMode('procurements')}>⛁</button>
       </div>
 
       <div className="sidebar">
@@ -294,6 +305,31 @@ export default function App() {
             </div>
           ))}
         </>}
+
+        {mode === 'procurements' && <>
+          <h2>Закупки-план</h2>
+          <div className={'tree-item' + (sel?.kind === 'command' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'command' })}>
+            <span className="glyph g-to_order">⛁</span>
+            <span className="code">Командный свод</span>
+          </div>
+          <div className={'tree-item new' + (sel?.kind === 'new-procurement' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-procurement' })}>
+            <span className="code">＋ Новая закупка</span>
+          </div>
+          {procurements.map(p => {
+            const st = PURCH_ST[p.status] ?? PURCH_ST.draft
+            return (
+              <div key={p.id}
+                className={'tree-item' + (sel?.kind === 'procurement' && sel.id === p.id ? ' sel' : '')}
+                onClick={() => setSel({ kind: 'procurement', id: p.id })}>
+                <span className={`glyph ${st.cls}`}>{st.g}</span>
+                <span className="code">Закупка #{p.id}</span>
+                <span className="sub">{p.lines} поз.{p.note ? ' · ' + p.note : ''}</span>
+              </div>
+            )
+          })}
+        </>}
       </div>
 
       <div className="work">
@@ -348,13 +384,21 @@ export default function App() {
         {sel?.kind === 'new-requisition' &&
           <NewRequisition projects={projects}
             onCreated={id => { reloadRequisitions(); openRequisition(id) }} />}
+        {sel?.kind === 'command' &&
+          <CommandDeficitView openItem={openItem}
+            openProcurement={id => { reloadProcurements(); openProcurement(id) }} />}
+        {sel?.kind === 'procurement' &&
+          <ProcurementView procurementId={sel.id} items={items} openItem={openItem}
+            onChanged={reloadProcurements} />}
+        {sel?.kind === 'new-procurement' &&
+          <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
         {!sel && <div className="empty">Выберите объект слева</div>}
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 6 · закрытие проекта (списание / требование + панель)</span>
+        <span>plume · волна 7 · планирование закупок (командный свод + order.xlsx)</span>
         <span className="spacer" />
-        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length}</span>
+        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length}</span>
       </div>
     </div>
   )
@@ -440,6 +484,38 @@ function NewPurchase({ projects, onCreated }: {
         <dt>Примечание</dt>
         <dd><input className="qty-in" style={{ width: 260 }} value={note}
           placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание новой закупки-плана: без проекта (командная высота), только примечание.
+// Строки набираются в кокпите или мостом из командного свода.
+function NewProcurement({ onCreated }: { onCreated: (id: number) => void }) {
+  const [note, setNote] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    setBusy(true); setErr(null)
+    api.createProcurement({ note: note.trim() || undefined })
+      .then(c => onCreated(c.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новая закупка-план</h1>
+      <div className="subtitle">Планирование (командная высота, без проекта) · позиции — в кокпите или из свода</div>
+      <dl className="props">
+        <dt>Примечание</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={note}
+          placeholder="контрагент / поток…" onChange={e => setNote(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

@@ -923,6 +923,180 @@ class HeaderEditTests(EngineTestBase):
         self.assertEqual(req.number, 'ТР-2')
 
 
+class CommandDeficitTests(EngineTestBase):
+    """Волна 7: командный свод — Σ проектных дефицитов по Item, без перенеттинга."""
+
+    def _device_with_screw(self, screw, qty_per, suffix=''):
+        dev = self.make_item(f'DEV{screw.code}{suffix}', manufactured=True,
+                             kind=models.Item.Kind.DEVICE)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(qty_per))
+        return dev
+
+    def test_rolls_up_by_item_across_projects(self):
+        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        dev = self._device_with_screw(scr, 4)
+        prj2 = models.Project.objects.create(code='P2', name='Проект 2',
+                                             kind=models.Project.Kind.EXTERNAL)
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
+
+        rows = {r['item_code']: r for r in engine.command_deficit()['rows']}
+        row = rows['SCR']
+        self.assertEqual(row['need'], D(60))         # 40 + 20
+        self.assertEqual(row['to_order'], D(60))     # склада/заказов нет
+        self.assertEqual(row['status'], 'to_order')
+        self.assertEqual(len(row['by_project']), 2)
+
+    def test_stock_and_order_no_cross_project_netting(self):
+        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        dev = self._device_with_screw(scr, 4)
+        prj2 = models.Project.objects.create(code='P2', name='Проект 2',
+                                             kind=models.Project.Kind.EXTERNAL)
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
+        # склад лежит только в P1 (10 шт) — НЕ должен гасить нужду P2
+        self.receipt_lot(scr, self.prj, 10)
+
+        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
+        self.assertEqual(row['have'], D(10))          # только P1 покрыт
+        self.assertEqual(row['to_order'], D(50))      # 30 (P1) + 20 (P2), не 40
+        self.assertEqual(row['need'], D(60))
+
+    def test_closed_and_internal_projects_excluded(self):
+        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        dev = self._device_with_screw(scr, 2)
+        closed = models.Project.objects.create(code='PC', name='Закрытый',
+            kind=models.Project.Kind.EXTERNAL, status=models.Project.Status.CLOSED)
+        white = models.Project.objects.create(code='WHITE', name='Склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        models.ProjectDemand.objects.create(project=closed, target_item=dev, qty=D(3))
+        models.ProjectDemand.objects.create(project=white, target_item=dev, qty=D(3))
+        self.assertEqual(engine.command_deficit()['rows'], [])
+
+    def test_intra_project_need_aggregated_across_demands(self):
+        # два прибора в одном проекте делят компонент → потребность суммируется,
+        # покрытие считается один раз (одна by_project-строка на проект)
+        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        dev_a = self._device_with_screw(scr, 4, suffix='A')
+        dev_b = self._device_with_screw(scr, 3, suffix='B')
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev_a, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev_b, qty=D(2))
+
+        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
+        self.assertEqual(row['need'], D(14))          # 2×4 + 2×3
+        self.assertEqual(len(row['by_project']), 1)   # агрегат по проекту
+
+    def test_sorted_worst_first(self):
+        red = self.make_item('RED', kind=models.Item.Kind.MATERIAL)
+        green = self.make_item('GRN', kind=models.Item.Kind.MATERIAL)
+        dev = self.make_item('DEVX', manufactured=True, kind=models.Item.Kind.DEVICE)
+        models.BomLine.objects.create(parent=dev, component=red, qty=D(1))
+        models.BomLine.objects.create(parent=dev, component=green, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+        self.receipt_lot(green, self.prj, 100)        # GRN покрыт ✓, RED красный ▲
+
+        codes = [r['item_code'] for r in engine.command_deficit()['rows']]
+        self.assertEqual(codes, ['RED', 'GRN'])       # красное наверх
+
+
+class ProcurementCockpitTests(EngineTestBase):
+    """Волна 7: записываемый план закупки — строки, замок отправки, мост, xlsx."""
+
+    def test_create_and_cockpit_totals(self):
+        p = engine.create_procurement(self.user, note='весна')
+        engine.add_procurement_line(p, self.make_item('A'), D(10))
+        engine.add_procurement_line(p, self.make_item('B'), D(5))
+        c = engine.procurement_cockpit(p)
+        self.assertEqual(len(c['lines']), 2)
+        self.assertEqual(c['total_qty'], D(15))
+        self.assertTrue(c['editable'])
+        self.assertEqual(c['status'], models.Procurement.Status.DRAFT)
+        self.assertEqual(c['note'], 'весна')
+
+    def test_add_line_rejects_duplicate_and_nonpositive(self):
+        p = engine.create_procurement(self.user)
+        item = self.make_item('A')
+        engine.add_procurement_line(p, item, D(10))
+        with self.assertRaises(ValidationError):
+            engine.add_procurement_line(p, item, D(3))
+        with self.assertRaises(ValidationError):
+            engine.add_procurement_line(p, self.make_item('B'), D(0))
+
+    def test_update_and_remove_line(self):
+        p = engine.create_procurement(self.user)
+        line = engine.add_procurement_line(p, self.make_item('A'), D(10))
+        engine.update_procurement_line(line, D(7))
+        line.refresh_from_db()
+        self.assertEqual(line.qty, D(7))
+        engine.remove_procurement_line(line)
+        self.assertFalse(models.ProcurementLine.objects.filter(pk=line.pk).exists())
+
+    def test_send_locks_and_rejects_empty(self):
+        p = engine.create_procurement(self.user)
+        with self.assertRaises(ValidationError):
+            engine.send_procurement(p)                 # пустую нельзя
+        line = engine.add_procurement_line(p, self.make_item('A'), D(10))
+        engine.send_procurement(p)
+        self.assertEqual(p.status, models.Procurement.Status.SENT)
+        with self.assertRaises(ValidationError):
+            engine.update_procurement_line(line, D(5))  # строки под замком
+        with self.assertRaises(ValidationError):
+            engine.add_procurement_line(p, self.make_item('B'), D(1))
+
+    def test_unsend_cancel_restore(self):
+        p = engine.create_procurement(self.user)
+        line = engine.add_procurement_line(p, self.make_item('A'), D(10))
+        engine.send_procurement(p)
+        engine.unsend_procurement(p)
+        engine.update_procurement_line(line, D(30))    # снова можно
+        self.assertEqual(line.qty, D(30))
+        engine.send_procurement(p)
+        engine.cancel_procurement(p)
+        with self.assertRaises(ValidationError):
+            engine.send_procurement(p)                 # отменённую не отправить
+        engine.restore_procurement(p)
+        self.assertEqual(p.status, models.Procurement.Status.DRAFT)
+
+    def test_bridge_add_to_procurement_creates_and_increments(self):
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p1 = engine.add_to_procurement(item, D(15), self.user)
+        self.assertEqual(p1.lines.get(item=item).qty, D(15))
+        p2 = engine.add_to_procurement(item, D(10), self.user)
+        self.assertEqual(p1.id, p2.id)                 # тот же черновик
+        self.assertEqual(p2.lines.get(item=item).qty, D(25))
+
+    def test_bridge_ignores_solo_purchase_stub(self):
+        # заказ волны 4 плодит 1:1-заглушку Procurement — мост её не должен трогать
+        engine.create_purchase(self.prj, self.user)      # заглушка (draft, с purchase)
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p = engine.add_to_procurement(item, D(5), self.user)
+        self.assertFalse(p.purchases.exists())           # это чистый план, не заглушка
+        self.assertEqual(list(engine._plan_procurements()), [p])  # заглушки нет в списке
+
+    def test_update_header(self):
+        p = engine.create_procurement(self.user)
+        engine.update_procurement(p, date='2026-07-10', note='осень')
+        p.refresh_from_db()
+        self.assertEqual(str(p.date), '2026-07-10')
+        self.assertEqual(p.note, 'осень')
+        engine.update_procurement(p, date='')          # пустая строка → NULL
+        p.refresh_from_db()
+        self.assertIsNone(p.date)
+
+    def test_xlsx_bytes_have_header_and_rows(self):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, self.make_item('R100'), D(12))
+        data = engine.procurement_xlsx(p)
+        self.assertTrue(data)                          # непустой байт-поток
+        ws = load_workbook(BytesIO(data)).active
+        self.assertEqual(ws['A1'].value, 'Артикул')
+        self.assertEqual(ws['A2'].value, 'R100')
+        self.assertEqual(ws['C2'].value, 12)
+
+
 class ClosureHttpTests(TestCase):
     """Волна 6: HTTP-путь через test Client — провязка urls/views + мапинг ошибок."""
 
@@ -992,3 +1166,59 @@ class ClosureHttpTests(TestCase):
         self.assertIsNotNone(line.json()['lines'][0]['born_lot_id'])
         picker = self.c.get('/api/available-lots/')
         self.assertEqual(picker.status_code, 200)
+
+
+class ProcurementHttpTests(TestCase):
+    """Волна 7: HTTP-путь — свод, записываемый Procurement, мост, order.xlsx."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.scr = models.Item.objects.create(code='SCR', name='Винт',
+            kind=models.Item.Kind.MATERIAL)
+        self.dev = models.Item.objects.create(code='DEV', name='Прибор',
+            kind=models.Item.Kind.DEVICE, is_manufactured=True)
+        models.BomLine.objects.create(parent=self.dev, component=self.scr, qty=D(4))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev,
+            qty=D(10))
+        self.c = Client()
+
+    def test_command_deficit_and_bridge(self):
+        svod = self.c.get('/api/command-deficit/')
+        self.assertEqual(svod.status_code, 200)
+        rows = {r['item_code']: r for r in svod.json()['rows']}
+        self.assertEqual(float(rows['SCR']['to_order']), 40.0)
+        # мост «свод → закупка» создаёт черновик
+        add = self.c.post('/api/command-deficit/add-to-procurement/',
+            {'item_id': self.scr.id, 'qty': 40}, content_type='application/json')
+        self.assertEqual(add.status_code, 201)
+        pid = add.json()['procurement_id']
+        cockpit = self.c.get(f'/api/procurements/{pid}/').json()
+        self.assertEqual(float(cockpit['total_qty']), 40.0)
+
+    def test_procurement_crud_lock_and_xlsx(self):
+        r = self.c.post('/api/procurements/', {'note': 'весна'},
+            content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        pid = r.json()['id']
+        line = self.c.post(f'/api/procurements/{pid}/lines/',
+            {'item_id': self.scr.id, 'qty': 12}, content_type='application/json')
+        self.assertEqual(line.status_code, 201)
+        # дубль item → 400
+        dup = self.c.post(f'/api/procurements/{pid}/lines/',
+            {'item_id': self.scr.id, 'qty': 1}, content_type='application/json')
+        self.assertEqual(dup.status_code, 400)
+        # отправка → строки под замком
+        sent = self.c.post(f'/api/procurements/{pid}/send/')
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual(sent.json()['status'], 'sent')
+        locked = self.c.post(f'/api/procurements/{pid}/lines/',
+            {'item_id': self.dev.id, 'qty': 1}, content_type='application/json')
+        self.assertEqual(locked.status_code, 400)
+        # выгрузка xlsx — бинарное тело, xlsx content-type
+        xlsx = self.c.get(f'/api/procurements/{pid}/order.xlsx')
+        self.assertEqual(xlsx.status_code, 200)
+        self.assertIn('spreadsheetml', xlsx['Content-Type'])
+        self.assertTrue(xlsx['Content-Disposition'].startswith('attachment'))
+        self.assertTrue(xlsx.content[:2] == b'PK')      # zip-сигнатура xlsx

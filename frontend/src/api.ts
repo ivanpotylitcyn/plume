@@ -187,6 +187,31 @@ export interface ProjectClosure {
   can_close: boolean; blocker: string
 }
 
+// ── Планирование закупок (волна 7): командный свод + Procurement ──
+export interface CommandDeficitProject {
+  project_id: number; project_code: string; project_name: string
+  need: number; have: number; on_order: number; to_order: number; status: Status
+}
+export interface CommandDeficitRow {
+  item_id: number; item_code: string; item_name: string; uom: string
+  is_manufactured: boolean
+  need: number; have: number; on_order: number; to_order: number
+  status: Status; by_project: CommandDeficitProject[]
+}
+export interface CommandDeficit { rows: CommandDeficitRow[] }
+
+export interface ProcurementRow {
+  id: number; status: string; date: string | null; note: string; lines: number
+}
+export interface ProcurementCockpitLine {
+  id: number; item_id: number; item_code: string; item_name: string
+  uom: string; qty: number
+}
+export interface ProcurementCockpit {
+  id: number; status: string; date: string | null; note: string; editable: boolean
+  total_qty: number; lines: ProcurementCockpitLine[]
+}
+
 function getCookie(name: string): string | null {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
   return m ? decodeURIComponent(m[2]) : null
@@ -322,6 +347,28 @@ export const api = {
   deleteRequisitionLine: (id: number) =>
     send<RequisitionCockpit>('DELETE', `/api/requisition-lines/${id}/`),
   allAvailableLots: () => get<AllAvailableLot[]>('/api/available-lots/'),
+
+  // ── Планирование закупок (волна 7) ──
+  commandDeficit: () => get<CommandDeficit>('/api/command-deficit/'),
+  addToProcurement: (b: { item_id: number; qty: number }) =>
+    send<{ procurement_id: number }>('POST', '/api/command-deficit/add-to-procurement/', b),
+  procurements: () => get<ProcurementRow[]>('/api/procurements/'),
+  procurement: (id: number) => get<ProcurementCockpit>(`/api/procurements/${id}/`),
+  updateProcurement: (id: number, b: Partial<{ date: string; note: string }>) =>
+    send<ProcurementCockpit>('PATCH', `/api/procurements/${id}/`, b),
+  createProcurement: (b: { note?: string; date?: string }) =>
+    send<ProcurementCockpit>('POST', '/api/procurements/', b),
+  addProcurementLine: (id: number, b: { item_id: number; qty: number }) =>
+    send<ProcurementCockpit>('POST', `/api/procurements/${id}/lines/`, b),
+  updateProcurementLine: (id: number, qty: number) =>
+    send<ProcurementCockpit>('PATCH', `/api/procurement-lines/${id}/`, { qty }),
+  deleteProcurementLine: (id: number) =>
+    send<ProcurementCockpit>('DELETE', `/api/procurement-lines/${id}/`),
+  sendProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/send/`),
+  unsendProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/unsend/`),
+  cancelProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/cancel/`),
+  restoreProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/restore/`),
+  orderXlsxUrl: (id: number) => `/api/procurements/${id}/order.xlsx`,
 
   closure: (id: number) => get<ProjectClosure>(`/api/projects/${id}/closure/`),
   writeoffLot: (id: number, b: { lot_id: number; qty: number }) =>

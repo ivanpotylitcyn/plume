@@ -64,4 +64,16 @@ urlpatterns = [
     path('requisitions/<int:pk>/', views.requisition_detail, name='requisition-detail'),
     path('requisitions/<int:pk>/lines/', views.requisition_lines, name='requisition-lines'),
     path('requisition-lines/<int:pk>/', views.requisition_line_detail, name='requisition-line'),
+    # планирование закупок (волна 7): командный свод + записываемый Procurement + order.xlsx
+    path('command-deficit/', views.command_deficit, name='command-deficit'),
+    path('command-deficit/add-to-procurement/', views.command_deficit_add, name='command-deficit-add'),
+    path('procurements/', views.procurements, name='procurements'),
+    path('procurements/<int:pk>/', views.procurement_detail, name='procurement-detail'),
+    path('procurements/<int:pk>/lines/', views.procurement_lines, name='procurement-lines'),
+    path('procurements/<int:pk>/send/', views.procurement_send, name='procurement-send'),
+    path('procurements/<int:pk>/unsend/', views.procurement_unsend, name='procurement-unsend'),
+    path('procurements/<int:pk>/cancel/', views.procurement_cancel, name='procurement-cancel'),
+    path('procurements/<int:pk>/restore/', views.procurement_restore, name='procurement-restore'),
+    path('procurements/<int:pk>/order.xlsx', views.procurement_order_xlsx, name='procurement-order-xlsx'),
+    path('procurement-lines/<int:pk>/', views.procurement_line_detail, name='procurement-line'),
 ]
