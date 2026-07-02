@@ -21,7 +21,13 @@
 - `add/update/remove_receipt_lot`, `approve/unapprove_receipt` — рождение лотов
   (`+RECEIPT`) и мягкий замок «сверено со сканом».
 
-Следующие волны: pegging, командный свод, бюджет/экономия.
+Волна 4 (записываемый заказ / Purchase + связь с приходом):
+- `purchase_cockpit(purchase)` — шапка + строки (заказано/поступило/остаток) + приходы;
+  `create_purchase`, `add/update/remove_purchase_line`, `send/unsend/cancel/restore_purchase`.
+- `set_receipt_purchase(receipt, purchase)` — связь `Receipt↔Purchase` (гашение заказа).
+- `add_to_project_order(...)` — мост «дефицит → заказ» (оживляет член «заказано»).
+
+Следующие волны: командный свод + Procurement, pegging, бюджет/экономия.
 """
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -128,6 +134,17 @@ def item_has_negative_lot(item, project):
 # --------------------------------------------------------------------------- #
 #  «Заказано» (оранжевый член): открытый заказ или wip-комплектация
 # --------------------------------------------------------------------------- #
+def _line_received(line):
+    """Поступило по строке заказа = Σ Lot.qty лотов её item по связанным приходам.
+
+    Документ = УПД правда: поступившее — приход (`+RECEIPT` через `Receipt.purchase`),
+    не текущий остаток (получили 100 → спаяли 40 → заказ закрыт на 100).
+    """
+    return models.Lot.objects.filter(
+        item=line.item, receipt__purchase=line.purchase,
+    ).aggregate(s=Sum('qty'))['s'] or ZERO
+
+
 def _purchased_on_order(item, project):
     """Σ max(0, PurchaseLine.qty − поступившее) по открытым (sent) заказам проекта."""
     total = ZERO
@@ -136,10 +153,7 @@ def _purchased_on_order(item, project):
         purchase__status=models.Purchase.Status.SENT,
     ).select_related('purchase')
     for line in lines:
-        received = models.Lot.objects.filter(
-            item=item, receipt__purchase=line.purchase,
-        ).aggregate(s=Sum('qty'))['s'] or ZERO
-        total += max(ZERO, line.qty - received)
+        total += max(ZERO, line.qty - _line_received(line))
     return total
 
 
@@ -493,6 +507,7 @@ def receipt_cockpit(receipt):
         'supplier_id': receipt.supplier_id, 'supplier_name': receipt.supplier.name,
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
         'project_name': receipt.project.name,
+        'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
         'approved': receipt.approved, 'total_cost': total,
         'lots': lots,
     }
@@ -576,3 +591,180 @@ def unapprove_receipt(receipt):
     receipt.approved = False
     receipt.save(update_fields=['approved'])
     return receipt
+
+
+def set_receipt_purchase(receipt, purchase):
+    """Связать приход с заказом (гасит строки заказа) или отвязать (`None`).
+
+    Один заказ закрывается одним/несколькими приходами через `Receipt.purchase`.
+    Приход закрывает только заказ **своего проекта** (чистота «один УПД ↔ один проект»).
+    Лоты не двигает — `rebuild_movements` не нужен; на «заказано» влияет через
+    `_line_received` (проекция).
+    """
+    if purchase is not None and purchase.project_id != receipt.project_id:
+        raise ValidationError(
+            'Заказ другого проекта — приход закрывает только заказ своего проекта.')
+    receipt.purchase = purchase
+    receipt.save(update_fields=['purchase'])
+    return receipt
+
+
+# --------------------------------------------------------------------------- #
+#  Кокпит заказа / Purchase (волна 4): строки-обязательства + гашение приходом
+# --------------------------------------------------------------------------- #
+def _solo_procurement(user):
+    """Тонкий draft-`Procurement` под одиночный проектный заказ.
+
+    `Purchase.procurement` — обязательный FK, но командный свод отложен: пока каждый
+    проектный заказ получает свою закупку-родителя (вырожденный 1:1). Будущая
+    командная волна введёт общие Procurement, веерно нарезаемые на проектные Purchase.
+    """
+    return models.Procurement.objects.create(
+        user=user, status=models.Procurement.Status.DRAFT,
+        note='авто (проектный заказ)')
+
+
+def create_purchase(project, user, date=None, note=''):
+    """Создать заказ проекта (черновик) с авто-`Procurement`-родителем."""
+    proc = _solo_procurement(user)
+    return models.Purchase.objects.create(
+        procurement=proc, project=project, user=user,
+        status=models.Purchase.Status.DRAFT, date=date, note=note or '')
+
+
+def purchase_cockpit(purchase):
+    """Проекция кокпита заказа: шапка + строки (заказано/поступило/остаток) + приходы.
+
+    Закрытость строки красится тем же словарём ✓/●/▲, что дефицит/кокпиты:
+    получено полностью → ✓ (available), частично → ● (on_order), ничего → ▲ (to_order).
+    Статусы `partial`/`received` не храним — это вычисляемая закрытость. Ничего не
+    хранит (чистая проекция).
+    """
+    is_draft = purchase.status == models.Purchase.Status.DRAFT
+    rows = []
+    statuses = []
+    total_ordered = ZERO
+    total_received = ZERO
+    for line in purchase.lines.select_related('item').order_by('id'):
+        received = _line_received(line)
+        remaining = max(ZERO, line.qty - received)
+        total_ordered += line.qty
+        total_received += received
+        if line.qty > 0 and received >= line.qty:
+            st = 'available'      # ✓ получено полностью
+        elif received > 0:
+            st = 'on_order'       # ● частично получено
+        else:
+            st = 'to_order'       # ▲ ждём поставки
+        statuses.append(st)
+        rows.append({
+            'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
+            'item_name': line.item.name, 'uom': line.item.uom,
+            'qty': line.qty, 'received': received, 'remaining': remaining,
+            'status': st,
+        })
+    receipts = [
+        {'id': r.id, 'number': r.number, 'date': r.date,
+         'supplier_name': r.supplier.name, 'lines': r.lots.count()}
+        for r in purchase.receipts.select_related('supplier').order_by('id')
+    ]
+    return {
+        'id': purchase.id, 'status': purchase.status,
+        'project_id': purchase.project_id, 'project_code': purchase.project.code,
+        'project_name': purchase.project.name,
+        'date': purchase.date, 'note': purchase.note,
+        'editable': is_draft,                       # строки правятся только в черновике
+        'cockpit_status': _worst_of(statuses),      # worst-of закрытости строк
+        'total_ordered': total_ordered, 'total_received': total_received,
+        'rows': rows, 'receipts': receipts,
+    }
+
+
+def _require_purchase_draft(purchase):
+    if purchase.status != models.Purchase.Status.DRAFT:
+        raise ValidationError(
+            'Строки правятся только в черновике заказа — снимите отправку (unsend).')
+
+
+def add_purchase_line(purchase, item, qty):
+    """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна."""
+    _require_purchase_draft(purchase)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество заказа должно быть положительным.')
+    if purchase.lines.filter(item=item).exists():
+        raise ValidationError(
+            f'Изделие {item.code} уже в заказе — правьте существующую строку.')
+    return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
+
+
+def update_purchase_line(line, qty):
+    """Автосейв количества строки заказа (только в черновике)."""
+    _require_purchase_draft(line.purchase)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество заказа должно быть положительным.')
+    line.qty = qty
+    line.save(update_fields=['qty'])
+    return line
+
+
+def remove_purchase_line(line):
+    """Удалить строку заказа (только в черновике)."""
+    _require_purchase_draft(line.purchase)
+    line.delete()
+
+
+def send_purchase(purchase):
+    """Отправить заказ (`draft → sent`) — мягкий замок: теперь считается в «заказано»,
+    строки становятся read-only. Снятие (`unsend`) ничего не разрушает."""
+    if purchase.status == models.Purchase.Status.CANCELLED:
+        raise ValidationError('Отменённый заказ нельзя отправить — восстановите его.')
+    if not purchase.lines.exists():
+        raise ValidationError('Нельзя отправить пустой заказ — добавьте строку.')
+    purchase.status = models.Purchase.Status.SENT
+    purchase.save(update_fields=['status'])
+    return purchase
+
+
+def unsend_purchase(purchase):
+    """Вернуть заказ в черновик (`sent → draft`). Purchase лотов не рождает —
+    снятие обязательства ничего не разрушает (связанные приходы остаются, заказ
+    просто выходит из счёта «заказано»), guard по потомкам не нужен."""
+    purchase.status = models.Purchase.Status.DRAFT
+    purchase.save(update_fields=['status'])
+    return purchase
+
+
+def cancel_purchase(purchase):
+    """Отменить заказ — выводит из счёта «заказано» (не удаляет)."""
+    purchase.status = models.Purchase.Status.CANCELLED
+    purchase.save(update_fields=['status'])
+    return purchase
+
+
+def restore_purchase(purchase):
+    """Восстановить отменённый заказ в черновик."""
+    purchase.status = models.Purchase.Status.DRAFT
+    purchase.save(update_fields=['status'])
+    return purchase
+
+
+def add_to_project_order(project, item, qty, user):
+    """Мост «дефицит → заказ»: положить позицию в draft-заказ проекта.
+
+    Находит последний черновик-заказ проекта (или создаёт новый с авто-`Procurement`)
+    и добавляет строку; если строка item уже есть — инкрементит её `qty`. Возвращает
+    заказ (UI ведёт в кокпит). Оживляет ▲-член «заказано» дашборда дефицита.
+    """
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество должно быть положительным.')
+    purchase = (project.purchases.filter(status=models.Purchase.Status.DRAFT)
+                .order_by('-id').first())
+    if purchase is None:
+        purchase = create_purchase(project, user)
+    line = purchase.lines.filter(item=item).first()
+    if line:
+        line.qty = line.qty + qty
+        line.save(update_fields=['qty'])
+    else:
+        models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
+    return purchase

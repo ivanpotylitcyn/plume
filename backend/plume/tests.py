@@ -430,3 +430,129 @@ class ReceiptCockpitTests(EngineTestBase):
         row = {r['component_code']: r for r in c['rows']}['R']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
+
+
+class PurchaseCockpitTests(EngineTestBase):
+    """Волна 4: кокпит заказа — строки-обязательства, замок отправки, гашение
+    приходом, мост «дефицит → заказ»."""
+
+    def test_create_purchase_autocreates_procurement(self):
+        p = engine.create_purchase(self.prj, self.user)
+        self.assertEqual(p.status, models.Purchase.Status.DRAFT)
+        self.assertIsNotNone(p.procurement_id)          # авто-родитель
+        self.assertEqual(p.project_id, self.prj.id)
+
+    def test_add_line_and_cockpit_totals(self):
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, self.make_item('A'), D(10))
+        engine.add_purchase_line(p, self.make_item('B'), D(5))
+        c = engine.purchase_cockpit(p)
+        self.assertEqual(len(c['rows']), 2)
+        self.assertEqual(c['total_ordered'], D(15))
+        self.assertEqual(c['total_received'], D(0))
+        self.assertTrue(c['editable'])
+        self.assertEqual(c['rows'][0]['status'], 'to_order')   # ждём поставки
+
+    def test_add_line_rejects_duplicate_item(self):
+        p = engine.create_purchase(self.prj, self.user)
+        item = self.make_item('A')
+        engine.add_purchase_line(p, item, D(10))
+        with self.assertRaises(ValidationError):
+            engine.add_purchase_line(p, item, D(3))
+
+    def test_add_line_rejects_nonpositive(self):
+        p = engine.create_purchase(self.prj, self.user)
+        with self.assertRaises(ValidationError):
+            engine.add_purchase_line(p, self.make_item('A'), D(0))
+
+    def test_update_and_remove_line(self):
+        p = engine.create_purchase(self.prj, self.user)
+        line = engine.add_purchase_line(p, self.make_item('A'), D(10))
+        engine.update_purchase_line(line, D(7))
+        line.refresh_from_db()
+        self.assertEqual(line.qty, D(7))
+        engine.remove_purchase_line(line)
+        self.assertFalse(models.PurchaseLine.objects.filter(pk=line.pk).exists())
+
+    def test_send_counts_in_on_order(self):
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, item, D(40))
+        self.assertEqual(engine.item_on_order(item, self.prj), D(0))  # draft не в счёте
+        engine.send_purchase(p)
+        self.assertEqual(engine.item_on_order(item, self.prj), D(40))
+
+    def test_send_rejects_empty(self):
+        p = engine.create_purchase(self.prj, self.user)
+        with self.assertRaises(ValidationError):
+            engine.send_purchase(p)
+
+    def test_lines_locked_after_send(self):
+        p = engine.create_purchase(self.prj, self.user)
+        line = engine.add_purchase_line(p, self.make_item('A'), D(10))
+        engine.send_purchase(p)
+        with self.assertRaises(ValidationError):
+            engine.update_purchase_line(line, D(5))
+        with self.assertRaises(ValidationError):
+            engine.add_purchase_line(p, self.make_item('B'), D(1))
+
+    def test_unsend_reenables_and_drops_from_on_order(self):
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p = engine.create_purchase(self.prj, self.user)
+        line = engine.add_purchase_line(p, item, D(40))
+        engine.send_purchase(p)
+        engine.unsend_purchase(p)
+        self.assertEqual(engine.item_on_order(item, self.prj), D(0))
+        engine.update_purchase_line(line, D(30))       # снова можно
+        self.assertEqual(line.qty, D(30))
+
+    def test_cancel_drops_from_on_order(self):
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, item, D(40))
+        engine.send_purchase(p)
+        engine.cancel_purchase(p)
+        self.assertEqual(engine.item_on_order(item, self.prj), D(0))
+        with self.assertRaises(ValidationError):        # отменённый не отправить
+            engine.send_purchase(p)
+        engine.restore_purchase(p)
+        self.assertEqual(p.status, models.Purchase.Status.DRAFT)
+
+    def test_linked_receipt_reduces_on_order_and_closes_line(self):
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p = engine.create_purchase(self.prj, self.user)
+        line = engine.add_purchase_line(p, item, D(40))
+        engine.send_purchase(p)
+        # приход 15, связанный с заказом → поступило 15, «заказано» 25
+        self.receipt_lot(item, self.prj, 15, purchase=p)
+        self.assertEqual(engine.item_on_order(item, self.prj), D(25))
+        c = engine.purchase_cockpit(p)
+        row = c['rows'][0]
+        self.assertEqual(row['received'], D(15))
+        self.assertEqual(row['remaining'], D(25))
+        self.assertEqual(row['status'], 'on_order')     # ● частично
+        self.assertEqual(len(c['receipts']), 1)
+        # добираем остаток → строка закрыта (✓), «заказано» 0
+        self.receipt_lot(item, self.prj, 25, purchase=p)
+        self.assertEqual(engine.item_on_order(item, self.prj), D(0))
+        row = engine.purchase_cockpit(p)['rows'][0]
+        self.assertEqual(row['status'], 'available')
+
+    def test_set_receipt_purchase_rejects_foreign_project(self):
+        other = models.Project.objects.create(
+            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        p = engine.create_purchase(other, self.user)
+        r = models.Receipt.objects.create(
+            number='УПД-Х', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        with self.assertRaises(ValidationError):
+            engine.set_receipt_purchase(r, p)           # заказ чужого проекта
+
+    def test_deficit_bridge_creates_and_increments_line(self):
+        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        p1 = engine.add_to_project_order(self.prj, item, D(15), self.user)
+        self.assertEqual(p1.lines.get(item=item).qty, D(15))
+        # повтор той же позиции — инкремент в том же черновике
+        p2 = engine.add_to_project_order(self.prj, item, D(10), self.user)
+        self.assertEqual(p1.id, p2.id)
+        self.assertEqual(p2.lines.get(item=item).qty, D(25))

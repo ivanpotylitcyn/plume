@@ -3,20 +3,26 @@
 // цена + название, автосейв по blur/Enter. Добавление строки = рождение партии
 // (+RECEIPT). Замок «сверено со сканом» (approved) делает форму read-only.
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type ReceiptCockpit, type ReceiptLot } from './api'
+import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
+  type ReceiptLot } from './api'
 import { num } from './status'
 
-export function ReceiptView({ receiptId, items, openItem, onChanged }: {
+export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged }: {
   receiptId: number; items: ItemRow[]
-  openItem: (id: number) => void; onChanged: () => void
+  openItem: (id: number) => void; openPurchase: (id: number) => void
+  onChanged: () => void
 }) {
   const [c, setC] = useState<ReceiptCockpit | null>(null)
+  const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setC(null); setErr(null)
-    api.receipt(receiptId).then(setC).catch(e => setErr(String(e)))
+    api.receipt(receiptId).then(c => {
+      setC(c)
+      api.projectPurchases(c.project_id).then(setPurchases)
+    }).catch(e => setErr(String(e)))
   }, [receiptId])
 
   const run = (p: Promise<ReceiptCockpit>) => {
@@ -49,6 +55,17 @@ export function ReceiptView({ receiptId, items, openItem, onChanged }: {
               onClick={() => run(api.unapproveReceipt(c.id))}>Снять замок</button>
           : <button className="btn" disabled={busy}
               onClick={() => run(api.approveReceipt(c.id))}>Сверено со сканом</button>}
+        <span className="hint">Заказ (закрывает):</span>
+        <select className="lot-sel" value={c.purchase_id ?? ''} disabled={locked || busy}
+          onChange={e => run(api.linkReceiptPurchase(
+            c.id, e.target.value ? Number(e.target.value) : null))}>
+          <option value="">— не связан —</option>
+          {purchases.map(p => (
+            <option key={p.id} value={p.id}>Заказ #{p.id} · {p.status} · {p.lines} стр.</option>
+          ))}
+        </select>
+        {c.purchase_id &&
+          <a className="link" onClick={() => openPurchase(c.purchase_id!)}>открыть заказ ›</a>}
         {busy && <span className="hint">сохраняю…</span>}
         {err && <span className="anomaly">{err}</span>}
       </div>
@@ -166,7 +183,8 @@ function GhostRow({ receiptId, items, busy, run }: {
 }
 
 // Автосейв текстового/числового поля: коммит по blur / Enter (без кнопки).
-function CommitInput({ value, onCommit, disabled, width = 60, validate }: {
+// Переиспуемый компонент (кокпиты прихода/заказа).
+export function CommitInput({ value, onCommit, disabled, width = 60, validate }: {
   value: string; onCommit: (v: string) => void; disabled?: boolean
   width?: number; validate?: (v: string) => boolean
 }) {

@@ -4,6 +4,8 @@
 Волна 2 — записываемое ядро: кокпит комплектации (пайка = промоушн призрачной
 строки в `KittingLine`, автосейв qty, закрытие/переоткрытие). Правила мутаций
 живут в `engine.py`; вьюхи только разбирают запрос и маппят ошибки в 400.
+Волна 3 — приход/УПД (рождение лотов, замок). Волна 4 — заказ (Purchase) +
+связь `Receipt↔Purchase` + мост «дефицит → заказ».
 """
 from decimal import Decimal, InvalidOperation
 
@@ -320,3 +322,152 @@ def receipt_unapprove(request, pk):
     r = get_object_or_404(models.Receipt, pk=pk)
     engine.unapprove_receipt(r)
     return Response(engine.receipt_cockpit(r))
+
+
+@api_view(['POST'])
+def receipt_link(request, pk):
+    """Связать приход с заказом (закрытие строк заказа) или отвязать (purchase_id=null)."""
+    r = get_object_or_404(models.Receipt, pk=pk)
+    pid = request.data.get('purchase_id')
+    try:
+        purchase = models.Purchase.objects.get(pk=pid) if pid else None
+        engine.set_receipt_purchase(r, purchase)
+    except models.Purchase.DoesNotExist:
+        return _bad('Заказ не найден.')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.receipt_cockpit(r))
+
+
+# --------------------------------------------------------------------------- #
+#  Заказ / Purchase (волна 4 — записываемое ядро) + мост «дефицит → заказ»
+# --------------------------------------------------------------------------- #
+def _purchase_row(p):
+    """Строка списка заказов для дерева навигации."""
+    return {
+        'id': p.id, 'project_code': p.project.code, 'status': p.status,
+        'date': p.date, 'note': p.note, 'lines': p.lines.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def purchases(request):
+    """Список заказов (дерево) / создание нового (призрачная строка)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+        except (KeyError, models.Project.DoesNotExist) as e:
+            return _bad(f'Нужен project_id ({e}).')
+        p = engine.create_purchase(project, _actor(request),
+                                   date=d.get('date') or None,
+                                   note=(d.get('note') or '').strip())
+        return Response(engine.purchase_cockpit(p), status=http.HTTP_201_CREATED)
+
+    rows = [_purchase_row(p) for p in models.Purchase.objects
+            .select_related('project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET'])
+def purchase_detail(request, pk):
+    """Кокпит заказа: строки (заказано/поступило/остаток) + связанные приходы."""
+    p = get_object_or_404(models.Purchase, pk=pk)
+    return Response(engine.purchase_cockpit(p))
+
+
+@api_view(['POST'])
+def purchase_lines(request, pk):
+    """Добавить строку заказа (только в черновике)."""
+    p = get_object_or_404(models.Purchase, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        engine.add_purchase_line(p, item, _dec(d.get('qty')))
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.purchase_cockpit(p), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def purchase_line_detail(request, pk):
+    """Автосейв количества строки заказа (PATCH) / удаление строки (DELETE)."""
+    line = get_object_or_404(
+        models.PurchaseLine.objects.select_related('purchase'), pk=pk)
+    purchase = line.purchase
+    try:
+        if request.method == 'DELETE':
+            engine.remove_purchase_line(line)
+        else:
+            engine.update_purchase_line(line, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.purchase_cockpit(purchase))
+
+
+def _purchase_transition(request, pk, fn):
+    """Общий обработчик перехода статуса заказа (send/unsend/cancel/restore)."""
+    p = get_object_or_404(models.Purchase, pk=pk)
+    try:
+        fn(p)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.purchase_cockpit(p))
+
+
+@api_view(['POST'])
+def purchase_send(request, pk):
+    """Отправить заказ (draft → sent) — мягкий замок, счёт в «заказано»."""
+    return _purchase_transition(request, pk, engine.send_purchase)
+
+
+@api_view(['POST'])
+def purchase_unsend(request, pk):
+    """Вернуть заказ в черновик (sent → draft)."""
+    return _purchase_transition(request, pk, engine.unsend_purchase)
+
+
+@api_view(['POST'])
+def purchase_cancel(request, pk):
+    """Отменить заказ (выводит из счёта «заказано»)."""
+    return _purchase_transition(request, pk, engine.cancel_purchase)
+
+
+@api_view(['POST'])
+def purchase_restore(request, pk):
+    """Восстановить отменённый заказ в черновик."""
+    return _purchase_transition(request, pk, engine.restore_purchase)
+
+
+@api_view(['GET'])
+def project_purchases(request, pk):
+    """Заказы проекта (не отменённые) — пикер связи прихода с заказом."""
+    project = get_object_or_404(models.Project, pk=pk)
+    rows = [
+        {'id': p.id, 'status': p.status, 'date': p.date, 'note': p.note,
+         'lines': p.lines.count()}
+        for p in project.purchases.exclude(status=models.Purchase.Status.CANCELLED)
+        .order_by('-id')
+    ]
+    return Response(rows)
+
+
+@api_view(['POST'])
+def project_order(request, pk):
+    """Мост «дефицит → заказ»: положить позицию в draft-заказ проекта.
+
+    Возвращает id заказа (UI ведёт в кокпит). Оживляет ▲-член «заказано» дефицита.
+    """
+    project = get_object_or_404(models.Project, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        p = engine.add_to_project_order(project, item, _dec(d.get('qty')),
+                                        _actor(request))
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response({'purchase_id': p.id}, status=http.HTTP_201_CREATED)

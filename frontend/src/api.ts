@@ -87,7 +87,30 @@ export interface ReceiptLot {
 export interface ReceiptCockpit {
   id: number; number: string; date: string; supplier_id: number; supplier_name: string
   project_id: number; project_code: string; project_name: string
+  purchase_id: number | null
   approved: boolean; total_cost: number; lots: ReceiptLot[]
+}
+
+// ── Заказ / Purchase (волна 4 — записываемое ядро) ──
+export interface PurchaseRow {
+  id: number; project_code: string; status: string
+  date: string | null; note: string; lines: number
+}
+export interface PurchaseCockpitLine {
+  id: number; item_id: number; item_code: string; item_name: string; uom: string
+  qty: number; received: number; remaining: number; status: Status
+}
+export interface PurchaseReceiptRow {
+  id: number; number: string; date: string; supplier_name: string; lines: number
+}
+export interface PurchaseCockpit {
+  id: number; status: string; project_id: number; project_code: string
+  project_name: string; date: string | null; note: string; editable: boolean
+  cockpit_status: Status; total_ordered: number; total_received: number
+  rows: PurchaseCockpitLine[]; receipts: PurchaseReceiptRow[]
+}
+export interface ProjectPurchaseRow {
+  id: number; status: string; date: string | null; note: string; lines: number
 }
 
 function getCookie(name: string): string | null {
@@ -155,4 +178,24 @@ export const api = {
   deleteReceiptLot: (id: number) => send<ReceiptCockpit>('DELETE', `/api/lots/${id}/`),
   approveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/approve/`),
   unapproveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/unapprove/`),
+  linkReceiptPurchase: (id: number, purchase_id: number | null) =>
+    send<ReceiptCockpit>('POST', `/api/receipts/${id}/link/`, { purchase_id }),
+
+  purchases: () => get<PurchaseRow[]>('/api/purchases/'),
+  purchase: (id: number) => get<PurchaseCockpit>(`/api/purchases/${id}/`),
+  createPurchase: (b: { project_id: number; date?: string; note?: string }) =>
+    send<PurchaseCockpit>('POST', '/api/purchases/', b),
+  addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
+    send<PurchaseCockpit>('POST', `/api/purchases/${id}/lines/`, b),
+  updatePurchaseLine: (id: number, qty: number) =>
+    send<PurchaseCockpit>('PATCH', `/api/purchase-lines/${id}/`, { qty }),
+  deletePurchaseLine: (id: number) =>
+    send<PurchaseCockpit>('DELETE', `/api/purchase-lines/${id}/`),
+  sendPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/send/`),
+  unsendPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/unsend/`),
+  cancelPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/cancel/`),
+  restorePurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/restore/`),
+  projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
+  addToOrder: (id: number, b: { item_id: number; qty: number }) =>
+    send<{ purchase_id: number }>('POST', `/api/projects/${id}/order/`, b),
 }

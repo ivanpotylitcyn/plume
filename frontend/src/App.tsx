@@ -3,13 +3,14 @@
 // Волна 2: третий режим «Комплектации» — записываемый кокпит сборки.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
-  type SupplierRow } from './api'
+  type PurchaseRow, type SupplierRow } from './api'
 import { DeficitView } from './DeficitView'
 import { ItemView } from './ItemView'
 import { KittingView } from './KittingView'
 import { ReceiptView } from './ReceiptView'
+import { PurchaseView, PURCH_ST } from './PurchaseView'
 
-type Mode = 'projects' | 'items' | 'kittings' | 'receipts'
+type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'item'; id: number }
@@ -17,6 +18,8 @@ type Sel =
   | { kind: 'new-kitting' }
   | { kind: 'receipt'; id: number }
   | { kind: 'new-receipt' }
+  | { kind: 'purchase'; id: number }
+  | { kind: 'new-purchase' }
   | null
 
 const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
@@ -31,6 +34,7 @@ export default function App() {
   const [items, setItems] = useState<ItemRow[]>([])
   const [kittings, setKittings] = useState<KittingRow[]>([])
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
+  const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
 
   // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
@@ -43,6 +47,7 @@ export default function App() {
 
   const reloadKittings = useCallback(() => api.kittings().then(setKittings), [])
   const reloadReceipts = useCallback(() => api.receipts().then(setReceipts), [])
+  const reloadPurchases = useCallback(() => api.purchases().then(setPurchases), [])
 
   useEffect(() => {
     api.projects().then(ps => {
@@ -57,7 +62,8 @@ export default function App() {
     api.items().then(setItems)
     reloadKittings()
     reloadReceipts()
-  }, [reloadKittings, reloadReceipts])
+    reloadPurchases()
+  }, [reloadKittings, reloadReceipts, reloadPurchases])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
   // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
@@ -105,6 +111,7 @@ export default function App() {
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
   const openReceipt = (id: number) => { setMode('receipts'); setSel({ kind: 'receipt', id }) }
+  const openPurchase = (id: number) => { setMode('purchases'); setSel({ kind: 'purchase', id }) }
 
   return (
     <div className="app">
@@ -117,6 +124,8 @@ export default function App() {
           title="Комплектации — кокпит сборки" onClick={() => setMode('kittings')}>⛭</button>
         <button className={mode === 'receipts' ? 'active' : ''}
           title="Приходы — УПД, рождение лотов" onClick={() => setMode('receipts')}>📥</button>
+        <button className={mode === 'purchases' ? 'active' : ''}
+          title="Заказы — обязательства, закрытие приходом" onClick={() => setMode('purchases')}>🛒</button>
       </div>
 
       <div className="sidebar">
@@ -180,6 +189,26 @@ export default function App() {
             </div>
           ))}
         </>}
+
+        {mode === 'purchases' && <>
+          <h2>Заказы</h2>
+          <div className={'tree-item new' + (sel?.kind === 'new-purchase' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-purchase' })}>
+            <span className="code">＋ Новый заказ</span>
+          </div>
+          {purchases.map(p => {
+            const st = PURCH_ST[p.status] ?? PURCH_ST.draft
+            return (
+              <div key={p.id}
+                className={'tree-item' + (sel?.kind === 'purchase' && sel.id === p.id ? ' sel' : '')}
+                onClick={() => setSel({ kind: 'purchase', id: p.id })}>
+                <span className={`glyph ${st.cls}`}>{st.g}</span>
+                <span className="code">Заказ #{p.id}</span>
+                <span className="sub">{p.project_code} · {p.lines} стр.</span>
+              </div>
+            )
+          })}
+        </>}
       </div>
 
       <div className="work">
@@ -188,7 +217,9 @@ export default function App() {
             title="Назад — предыдущая форма (⌥←)"
             onClick={() => window.history.back()}>‹ Назад</button>
         </div>
-        {sel?.kind === 'project' && <DeficitView projectId={sel.id} openItem={openItem} />}
+        {sel?.kind === 'project' &&
+          <DeficitView projectId={sel.id} openItem={openItem}
+            openPurchase={id => { reloadPurchases(); openPurchase(id) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} openItem={openItem} />}
         {sel?.kind === 'kitting' &&
           <KittingView kittingId={sel.id} openItem={openItem} onChanged={reloadKittings} />}
@@ -197,17 +228,23 @@ export default function App() {
             onCreated={id => { reloadKittings(); openKitting(id) }} />}
         {sel?.kind === 'receipt' &&
           <ReceiptView receiptId={sel.id} items={items} openItem={openItem}
-            onChanged={reloadReceipts} />}
+            openPurchase={openPurchase} onChanged={reloadReceipts} />}
         {sel?.kind === 'new-receipt' &&
           <NewReceipt projects={projects}
             onCreated={id => { reloadReceipts(); openReceipt(id) }} />}
+        {sel?.kind === 'purchase' &&
+          <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
+            openReceipt={openReceipt} onChanged={reloadPurchases} />}
+        {sel?.kind === 'new-purchase' &&
+          <NewPurchase projects={projects}
+            onCreated={id => { reloadPurchases(); openPurchase(id) }} />}
         {!sel && <div className="empty">Выберите объект слева</div>}
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 3 · записываемый приход (УПД)</span>
+        <span>plume · волна 4 · записываемый заказ (Purchase)</span>
         <span className="spacer" />
-        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length}</span>
+        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length}</span>
       </div>
     </div>
   )
@@ -252,6 +289,47 @@ function NewKitting({ projects, items, onCreated }: {
         </select></dd>
         <dt>Образцов</dt>
         <dd><input className="qty-in" value={qty} onChange={e => setQty(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание нового заказа: проект (+ примечание). Строки добавляются в кокпите.
+function NewPurchase({ projects, onCreated }: {
+  projects: ProjectRow[]; onCreated: (id: number) => void
+}) {
+  const externalProjects = projects.filter(p => p.kind === 'external')
+  const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
+  const [note, setNote] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!projectId) { setErr('Выберите проект'); return }
+    setBusy(true); setErr(null)
+    api.createPurchase({ project_id: projectId, note: note.trim() || undefined })
+      .then(c => onCreated(c.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новый заказ</h1>
+      <div className="subtitle">Проект-исполнение · строки добавляются в кокпите заказа</div>
+      <dl className="props">
+        <dt>Проект</dt>
+        <dd><select className="lot-sel" value={projectId}
+          onChange={e => setProjectId(Number(e.target.value))}>
+          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+        </select></dd>
+        <dt>Примечание</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={note}
+          placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

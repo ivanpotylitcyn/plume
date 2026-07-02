@@ -4,15 +4,26 @@ import { useEffect, useState } from 'react'
 import { api, type Deficit, type DeficitDemand } from './api'
 import { GLYPH, Glyph, Segment, num } from './status'
 
-export function DeficitView({ projectId, openItem }:
-  { projectId: number; openItem: (id: number) => void }) {
+export function DeficitView({ projectId, openItem, openPurchase }:
+  { projectId: number; openItem: (id: number) => void
+    openPurchase: (id: number) => void }) {
   const [data, setData] = useState<Deficit | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setData(null); setErr(null)
     api.deficit(projectId).then(setData).catch(e => setErr(String(e)))
   }, [projectId])
+
+  // Мост «дефицит → заказ»: положить ▲-позицию в черновик-заказ проекта и открыть его.
+  const order = (itemId: number, qty: number) => {
+    setBusy(true)
+    api.addToOrder(projectId, { item_id: itemId, qty })
+      .then(r => openPurchase(r.purchase_id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
 
   if (err) return <div className="empty">Ошибка: {err}</div>
   if (!data) return <div className="empty">Загрузка…</div>
@@ -22,12 +33,16 @@ export function DeficitView({ projectId, openItem }:
       <h1 className="title"><span className="pn">{data.project_code}</span> <span className="lit">— {data.project_name}</span></h1>
       <div className="subtitle">Дефицит проекта · надо − склад − заказано · 1 уровень BOM</div>
       {data.demands.length === 0 && <div className="empty">Нет потребностей (ProjectDemand)</div>}
-      {data.demands.map(d => <Demand key={d.demand_id} d={d} openItem={openItem} />)}
+      {data.demands.map(d => <Demand key={d.demand_id} d={d} openItem={openItem}
+        order={order} busy={busy} />)}
     </div>
   )
 }
 
-function Demand({ d, openItem }: { d: DeficitDemand; openItem: (id: number) => void }) {
+function Demand({ d, openItem, order, busy }: {
+  d: DeficitDemand; openItem: (id: number) => void
+  order: (itemId: number, qty: number) => void; busy: boolean
+}) {
   const dev = d.device
   return (
     <div>
@@ -48,7 +63,7 @@ function Demand({ d, openItem }: { d: DeficitDemand; openItem: (id: number) => v
       <table className="grid">
         <thead>
           <tr><th>Компонент</th><th>Назв.</th><th style={{ textAlign: 'right' }}>Надо</th>
-            <th>Разбор</th><th style={{ textAlign: 'right' }}>Склад</th></tr>
+            <th>Разбор</th><th style={{ textAlign: 'right' }}>Склад</th><th /></tr>
         </thead>
         <tbody>
           {d.lines.map(ln => (
@@ -65,6 +80,12 @@ function Demand({ d, openItem }: { d: DeficitDemand; openItem: (id: number) => v
               <td className="num">
                 {num(ln.available_raw)}
                 {ln.anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲ подбей лоты</span>}
+              </td>
+              <td style={{ textAlign: 'right' }}>
+                {ln.to_order > 0 &&
+                  <button className="btn sm" disabled={busy}
+                    title={`положить ${num(ln.to_order)} ${ln.uom} в черновик-заказ проекта`}
+                    onClick={() => order(ln.component_id, ln.to_order)}>＋ в заказ</button>}
               </td>
             </tr>
           ))}
