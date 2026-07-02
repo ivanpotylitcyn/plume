@@ -323,3 +323,110 @@ class KittingCockpitTests(EngineTestBase):
         engine.rebuild_movements(device_lot)
         with self.assertRaises(ValidationError):
             engine.reopen_kitting(k)
+
+
+class ReceiptCockpitTests(EngineTestBase):
+    """Волна 3: кокпит прихода — строки-лоты УПД, рождение +RECEIPT, замок."""
+
+    def make_receipt(self, approved=False):
+        return models.Receipt.objects.create(
+            number='УПД-Т', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user, approved=approved)
+
+    def test_add_lot_births_receipt_movement(self):
+        r = self.make_receipt()
+        case = self.make_item('CASE')
+        lot = engine.add_receipt_lot(r, case, D(12), unit_cost=D(800),
+                                     received_name='Корпус Al')
+        self.assertEqual(lot.project_id, r.project_id)   # проект наследован
+        self.assertEqual(engine.lot_live_qty(lot), D(12))
+        mv = lot.movements.get()
+        self.assertEqual(mv.type, models.StockMovement.Type.RECEIPT)
+        self.assertEqual(mv.qty, D(12))
+
+    def test_cockpit_shows_lines_and_total(self):
+        r = self.make_receipt()
+        engine.add_receipt_lot(r, self.make_item('A'), D(2), unit_cost=D(100))
+        engine.add_receipt_lot(r, self.make_item('B'), D(3), unit_cost=D(10))
+        c = engine.receipt_cockpit(r)
+        self.assertEqual(len(c['lots']), 2)
+        self.assertEqual(c['total_cost'], D(230))        # 2×100 + 3×10
+        self.assertFalse(c['approved'])
+
+    def test_add_lot_rejects_nonpositive_qty(self):
+        r = self.make_receipt()
+        with self.assertRaises(ValidationError):
+            engine.add_receipt_lot(r, self.make_item('A'), D(0))
+
+    def test_update_lot_qty_rebuilds(self):
+        r = self.make_receipt()
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(10))
+        engine.update_receipt_lot(lot, qty=D(7))
+        self.assertEqual(engine.lot_live_qty(lot), D(7))
+
+    def test_update_lot_cost_and_name(self):
+        r = self.make_receipt()
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        engine.update_receipt_lot(lot, unit_cost=D(42), received_name='Ы')
+        lot.refresh_from_db()
+        self.assertEqual(lot.unit_cost, D(42))
+        self.assertEqual(lot.received_name, 'Ы')
+
+    def test_remove_lot(self):
+        r = self.make_receipt()
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        engine.remove_receipt_lot(lot)
+        self.assertFalse(models.Lot.objects.filter(pk=lot.pk).exists())
+
+    def test_remove_blocked_when_consumed(self):
+        r = self.make_receipt()
+        comp = self.make_item('R')
+        lot = engine.add_receipt_lot(r, comp, D(100))
+        dev = self.make_item('DEV', manufactured=True)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1),
+                                          status=models.Kitting.Status.WIP)
+        engine.add_kitting_line(k, comp, lot, D(30))   # спаяли — потреблён ниже
+        with self.assertRaises(ValidationError):
+            engine.remove_receipt_lot(lot)
+
+    def test_approve_locks_edits(self):
+        r = self.make_receipt()
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        engine.approve_receipt(r)
+        r.refresh_from_db()
+        self.assertTrue(r.approved)
+        with self.assertRaises(ValidationError):
+            engine.update_receipt_lot(lot, qty=D(9))
+        with self.assertRaises(ValidationError):
+            engine.add_receipt_lot(r, self.make_item('B'), D(1))
+
+    def test_approve_rejects_empty(self):
+        r = self.make_receipt()
+        with self.assertRaises(ValidationError):
+            engine.approve_receipt(r)
+
+    def test_unapprove_reenables_edits(self):
+        r = self.make_receipt()
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        engine.approve_receipt(r)
+        engine.unapprove_receipt(r)
+        r.refresh_from_db()
+        self.assertFalse(r.approved)
+        engine.update_receipt_lot(lot, qty=D(9))       # снова можно
+        self.assertEqual(engine.lot_live_qty(lot), D(9))
+
+    def test_received_lot_feeds_kitting_cockpit(self):
+        # приход РЕЗ → лот сразу виден кокпиту комплектации как кандидат
+        r = self.make_receipt()
+        comp = self.make_item('R')
+        engine.add_receipt_lot(r, comp, D(50))
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1),
+                                          status=models.Kitting.Status.WIP)
+        c = engine.kitting_cockpit(k)
+        row = {r['component_code']: r for r in c['rows']}['R']
+        self.assertEqual(row['ghost']['status'], 'available')
+        self.assertEqual(len(row['ghost']['candidate_lots']), 1)

@@ -73,6 +73,23 @@ export interface Cockpit {
   rows: CockpitRow[]; born_lots: BornLot[]
 }
 
+// ── Приход / УПД (волна 3 — записываемое ядро) ──
+export interface SupplierRow { id: number; name: string; inn: string }
+export interface ReceiptRow {
+  id: number; number: string; date: string; supplier_name: string
+  project_code: string; approved: boolean; lines: number
+}
+export interface ReceiptLot {
+  id: number; item_id: number; item_code: string; item_name: string; uom: string
+  qty: number; live_qty: number; unit_cost: number; received_name: string
+  serial_number: string; consumed: boolean
+}
+export interface ReceiptCockpit {
+  id: number; number: string; date: string; supplier_id: number; supplier_name: string
+  project_id: number; project_code: string; project_name: string
+  approved: boolean; total_cost: number; lots: ReceiptLot[]
+}
+
 function getCookie(name: string): string | null {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
   return m ? decodeURIComponent(m[2]) : null
@@ -120,4 +137,22 @@ export const api = {
   deleteLine: (id: number) => send<Cockpit>('DELETE', `/api/kitting-lines/${id}/`),
   closeKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/close/`),
   reopenKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/reopen/`),
+
+  suppliers: () => get<SupplierRow[]>('/api/suppliers/'),
+  createSupplier: (b: { name: string; inn?: string }) =>
+    send<SupplierRow>('POST', '/api/suppliers/', b),
+  receipts: () => get<ReceiptRow[]>('/api/receipts/'),
+  receipt: (id: number) => get<ReceiptCockpit>(`/api/receipts/${id}/`),
+  createReceipt: (b: { supplier_id: number; project_id: number; number: string; date: string }) =>
+    send<ReceiptCockpit>('POST', '/api/receipts/', b),
+  addReceiptLot: (id: number, b: {
+    item_id: number; qty: number; unit_cost?: number
+    received_name?: string; serial_number?: string
+  }) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/lots/`, b),
+  updateReceiptLot: (id: number, b: Partial<{
+    qty: number; unit_cost: number; received_name: string; serial_number: string
+  }>) => send<ReceiptCockpit>('PATCH', `/api/lots/${id}/`, b),
+  deleteReceiptLot: (id: number) => send<ReceiptCockpit>('DELETE', `/api/lots/${id}/`),
+  approveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/approve/`),
+  unapproveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/unapprove/`),
 }

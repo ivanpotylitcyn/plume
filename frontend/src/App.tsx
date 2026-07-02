@@ -2,17 +2,21 @@
 // (одна, без вкладок) + статус-бар. Навигация по сущностям, проект — ось.
 // Волна 2: третий режим «Комплектации» — записываемый кокпит сборки.
 import { useCallback, useEffect, useState } from 'react'
-import { api, type ProjectRow, type ItemRow, type KittingRow } from './api'
+import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
+  type SupplierRow } from './api'
 import { DeficitView } from './DeficitView'
 import { ItemView } from './ItemView'
 import { KittingView } from './KittingView'
+import { ReceiptView } from './ReceiptView'
 
-type Mode = 'projects' | 'items' | 'kittings'
+type Mode = 'projects' | 'items' | 'kittings' | 'receipts'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'item'; id: number }
   | { kind: 'kitting'; id: number }
   | { kind: 'new-kitting' }
+  | { kind: 'receipt'; id: number }
+  | { kind: 'new-receipt' }
   | null
 
 const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
@@ -26,9 +30,11 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectRow[]>([])
   const [items, setItems] = useState<ItemRow[]>([])
   const [kittings, setKittings] = useState<KittingRow[]>([])
+  const [receipts, setReceipts] = useState<ReceiptRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
 
   const reloadKittings = useCallback(() => api.kittings().then(setKittings), [])
+  const reloadReceipts = useCallback(() => api.receipts().then(setReceipts), [])
 
   useEffect(() => {
     api.projects().then(ps => {
@@ -38,10 +44,12 @@ export default function App() {
     })
     api.items().then(setItems)
     reloadKittings()
-  }, [reloadKittings])
+    reloadReceipts()
+  }, [reloadKittings, reloadReceipts])
 
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
+  const openReceipt = (id: number) => { setMode('receipts'); setSel({ kind: 'receipt', id }) }
 
   return (
     <div className="app">
@@ -52,6 +60,8 @@ export default function App() {
           title="Изделия — остатки" onClick={() => setMode('items')}>≡</button>
         <button className={mode === 'kittings' ? 'active' : ''}
           title="Комплектации — кокпит сборки" onClick={() => setMode('kittings')}>⛭</button>
+        <button className={mode === 'receipts' ? 'active' : ''}
+          title="Приходы — УПД, рождение лотов" onClick={() => setMode('receipts')}>📥</button>
       </div>
 
       <div className="sidebar">
@@ -98,6 +108,23 @@ export default function App() {
             )
           })}
         </>}
+
+        {mode === 'receipts' && <>
+          <h2>Приходы</h2>
+          <div className={'tree-item new' + (sel?.kind === 'new-receipt' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-receipt' })}>
+            <span className="code">＋ Новый УПД</span>
+          </div>
+          {receipts.map(r => (
+            <div key={r.id}
+              className={'tree-item' + (sel?.kind === 'receipt' && sel.id === r.id ? ' sel' : '')}
+              onClick={() => setSel({ kind: 'receipt', id: r.id })}>
+              <span className={`glyph ${r.approved ? 'g-lock' : 'g-on_order'}`}>{r.approved ? '🔒' : '●'}</span>
+              <span className="code">{r.number}</span>
+              <span className="sub">{r.project_code} · {r.lines} стр.</span>
+            </div>
+          ))}
+        </>}
       </div>
 
       <div className="work">
@@ -108,13 +135,19 @@ export default function App() {
         {sel?.kind === 'new-kitting' &&
           <NewKitting projects={projects} items={items}
             onCreated={id => { reloadKittings(); openKitting(id) }} />}
+        {sel?.kind === 'receipt' &&
+          <ReceiptView receiptId={sel.id} items={items} openItem={openItem}
+            onChanged={reloadReceipts} />}
+        {sel?.kind === 'new-receipt' &&
+          <NewReceipt projects={projects}
+            onCreated={id => { reloadReceipts(); openReceipt(id) }} />}
         {!sel && <div className="empty">Выберите объект слева</div>}
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 2 · кокпит комплектации</span>
+        <span>plume · волна 3 · записываемый приход (УПД)</span>
         <span className="spacer" />
-        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length}</span>
+        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length}</span>
       </div>
     </div>
   )
@@ -159,6 +192,89 @@ function NewKitting({ projects, items, onCreated }: {
         </select></dd>
         <dt>Образцов</dt>
         <dd><input className="qty-in" value={qty} onChange={e => setQty(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание нового УПД: поставщик (пикер + быстрое создание) + № + дата + проект.
+function NewReceipt({ projects, onCreated }: {
+  projects: ProjectRow[]; onCreated: (id: number) => void
+}) {
+  const [suppliers, setSuppliers] = useState<SupplierRow[]>([])
+  const [supplierId, setSupplierId] = useState<number | ''>('')
+  const [newSupplier, setNewSupplier] = useState('')
+  const [projectId, setProjectId] = useState<number | ''>(
+    projects.find(p => p.kind === 'external')?.id ?? '')
+  const [number, setNumber] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.suppliers().then(ss => {
+      setSuppliers(ss)
+      setSupplierId(s => s || (ss[0]?.id ?? ''))
+    })
+  }, [])
+
+  const addSupplier = () => {
+    const name = newSupplier.trim()
+    if (!name) return
+    setBusy(true); setErr(null)
+    api.createSupplier({ name })
+      .then(s => { setSuppliers(ss => [...ss, s]); setSupplierId(s.id); setNewSupplier('') })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  const create = () => {
+    if (!supplierId || !projectId || !number.trim()) {
+      setErr('Заполните поставщика, № УПД и проект'); return
+    }
+    setBusy(true); setErr(null)
+    api.createReceipt({ supplier_id: supplierId, project_id: projectId,
+      number: number.trim(), date })
+      .then(c => onCreated(c.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новый приход (УПД)</h1>
+      <div className="subtitle">Поставщик + № УПД + дата + проект-получатель</div>
+      <dl className="props">
+        <dt>Поставщик</dt>
+        <dd>
+          <select className="lot-sel" value={supplierId} disabled={busy}
+            onChange={e => setSupplierId(e.target.value ? Number(e.target.value) : '')}>
+            {suppliers.length === 0 && <option value="">— нет, создайте ниже —</option>}
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          {' '}
+          <input className="qty-in" style={{ width: 160 }} value={newSupplier}
+            placeholder="новый поставщик…" disabled={busy}
+            onChange={e => setNewSupplier(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') addSupplier() }} />
+          <button className="btn sm" disabled={busy || !newSupplier.trim()}
+            onClick={addSupplier}>＋</button>
+        </dd>
+        <dt>№ УПД</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} value={number}
+          onChange={e => setNumber(e.target.value)} /></dd>
+        <dt>Дата</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} type="date" value={date}
+          onChange={e => setDate(e.target.value)} /></dd>
+        <dt>Проект</dt>
+        <dd><select className="lot-sel" value={projectId}
+          onChange={e => setProjectId(e.target.value ? Number(e.target.value) : '')}>
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+        </select></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

@@ -15,6 +15,12 @@
   (пробитые) строки + призрачные строки, покрашенные по доступности + лоты-кандидаты.
 - `close_kitting` / `reopen_kitting` — рождение/снятие лота-прибора (мягкий замок).
 
+Волна 3 (записываемый приход / УПД):
+- `receipt_cockpit(receipt)` — проекция кокпита прихода: строки-лоты УПД (в модели
+  отдельной ReceiptLine нет — строки прихода это его лоты) + живой остаток + сумма.
+- `add/update/remove_receipt_lot`, `approve/unapprove_receipt` — рождение лотов
+  (`+RECEIPT`) и мягкий замок «сверено со сканом».
+
 Следующие волны: pegging, командный свод, бюджет/экономия.
 """
 from decimal import ROUND_HALF_UP, Decimal
@@ -439,9 +445,7 @@ def reopen_kitting(kitting):
     if kitting.status != models.Kitting.Status.CLOSED:
         raise ValidationError('Переоткрыть можно только закрытую комплектацию.')
     for lot in kitting.lots.all():
-        if (lot.movements.filter(qty__lt=0).exists() or lot.successors.exists()
-                or lot.transfer_lines.exists() or lot.kitting_lines.exists()
-                or lot.writeoff_lines.exists() or lot.requisition_lines.exists()):
+        if _lot_consumed_downstream(lot):
             raise ValidationError(
                 'Лот-прибор уже потреблён/передан ниже — переоткрытие заблокировано.')
     for lot in kitting.lots.all():
@@ -449,3 +453,126 @@ def reopen_kitting(kitting):
         lot.delete()
     kitting.status = models.Kitting.Status.WIP
     kitting.save(update_fields=['status'])
+
+
+# --------------------------------------------------------------------------- #
+#  Кокпит прихода / УПД (волна 3): строки-лоты, рождение +RECEIPT, мягкий замок
+# --------------------------------------------------------------------------- #
+def _lot_consumed_downstream(lot):
+    """Потреблён ли лот ниже: расход/пайка/передача/списание/отпочкование/успех.
+
+    Общий guard: до `PROTECT`-ошибки БД даём дружелюбный отказ на разрушающую
+    правку (удаление строки прихода, переоткрытие комплектации).
+    """
+    return (lot.movements.filter(qty__lt=0).exists() or lot.successors.exists()
+            or lot.kitting_lines.exists() or lot.transfer_lines.exists()
+            or lot.writeoff_lines.exists() or lot.requisition_lines.exists())
+
+
+def receipt_cockpit(receipt):
+    """Проекция кокпита прихода: шапка УПД + строки-лоты (каждая строка = Lot).
+
+    В модели отдельной `ReceiptLine` нет — строки прихода это его лоты. Каждый лот
+    показывает рождённое кол-во, живой остаток (просел ли под пайку), цену и
+    название из УПД. Ничего не хранит — чистая проекция.
+    """
+    lots = []
+    total = ZERO
+    for lot in receipt.lots.select_related('item').order_by('id'):
+        total += lot.qty * lot.unit_cost
+        lots.append({
+            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'qty': lot.qty, 'live_qty': lot_live_qty(lot),
+            'unit_cost': lot.unit_cost, 'received_name': lot.received_name,
+            'serial_number': lot.serial_number,
+            'consumed': _lot_consumed_downstream(lot),
+        })
+    return {
+        'id': receipt.id, 'number': receipt.number, 'date': receipt.date,
+        'supplier_id': receipt.supplier_id, 'supplier_name': receipt.supplier.name,
+        'project_id': receipt.project_id, 'project_code': receipt.project.code,
+        'project_name': receipt.project.name,
+        'approved': receipt.approved, 'total_cost': total,
+        'lots': lots,
+    }
+
+
+def _require_unapproved(receipt):
+    if receipt.approved:
+        raise ValidationError('Приход сверён (замок) — снимите замок для правки.')
+
+
+def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, received_name='',
+                    serial_number=''):
+    """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода."""
+    _require_unapproved(receipt)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество прихода должно быть положительным.')
+    if unit_cost is not None and unit_cost < 0:
+        raise ValidationError('Цена не может быть отрицательной.')
+    lot = models.Lot.objects.create(
+        item=item, project=receipt.project, receipt=receipt, qty=qty,
+        unit_cost=unit_cost or ZERO, received_name=received_name or '',
+        serial_number=serial_number or '',
+    )
+    rebuild_movements(lot)
+    return lot
+
+
+def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
+                       serial_number=None):
+    """Автосейв строки УПД (кол-во/цена/название/зав.№). Правка до замка.
+
+    Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
+    уйдёт в минус (недостача информативнее, в духе мутабельной ДНК).
+    """
+    _require_unapproved(lot.receipt)
+    fields = []
+    if qty is not None:
+        if qty <= 0:
+            raise ValidationError('Количество прихода должно быть положительным.')
+        lot.qty = qty
+        fields.append('qty')
+    if unit_cost is not None:
+        if unit_cost < 0:
+            raise ValidationError('Цена не может быть отрицательной.')
+        lot.unit_cost = unit_cost
+        fields.append('unit_cost')
+    if received_name is not None:
+        lot.received_name = received_name
+        fields.append('received_name')
+    if serial_number is not None:
+        lot.serial_number = serial_number
+        fields.append('serial_number')
+    if fields:
+        lot.save(update_fields=fields)
+        rebuild_movements(lot)
+    return lot
+
+
+def remove_receipt_lot(lot):
+    """Удалить строку УПД (до замка). Guard: лот не потреблён ниже."""
+    _require_unapproved(lot.receipt)
+    if _lot_consumed_downstream(lot):
+        raise ValidationError(
+            'Партия уже потреблена ниже (пайка/передача) — удаление заблокировано.')
+    lot.movements.all().delete()
+    lot.delete()
+
+
+def approve_receipt(receipt):
+    """Поставить замок «сверено со сканом» — форма прихода становится read-only."""
+    if not receipt.lots.exists():
+        raise ValidationError('Нельзя сверить пустой приход — добавьте строку.')
+    receipt.approved = True
+    receipt.save(update_fields=['approved'])
+    return receipt
+
+
+def unapprove_receipt(receipt):
+    """Снять замок — снова разрешить правку. Ничего не разрушает (в отличие от
+    переоткрытия комплектации), поэтому guard по потомкам не нужен."""
+    receipt.approved = False
+    receipt.save(update_fields=['approved'])
+    return receipt

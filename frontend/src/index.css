@@ -144,6 +144,7 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .g-on_order { color: var(--st-wip); }
 .g-available { color: var(--st-ok); }
 .g-info { color: var(--st-info); }
+.g-lock { color: var(--st-lock); }
 .seg { font-variant-numeric: tabular-nums; }
 .seg .glyph { margin-right: 2px; }
 .seg + .seg { margin-left: 10px; }

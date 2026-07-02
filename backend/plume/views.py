@@ -199,3 +199,124 @@ def kitting_reopen(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.kitting_cockpit(k))
+
+
+# --------------------------------------------------------------------------- #
+#  Приход / УПД (волна 3 — записываемое ядро) + справочник поставщиков
+# --------------------------------------------------------------------------- #
+@api_view(['GET', 'POST'])
+def suppliers(request):
+    """Список поставщиков (пикер) / быстрое создание мелкой сущности."""
+    if request.method == 'POST':
+        name = (request.data.get('name') or '').strip()
+        if not name:
+            return _bad('Нужно наименование поставщика.')
+        s = models.Supplier.objects.create(
+            name=name, inn=(request.data.get('inn') or '').strip())
+        return Response({'id': s.id, 'name': s.name, 'inn': s.inn},
+                        status=http.HTTP_201_CREATED)
+    data = [{'id': s.id, 'name': s.name, 'inn': s.inn}
+            for s in models.Supplier.objects.all()]
+    return Response(data)
+
+
+def _receipt_row(r):
+    """Строка списка приходов для дерева навигации."""
+    return {
+        'id': r.id, 'number': r.number, 'date': r.date,
+        'supplier_name': r.supplier.name, 'project_code': r.project.code,
+        'approved': r.approved, 'lines': r.lots.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def receipts(request):
+    """Список приходов (дерево) / создание нового УПД (призрачная строка)."""
+    if request.method == 'POST':
+        d = request.data
+        number = (d.get('number') or '').strip()
+        if not number:
+            return _bad('Нужен № УПД.')
+        try:
+            supplier = models.Supplier.objects.get(pk=d['supplier_id'])
+            project = models.Project.objects.get(pk=d['project_id'])
+            r = models.Receipt.objects.create(
+                number=number, date=d.get('date') or timezone.localdate(),
+                supplier=supplier, project=project, user=_actor(request))
+        except (KeyError, models.Supplier.DoesNotExist,
+                models.Project.DoesNotExist) as e:
+            return _bad(f'Нужны supplier_id, project_id, number ({e}).')
+        return Response(engine.receipt_cockpit(r), status=http.HTTP_201_CREATED)
+
+    rows = [_receipt_row(r) for r in models.Receipt.objects
+            .select_related('supplier', 'project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET'])
+def receipt_detail(request, pk):
+    """Кокпит прихода: строки-лоты УПД + живой остаток + сумма."""
+    r = get_object_or_404(models.Receipt, pk=pk)
+    return Response(engine.receipt_cockpit(r))
+
+
+@api_view(['POST'])
+def receipt_lots(request, pk):
+    """Добавить строку УПД — рождается партия (`+RECEIPT`)."""
+    r = get_object_or_404(models.Receipt, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        engine.add_receipt_lot(
+            r, item, _dec(d.get('qty')),
+            unit_cost=_dec(d.get('unit_cost')) or engine.ZERO,
+            received_name=d.get('received_name') or '',
+            serial_number=d.get('serial_number') or '')
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.receipt_cockpit(r), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def receipt_lot_detail(request, pk):
+    """Автосейв строки УПД (PATCH) / удаление строки (DELETE)."""
+    lot = get_object_or_404(
+        models.Lot.objects.select_related('receipt', 'item'), pk=pk)
+    if lot.receipt_id is None:
+        return _bad('Партия не из прихода — правка через её origin-документ.')
+    receipt = lot.receipt
+    try:
+        if request.method == 'DELETE':
+            engine.remove_receipt_lot(lot)
+        else:
+            d = request.data
+            engine.update_receipt_lot(
+                lot,
+                qty=_dec(d['qty']) if 'qty' in d else None,
+                unit_cost=_dec(d['unit_cost']) if 'unit_cost' in d else None,
+                received_name=d['received_name'] if 'received_name' in d else None,
+                serial_number=d['serial_number'] if 'serial_number' in d else None)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.receipt_cockpit(receipt))
+
+
+@api_view(['POST'])
+def receipt_approve(request, pk):
+    """Поставить замок «сверено со сканом» (форма read-only)."""
+    r = get_object_or_404(models.Receipt, pk=pk)
+    try:
+        engine.approve_receipt(r)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.receipt_cockpit(r))
+
+
+@api_view(['POST'])
+def receipt_unapprove(request, pk):
+    """Снять замок — снова разрешить правку."""
+    r = get_object_or_404(models.Receipt, pk=pk)
+    engine.unapprove_receipt(r)
+    return Response(engine.receipt_cockpit(r))

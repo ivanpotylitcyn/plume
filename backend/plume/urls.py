@@ -19,4 +19,12 @@ urlpatterns = [
     path('kittings/<int:pk>/close/', views.kitting_close, name='kitting-close'),
     path('kittings/<int:pk>/reopen/', views.kitting_reopen, name='kitting-reopen'),
     path('kitting-lines/<int:pk>/', views.kitting_line_detail, name='kitting-line'),
+    # приход / УПД (записываемое ядро, волна 3) + справочник поставщиков
+    path('suppliers/', views.suppliers, name='suppliers'),
+    path('receipts/', views.receipts, name='receipts'),
+    path('receipts/<int:pk>/', views.receipt_detail, name='receipt-detail'),
+    path('receipts/<int:pk>/lots/', views.receipt_lots, name='receipt-lots'),
+    path('receipts/<int:pk>/approve/', views.receipt_approve, name='receipt-approve'),
+    path('receipts/<int:pk>/unapprove/', views.receipt_unapprove, name='receipt-unapprove'),
+    path('lots/<int:pk>/', views.receipt_lot_detail, name='lot-detail'),
 ]

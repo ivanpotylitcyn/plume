@@ -1,0 +1,185 @@
+// Витрина волны 3: кокпит прихода / УПД (записываемое ядро).
+// Строки УПД = лоты (в модели отдельной ReceiptLine нет): изделие + кол-во +
+// цена + название, автосейв по blur/Enter. Добавление строки = рождение партии
+// (+RECEIPT). Замок «сверено со сканом» (approved) делает форму read-only.
+import { useEffect, useState } from 'react'
+import { api, type ItemRow, type ReceiptCockpit, type ReceiptLot } from './api'
+import { num } from './status'
+
+export function ReceiptView({ receiptId, items, openItem, onChanged }: {
+  receiptId: number; items: ItemRow[]
+  openItem: (id: number) => void; onChanged: () => void
+}) {
+  const [c, setC] = useState<ReceiptCockpit | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setC(null); setErr(null)
+    api.receipt(receiptId).then(setC).catch(e => setErr(String(e)))
+  }, [receiptId])
+
+  const run = (p: Promise<ReceiptCockpit>) => {
+    setBusy(true); setErr(null)
+    p.then(next => { setC(next); onChanged() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  if (err && !c) return <div className="empty">Ошибка: {err}</div>
+  if (!c) return <div className="empty">Загрузка…</div>
+
+  const locked = c.approved
+  return (
+    <div>
+      <h1 className="title">
+        <span className={`glyph ${locked ? 'g-lock' : 'g-on_order'}`}>{locked ? '🔒' : '●'}</span>{' '}
+        <span className="pn">УПД {c.number}</span>{' '}
+        <span className="lit">— {c.supplier_name}</span>
+      </h1>
+      <div className="subtitle">
+        Кокпит прихода · проект {c.project_code} · {c.date} ·{' '}
+        <span className={locked ? 'g-lock' : 'g-on_order'}>{locked ? 'сверено (замок)' : 'в работе'}</span>
+        {' · сумма '}<span className="seg">{num(c.total_cost)} ₽</span>
+      </div>
+
+      <div className="kit-actions">
+        {locked
+          ? <button className="btn" disabled={busy}
+              onClick={() => run(api.unapproveReceipt(c.id))}>Снять замок</button>
+          : <button className="btn" disabled={busy}
+              onClick={() => run(api.approveReceipt(c.id))}>Сверить со сканом (замок)</button>}
+        {busy && <span className="hint">сохраняю…</span>}
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>изделие</th><th style={{ textAlign: 'right' }}>кол-во</th>
+            <th style={{ textAlign: 'right' }}>цена, ₽</th><th>название из УПД</th><th />
+          </tr>
+        </thead>
+        <tbody>
+          {c.lots.map(lot => (
+            <LotRow key={lot.id} lot={lot} locked={locked} busy={busy}
+              openItem={openItem} run={run} />
+          ))}
+          {!locked && <GhostRow receiptId={c.id} items={items} busy={busy} run={run} />}
+        </tbody>
+      </table>
+      {c.lots.length === 0 && locked &&
+        <div className="empty">Приход пуст.</div>}
+    </div>
+  )
+}
+
+// Реальная строка УПД (лот): автосейв кол-ва/цены/названия, удаление до замка.
+function LotRow({ lot, locked, busy, openItem, run }: {
+  lot: ReceiptLot; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<ReceiptCockpit>) => void
+}) {
+  const short = lot.live_qty !== lot.qty   // просел под пайку/расход
+  return (
+    <tr className="row s-available">
+      <td>
+        <span className="glyph g-available">✓</span>{' '}
+        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a>{' '}
+        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_name}</span>
+        {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
+      </td>
+      <td className="num">
+        <CommitInput value={String(lot.qty)} width={60} disabled={locked || busy}
+          onCommit={v => run(api.updateReceiptLot(lot.id, { qty: Number(v) }))}
+          validate={v => Number(v) > 0} /> {lot.uom}
+      </td>
+      <td className="num">
+        <CommitInput value={String(lot.unit_cost)} width={72} disabled={locked || busy}
+          onCommit={v => run(api.updateReceiptLot(lot.id, { unit_cost: Number(v) }))}
+          validate={v => Number(v) >= 0} />
+      </td>
+      <td>
+        <CommitInput value={lot.received_name} width={160} disabled={locked || busy}
+          onCommit={v => run(api.updateReceiptLot(lot.id, { received_name: v }))} />
+      </td>
+      <td style={{ textAlign: 'right' }}>
+        {!locked && !lot.consumed &&
+          <button className="x" title="убрать строку" disabled={busy}
+            onClick={() => run(api.deleteReceiptLot(lot.id))}>×</button>}
+        {lot.consumed && <span className="hint">потреблён</span>}
+      </td>
+    </tr>
+  )
+}
+
+// Призрачная строка: добавить строку УПД (рождается партия).
+function GhostRow({ receiptId, items, busy, run }: {
+  receiptId: number; items: ItemRow[]; busy: boolean
+  run: (p: Promise<ReceiptCockpit>) => void
+}) {
+  const [itemId, setItemId] = useState<number | ''>('')
+  const [qty, setQty] = useState('')
+  const [cost, setCost] = useState('')
+  const [name, setName] = useState('')
+
+  const add = () => {
+    const q = Number(qty)
+    if (!itemId || !(q > 0)) return
+    run(api.addReceiptLot(receiptId, {
+      item_id: itemId, qty: q,
+      unit_cost: cost === '' ? undefined : Number(cost),
+      received_name: name || undefined,
+    }))
+    setItemId(''); setQty(''); setCost(''); setName('')
+  }
+
+  return (
+    <tr className="row ghost">
+      <td>
+        <select className="lot-sel" value={itemId} disabled={busy}
+          onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
+          <option value="">＋ изделие…</option>
+          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+        </select>
+      </td>
+      <td className="num">
+        <input className="qty-in" value={qty} disabled={busy} placeholder="0"
+          onChange={e => setQty(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      </td>
+      <td className="num">
+        <input className="qty-in" value={cost} disabled={busy} placeholder="0"
+          onChange={e => setCost(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      </td>
+      <td>
+        <input className="qty-in" style={{ width: 160 }} value={name} disabled={busy}
+          placeholder="название из УПД" onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      </td>
+      <td style={{ textAlign: 'right' }}>
+        <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
+          onClick={add}>добавить</button>
+      </td>
+    </tr>
+  )
+}
+
+// Автосейв текстового/числового поля: коммит по blur / Enter (без кнопки).
+function CommitInput({ value, onCommit, disabled, width = 60, validate }: {
+  value: string; onCommit: (v: string) => void; disabled?: boolean
+  width?: number; validate?: (v: string) => boolean
+}) {
+  const [v, setV] = useState(value)
+  useEffect(() => { setV(value) }, [value])
+  const commit = () => {
+    if (v === value) return
+    if (validate && !validate(v)) { setV(value); return }
+    onCommit(v)
+  }
+  return (
+    <input className="qty-in" style={{ width }} value={v} disabled={disabled}
+      onChange={e => setV(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+  )
+}
