@@ -502,6 +502,7 @@ class Transfer(models.Model):
                              related_name='transfers', verbose_name='автор')
     date = models.DateField('дата')
     number = models.CharField('№ накладной', max_length=64)
+    posted = models.BooleanField('отгружено (замок)', default=False)
 
     class Meta:
         verbose_name = 'передача'

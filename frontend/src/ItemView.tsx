@@ -1,15 +1,12 @@
 // Витрина волны 1: экран изделия = панель свойств + окружение из связей.
-// Карта остатков по складам-проектам (north-star), where-used, лоты. Read-only.
+// Партии на складе (по проектам, с живым остатком), where-used, состав. Read-only.
+// Волна 5: блок «Отгруженные партии» — куда и по какой накладной ушло заказчику.
 import { useEffect, useState } from 'react'
 import { api, type ItemDetail } from './api'
 import { num } from './status'
 
 const KIND_RU: Record<string, string> = {
   device: 'изделие', component: 'компонент', material: 'материал',
-}
-const PROJ_KIND_RU: Record<string, string> = {
-  external: 'проект', internal_stock: 'свой склад (белые)',
-  internal_writeoff: 'неучтённые (серые)',
 }
 
 export function ItemView({ itemId, openItem }:
@@ -33,24 +30,6 @@ export function ItemView({ itemId, openItem }:
         <dt>Ед. изм.</dt><dd>{d.uom}</dd>
         <dt>Оценка</dt><dd>{d.estimated_cost != null ? `${d.estimated_cost} ₽` : '—'}</dd>
       </dl>
-
-      <div className="section-h">Карта остатков
-        <span className="hint">где этот Item лежит по всем складам-проектам</span></div>
-      {d.stock_map.rows.length === 0
-        ? <div style={{ color: 'var(--fg-dim)' }}>Нет доступных остатков</div>
-        : <table className="grid">
-            <thead><tr><th>Склад-проект</th><th>Вид</th>
-              <th style={{ textAlign: 'right' }}>Доступно</th></tr></thead>
-            <tbody>
-              {d.stock_map.rows.map(r => (
-                <tr key={r.project_id} className="row s-available">
-                  <td>{r.project_code} <span style={{ color: 'var(--fg-dim)' }}>{r.project_name}</span></td>
-                  <td className="kind-chip">{PROJ_KIND_RU[r.project_kind] ?? r.project_kind}</td>
-                  <td className="num">{num(r.available)} {d.uom}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>}
 
       <div className="section-h">Где применяется
         <span className="hint">where-used по составу</span></div>
@@ -81,7 +60,8 @@ export function ItemView({ itemId, openItem }:
         </table>
       </>}
 
-      <div className="section-h">Партии на складе</div>
+      <div className="section-h">Партии на складе
+        <span className="hint">где лежит по проектам · рождённое / живой остаток</span></div>
       {d.lots.length === 0
         ? <div style={{ color: 'var(--fg-dim)' }}>Нет партий</div>
         : <table className="grid">
@@ -90,11 +70,33 @@ export function ItemView({ itemId, openItem }:
               <th style={{ textAlign: 'right' }}>Остаток</th>
               <th>Зав. №</th></tr></thead>
             <tbody>{d.lots.map(l => (
-              <tr key={l.id} className="row">
+              <tr key={l.id} className={'row' + (l.live_qty > 0 ? ' s-available' : '')}>
                 <td>#{l.id}</td><td>{l.project_code}</td><td className="kind-chip">{l.origin}</td>
                 <td className="num">{num(l.qty_born)}</td>
                 <td className="num">{num(l.live_qty)}</td>
                 <td style={{ color: 'var(--fg-dim)' }}>{l.serial_number || '—'}</td>
+              </tr>))}</tbody>
+          </table>}
+
+      <div className="section-h">Отгруженные партии
+        <span className="hint">куда ушло заказчику · по накладным</span></div>
+      {d.shipments.length === 0
+        ? <div style={{ color: 'var(--fg-dim)' }}>Пока ничего не отгружено</div>
+        : <table className="grid">
+            <thead><tr><th>Накладная</th><th>Дата</th><th>Проект</th><th>Lot</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th>
+              <th>Имя в накладной</th></tr></thead>
+            <tbody>{d.shipments.map((s, i) => (
+              <tr key={`${s.transfer_id}-${s.lot_id}-${i}`} className="row">
+                <td>
+                  <span className={`glyph ${s.posted ? 'g-lock' : 'g-info'}`}>{s.posted ? '🔒' : '📦'}</span>{' '}
+                  {s.number}
+                </td>
+                <td style={{ color: 'var(--fg-dim)' }}>{s.date}</td>
+                <td>{s.project_code}</td>
+                <td>#{s.lot_id}</td>
+                <td className="num">{num(s.qty)} {d.uom}</td>
+                <td style={{ color: 'var(--fg-dim)' }}>{s.display_name || '—'}</td>
               </tr>))}</tbody>
           </table>}
     </div>

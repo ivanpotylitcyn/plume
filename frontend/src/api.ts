@@ -32,6 +32,11 @@ export interface StockMap {
   item_id: number; item_code: string; item_name: string; uom: string
   rows: StockMapRow[]
 }
+export interface ItemShipment {
+  transfer_id: number; number: string; date: string; project_code: string
+  posted: boolean; lot_id: number; qty: number; display_name: string
+  serial_number: string
+}
 export interface ItemDetail {
   id: number; code: string; name: string; kind: string; uom: string
   is_manufactured: boolean; estimated_cost: number | null
@@ -39,7 +44,7 @@ export interface ItemDetail {
   where_used: { parent_id: number; parent_code: string; parent_name: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
           live_qty: number; unit_cost: number; serial_number: string }[]
-  stock_map: StockMap
+  shipments: ItemShipment[]
 }
 
 // ── Кокпит комплектации (волна 2 — записываемое ядро) ──
@@ -111,6 +116,26 @@ export interface PurchaseCockpit {
 }
 export interface ProjectPurchaseRow {
   id: number; status: string; date: string | null; note: string; lines: number
+}
+
+// ── Передача / Transfer (волна 5 — записываемое ядро) ──
+export interface TransferRow {
+  id: number; number: string; date: string; project_code: string
+  posted: boolean; lines: number
+}
+export interface AvailableLot {
+  lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
+  live_qty: number; origin: string; serial_number: string; received_name: string
+}
+export interface TransferCockpitLine {
+  id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
+  item_name: string; uom: string; qty: number; display_name: string
+  lot_live_qty: number; serial_number: string
+}
+export interface TransferCockpit {
+  id: number; number: string; date: string; project_id: number
+  project_code: string; project_name: string; posted: boolean
+  total_qty: number; lines: TransferCockpitLine[]
 }
 
 function getCookie(name: string): string | null {
@@ -198,4 +223,19 @@ export const api = {
   projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
   addToOrder: (id: number, b: { item_id: number; qty: number }) =>
     send<{ purchase_id: number }>('POST', `/api/projects/${id}/order/`, b),
+
+  transfers: () => get<TransferRow[]>('/api/transfers/'),
+  transfer: (id: number) => get<TransferCockpit>(`/api/transfers/${id}/`),
+  createTransfer: (b: { project_id: number; number: string; date?: string }) =>
+    send<TransferCockpit>('POST', '/api/transfers/', b),
+  addTransferLine: (id: number, b: { lot_id: number; qty: number; display_name?: string }) =>
+    send<TransferCockpit>('POST', `/api/transfers/${id}/lines/`, b),
+  updateTransferLine: (id: number, b: Partial<{ qty: number; display_name: string }>) =>
+    send<TransferCockpit>('PATCH', `/api/transfer-lines/${id}/`, b),
+  deleteTransferLine: (id: number) =>
+    send<TransferCockpit>('DELETE', `/api/transfer-lines/${id}/`),
+  postTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/post/`),
+  unpostTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/unpost/`),
+  projectAvailableLots: (id: number) =>
+    get<AvailableLot[]>(`/api/projects/${id}/available-lots/`),
 }

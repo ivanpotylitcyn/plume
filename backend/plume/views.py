@@ -105,7 +105,7 @@ def item_detail(request, pk):
         'uom': item.uom, 'is_manufactured': item.is_manufactured,
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
-        'stock_map': engine.stock_map(item),
+        'shipments': engine.item_shipments(item),
     })
 
 
@@ -471,3 +471,105 @@ def project_order(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response({'purchase_id': p.id}, status=http.HTTP_201_CREATED)
+
+
+# --------------------------------------------------------------------------- #
+#  Передача / Transfer (волна 5 — записываемое ядро): отгрузка заказчику
+# --------------------------------------------------------------------------- #
+def _transfer_row(t):
+    """Строка списка передач для дерева навигации."""
+    return {
+        'id': t.id, 'number': t.number, 'date': t.date,
+        'project_code': t.project.code, 'posted': t.posted,
+        'lines': t.lines.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def transfers(request):
+    """Список передач (дерево) / создание новой накладной (призрачная строка)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+            t = engine.create_transfer(
+                project, _actor(request), d.get('number') or '',
+                date=d.get('date') or timezone.localdate())
+        except (KeyError, models.Project.DoesNotExist) as e:
+            return _bad(f'Нужны project_id, number ({e}).')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.transfer_cockpit(t), status=http.HTTP_201_CREATED)
+
+    rows = [_transfer_row(t) for t in models.Transfer.objects
+            .select_related('project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET'])
+def transfer_detail(request, pk):
+    """Кокпит передачи: строки-лоты накладной + живой остаток источника + итог."""
+    t = get_object_or_404(models.Transfer, pk=pk)
+    return Response(engine.transfer_cockpit(t))
+
+
+@api_view(['POST'])
+def transfer_lines(request, pk):
+    """Добавить строку передачи — отгрузка партии заказчику (`−ISSUE`)."""
+    t = get_object_or_404(models.Transfer, pk=pk)
+    d = request.data
+    try:
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        engine.add_transfer_line(t, lot, _dec(d.get('qty')),
+                                 display_name=d.get('display_name') or '')
+    except (KeyError, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.transfer_cockpit(t), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def transfer_line_detail(request, pk):
+    """Автосейв строки передачи (кол-во/имя) (PATCH) / удаление строки (DELETE)."""
+    line = get_object_or_404(
+        models.TransferLine.objects.select_related('transfer', 'lot'), pk=pk)
+    transfer = line.transfer
+    try:
+        if request.method == 'DELETE':
+            engine.remove_transfer_line(line)
+        else:
+            d = request.data
+            engine.update_transfer_line(
+                line,
+                qty=_dec(d['qty']) if 'qty' in d else None,
+                display_name=d['display_name'] if 'display_name' in d else None)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.transfer_cockpit(transfer))
+
+
+@api_view(['POST'])
+def transfer_post(request, pk):
+    """Поставить замок «отгружено» — накладная read-only."""
+    t = get_object_or_404(models.Transfer, pk=pk)
+    try:
+        engine.post_transfer(t)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.transfer_cockpit(t))
+
+
+@api_view(['POST'])
+def transfer_unpost(request, pk):
+    """Снять замок — снова разрешить правку накладной."""
+    t = get_object_or_404(models.Transfer, pk=pk)
+    engine.unpost_transfer(t)
+    return Response(engine.transfer_cockpit(t))
+
+
+@api_view(['GET'])
+def project_available_lots(request, pk):
+    """Лоты проекта с остатком > 0 — пикер строки передачи."""
+    project = get_object_or_404(models.Project, pk=pk)
+    return Response(engine.project_available_lots(project))

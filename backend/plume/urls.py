@@ -12,6 +12,7 @@ urlpatterns = [
     path('projects/<int:pk>/deficit/', views.project_deficit, name='project-deficit'),
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
     path('projects/<int:pk>/order/', views.project_order, name='project-order'),
+    path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),
     path('items/', views.items, name='items'),
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     # кокпит комплектации (записываемое ядро)
@@ -39,4 +40,11 @@ urlpatterns = [
     path('purchases/<int:pk>/cancel/', views.purchase_cancel, name='purchase-cancel'),
     path('purchases/<int:pk>/restore/', views.purchase_restore, name='purchase-restore'),
     path('purchase-lines/<int:pk>/', views.purchase_line_detail, name='purchase-line'),
+    # передача / Transfer (записываемое ядро, волна 5)
+    path('transfers/', views.transfers, name='transfers'),
+    path('transfers/<int:pk>/', views.transfer_detail, name='transfer-detail'),
+    path('transfers/<int:pk>/lines/', views.transfer_lines, name='transfer-lines'),
+    path('transfers/<int:pk>/post/', views.transfer_post, name='transfer-post'),
+    path('transfers/<int:pk>/unpost/', views.transfer_unpost, name='transfer-unpost'),
+    path('transfer-lines/<int:pk>/', views.transfer_line_detail, name='transfer-line'),
 ]

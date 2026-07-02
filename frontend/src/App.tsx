@@ -3,14 +3,15 @@
 // Волна 2: третий режим «Комплектации» — записываемый кокпит сборки.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
-  type PurchaseRow, type SupplierRow } from './api'
+  type PurchaseRow, type SupplierRow, type TransferRow } from './api'
 import { DeficitView } from './DeficitView'
 import { ItemView } from './ItemView'
 import { KittingView } from './KittingView'
 import { ReceiptView } from './ReceiptView'
 import { PurchaseView, PURCH_ST } from './PurchaseView'
+import { TransferView } from './TransferView'
 
-type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases'
+type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases' | 'transfers'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'item'; id: number }
@@ -20,6 +21,8 @@ type Sel =
   | { kind: 'new-receipt' }
   | { kind: 'purchase'; id: number }
   | { kind: 'new-purchase' }
+  | { kind: 'transfer'; id: number }
+  | { kind: 'new-transfer' }
   | null
 
 const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
@@ -35,6 +38,7 @@ export default function App() {
   const [kittings, setKittings] = useState<KittingRow[]>([])
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
+  const [transfers, setTransfers] = useState<TransferRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
 
   // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
@@ -48,6 +52,7 @@ export default function App() {
   const reloadKittings = useCallback(() => api.kittings().then(setKittings), [])
   const reloadReceipts = useCallback(() => api.receipts().then(setReceipts), [])
   const reloadPurchases = useCallback(() => api.purchases().then(setPurchases), [])
+  const reloadTransfers = useCallback(() => api.transfers().then(setTransfers), [])
 
   useEffect(() => {
     api.projects().then(ps => {
@@ -63,7 +68,8 @@ export default function App() {
     reloadKittings()
     reloadReceipts()
     reloadPurchases()
-  }, [reloadKittings, reloadReceipts, reloadPurchases])
+    reloadTransfers()
+  }, [reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
   // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
@@ -112,6 +118,7 @@ export default function App() {
   const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
   const openReceipt = (id: number) => { setMode('receipts'); setSel({ kind: 'receipt', id }) }
   const openPurchase = (id: number) => { setMode('purchases'); setSel({ kind: 'purchase', id }) }
+  const openTransfer = (id: number) => { setMode('transfers'); setSel({ kind: 'transfer', id }) }
 
   return (
     <div className="app">
@@ -126,6 +133,8 @@ export default function App() {
           title="Приходы — УПД, рождение лотов" onClick={() => setMode('receipts')}>📥</button>
         <button className={mode === 'purchases' ? 'active' : ''}
           title="Заказы — обязательства, закрытие приходом" onClick={() => setMode('purchases')}>🛒</button>
+        <button className={mode === 'transfers' ? 'active' : ''}
+          title="Передачи — отгрузка заказчику по накладной" onClick={() => setMode('transfers')}>📦</button>
       </div>
 
       <div className="sidebar">
@@ -209,6 +218,23 @@ export default function App() {
             )
           })}
         </>}
+
+        {mode === 'transfers' && <>
+          <h2>Передачи</h2>
+          <div className={'tree-item new' + (sel?.kind === 'new-transfer' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-transfer' })}>
+            <span className="code">＋ Новая передача</span>
+          </div>
+          {transfers.map(t => (
+            <div key={t.id}
+              className={'tree-item' + (sel?.kind === 'transfer' && sel.id === t.id ? ' sel' : '')}
+              onClick={() => setSel({ kind: 'transfer', id: t.id })}>
+              <span className={`glyph ${t.posted ? 'g-lock' : 'g-info'}`}>{t.posted ? '🔒' : '📦'}</span>
+              <span className="code">{t.number}</span>
+              <span className="sub">{t.project_code} · {t.lines} стр.</span>
+            </div>
+          ))}
+        </>}
       </div>
 
       <div className="work">
@@ -238,13 +264,18 @@ export default function App() {
         {sel?.kind === 'new-purchase' &&
           <NewPurchase projects={projects}
             onCreated={id => { reloadPurchases(); openPurchase(id) }} />}
+        {sel?.kind === 'transfer' &&
+          <TransferView transferId={sel.id} openItem={openItem} onChanged={reloadTransfers} />}
+        {sel?.kind === 'new-transfer' &&
+          <NewTransfer projects={projects}
+            onCreated={id => { reloadTransfers(); openTransfer(id) }} />}
         {!sel && <div className="empty">Выберите объект слева</div>}
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 4 · записываемый заказ (Purchase)</span>
+        <span>plume · волна 5 · записываемая передача (Transfer)</span>
         <span className="spacer" />
-        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length}</span>
+        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length}</span>
       </div>
     </div>
   )
@@ -330,6 +361,51 @@ function NewPurchase({ projects, onCreated }: {
         <dt>Примечание</dt>
         <dd><input className="qty-in" style={{ width: 260 }} value={note}
           placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание новой передачи (накладной): проект + № + дата. Строки — в кокпите.
+function NewTransfer({ projects, onCreated }: {
+  projects: ProjectRow[]; onCreated: (id: number) => void
+}) {
+  const externalProjects = projects.filter(p => p.kind === 'external')
+  const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
+  const [number, setNumber] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!projectId || !number.trim()) { setErr('Заполните проект и № накладной'); return }
+    setBusy(true); setErr(null)
+    api.createTransfer({ project_id: projectId, number: number.trim(), date })
+      .then(c => onCreated(c.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новая передача</h1>
+      <div className="subtitle">Отгрузка заказчику · проект + № накладной · строки в кокпите</div>
+      <dl className="props">
+        <dt>Проект</dt>
+        <dd><select className="lot-sel" value={projectId}
+          onChange={e => setProjectId(Number(e.target.value))}>
+          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+        </select></dd>
+        <dt>№ накладной</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} value={number}
+          onChange={e => setNumber(e.target.value)} /></dd>
+        <dt>Дата</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} type="date" value={date}
+          onChange={e => setDate(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

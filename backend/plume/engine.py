@@ -27,12 +27,23 @@
 - `set_receipt_purchase(receipt, purchase)` — связь `Receipt↔Purchase` (гашение заказа).
 - `add_to_project_order(...)` — мост «дефицит → заказ» (оживляет член «заказано»).
 
-Следующие волны: командный свод + Procurement, pegging, бюджет/экономия.
+Волна 5 (записываемая передача / Transfer — отгрузка заказчику):
+- `transfer_cockpit(transfer)` — шапка накладной + строки-лоты (отдаём партию заказчику,
+  `−ISSUE`) + живой остаток источника + итог; `project_available_lots(project)` — пикер
+  отдаваемых лотов (live>0). `create_transfer`, `add/update/remove_transfer_line`.
+- Мягкий замок «отгружено» (`Transfer.posted`, зеркалит `Receipt.approved`):
+  `post_transfer`/`unpost_transfer` — под замком форма read-only; снятие ничего не
+  разрушает (guard по потомкам не нужен). `item_shipments(item)` — отгруженные партии
+  изделия для его экрана (замыкает петлю `комплектация → передача`).
+
+Следующие волны: закрытие проекта (Writeoff/Requisition/Inventory), командный свод +
+Procurement, pegging, бюджет/экономия.
 """
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.exceptions import ValidationError
 from django.db.models import Sum
+from django.utils import timezone
 
 from . import models
 
@@ -768,3 +779,163 @@ def add_to_project_order(project, item, qty, user):
     else:
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
     return purchase
+
+
+# --------------------------------------------------------------------------- #
+#  Кокпит передачи / Transfer (волна 5): отдаём партию заказчику (−ISSUE)
+# --------------------------------------------------------------------------- #
+def project_available_lots(project):
+    """Лоты проекта с живым остатком > 0 — кандидаты на отгрузку заказчику.
+
+    Пикер строки передачи: любой лот проекта, где ещё что-то лежит (обычно
+    готовое железо — приборы из комплектации, но модель не ограничивает).
+    """
+    result = []
+    for lot in (models.Lot.objects.filter(project=project)
+                .select_related('item').order_by('item__code', 'id')):
+        live = lot_live_qty(lot)
+        if live > 0:
+            result.append({
+                'lot_id': lot.id, 'item_id': lot.item_id,
+                'item_code': lot.item.code, 'item_name': lot.item.name,
+                'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
+                'serial_number': lot.serial_number,
+                'received_name': lot.received_name,
+            })
+    return result
+
+
+def _lot_label(lot):
+    """Человекочитаемая метка лота для накладной/строки (зав.№ / название / артикул)."""
+    tail = lot.serial_number or lot.received_name or lot.item.code
+    return f'#{lot.id} {tail}'
+
+
+def transfer_cockpit(transfer):
+    """Проекция кокпита передачи: шапка накладной + строки-лоты + итог.
+
+    Каждая строка отдаёт партию заказчику (`−ISSUE`); показываем живой остаток
+    источника (просел ли под передачу, не ушёл ли в минус). Ничего не хранит.
+    """
+    lines = []
+    total_qty = ZERO
+    for line in transfer.lines.select_related('lot__item').order_by('id'):
+        lot = line.lot
+        total_qty += line.qty
+        lines.append({
+            'id': line.id, 'lot_id': lot.id,
+            'lot_label': _lot_label(lot),
+            'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'qty': line.qty, 'display_name': line.display_name,
+            'lot_live_qty': lot_live_qty(lot),   # остаток источника после отгрузки
+            'serial_number': lot.serial_number,
+        })
+    return {
+        'id': transfer.id, 'number': transfer.number, 'date': transfer.date,
+        'project_id': transfer.project_id, 'project_code': transfer.project.code,
+        'project_name': transfer.project.name, 'posted': transfer.posted,
+        'total_qty': total_qty, 'lines': lines,
+    }
+
+
+def item_shipments(item):
+    """Отгруженные партии изделия — где и по какой накладной ушло заказчику.
+
+    Read-only проекция для экрана изделия: строки передач его лотов (замыкает
+    петлю `комплектация → передача`). Порядок — свежие сверху.
+    """
+    rows = []
+    for line in (models.TransferLine.objects
+                 .filter(lot__item=item).select_related('transfer__project', 'lot')
+                 .order_by('-transfer__date', '-id')):
+        t = line.transfer
+        rows.append({
+            'transfer_id': t.id, 'number': t.number, 'date': t.date,
+            'project_code': t.project.code, 'posted': t.posted,
+            'lot_id': line.lot_id, 'qty': line.qty,
+            'display_name': line.display_name,
+            'serial_number': line.lot.serial_number,
+        })
+    return rows
+
+
+def create_transfer(project, user, number, date=None):
+    """Создать передачу (накладную) проекта. Строки добавляются в кокпите.
+
+    `Transfer.date` не nullable — пустую дату замыкаем на сегодня.
+    """
+    if not (number or '').strip():
+        raise ValidationError('Нужен № накладной.')
+    return models.Transfer.objects.create(
+        project=project, user=user, number=number.strip(),
+        date=date or timezone.localdate())
+
+
+def _require_unposted(transfer):
+    if transfer.posted:
+        raise ValidationError('Накладная отгружена (замок) — снимите замок для правки.')
+
+
+def add_transfer_line(transfer, lot, qty, display_name=''):
+    """Отгрузить партию заказчику: строка передачи (`−ISSUE` на лоте).
+
+    Лот — того же проекта (передаём своё, чужое — через требование). Кол-во не
+    клампим по остатку: переотдать можно, лот уйдёт в минус (недостача информативна,
+    в духе мутабельной ДНК).
+    """
+    _require_unposted(transfer)
+    if lot.project_id != transfer.project_id:
+        raise ValidationError('Лот из другого проекта — передаём только своё.')
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество передачи должно быть положительным.')
+    line = models.TransferLine.objects.create(
+        transfer=transfer, lot=lot, qty=qty,
+        display_name=(display_name or '').strip() or _lot_label(lot))
+    rebuild_movements(lot)
+    return line
+
+
+def update_transfer_line(line, qty=None, display_name=None):
+    """Автосейв строки передачи (кол-во / отображаемое имя для накладной)."""
+    _require_unposted(line.transfer)
+    fields = []
+    if qty is not None:
+        if qty <= 0:
+            raise ValidationError('Количество передачи должно быть положительным.')
+        line.qty = qty
+        fields.append('qty')
+    if display_name is not None:
+        line.display_name = display_name
+        fields.append('display_name')
+    if fields:
+        line.save(update_fields=fields)
+        if 'qty' in fields:
+            rebuild_movements(line.lot)
+    return line
+
+
+def remove_transfer_line(line):
+    """Убрать строку передачи (коррекция) — источник возвращает остаток."""
+    _require_unposted(line.transfer)
+    lot = line.lot
+    line.delete()
+    rebuild_movements(lot)
+
+
+def post_transfer(transfer):
+    """Поставить замок «отгружено» — накладная становится read-only (зеркалит
+    `approve_receipt`). Сюда позже ляжет подписанная накладная (Attachment)."""
+    if not transfer.lines.exists():
+        raise ValidationError('Нельзя отгрузить пустую накладную — добавьте строку.')
+    transfer.posted = True
+    transfer.save(update_fields=['posted'])
+    return transfer
+
+
+def unpost_transfer(transfer):
+    """Снять замок — снова разрешить правку. Ничего не разрушает (строки и их
+    `−ISSUE` остаются), поэтому guard по потомкам не нужен."""
+    transfer.posted = False
+    transfer.save(update_fields=['posted'])
+    return transfer

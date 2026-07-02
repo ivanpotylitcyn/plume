@@ -556,3 +556,119 @@ class PurchaseCockpitTests(EngineTestBase):
         p2 = engine.add_to_project_order(self.prj, item, D(10), self.user)
         self.assertEqual(p1.id, p2.id)
         self.assertEqual(p2.lines.get(item=item).qty, D(25))
+
+
+class TransferCockpitTests(EngineTestBase):
+    """Волна 5: кокпит передачи — отгрузка партии заказчику (`−ISSUE`), пикер
+    отдаваемых лотов, guard чужого проекта, коррекция строк."""
+
+    def setUp(self):
+        super().setUp()
+        self.device = self.make_item('DEV', manufactured=True,
+                                      kind=models.Item.Kind.DEVICE)
+        # готовое железо на складе проекта: лот 5 (как из комплектации/прихода)
+        self.lot = self.receipt_lot(self.device, self.prj, 5)
+
+    def test_add_line_issues_from_lot(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(t, self.lot, D(2))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(3))   # 5 − 2
+        self.assertTrue(self.lot.movements.filter(type='ISSUE', qty=D(-2)).exists())
+
+    def test_cockpit_totals_and_live(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(t, self.lot, D(2), display_name='Прибор зав.№7')
+        c = engine.transfer_cockpit(t)
+        self.assertEqual(c['number'], 'Н-1')
+        self.assertEqual(c['total_qty'], D(2))
+        self.assertEqual(len(c['lines']), 1)
+        row = c['lines'][0]
+        self.assertEqual(row['qty'], D(2))
+        self.assertEqual(row['lot_live_qty'], D(3))
+        self.assertEqual(row['display_name'], 'Прибор зав.№7')
+
+    def test_default_display_name_from_lot(self):
+        self.lot.serial_number = 'ЗН-42'
+        self.lot.save(update_fields=['serial_number'])
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        line = engine.add_transfer_line(t, self.lot, D(1))
+        self.assertIn('ЗН-42', line.display_name)               # авто-метка лота
+
+    def test_create_rejects_empty_number(self):
+        with self.assertRaises(ValidationError):
+            engine.create_transfer(self.prj, self.user, '   ')
+
+    def test_add_line_rejects_foreign_project_lot(self):
+        other = models.Project.objects.create(
+            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        t = engine.create_transfer(other, self.user, 'Н-2')
+        with self.assertRaises(ValidationError):
+            engine.add_transfer_line(t, self.lot, D(1))         # лот чужого проекта
+
+    def test_add_line_rejects_nonpositive(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        with self.assertRaises(ValidationError):
+            engine.add_transfer_line(t, self.lot, D(0))
+
+    def test_over_issue_drives_negative_not_clamped(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(t, self.lot, D(8))             # больше остатка 5
+        self.assertEqual(engine.lot_live_qty(self.lot), D(-3))  # недостача информативна
+
+    def test_update_qty_rebuilds_and_remove_restores(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        line = engine.add_transfer_line(t, self.lot, D(2))
+        engine.update_transfer_line(line, qty=D(4))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(1))   # 5 − 4
+        engine.update_transfer_line(line, display_name='новое имя')
+        line.refresh_from_db()
+        self.assertEqual(line.display_name, 'новое имя')
+        engine.remove_transfer_line(line)
+        self.assertEqual(engine.lot_live_qty(self.lot), D(5))   # источник восстановлен
+
+    def test_available_lots_picker(self):
+        # ещё один лот проекта + чужой проект + нулевой остаток → в пикере только живой свой
+        other = models.Project.objects.create(
+            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        self.receipt_lot(self.device, other, 3)                 # чужой проект
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(t, self.lot, D(5))             # свой лот в ноль
+        picker = engine.project_available_lots(self.prj)
+        self.assertEqual(picker, [])                            # живых своих лотов нет
+        self.assertEqual(len(engine.project_available_lots(other)), 1)
+
+    def test_post_locks_edits(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        line = engine.add_transfer_line(t, self.lot, D(2))
+        engine.post_transfer(t)
+        self.assertTrue(engine.transfer_cockpit(t)['posted'])
+        with self.assertRaises(ValidationError):
+            engine.update_transfer_line(line, qty=D(1))
+        with self.assertRaises(ValidationError):
+            engine.add_transfer_line(t, self.lot, D(1))
+        with self.assertRaises(ValidationError):
+            engine.remove_transfer_line(line)
+
+    def test_post_rejects_empty(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        with self.assertRaises(ValidationError):
+            engine.post_transfer(t)
+
+    def test_unpost_reenables_edits(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        line = engine.add_transfer_line(t, self.lot, D(2))
+        engine.post_transfer(t)
+        engine.unpost_transfer(t)
+        self.assertFalse(engine.transfer_cockpit(t)['posted'])
+        engine.update_transfer_line(line, qty=D(3))            # снова можно
+        self.assertEqual(engine.lot_live_qty(self.lot), D(2))
+
+    def test_item_shipments_projection(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-7')
+        engine.add_transfer_line(t, self.lot, D(2), display_name='Прибор №7')
+        rows = engine.item_shipments(self.device)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['number'], 'Н-7')
+        self.assertEqual(rows[0]['qty'], D(2))
+        self.assertEqual(rows[0]['display_name'], 'Прибор №7')
+        self.assertFalse(rows[0]['posted'])
