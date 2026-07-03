@@ -798,6 +798,118 @@ def requisition_line_detail(request, pk):
     return Response(engine.requisition_cockpit(requisition))
 
 
+# ── Инвентаризация / Inventory (записываемое ядро, волна 9) ──
+def _inventory_row(i):
+    return {
+        'id': i.id, 'number': i.number, 'date': i.date,
+        'project_code': i.project.code, 'note': i.note, 'lines': i.lots.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def inventories(request):
+    """Список инвентаризаций (дерево) / создание нового акта (проект-дом)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+            i = engine.create_inventory(
+                project, _actor(request), d.get('number') or '',
+                date=d.get('date') or timezone.localdate(),
+                note=d.get('note') or '')
+        except (KeyError, models.Project.DoesNotExist) as e:
+            return _bad(f'Нужны project_id, number ({e}).')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.inventory_cockpit(i), status=http.HTTP_201_CREATED)
+
+    rows = [_inventory_row(i) for i in models.Inventory.objects
+            .select_related('project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET', 'PATCH'])
+def inventory_detail(request, pk):
+    """Кокпит инвентаризации: строки-лоты (`+RECEIPT`) + провенанс + итог.
+    PATCH — правка шапки (№ акта / дата / примечание) прямо в кокпите."""
+    i = get_object_or_404(models.Inventory, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_inventory(
+                i, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None,
+                note=d['note'] if 'note' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.inventory_cockpit(i))
+
+
+@api_view(['POST'])
+def inventory_lots(request, pk):
+    """Добавить строку акта — рождается «найденная» партия (`+RECEIPT`).
+
+    `predecessor_id` (опц.) — списанный лот-источник (ре-материализация серого
+    остатка): item/цена/название/зав.№ наследуются, если не заданы явно.
+    """
+    i = get_object_or_404(models.Inventory, pk=pk)
+    d = request.data
+    try:
+        pred = None
+        if d.get('predecessor_id'):
+            pred = models.Lot.objects.select_related('item').get(pk=d['predecessor_id'])
+        if pred is not None:
+            item = pred.item
+            unit_cost = _dec(d.get('unit_cost'))
+            unit_cost = pred.unit_cost if unit_cost is None else unit_cost
+            received_name = d['received_name'] if 'received_name' in d else pred.received_name
+            serial_number = d['serial_number'] if 'serial_number' in d else pred.serial_number
+        else:
+            item = models.Item.objects.get(pk=d['item_id'])
+            unit_cost = _dec(d.get('unit_cost')) or engine.ZERO
+            received_name = d.get('received_name') or ''
+            serial_number = d.get('serial_number') or ''
+        engine.add_inventory_lot(
+            i, item, _dec(d.get('qty')), unit_cost=unit_cost,
+            received_name=received_name, serial_number=serial_number,
+            predecessor=pred)
+    except (KeyError, models.Item.DoesNotExist, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны item_id (или predecessor_id), qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.inventory_cockpit(i), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def inventory_lot_detail(request, pk):
+    """Автосейв строки акта (PATCH) / удаление строки (DELETE)."""
+    lot = get_object_or_404(
+        models.Lot.objects.select_related('inventory', 'item'), pk=pk)
+    if lot.inventory_id is None:
+        return _bad('Партия не из инвентаризации — правка через её origin-документ.')
+    inventory = lot.inventory
+    try:
+        if request.method == 'DELETE':
+            engine.remove_inventory_lot(lot)
+        else:
+            d = request.data
+            engine.update_inventory_lot(
+                lot,
+                qty=_dec(d['qty']) if 'qty' in d else None,
+                unit_cost=_dec(d['unit_cost']) if 'unit_cost' in d else None,
+                received_name=d['received_name'] if 'received_name' in d else None,
+                serial_number=d['serial_number'] if 'serial_number' in d else None)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.inventory_cockpit(inventory))
+
+
+@api_view(['GET'])
+def written_off_lots(request):
+    """Списанные лоты — пикер ре-материализации (серый остаток → на баланс)."""
+    return Response(engine.written_off_lots())
+
+
 # ── Панель закрытия проекта + мосты + мягкий замок ──
 @api_view(['GET'])
 def project_closure(request, pk):

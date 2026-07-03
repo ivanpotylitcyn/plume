@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
   type PurchaseRow, type SupplierRow, type TransferRow, type WriteoffRow,
-  type RequisitionRow, type ProcurementRow } from './api'
+  type RequisitionRow, type ProcurementRow, type InventoryRow } from './api'
 import { DeficitView } from './DeficitView'
 import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
@@ -17,9 +17,10 @@ import { CommandDeficitView } from './CommandDeficitView'
 import { TransferView } from './TransferView'
 import { WriteoffView } from './WriteoffView'
 import { RequisitionView } from './RequisitionView'
+import { InventoryView } from './InventoryView'
 
 type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases'
-  | 'transfers' | 'writeoffs' | 'requisitions' | 'procurements'
+  | 'transfers' | 'writeoffs' | 'requisitions' | 'procurements' | 'inventories'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'new-project' }
@@ -40,6 +41,8 @@ type Sel =
   | { kind: 'command' }
   | { kind: 'procurement'; id: number }
   | { kind: 'new-procurement' }
+  | { kind: 'inventory'; id: number }
+  | { kind: 'new-inventory' }
   | null
 
 const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
@@ -59,6 +62,7 @@ export default function App() {
   const [writeoffs, setWriteoffs] = useState<WriteoffRow[]>([])
   const [requisitions, setRequisitions] = useState<RequisitionRow[]>([])
   const [procurements, setProcurements] = useState<ProcurementRow[]>([])
+  const [inventories, setInventories] = useState<InventoryRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
 
   // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
@@ -76,6 +80,7 @@ export default function App() {
   const reloadWriteoffs = useCallback(() => api.writeoffs().then(setWriteoffs), [])
   const reloadRequisitions = useCallback(() => api.requisitions().then(setRequisitions), [])
   const reloadProcurements = useCallback(() => api.procurements().then(setProcurements), [])
+  const reloadInventories = useCallback(() => api.inventories().then(setInventories), [])
   const reloadProjects = useCallback(() => api.projects().then(setProjects), [])
   const reloadItems = useCallback(() => api.items().then(setItems), [])
 
@@ -97,8 +102,9 @@ export default function App() {
     reloadWriteoffs()
     reloadRequisitions()
     reloadProcurements()
+    reloadInventories()
   }, [reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
-      reloadWriteoffs, reloadRequisitions, reloadProcurements])
+      reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
   // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
@@ -152,6 +158,7 @@ export default function App() {
   const openWriteoff = (id: number) => { setMode('writeoffs'); setSel({ kind: 'writeoff', id }) }
   const openRequisition = (id: number) => { setMode('requisitions'); setSel({ kind: 'requisition', id }) }
   const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
+  const openInventory = (id: number) => { setMode('inventories'); setSel({ kind: 'inventory', id }) }
 
   return (
     <div className="app">
@@ -174,6 +181,8 @@ export default function App() {
           title="Требования — отпочкование / постановка на баланс" onClick={() => setMode('requisitions')}>⇄</button>
         <button className={mode === 'procurements' ? 'active' : ''}
           title="Закупки-план — командный свод + order.xlsx" onClick={() => setMode('procurements')}>⛁</button>
+        <button className={mode === 'inventories' ? 'active' : ''}
+          title="Инвентаризации — найденные партии + ре-материализация" onClick={() => setMode('inventories')}>🔍</button>
       </div>
 
       <div className="sidebar">
@@ -342,6 +351,23 @@ export default function App() {
             )
           })}
         </>}
+
+        {mode === 'inventories' && <>
+          <h2>Инвентаризации</h2>
+          <div className={'tree-item new' + (sel?.kind === 'new-inventory' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-inventory' })}>
+            <span className="code">＋ Новая инвентаризация</span>
+          </div>
+          {inventories.map(i => (
+            <div key={i.id}
+              className={'tree-item' + (sel?.kind === 'inventory' && sel.id === i.id ? ' sel' : '')}
+              onClick={() => setSel({ kind: 'inventory', id: i.id })}>
+              <span className="glyph g-available">🔍</span>
+              <span className="code">{i.number}</span>
+              <span className="sub">{i.project_code} · {i.lines} стр.</span>
+            </div>
+          ))}
+        </>}
       </div>
 
       <div className="work">
@@ -409,13 +435,19 @@ export default function App() {
             onChanged={reloadProcurements} />}
         {sel?.kind === 'new-procurement' &&
           <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
+        {sel?.kind === 'inventory' &&
+          <InventoryView inventoryId={sel.id} items={items} openItem={openItem}
+            onChanged={reloadInventories} />}
+        {sel?.kind === 'new-inventory' &&
+          <NewInventory projects={projects}
+            onCreated={id => { reloadInventories(); openInventory(id) }} />}
         {!sel && <div className="empty">Выберите объект слева</div>}
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 8 · привязка плана-закупки к проектным заказам</span>
+        <span>plume · волна 9 · инвентаризация: найденные партии + серая ре-материализация</span>
         <span className="spacer" />
-        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length}</span>
+        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length} · инвентаризаций {inventories.length}</span>
       </div>
     </div>
   )
@@ -772,6 +804,59 @@ function NewRequisition({ projects, onCreated }: {
         <dt>Дата</dt>
         <dd><input className="qty-in" style={{ width: 160 }} type="date" value={date}
           onChange={e => setDate(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание новой инвентаризации: проект-дом + № акта + дата + примечание.
+// Найденные партии рождаются в кокпите (излишки + ре-материализация серого).
+// По умолчанию — GREY «Свободные неучтённые» (флагман — ре-материализация), но
+// излишек можно завести и в реальном проекте.
+function NewInventory({ projects, onCreated }: {
+  projects: ProjectRow[]; onCreated: (id: number) => void
+}) {
+  const [projectId, setProjectId] = useState<number | ''>(
+    projects.find(p => p.kind === 'internal_writeoff')?.id ?? projects[0]?.id ?? '')
+  const [number, setNumber] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [note, setNote] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!projectId || !number.trim()) { setErr('Заполните проект-дом и № акта'); return }
+    setBusy(true); setErr(null)
+    api.createInventory({ project_id: projectId, number: number.trim(), date,
+      note: note.trim() || undefined })
+      .then(c => onCreated(c.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новая инвентаризация</h1>
+      <div className="subtitle">Рождение найденных партий · проект-дом + № акта · строки в кокпите</div>
+      <dl className="props">
+        <dt>Проект-дом</dt>
+        <dd><select className="lot-sel" value={projectId}
+          onChange={e => setProjectId(Number(e.target.value))}>
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+        </select></dd>
+        <dt>№ акта</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} value={number}
+          onChange={e => setNumber(e.target.value)} /></dd>
+        <dt>Дата</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} type="date" value={date}
+          onChange={e => setDate(e.target.value)} /></dd>
+        <dt>Примечание</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={note}
+          placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

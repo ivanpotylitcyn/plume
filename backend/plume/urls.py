@@ -64,6 +64,12 @@ urlpatterns = [
     path('requisitions/<int:pk>/', views.requisition_detail, name='requisition-detail'),
     path('requisitions/<int:pk>/lines/', views.requisition_lines, name='requisition-lines'),
     path('requisition-lines/<int:pk>/', views.requisition_line_detail, name='requisition-line'),
+    # инвентаризация / Inventory (записываемое ядро, волна 9)
+    path('inventories/', views.inventories, name='inventories'),
+    path('inventories/<int:pk>/', views.inventory_detail, name='inventory-detail'),
+    path('inventories/<int:pk>/lots/', views.inventory_lots, name='inventory-lots'),
+    path('inventory-lots/<int:pk>/', views.inventory_lot_detail, name='inventory-lot'),
+    path('written-off-lots/', views.written_off_lots, name='written-off-lots'),
     # планирование закупок (волна 7): командный свод + записываемый Procurement + order.xlsx
     path('command-deficit/', views.command_deficit, name='command-deficit'),
     path('command-deficit/add-to-procurement/', views.command_deficit_add, name='command-deficit-add'),

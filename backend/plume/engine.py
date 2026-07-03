@@ -1816,6 +1816,143 @@ def autopeg_procurement(procurement, user):
 
 
 # --------------------------------------------------------------------------- #
+#  Волна 9 — инвентаризация (Inventory): 4-й origin партии + серая ре-материализация
+# --------------------------------------------------------------------------- #
+# `Inventory` рождает «найденные» партии — излишки, всплывшие при пересчёте, и
+# ре-материализацию серых остатков (списанное → −ISSUE «в серый»; найдено физически
+# → возвращаем на баланс новым лотом с `predecessor` → списанный, наследуя
+# item/цену/название/зав.№). Отдельной `InventoryLine` в модели нет: строки акта =
+# его лоты (`inventory.lots`, как приход/УПД). Origin `inventory` уже знают
+# `LOT_ORIGIN_FIELDS` и `rebuild_movements` — волна добавляет записываемую надстройку.
+# Замка нет (у модели нет поля-статуса, как у Writeoff/Requisition): правимо всегда,
+# корректность держат guard'ы + PROTECT.
+def inventory_cockpit(inventory):
+    """Проекция кокпита инвентаризации: шапка акта + строки-лоты (`+RECEIPT`) + итог.
+
+    Каждая строка — рождённый актом лот («найденная» партия): кол-во, живой остаток
+    (просел ли под последующий расход), цена/название, зав.№ и провенанс
+    (`predecessor` — из какого списанного лота ре-материализован). Чистая проекция.
+    """
+    lots = []
+    total = ZERO
+    for lot in (inventory.lots.select_related('item', 'predecessor__project')
+                .order_by('id')):
+        total += lot.qty * lot.unit_cost
+        pred = lot.predecessor
+        lots.append({
+            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'qty': lot.qty, 'live_qty': lot_live_qty(lot),
+            'unit_cost': lot.unit_cost, 'received_name': lot.received_name,
+            'serial_number': lot.serial_number,
+            'predecessor_id': lot.predecessor_id,
+            'predecessor_label': _lot_label(pred) if pred else '',
+            'consumed': _lot_consumed_downstream(lot),
+        })
+    return {
+        'id': inventory.id, 'number': inventory.number, 'date': inventory.date,
+        'note': inventory.note,
+        'project_id': inventory.project_id, 'project_code': inventory.project.code,
+        'project_name': inventory.project.name,
+        'total_cost': total, 'lots': lots,
+    }
+
+
+def create_inventory(project, user, number, date=None, note=''):
+    """Создать акт инвентаризации в проект-дом (куда рождаются найденные лоты)."""
+    if not (number or '').strip():
+        raise ValidationError('Нужен № акта инвентаризации.')
+    return models.Inventory.objects.create(
+        project=project, user=user, number=number.strip(),
+        date=date or timezone.localdate(), note=(note or '').strip())
+
+
+def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, received_name='',
+                      serial_number='', predecessor=None):
+    """Добавить строку акта: рождается «найденная» партия (`+RECEIPT`) в его проекте.
+
+    `predecessor` (опц.) связывает найденный лот со списанным-источником
+    (ре-материализация серого остатка — провенанс/генеалогия). Кол-во не клампим.
+    """
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество должно быть положительным.')
+    if unit_cost is not None and unit_cost < 0:
+        raise ValidationError('Цена не может быть отрицательной.')
+    lot = models.Lot.objects.create(
+        item=item, project=inventory.project, inventory=inventory, qty=qty,
+        unit_cost=unit_cost or ZERO, received_name=received_name or '',
+        serial_number=serial_number or '', predecessor=predecessor)
+    rebuild_movements(lot)
+    return lot
+
+
+def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
+                         serial_number=None):
+    """Автосейв строки акта (кол-во/цена/название/зав.№). Кол-во не клампим по расходу."""
+    fields = []
+    if qty is not None:
+        if qty <= 0:
+            raise ValidationError('Количество должно быть положительным.')
+        lot.qty = qty
+        fields.append('qty')
+    if unit_cost is not None:
+        if unit_cost < 0:
+            raise ValidationError('Цена не может быть отрицательной.')
+        lot.unit_cost = unit_cost
+        fields.append('unit_cost')
+    if received_name is not None:
+        lot.received_name = received_name
+        fields.append('received_name')
+    if serial_number is not None:
+        lot.serial_number = serial_number
+        fields.append('serial_number')
+    if fields:
+        lot.save(update_fields=fields)
+        rebuild_movements(lot)
+    return lot
+
+
+def remove_inventory_lot(lot):
+    """Удалить строку акта (коррекция). Guard: найденный лот не потреблён ниже."""
+    if _lot_consumed_downstream(lot):
+        raise ValidationError(
+            'Найденная партия уже потреблена ниже — удаление заблокировано.')
+    lot.movements.all().delete()
+    lot.delete()
+
+
+def update_inventory(inventory, number=None, date=None, note=None):
+    """Правка шапки инвентаризации (№ акта / дата / примечание)."""
+    _require_number(number)
+    _require_date(date)
+    return _apply(inventory, {'number': number and number.strip(), 'date': date,
+                              'note': None if note is None else note.strip()})
+
+
+def written_off_lots():
+    """Списанные лоты (серый путь) — кандидаты ре-материализации инвентаризацией.
+
+    Списание — чистый `−ISSUE`: лот покинул учёт «в серый». Если серую партию нашли
+    физически, инвентаризация возвращает её на баланс лотом-потомком (`predecessor` →
+    списанный, наследование item/цены/названия/зав.№). Показываем суммарно списанное
+    с лота (сколько «серого» доступно вернуть).
+    """
+    result = []
+    for lot in (models.Lot.objects.filter(writeoff_lines__isnull=False).distinct()
+                .select_related('item', 'project').order_by('project__code',
+                                                            'item__code', 'id')):
+        written = lot.writeoff_lines.aggregate(s=Sum('qty'))['s'] or ZERO
+        result.append({
+            'lot_id': lot.id, 'item_id': lot.item_id,
+            'item_code': lot.item.code, 'item_name': lot.item.name,
+            'uom': lot.item.uom, 'written_qty': written,
+            'project_code': lot.project.code, 'unit_cost': lot.unit_cost,
+            'received_name': lot.received_name, 'serial_number': lot.serial_number,
+        })
+    return result
+
+
+# --------------------------------------------------------------------------- #
 #  Справочники: создание изделий и проектов (канон «＋ Новая», 2026-07-03)
 # --------------------------------------------------------------------------- #
 def create_item(code, name, kind=None, uom='шт', is_manufactured=False,

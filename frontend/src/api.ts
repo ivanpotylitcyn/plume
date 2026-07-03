@@ -175,6 +175,28 @@ export interface RequisitionCockpit {
   total_qty: number; lines: RequisitionCockpitLine[]
 }
 
+// ── Инвентаризация / Inventory (волна 9 — записываемое ядро) ──
+export interface InventoryRow {
+  id: number; number: string; date: string; project_code: string
+  note: string; lines: number
+}
+export interface InventoryCockpitLot {
+  id: number; item_id: number; item_code: string; item_name: string; uom: string
+  qty: number; live_qty: number; unit_cost: number; received_name: string
+  serial_number: string; predecessor_id: number | null; predecessor_label: string
+  consumed: boolean
+}
+export interface InventoryCockpit {
+  id: number; number: string; date: string; note: string
+  project_id: number; project_code: string; project_name: string
+  total_cost: number; lots: InventoryCockpitLot[]
+}
+export interface WrittenOffLot {
+  lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
+  written_qty: number; project_code: string; unit_cost: number
+  received_name: string; serial_number: string
+}
+
 // ── Панель закрытия проекта (волна 6) ──
 export interface ResidualLot {
   lot_id: number; lot_label: string; item_id: number; item_code: string
@@ -371,6 +393,23 @@ export const api = {
   deleteRequisitionLine: (id: number) =>
     send<RequisitionCockpit>('DELETE', `/api/requisition-lines/${id}/`),
   allAvailableLots: () => get<AllAvailableLot[]>('/api/available-lots/'),
+
+  inventories: () => get<InventoryRow[]>('/api/inventories/'),
+  inventory: (id: number) => get<InventoryCockpit>(`/api/inventories/${id}/`),
+  updateInventory: (id: number, b: Partial<{ number: string; date: string; note: string }>) =>
+    send<InventoryCockpit>('PATCH', `/api/inventories/${id}/`, b),
+  createInventory: (b: { project_id: number; number: string; date?: string; note?: string }) =>
+    send<InventoryCockpit>('POST', '/api/inventories/', b),
+  addInventoryLot: (id: number, b: {
+    item_id?: number; predecessor_id?: number; qty: number
+    unit_cost?: number; received_name?: string; serial_number?: string
+  }) => send<InventoryCockpit>('POST', `/api/inventories/${id}/lots/`, b),
+  updateInventoryLot: (id: number, b: Partial<{
+    qty: number; unit_cost: number; received_name: string; serial_number: string
+  }>) => send<InventoryCockpit>('PATCH', `/api/inventory-lots/${id}/`, b),
+  deleteInventoryLot: (id: number) =>
+    send<InventoryCockpit>('DELETE', `/api/inventory-lots/${id}/`),
+  writtenOffLots: () => get<WrittenOffLot[]>('/api/written-off-lots/'),
 
   // ── Планирование закупок (волна 7) ──
   commandDeficit: () => get<CommandDeficit>('/api/command-deficit/'),

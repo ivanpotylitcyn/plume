@@ -1426,3 +1426,150 @@ class ReferenceCreateHttpTests(TestCase):
         bad = self.c.post('/api/projects/', {'code': '', 'name': 'X'},
             content_type='application/json')
         self.assertEqual(bad.status_code, 400)
+
+
+class InventoryCockpitTests(EngineTestBase):
+    """Волна 9: инвентаризация — рождение «найденных» партий (`+RECEIPT`, 4-й
+    origin) + серая ре-материализация списанного лота с наследованием провенанса."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.grey = models.Project.objects.create(
+            code='GREY', name='Свободные неучтённые',
+            kind=models.Project.Kind.INTERNAL_WRITEOFF)
+
+    def test_add_lot_births_receipt_movement(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1', note='пересчёт')
+        lot = engine.add_inventory_lot(inv, self.item, D(7), unit_cost=D('1.50'),
+                                       received_name='Резистор')
+        self.assertEqual(lot.origin_kind, 'inventory')
+        self.assertEqual(lot.project_id, self.prj.id)
+        self.assertEqual(engine.lot_live_qty(lot), D(7))       # +RECEIPT
+        self.assertTrue(lot.movements.filter(type='RECEIPT', qty=D(7)).exists())
+
+    def test_cockpit_totals_and_note(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1', note='пересчёт')
+        engine.add_inventory_lot(inv, self.item, D(4), unit_cost=D('2'))
+        c = engine.inventory_cockpit(inv)
+        self.assertEqual(c['number'], 'ИНВ-1')
+        self.assertEqual(c['note'], 'пересчёт')
+        self.assertEqual(c['total_cost'], D(8))                # 4 × 2
+        self.assertEqual(c['lots'][0]['live_qty'], D(4))
+
+    def test_create_rejects_empty_number(self):
+        with self.assertRaises(ValidationError):
+            engine.create_inventory(self.prj, self.user, '  ')
+
+    def test_add_lot_rejects_nonpositive_and_negative_cost(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
+        with self.assertRaises(ValidationError):
+            engine.add_inventory_lot(inv, self.item, D(0))
+        with self.assertRaises(ValidationError):
+            engine.add_inventory_lot(inv, self.item, D(1), unit_cost=D(-1))
+
+    def test_update_and_remove_lot(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
+        lot = engine.add_inventory_lot(inv, self.item, D(4))
+        engine.update_inventory_lot(lot, qty=D(9), unit_cost=D('3'))
+        self.assertEqual(engine.lot_live_qty(lot), D(9))
+        engine.remove_inventory_lot(lot)
+        self.assertFalse(models.Lot.objects.filter(pk=lot.id).exists())
+
+    def test_remove_blocked_when_consumed(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
+        lot = engine.add_inventory_lot(inv, self.item, D(10))
+        # потребим найденный лот передачей → удаление заблокировано
+        tr = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(tr, lot, D(3))
+        with self.assertRaises(ValidationError):
+            engine.remove_inventory_lot(lot)
+
+    def test_rematerialize_written_off_lot_inherits_provenance(self):
+        # списываем партию из проекта (серый путь), затем находим и ре-материализуем в GREY
+        src = self.receipt_lot(self.item, self.prj, 10)
+        src.unit_cost = D('2.50'); src.received_name = 'Резистор'; src.serial_number = 'ЗН-9'
+        src.save(update_fields=['unit_cost', 'received_name', 'serial_number'])
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='на серый')
+        engine.add_writeoff_line(w, src, D(6))
+        self.assertEqual(engine.lot_live_qty(src), D(4))
+        # пикер показывает списанный лот с суммой списания
+        picker = {r['lot_id']: r for r in engine.written_off_lots()}
+        self.assertIn(src.id, picker)
+        self.assertEqual(picker[src.id]['written_qty'], D(6))
+        # ре-материализация: born-лот в GREY с predecessor и унаследованными полями
+        inv = engine.create_inventory(self.grey, self.user, 'ИНВ-G1')
+        born = engine.add_inventory_lot(inv, src.item, D(6), unit_cost=src.unit_cost,
+                                        received_name=src.received_name,
+                                        serial_number=src.serial_number, predecessor=src)
+        self.assertEqual(born.project_id, self.grey.id)
+        self.assertEqual(born.predecessor_id, src.id)
+        self.assertEqual(born.unit_cost, D('2.50'))
+        self.assertEqual(engine.lot_live_qty(born), D(6))
+        c = engine.inventory_cockpit(inv)
+        self.assertEqual(c['lots'][0]['predecessor_id'], src.id)
+        self.assertTrue(c['lots'][0]['predecessor_label'])
+
+
+class InventoryHttpTests(TestCase):
+    """Волна 9: HTTP-путь инвентаризации — create/строка/правка/пикер/ре-материализация."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.grey = models.Project.objects.create(
+            code='GREY', name='Свободные неучтённые',
+            kind=models.Project.Kind.INTERNAL_WRITEOFF)
+        self.item = models.Item.objects.create(code='R100', name='R100')
+        self.sup = models.Supplier.objects.create(name='П')
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+            supplier=self.sup, project=self.prj, user=get_user_model().objects.first())
+        self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
+            receipt=r, qty=D(10), unit_cost=D('2.50'), serial_number='ЗН-9')
+        engine.rebuild_movements(self.lot)
+        self.c = Client()
+
+    def test_inventory_crud_flow(self):
+        r = self.c.post('/api/inventories/', {'project_id': self.prj.id,
+            'number': 'ИНВ-1', 'note': 'пересчёт'}, content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        iid = r.json()['id']
+        # строка = найденная партия (+RECEIPT)
+        line = self.c.post(f'/api/inventories/{iid}/lots/',
+            {'item_id': self.item.id, 'qty': 7, 'unit_cost': '1.5',
+             'received_name': 'Резистор'}, content_type='application/json')
+        self.assertEqual(line.status_code, 201)
+        body = line.json()
+        self.assertEqual(float(body['total_cost']), 10.5)
+        self.assertEqual(float(body['lots'][0]['live_qty']), 7.0)
+        # нонпозитив qty → 400
+        bad = self.c.post(f'/api/inventories/{iid}/lots/',
+            {'item_id': self.item.id, 'qty': 0}, content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        # правка шапки
+        patch = self.c.patch(f'/api/inventories/{iid}/', {'note': 'обновлено'},
+            content_type='application/json')
+        self.assertEqual(patch.json()['note'], 'обновлено')
+
+    def test_rematerialize_via_picker(self):
+        # списываем часть лота → появляется в пикере ре-материализации
+        w = self.c.post('/api/writeoffs/', {'project_id': self.prj.id, 'number': 'СП-1'},
+            content_type='application/json').json()
+        self.c.post(f"/api/writeoffs/{w['id']}/lines/",
+            {'lot_id': self.lot.id, 'qty': 6}, content_type='application/json')
+        picker = self.c.get('/api/written-off-lots/')
+        self.assertEqual(picker.status_code, 200)
+        self.assertTrue(any(x['lot_id'] == self.lot.id and float(x['written_qty']) == 6.0
+                            for x in picker.json()))
+        # ре-материализация в GREY: predecessor → списанный, поля унаследованы
+        inv = self.c.post('/api/inventories/', {'project_id': self.grey.id,
+            'number': 'ИНВ-G1'}, content_type='application/json').json()
+        line = self.c.post(f"/api/inventories/{inv['id']}/lots/",
+            {'predecessor_id': self.lot.id, 'qty': 6}, content_type='application/json')
+        self.assertEqual(line.status_code, 201)
+        row = line.json()['lots'][0]
+        self.assertEqual(row['predecessor_id'], self.lot.id)
+        self.assertEqual(float(row['unit_cost']), 2.50)       # цена унаследована
+        self.assertEqual(row['serial_number'], 'ЗН-9')        # зав.№ унаследован
