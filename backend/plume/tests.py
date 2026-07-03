@@ -1097,6 +1097,80 @@ class ProcurementCockpitTests(EngineTestBase):
         self.assertEqual(ws['C2'].value, 12)
 
 
+class PeggingTests(EngineTestBase):
+    """Волна 8: нарезка плана (Procurement) на проектные заказы (Purchase)."""
+
+    def setUp(self):
+        super().setUp()
+        self.prj2 = models.Project.objects.create(
+            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        self.scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
+        self.plan = engine.create_procurement(self.user, note='свод')      # need 40 + 20
+        engine.add_procurement_line(self.plan, self.scr, D(60))
+
+    def test_peg_creates_project_purchase_under_plan(self):
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
+        pu = self.plan.purchases.get(project=self.prj)
+        self.assertEqual(pu.procurement_id, self.plan.id)   # под планом, не solo-заглушка
+        self.assertEqual(pu.status, models.Purchase.Status.DRAFT)
+        self.assertEqual(pu.lines.get(item=self.scr).qty, D(40))
+        # повторный пег — инкремент в тот же заказ
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
+        self.assertEqual(self.plan.purchases.count(), 1)
+        self.assertEqual(pu.lines.get(item=self.scr).qty, D(50))
+
+    def test_autopeg_distributes_and_idempotent(self):
+        engine.autopeg_procurement(self.plan, self.user)
+        p1 = self.plan.purchases.get(project=self.prj)
+        p2 = self.plan.purchases.get(project=self.prj2)
+        self.assertEqual(p1.lines.get(item=self.scr).qty, D(40))     # по наводке свода
+        self.assertEqual(p2.lines.get(item=self.scr).qty, D(20))
+        row = engine.procurement_pegging(self.plan)['rows'][0]
+        self.assertEqual(row['pegged'], D(60))
+        self.assertEqual(row['remaining'], D(0))
+        self.assertEqual(row['status'], 'available')
+        # идемпотентность — повтор ничего не добавляет
+        engine.autopeg_procurement(self.plan, self.user)
+        self.assertEqual(p1.lines.get(item=self.scr).qty, D(40))
+        self.assertEqual(self.plan.purchases.count(), 2)
+
+    def test_peg_guards(self):
+        with self.assertRaises(ValidationError):            # item не в плане
+            engine.peg_procurement_line(self.plan, self.make_item('OTH'),
+                                        self.prj, D(1), self.user)
+        with self.assertRaises(ValidationError):            # неположительное кол-во
+            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(0), self.user)
+        white = models.Project.objects.create(code='WHITE', name='Свой склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        with self.assertRaises(ValidationError):            # не внешний проект
+            engine.peg_procurement_line(self.plan, self.scr, white, D(1), self.user)
+        closed = models.Project.objects.create(code='CL', name='Закрыт',
+            kind=models.Project.Kind.EXTERNAL, status=models.Project.Status.CLOSED)
+        with self.assertRaises(ValidationError):            # не активный проект
+            engine.peg_procurement_line(self.plan, self.scr, closed, D(1), self.user)
+
+    def test_unpeg_removes_and_blocks_sent(self):
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
+        engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
+        pu = self.plan.purchases.get(project=self.prj)
+        self.assertFalse(pu.lines.exists())                 # пег снят
+        # пег в отправленном заказе — снять нельзя, пока не снят send
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
+        engine.send_purchase(pu)
+        with self.assertRaises(ValidationError):
+            engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
+
+    def test_plan_list_includes_pegged_excludes_solo(self):
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
+        engine.create_purchase(self.prj, self.user)         # solo-заглушка (purchases, без строк)
+        ids = {p.id for p in engine._plan_procurements()}
+        self.assertEqual(ids, {self.plan.id})               # пегнутый план виден, заглушка — нет
+
+
 class ClosureHttpTests(TestCase):
     """Волна 6: HTTP-путь через test Client — провязка urls/views + мапинг ошибок."""
 
@@ -1222,6 +1296,61 @@ class ProcurementHttpTests(TestCase):
         self.assertIn('spreadsheetml', xlsx['Content-Type'])
         self.assertTrue(xlsx['Content-Disposition'].startswith('attachment'))
         self.assertTrue(xlsx.content[:2] == b'PK')      # zip-сигнатура xlsx
+
+
+class PeggingHttpTests(TestCase):
+    """Волна 8: HTTP-путь pegging — проекция, peg/unpeg/autopeg, гварды."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.prj = models.Project.objects.create(code='P1', name='Проект 1',
+            kind=models.Project.Kind.EXTERNAL)
+        self.prj2 = models.Project.objects.create(code='P2', name='Проект 2',
+            kind=models.Project.Kind.EXTERNAL)
+        self.scr = models.Item.objects.create(code='SCR', name='Винт',
+            kind=models.Item.Kind.MATERIAL)
+        dev = models.Item.objects.create(code='DEV', name='Прибор',
+            kind=models.Item.Kind.DEVICE, is_manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
+        self.c = Client()
+        add = self.c.post('/api/command-deficit/add-to-procurement/',
+            {'item_id': self.scr.id, 'qty': 60}, content_type='application/json')
+        self.pid = add.json()['procurement_id']
+
+    def test_pegging_projection_and_autopeg(self):
+        peg = self.c.get(f'/api/procurements/{self.pid}/pegging/')
+        self.assertEqual(peg.status_code, 200)
+        row = peg.json()['rows'][0]
+        self.assertEqual(row['item_code'], 'SCR')
+        self.assertEqual(float(row['pegged']), 0.0)
+        self.assertEqual(len(row['by_project']), 2)             # наводка по двум проектам
+        auto = self.c.post(f'/api/procurements/{self.pid}/autopeg/')
+        self.assertEqual(auto.status_code, 200)
+        body = auto.json()
+        self.assertEqual(len(body['fan']), 2)                  # веер из двух заказов
+        self.assertEqual(float(body['rows'][0]['pegged']), 60.0)
+        self.assertEqual(body['rows'][0]['status'], 'available')
+
+    def test_manual_peg_unpeg_and_guard(self):
+        peg = self.c.post(f'/api/procurements/{self.pid}/peg/',
+            {'item_id': self.scr.id, 'project_id': self.prj.id, 'qty': 25},
+            content_type='application/json')
+        self.assertEqual(peg.status_code, 200)
+        self.assertEqual(float(peg.json()['rows'][0]['pegged']), 25.0)
+        # item не в плане → 400
+        x = models.Item.objects.create(code='X', name='X')
+        bad = self.c.post(f'/api/procurements/{self.pid}/peg/',
+            {'item_id': x.id, 'project_id': self.prj.id, 'qty': 1},
+            content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        # unpeg → 0
+        un = self.c.post(f'/api/procurements/{self.pid}/unpeg/',
+            {'item_id': self.scr.id, 'project_id': self.prj.id},
+            content_type='application/json')
+        self.assertEqual(un.status_code, 200)
+        self.assertEqual(float(un.json()['rows'][0]['pegged']), 0.0)
 
 
 class ReferenceCreateTests(EngineTestBase):

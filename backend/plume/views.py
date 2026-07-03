@@ -1001,3 +1001,57 @@ def procurement_order_xlsx(request, pk):
     resp['Content-Disposition'] = (
         f'attachment; filename="order-{p.id}.xlsx"')
     return resp
+
+
+# --------------------------------------------------------------------------- #
+#  Pegging (волна 8): нарезка плана-`Procurement` на проектные заказы-`Purchase`
+# --------------------------------------------------------------------------- #
+@api_view(['GET'])
+def procurement_pegging(request, pk):
+    """Проекция pegging плана: распределение строк по проектам + веер заказов."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    return Response(engine.procurement_pegging(p))
+
+
+@api_view(['POST'])
+def procurement_peg(request, pk):
+    """Пегнуть кол-во строки плана на проект (строка проектного заказа под этим планом)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        project = models.Project.objects.get(pk=d['project_id'])
+        engine.peg_procurement_line(p, item, project, _dec(d.get('qty')),
+                                    _actor(request))
+    except (KeyError, models.Item.DoesNotExist, models.Project.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, project_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_pegging(p))
+
+
+@api_view(['POST'])
+def procurement_unpeg(request, pk):
+    """Снять пег (item, project) под этим планом — удалить строку проектного заказа."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        project = models.Project.objects.get(pk=d['project_id'])
+        engine.unpeg_procurement_line(p, item, project)
+    except (KeyError, models.Item.DoesNotExist, models.Project.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, project_id ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_pegging(p))
+
+
+@api_view(['POST'])
+def procurement_autopeg(request, pk):
+    """Разрезать план по проектам в один клик (топ-ап до наводки свода)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    try:
+        engine.autopeg_procurement(p, _actor(request))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_pegging(p))

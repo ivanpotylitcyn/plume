@@ -212,6 +212,25 @@ export interface ProcurementCockpit {
   total_qty: number; lines: ProcurementCockpitLine[]
 }
 
+// ── Pegging (волна 8): нарезка плана на проектные заказы ──
+export interface PeggingProject {
+  project_id: number; project_code: string; project_name: string
+  suggest: number; pegged: number
+}
+export interface PeggingRow {
+  line_id: number; item_id: number; item_code: string; item_name: string
+  uom: string; qty: number; pegged: number; remaining: number; status: Status
+  by_project: PeggingProject[]
+}
+export interface PeggingFanRow {
+  purchase_id: number; status: string; project_id: number
+  project_code: string; project_name: string; lines: number; total: number
+}
+export interface Pegging {
+  id: number; status: string; editable: boolean
+  rows: PeggingRow[]; fan: PeggingFanRow[]
+}
+
 function getCookie(name: string): string | null {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
   return m ? decodeURIComponent(m[2]) : null
@@ -374,6 +393,13 @@ export const api = {
   cancelProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/cancel/`),
   restoreProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/restore/`),
   orderXlsxUrl: (id: number) => `/api/procurements/${id}/order.xlsx`,
+  // pegging (волна 8)
+  pegging: (id: number) => get<Pegging>(`/api/procurements/${id}/pegging/`),
+  peg: (id: number, b: { item_id: number; project_id: number; qty: number }) =>
+    send<Pegging>('POST', `/api/procurements/${id}/peg/`, b),
+  unpeg: (id: number, b: { item_id: number; project_id: number }) =>
+    send<Pegging>('POST', `/api/procurements/${id}/unpeg/`, b),
+  autopeg: (id: number) => send<Pegging>('POST', `/api/procurements/${id}/autopeg/`),
 
   closure: (id: number) => get<ProjectClosure>(`/api/projects/${id}/closure/`),
   writeoffLot: (id: number, b: { lot_id: number; qty: number }) =>

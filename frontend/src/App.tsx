@@ -405,6 +405,7 @@ export default function App() {
             openProcurement={id => { reloadProcurements(); openProcurement(id) }} />}
         {sel?.kind === 'procurement' &&
           <ProcurementView procurementId={sel.id} items={items} openItem={openItem}
+            openPurchase={id => { reloadPurchases(); openPurchase(id) }}
             onChanged={reloadProcurements} />}
         {sel?.kind === 'new-procurement' &&
           <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
@@ -412,7 +413,7 @@ export default function App() {
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 7 · планирование закупок (командный свод + order.xlsx)</span>
+        <span>plume · волна 8 · привязка плана-закупки к проектным заказам</span>
         <span className="spacer" />
         <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length}</span>
       </div>

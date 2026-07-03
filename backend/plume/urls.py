@@ -76,4 +76,9 @@ urlpatterns = [
     path('procurements/<int:pk>/restore/', views.procurement_restore, name='procurement-restore'),
     path('procurements/<int:pk>/order.xlsx', views.procurement_order_xlsx, name='procurement-order-xlsx'),
     path('procurement-lines/<int:pk>/', views.procurement_line_detail, name='procurement-line'),
+    # pegging (волна 8): нарезка плана на проектные заказы
+    path('procurements/<int:pk>/pegging/', views.procurement_pegging, name='procurement-pegging'),
+    path('procurements/<int:pk>/peg/', views.procurement_peg, name='procurement-peg'),
+    path('procurements/<int:pk>/unpeg/', views.procurement_unpeg, name='procurement-unpeg'),
+    path('procurements/<int:pk>/autopeg/', views.procurement_autopeg, name='procurement-autopeg'),
 ]

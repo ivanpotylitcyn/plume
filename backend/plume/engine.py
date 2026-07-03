@@ -53,13 +53,20 @@
   маркер командной высоты; мягкий замок `draft→sent`). Нарезка на `Purchase` — волна 8.
 - `add_to_procurement(...)` — мост «свод → закупка»; `procurement_xlsx(...)` — `order.xlsx`.
 
-Следующие волны: pegging (нарезка Procurement→Purchase), инвентаризация (Inventory —
-«найденные» партии), бюджет/экономия, логин-экран, UI вложений.
+Волна 8 (pegging — нарезка плана на проектные заказы):
+- `procurement_pegging(proc)` — проекция: по строке плана пегнуто/остаток/статус +
+  распределение по проектам (наводка из `command_deficit`) + веер проектных `Purchase`.
+- `peg_procurement_line` / `unpeg_procurement_line` / `autopeg_procurement` — раскладка
+  строки плана в проектные заказы под **этим** планом-родителем (ломает 1:1-заглушку
+  `_solo_procurement`: план теперь родитель веера `Purchase`, а не только своих строк).
+
+Следующие волны: инвентаризация (Inventory — «найденные» партии), бюджет/экономия,
+логин-экран, UI вложений.
 """
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.exceptions import ValidationError
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.utils import timezone
 
 from . import models
@@ -1574,13 +1581,19 @@ def update_procurement(procurement, date=None, note=None):
 
 
 def _plan_procurements():
-    """Закупки-планы волны 7 = `Procurement` **без** привязанных проектных заказов.
+    """Закупки-планы = `Procurement`, записанные на командной высоте (волна 7+).
 
-    Вырожденные 1:1-заглушки `_solo_procurement` (родитель проектного `Purchase`,
-    волна 4) всегда имеют ≥1 `Purchase` — отсекаем их, пока нарезка Procurement→Purchase
-    (pegging) не пришла волной 8 и не слила два уровня.
+    После pegging (волна 8) план становится родителем веера проектных `Purchase`, поэтому
+    старый признак «нет привязанных заказов» больше не годится (пегнутый план исчезал бы
+    из списка). Различаем структурно: **solo-заглушка** `_solo_procurement` (родитель
+    одиночного проектного заказа, волна 4) — это `Procurement` с ≥1 `Purchase` и **без**
+    строк плана (`ProcurementLine`); план же всегда либо имеет строки, либо пуст-и-без-
+    заказов (свежесозданный). Отсекаем ровно заглушки — веер пегнутого плана остаётся.
     """
-    return models.Procurement.objects.filter(purchases__isnull=True)
+    return (models.Procurement.objects
+            .annotate(_n_purch=Count('purchases', distinct=True),
+                      _n_lines=Count('lines', distinct=True))
+            .exclude(_n_purch__gt=0, _n_lines=0))
 
 
 def add_to_procurement(item, qty, user):
@@ -1634,6 +1647,172 @@ def procurement_xlsx(procurement):
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+#  Волна 8 — pegging: нарезка плана (Procurement) на проектные заказы (Purchase)
+# --------------------------------------------------------------------------- #
+def _procurement_pegs(procurement):
+    """Σ пегнутого по `(item_id, project_id)` под этим планом: `{(item, project): qty}`.
+
+    Пег = строка проектного заказа (`PurchaseLine`), чей заказ висит на этом плане.
+    Отменённые заказы (`cancelled`) не в счёте — обязательство снято.
+    """
+    pegs = {}
+    rows = (models.PurchaseLine.objects
+            .filter(purchase__procurement=procurement)
+            .exclude(purchase__status=models.Purchase.Status.CANCELLED)
+            .values_list('item_id', 'purchase__project_id')
+            .annotate(total=Sum('qty')))
+    for item_id, project_id, total in rows:
+        pegs[(item_id, project_id)] = total
+    return pegs
+
+
+def procurement_pegging(procurement):
+    """Проекция pegging: по строке плана — распределение по проектам + веер заказов.
+
+    По каждой строке плана `(item, qty)`: сколько уже пегнуто (`pegged`), остаток плана
+    (`remaining`), статус ✓/●/▲ (полностью/частично/не разложено) и разбивка по проектам
+    с **наводкой** из командного свода (`command_deficit` — сколько проекту ещё докупить
+    по этому Item) плюс фактически пегнутым. Внизу — веер проектных `Purchase` под этим
+    планом (навигация в их кокпиты). Read-only проекция; правит peg/unpeg/autopeg.
+    """
+    editable = procurement.status != models.Procurement.Status.CANCELLED
+    pegs = _procurement_pegs(procurement)
+    suggest = {row['item_id']: row['by_project'] for row in command_deficit()['rows']}
+    rows = []
+    for line in procurement.lines.select_related('item').order_by('id'):
+        by_project = {}
+        for bp in suggest.get(line.item_id, []):     # проекты, которым ещё надо
+            by_project[bp['project_id']] = {
+                'project_id': bp['project_id'], 'project_code': bp['project_code'],
+                'project_name': bp['project_name'],
+                'suggest': bp['to_order'], 'pegged': ZERO,
+            }
+        for (item_id, project_id), qty in pegs.items():    # фактически пегнутое
+            if item_id != line.item_id:
+                continue
+            slot = by_project.get(project_id)
+            if slot is None:
+                p = models.Project.objects.get(pk=project_id)
+                slot = {'project_id': project_id, 'project_code': p.code,
+                        'project_name': p.name, 'suggest': ZERO, 'pegged': ZERO}
+                by_project[project_id] = slot
+            slot['pegged'] = qty
+        pegged_total = sum((s['pegged'] for s in by_project.values()), ZERO)
+        if pegged_total <= 0:
+            st = 'to_order'
+        elif pegged_total >= line.qty:
+            st = 'available'
+        else:
+            st = 'on_order'
+        rows.append({
+            'line_id': line.id, 'item_id': line.item_id,
+            'item_code': line.item.code, 'item_name': line.item.name,
+            'uom': line.item.uom, 'qty': line.qty,
+            'pegged': pegged_total, 'remaining': line.qty - pegged_total, 'status': st,
+            'by_project': sorted(by_project.values(), key=lambda s: s['project_code']),
+        })
+    fan = []
+    for pu in (procurement.purchases.select_related('project')
+               .order_by('project__code', 'id')):
+        fan.append({
+            'purchase_id': pu.id, 'status': pu.status,
+            'project_id': pu.project_id, 'project_code': pu.project.code,
+            'project_name': pu.project.name, 'lines': pu.lines.count(),
+            'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,
+        })
+    return {
+        'id': procurement.id, 'status': procurement.status, 'editable': editable,
+        'rows': rows, 'fan': fan,
+    }
+
+
+def _require_procurement_peggable(procurement):
+    if procurement.status == models.Procurement.Status.CANCELLED:
+        raise ValidationError('Отменённую закупку нельзя пегать — восстановите её.')
+
+
+def _project_purchase_under(procurement, project, user):
+    """Найти-или-создать **черновиковый** проектный заказ под этим планом-родителем.
+
+    Ломает 1:1-заглушку `_solo_procurement`: заказ рождается с `procurement=<план>`
+    (веер проектных обязательств висит на общем плане), а не с throwaway-родителем.
+    """
+    pu = (procurement.purchases
+          .filter(project=project, status=models.Purchase.Status.DRAFT)
+          .order_by('-id').first())
+    if pu is None:
+        pu = models.Purchase.objects.create(
+            procurement=procurement, project=project, user=user,
+            status=models.Purchase.Status.DRAFT)
+    return pu
+
+
+def peg_procurement_line(procurement, item, project, qty, user):
+    """Пегнуть кол-во строки плана на проект: строка проектного заказа под этим планом.
+
+    Находит-или-создаёт draft-`Purchase` проекта под планом и добавляет/инкрементит
+    `PurchaseLine(item, qty)`. item — из строк плана; проект — активный внешний. Кол-во
+    не клампим по остатку плана (перепегнуть можно — расхождение информативнее, в духе
+    мутабельной ДНК). Возвращает план.
+    """
+    _require_procurement_peggable(procurement)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество должно быть положительным.')
+    if not procurement.lines.filter(item=item).exists():
+        raise ValidationError(
+            f'Изделие {item.code} не в плане закупки — сначала добавьте строку плана.')
+    if project.kind != models.Project.Kind.EXTERNAL:
+        raise ValidationError('Пегать можно только на внешний проект (НИР/контракт).')
+    if project.status != models.Project.Status.ACTIVE:
+        raise ValidationError('Пегать можно только на активный проект.')
+    pu = _project_purchase_under(procurement, project, user)
+    line = pu.lines.filter(item=item).first()
+    if line:
+        line.qty = line.qty + qty
+        line.save(update_fields=['qty'])
+    else:
+        models.PurchaseLine.objects.create(purchase=pu, item=item, qty=qty)
+    return procurement
+
+
+def unpeg_procurement_line(procurement, item, project):
+    """Снять пег `(item, project)` под этим планом — удалить строку проектного заказа.
+
+    Реверс пега (разложить можно всегда — разметить обратно тоже). Удаляем строку в
+    черновиковых заказах проекта под планом; если пег в **отправленном** заказе —
+    просим сначала снять отправку (не рушим обязательство молча). Возвращает план.
+    """
+    _require_procurement_peggable(procurement)
+    lines = models.PurchaseLine.objects.filter(
+        purchase__procurement=procurement, purchase__project=project, item=item)
+    if lines.filter(purchase__status=models.Purchase.Status.SENT).exists():
+        raise ValidationError(
+            'Пег в отправленном заказе — снимите отправку заказа, потом снимайте пег.')
+    lines.filter(purchase__status=models.Purchase.Status.DRAFT).delete()
+    return procurement
+
+
+def autopeg_procurement(procurement, user):
+    """Разрезать план по проектам в один клик: топ-ап каждой `(item, project)` до наводки.
+
+    По каждой строке плана и каждому проекту из наводки свода (`command_deficit`) догоняет
+    пегнутое до `to_order` проекта (`delta = to_order − уже_пегнуто`, пегаем только
+    положительную дельту). Идемпотентно (повтор ничего не добавит) и не трогает ручной
+    перепег (delta<0 → пропуск). Возвращает план.
+    """
+    _require_procurement_peggable(procurement)
+    suggest = {row['item_id']: row['by_project'] for row in command_deficit()['rows']}
+    pegs = _procurement_pegs(procurement)
+    for line in procurement.lines.select_related('item'):
+        for bp in suggest.get(line.item_id, []):
+            delta = bp['to_order'] - pegs.get((line.item_id, bp['project_id']), ZERO)
+            if delta > 0:
+                project = models.Project.objects.get(pk=bp['project_id'])
+                peg_procurement_line(procurement, line.item, project, delta, user)
+    return procurement
 
 
 # --------------------------------------------------------------------------- #

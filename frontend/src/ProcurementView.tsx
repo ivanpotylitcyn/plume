@@ -1,20 +1,23 @@
 // Витрина волны 7: кокпит закупки-плана (Procurement) — записываемое ядро.
-// Самостоятельный план без проекта (маркер командной высоты); нарезка на проектные
-// заказы (pegging) — волна 8. Строки (item + qty, автосейв в черновике). Мягкий замок
-// = отправка (draft→sent): строки read-only. Кнопка выгрузки order.xlsx поставщику.
+// Самостоятельный план без проекта (маркер командной высоты). Строки (item + qty,
+// автосейв в черновике). Мягкий замок = отправка (draft→sent): строки read-only. Кнопка
+// выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на проектные
+// заказы (веер Purchase под этим планом-родителем).
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { PURCH_ST } from './PurchaseView'
+import { PeggingPanel } from './PeggingPanel'
 import { num } from './status'
 
-export function ProcurementView({ procurementId, items, openItem, onChanged }: {
+export function ProcurementView({ procurementId, items, openItem, openPurchase, onChanged }: {
   procurementId: number; items: ItemRow[]
-  openItem: (id: number) => void; onChanged: () => void
+  openItem: (id: number) => void; openPurchase: (id: number) => void; onChanged: () => void
 }) {
   const [c, setC] = useState<ProcurementCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [rev, setRev] = useState(0)     // растёт на мутациях — освежает панель pegging
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -23,7 +26,7 @@ export function ProcurementView({ procurementId, items, openItem, onChanged }: {
 
   const run = (p: Promise<ProcurementCockpit>) => {
     setBusy(true); setErr(null)
-    p.then(next => { setC(next); onChanged() })
+    p.then(next => { setC(next); setRev(n => n + 1); onChanged() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -94,6 +97,9 @@ export function ProcurementView({ procurementId, items, openItem, onChanged }: {
       </table>
       {c.lines.length === 0 && !editable &&
         <div className="empty">Закупка пуста.</div>}
+
+      {c.status !== 'cancelled' &&
+        <PeggingPanel procurementId={c.id} rev={rev} openPurchase={openPurchase} />}
     </div>
   )
 }
