@@ -52,26 +52,48 @@ def ping(request):
     return Response({'status': 'ok', 'app': 'plume'})
 
 
-@api_view(['GET'])
+def _project_row(p):
+    return {'id': p.id, 'code': p.code, 'name': p.name, 'kind': p.kind,
+            'status': p.status}
+
+
+@api_view(['GET', 'POST'])
 def projects(request):
-    """Список проектов для дерева навигации."""
-    data = [
-        {'id': p.id, 'code': p.code, 'name': p.name, 'kind': p.kind,
-         'status': p.status}
-        for p in models.Project.objects.all()
-    ]
-    return Response(data)
+    """Список проектов (дерево) / создание нового внешнего проекта (канон «＋ Новый»)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            p = engine.create_project(
+                d.get('code'), d.get('name'), budget=_dec(d.get('budget')),
+                started_at=d.get('started_at') or None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(_project_row(p), status=http.HTTP_201_CREATED)
+
+    return Response([_project_row(p) for p in models.Project.objects.all()])
 
 
-@api_view(['GET'])
+def _item_row(i):
+    return {'id': i.id, 'code': i.code, 'name': i.name, 'kind': i.kind,
+            'uom': i.uom, 'is_manufactured': i.is_manufactured}
+
+
+@api_view(['GET', 'POST'])
 def items(request):
-    """Список изделий для дерева/карты."""
-    data = [
-        {'id': i.id, 'code': i.code, 'name': i.name, 'kind': i.kind,
-         'uom': i.uom, 'is_manufactured': i.is_manufactured}
-        for i in models.Item.objects.filter(active=True)
-    ]
-    return Response(data)
+    """Список изделий (дерево/карта) / создание нового изделия (канон «＋ Новое»)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            i = engine.create_item(
+                d.get('code'), d.get('name'), kind=d.get('kind') or None,
+                uom=d.get('uom') or 'шт',
+                is_manufactured=bool(d.get('is_manufactured')),
+                estimated_cost=_dec(d.get('estimated_cost')))
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(_item_row(i), status=http.HTTP_201_CREATED)
+
+    return Response([_item_row(i) for i in models.Item.objects.filter(active=True)])
 
 
 @api_view(['GET'])

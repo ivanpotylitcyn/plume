@@ -1634,3 +1634,47 @@ def procurement_xlsx(procurement):
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+#  Справочники: создание изделий и проектов (канон «＋ Новая», 2026-07-03)
+# --------------------------------------------------------------------------- #
+def create_item(code, name, kind=None, uom='шт', is_manufactured=False,
+                estimated_cost=None):
+    """Создать изделие справочника из мини-формы «＋ Новое». Артикул уникален."""
+    code = (code or '').strip()
+    name = (name or '').strip()
+    if not code:
+        raise ValidationError('Нужен артикул изделия.')
+    if not name:
+        raise ValidationError('Нужно название изделия.')
+    if models.Item.objects.filter(code=code).exists():
+        raise ValidationError(f'Изделие с артикулом {code} уже есть.')
+    kind = kind or models.Item.Kind.COMPONENT
+    if kind not in models.Item.Kind.values:
+        raise ValidationError(f'Неизвестный вид изделия: {kind}.')
+    return models.Item.objects.create(
+        code=code, name=name, kind=kind,
+        uom=(uom or '').strip() or 'шт',
+        is_manufactured=bool(is_manufactured),
+        estimated_cost=estimated_cost)
+
+
+def create_project(code, name, budget=None, started_at=None):
+    """Создать внешний проект (НИР/контракт) из мини-формы «＋ Новый». Код уникален.
+
+    Только `kind=external`: внутренние склады (WHITE/GREY) — синглтоны из сида
+    (`Project.clean`), формой «＋ Новый» не заводятся.
+    """
+    code = (code or '').strip()
+    name = (name or '').strip()
+    if not code:
+        raise ValidationError('Нужен код проекта.')
+    if not name:
+        raise ValidationError('Нужно название проекта.')
+    if models.Project.objects.filter(code=code).exists():
+        raise ValidationError(f'Проект с кодом {code} уже есть.')
+    return models.Project.objects.create(
+        code=code, name=name, kind=models.Project.Kind.EXTERNAL,
+        status=models.Project.Status.ACTIVE,
+        budget=budget, started_at=started_at or None)

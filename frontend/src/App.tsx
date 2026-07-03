@@ -22,7 +22,9 @@ type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases'
   | 'transfers' | 'writeoffs' | 'requisitions' | 'procurements'
 type Sel =
   | { kind: 'project'; id: number }
+  | { kind: 'new-project' }
   | { kind: 'item'; id: number }
+  | { kind: 'new-item' }
   | { kind: 'kitting'; id: number }
   | { kind: 'new-kitting' }
   | { kind: 'receipt'; id: number }
@@ -75,6 +77,7 @@ export default function App() {
   const reloadRequisitions = useCallback(() => api.requisitions().then(setRequisitions), [])
   const reloadProcurements = useCallback(() => api.procurements().then(setProcurements), [])
   const reloadProjects = useCallback(() => api.projects().then(setProjects), [])
+  const reloadItems = useCallback(() => api.items().then(setItems), [])
 
   useEffect(() => {
     api.projects().then(ps => {
@@ -140,6 +143,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [history.length])
 
+  const openProject = (id: number) => { setMode('projects'); setSel({ kind: 'project', id }) }
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
   const openReceipt = (id: number) => { setMode('receipts'); setSel({ kind: 'receipt', id }) }
@@ -175,6 +179,10 @@ export default function App() {
       <div className="sidebar">
         {mode === 'projects' && <>
           <h2>Проекты</h2>
+          <div className={'tree-item new' + (sel?.kind === 'new-project' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-project' })}>
+            <span className="code">＋ Новый проект</span>
+          </div>
           {projects.map(p => (
             <div key={p.id}
               className={'tree-item' + (sel?.kind === 'project' && sel.id === p.id ? ' sel' : '')}
@@ -188,6 +196,10 @@ export default function App() {
 
         {mode === 'items' && <>
           <h2>Изделия</h2>
+          <div className={'tree-item new' + (sel?.kind === 'new-item' ? ' sel' : '')}
+            onClick={() => setSel({ kind: 'new-item' })}>
+            <span className="code">＋ Новое изделие</span>
+          </div>
           {items.map(i => (
             <div key={i.id}
               className={'tree-item' + (sel?.kind === 'item' && sel.id === i.id ? ' sel' : '')}
@@ -351,7 +363,11 @@ export default function App() {
               onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }} />
           </>
         })()}
+        {sel?.kind === 'new-project' &&
+          <NewProject onCreated={id => { reloadProjects(); openProject(id) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} openItem={openItem} />}
+        {sel?.kind === 'new-item' &&
+          <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
         {sel?.kind === 'kitting' &&
           <KittingView kittingId={sel.id} openItem={openItem} onChanged={reloadKittings} />}
         {sel?.kind === 'new-kitting' &&
@@ -484,6 +500,105 @@ function NewPurchase({ projects, onCreated }: {
         <dt>Примечание</dt>
         <dd><input className="qty-in" style={{ width: 260 }} value={note}
           placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание нового изделия (справочник, канон «＋ Новое»): артикул + название + вид +
+// производимое + ед.изм. + оценочная стоимость (опц.). BOM правится отдельно.
+function NewItem({ onCreated }: { onCreated: (id: number) => void }) {
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState('component')
+  const [manufactured, setManufactured] = useState(false)
+  const [uom, setUom] = useState('шт')
+  const [cost, setCost] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!code.trim() || !name.trim()) { setErr('Заполните артикул и название'); return }
+    setBusy(true); setErr(null)
+    api.createItem({ code: code.trim(), name: name.trim(), kind, uom: uom.trim() || 'шт',
+      is_manufactured: manufactured, estimated_cost: cost.trim() ? Number(cost) : undefined })
+      .then(i => onCreated(i.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новое изделие</h1>
+      <div className="subtitle">Справочник · артикул + название + вид · состав (BOM) правится отдельно</div>
+      <dl className="props">
+        <dt>Артикул</dt>
+        <dd><input className="qty-in" style={{ width: 200 }} value={code}
+          onChange={e => setCode(e.target.value)} /></dd>
+        <dt>Название</dt>
+        <dd><input className="qty-in" style={{ width: 300 }} value={name}
+          onChange={e => setName(e.target.value)} /></dd>
+        <dt>Вид</dt>
+        <dd><select className="lot-sel" value={kind} onChange={e => setKind(e.target.value)}>
+          <option value="device">Изделие (прибор)</option>
+          <option value="component">Компонент</option>
+          <option value="material">Материал</option>
+        </select></dd>
+        <dt>Производимое</dt>
+        <dd><input type="checkbox" checked={manufactured}
+          onChange={e => setManufactured(e.target.checked)} /> <span className="sub">делаем сами (цель комплектации)</span></dd>
+        <dt>Ед. изм.</dt>
+        <dd><input className="qty-in" style={{ width: 80 }} value={uom}
+          onChange={e => setUom(e.target.value)} /></dd>
+        <dt>Оценочная стоимость</dt>
+        <dd><input className="qty-in" style={{ width: 120 }} value={cost}
+          placeholder="необязательно" onChange={e => setCost(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание нового проекта (справочник, канон «＋ Новый»): код + название + бюджет (опц.).
+// Только внешний (НИР/контракт); внутренние склады WHITE/GREY — синглтоны из сида.
+function NewProject({ onCreated }: { onCreated: (id: number) => void }) {
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [budget, setBudget] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!code.trim() || !name.trim()) { setErr('Заполните код и название'); return }
+    setBusy(true); setErr(null)
+    api.createProject({ code: code.trim(), name: name.trim(),
+      budget: budget.trim() ? Number(budget) : undefined })
+      .then(p => onCreated(p.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новый проект</h1>
+      <div className="subtitle">Внешний (НИР/контракт) · потребности и бюджет ведутся дальше</div>
+      <dl className="props">
+        <dt>Код</dt>
+        <dd><input className="qty-in" style={{ width: 200 }} value={code}
+          onChange={e => setCode(e.target.value)} /></dd>
+        <dt>Название</dt>
+        <dd><input className="qty-in" style={{ width: 300 }} value={name}
+          onChange={e => setName(e.target.value)} /></dd>
+        <dt>Бюджет</dt>
+        <dd><input className="qty-in" style={{ width: 140 }} value={budget}
+          placeholder="необязательно" onChange={e => setBudget(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

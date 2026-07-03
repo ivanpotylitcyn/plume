@@ -1222,3 +1222,78 @@ class ProcurementHttpTests(TestCase):
         self.assertIn('spreadsheetml', xlsx['Content-Type'])
         self.assertTrue(xlsx['Content-Disposition'].startswith('attachment'))
         self.assertTrue(xlsx.content[:2] == b'PK')      # zip-сигнатура xlsx
+
+
+class ReferenceCreateTests(EngineTestBase):
+    """Канон «＋ Новая» (2026-07-03): создание изделий и проектов из справочников."""
+
+    def test_create_item_defaults_and_fields(self):
+        i = engine.create_item('R100', 'Резистор', kind=models.Item.Kind.MATERIAL,
+                               uom='шт', is_manufactured=False, estimated_cost=D('1.50'))
+        self.assertEqual(i.code, 'R100')
+        self.assertEqual(i.kind, models.Item.Kind.MATERIAL)
+        self.assertEqual(i.estimated_cost, D('1.50'))
+        # дефолты: kind=component, uom=шт
+        j = engine.create_item(' B1 ', ' Плата ')
+        self.assertEqual(j.code, 'B1')                 # обрезка пробелов
+        self.assertEqual(j.kind, models.Item.Kind.COMPONENT)
+        self.assertEqual(j.uom, 'шт')
+
+    def test_create_item_rejects_dup_empty_and_bad_kind(self):
+        engine.create_item('R100', 'Резистор')
+        with self.assertRaises(ValidationError):
+            engine.create_item('R100', 'Дубль')        # дубль артикула
+        with self.assertRaises(ValidationError):
+            engine.create_item('', 'Без кода')
+        with self.assertRaises(ValidationError):
+            engine.create_item('X1', '')               # без названия
+        with self.assertRaises(ValidationError):
+            engine.create_item('X2', 'Плохой вид', kind='gadget')
+
+    def test_create_project_is_external_active(self):
+        p = engine.create_project('НИР-1', 'Тема', budget=D('100000'))
+        self.assertEqual(p.kind, models.Project.Kind.EXTERNAL)
+        self.assertEqual(p.status, models.Project.Status.ACTIVE)
+        self.assertEqual(p.budget, D('100000'))
+
+    def test_create_project_rejects_dup_and_empty(self):
+        engine.create_project('НИР-1', 'Тема')
+        with self.assertRaises(ValidationError):
+            engine.create_project('НИР-1', 'Дубль')    # дубль кода
+        with self.assertRaises(ValidationError):
+            engine.create_project('', 'Без кода')
+        with self.assertRaises(ValidationError):
+            engine.create_project('НИР-2', '')         # без названия
+
+
+class ReferenceCreateHttpTests(TestCase):
+    """Канон «＋ Новая»: HTTP-путь создания изделия/проекта."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.c = Client()
+
+    def test_create_item_http(self):
+        r = self.c.post('/api/items/', {'code': 'R100', 'name': 'Резистор',
+            'kind': 'material', 'is_manufactured': False},
+            content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()['code'], 'R100')
+        # появляется в списке
+        lst = self.c.get('/api/items/').json()
+        self.assertTrue(any(i['code'] == 'R100' for i in lst))
+        # дубль → 400
+        dup = self.c.post('/api/items/', {'code': 'R100', 'name': 'Дубль'},
+            content_type='application/json')
+        self.assertEqual(dup.status_code, 400)
+
+    def test_create_project_http(self):
+        r = self.c.post('/api/projects/', {'code': 'НИР-1', 'name': 'Тема',
+            'budget': '100000'}, content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        body = r.json()
+        self.assertEqual(body['kind'], 'external')
+        self.assertEqual(body['status'], 'active')
+        bad = self.c.post('/api/projects/', {'code': '', 'name': 'X'},
+            content_type='application/json')
+        self.assertEqual(bad.status_code, 400)

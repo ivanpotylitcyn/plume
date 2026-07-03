@@ -244,7 +244,12 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
 
 export const api = {
   projects: () => get<ProjectRow[]>('/api/projects/'),
+  createProject: (b: { code: string; name: string; budget?: number; started_at?: string }) =>
+    send<ProjectRow>('POST', '/api/projects/', b),
   items: () => get<ItemRow[]>('/api/items/'),
+  createItem: (b: { code: string; name: string; kind?: string; uom?: string;
+    is_manufactured?: boolean; estimated_cost?: number }) =>
+    send<ItemRow>('POST', '/api/items/', b),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
 
