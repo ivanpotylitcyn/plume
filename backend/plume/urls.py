@@ -8,6 +8,10 @@ from . import views
 
 urlpatterns = [
     path('ping/', views.ping, name='ping'),
+    # Аутентификация (волна 12): вход/выход сессией + «кто я» (ставит CSRF-cookie).
+    path('auth/me/', views.me, name='auth-me'),
+    path('auth/login/', views.login_view, name='auth-login'),
+    path('auth/logout/', views.logout_view, name='auth-logout'),
     path('projects/', views.projects, name='projects'),
     path('projects/<int:pk>/deficit/', views.project_deficit, name='project-deficit'),
     path('projects/<int:pk>/budget/', views.project_budget, name='project-budget'),

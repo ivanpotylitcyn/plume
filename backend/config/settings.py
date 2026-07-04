@@ -190,11 +190,24 @@ MAX_ATTACHMENT_SIZE = int(env('MAX_ATTACHMENT_SIZE', str(50 * 1024 * 1024)))
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-# Django REST Framework — в волне 1 отдаём только read-only проекции движка.
+# Django REST Framework.
+# Волна 12 — аутентификация: по умолчанию весь /api/ за логином. Механика —
+# сессионная (SessionAuthentication): внутренний инструмент, SPA с того же origin,
+# сессии в БД (никакого Redis/JWT — под ограничения reg.ru shared). Один уровень
+# доверия: любой залогиненный = полноправный оператор PLM (ролей/прав нет).
+# Открытые точки (`AllowAny`) — только `ping` (health-check) и `auth/*` (сам вход).
+# SessionAuthentication сама форсит CSRF на небезопасных методах для
+# аутентифицированной сессии — фронт шлёт `X-CSRFToken` из cookie (см. api.ts).
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
     ],
 }
 

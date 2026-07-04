@@ -9,13 +9,15 @@
 """
 from decimal import Decimal, InvalidOperation
 
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, login, logout
 from django.core.exceptions import ValidationError
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status as http
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from . import engine, models
@@ -32,15 +34,13 @@ def _dec(value):
 
 
 def _actor(request):
-    """Автор документа: залогиненный пользователь или дефолтный суперюзер.
+    """Автор документа — залогиненный пользователь.
 
-    Логин-экран — отдельная волна; во MVP пишем от суперюзера, чтобы кокпит
-    работал без формы входа. Авторство остаётся «на документах».
+    Волна 12: весь /api/ за `IsAuthenticated`, так что в мутационных вьюхах
+    `request.user` всегда настоящий пользователь (fallback на суперюзера, живший
+    до логин-экрана, убран). Авторство остаётся «на документах».
     """
-    if request.user and request.user.is_authenticated:
-        return request.user
-    User = get_user_model()
-    return User.objects.filter(is_superuser=True).order_by('id').first()
+    return request.user
 
 
 def _bad(exc):
@@ -48,8 +48,52 @@ def _bad(exc):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def ping(request):
     return Response({'status': 'ok', 'app': 'plume'})
+
+
+# --------------------------------------------------------------------------- #
+#  Аутентификация (волна 12): вход/выход сессией + «кто я».
+# --------------------------------------------------------------------------- #
+def _user_payload(u):
+    return {'id': u.id, 'username': u.username,
+            'full_name': u.get_full_name() or u.username,
+            'is_superuser': u.is_superuser}
+
+
+@ensure_csrf_cookie
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def me(request):
+    """Текущий пользователь (или 401). Заодно ставит CSRF-cookie — фронт зовёт
+    этот эндпоинт на старте, чтобы получить токен до POST-логина/мутаций."""
+    if not request.user.is_authenticated:
+        return Response({'detail': 'not authenticated'},
+                        status=http.HTTP_401_UNAUTHORIZED)
+    return Response(_user_payload(request.user))
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_view(request):
+    """Вход по логину/паролю → сессия. Пользователи заводятся в admin
+    (внутренний инструмент, сам-регистрации нет)."""
+    username = (request.data.get('username') or '').strip()
+    password = request.data.get('password') or ''
+    user = authenticate(request, username=username, password=password)
+    if user is None:
+        return Response({'detail': 'Неверный логин или пароль'},
+                        status=http.HTTP_400_BAD_REQUEST)
+    login(request, user)
+    return Response(_user_payload(user))
+
+
+@api_view(['POST'])
+def logout_view(request):
+    """Выход — гасит сессию (требует логина; CSRF форсится SessionAuth)."""
+    logout(request)
+    return Response(status=http.HTTP_204_NO_CONTENT)
 
 
 def _project_row(p):

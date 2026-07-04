@@ -1201,6 +1201,8 @@ class ClosureHttpTests(TestCase):
             receipt=r, qty=D(10))
         engine.rebuild_movements(self.lot)
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_writeoff_flow(self):
         r = self.c.post('/api/writeoffs/', {'project_id': self.prj.id,
@@ -1270,6 +1272,8 @@ class ProcurementHttpTests(TestCase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev,
             qty=D(10))
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_command_deficit_and_bridge(self):
         svod = self.c.get('/api/command-deficit/')
@@ -1328,6 +1332,8 @@ class PeggingHttpTests(TestCase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
         add = self.c.post('/api/command-deficit/add-to-procurement/',
             {'item_id': self.scr.id, 'qty': 60}, content_type='application/json')
         self.pid = add.json()['procurement_id']
@@ -1414,6 +1420,8 @@ class ReferenceCreateHttpTests(TestCase):
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_create_item_http(self):
         r = self.c.post('/api/items/', {'code': 'R100', 'name': 'Резистор',
@@ -1543,6 +1551,8 @@ class InventoryHttpTests(TestCase):
             receipt=r, qty=D(10), unit_cost=D('2.50'), serial_number='ЗН-9')
         engine.rebuild_movements(self.lot)
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_inventory_crud_flow(self):
         r = self.c.post('/api/inventories/', {'project_id': self.prj.id,
@@ -1709,6 +1719,8 @@ class ProjectBudgetHttpTests(TestCase):
             kind=models.Project.Kind.EXTERNAL, budget=D(5000))
         self.sup = models.Supplier.objects.create(name='П')
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_budget_projection(self):
         device = models.Item.objects.create(code='DEV', name='DEV',
@@ -1794,6 +1806,8 @@ class AttachmentHttpTests(TestCase):
             number='УПД-1', date='2026-05-01', supplier=self.supplier,
             project=self.prj, user=self.user)
         self.c = Client()
+        # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_full_cycle(self):
         up = SimpleUploadedFile('scan.pdf', b'%PDF data', content_type='application/pdf')
@@ -1842,3 +1856,56 @@ class AttachmentHttpTests(TestCase):
         r = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
                         {'label': 'нет файла'})
         self.assertEqual(r.status_code, 400)
+
+
+class AuthHttpTests(TestCase):
+    """Волна 12: логин-экран — вход/выход сессией, гейтинг всего /api/, авторство."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='ivan', password='s3cret-pass', first_name='Иван')
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект', kind=models.Project.Kind.EXTERNAL)
+        self.c = Client()
+
+    def test_anonymous_api_is_gated(self):
+        # Без логина любой прикладной эндпоинт закрыт (403 — DRF без challenge).
+        self.assertEqual(self.c.get('/api/projects/').status_code, 403)
+
+    def test_ping_open_without_login(self):
+        r = self.c.get('/api/ping/')
+        self.assertEqual(r.status_code, 200)
+
+    def test_me_anonymous_is_401_and_sets_csrf_cookie(self):
+        r = self.c.get('/api/auth/me/')
+        self.assertEqual(r.status_code, 401)
+        self.assertIn('csrftoken', r.cookies)     # токен для последующего POST
+
+    def test_login_flow_and_authorship(self):
+        bad = self.c.post('/api/auth/login/',
+                          {'username': 'ivan', 'password': 'wrong'},
+                          content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        ok = self.c.post('/api/auth/login/',
+                         {'username': 'ivan', 'password': 's3cret-pass'},
+                         content_type='application/json')
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()['username'], 'ivan')
+        self.assertEqual(ok.json()['full_name'], 'Иван')     # get_full_name
+        # После логина — доступ открыт и авторство пишется реальным юзером.
+        me = self.c.get('/api/auth/me/')
+        self.assertEqual(me.status_code, 200)
+        cr = self.c.post('/api/kittings/', {'project_id': self.prj.id,
+            'target_item_id': models.Item.objects.create(
+                code='D1', name='Прибор', is_manufactured=True).id, 'qty': 1},
+            content_type='application/json')
+        self.assertEqual(cr.status_code, 201)
+        k = models.Kitting.objects.get(pk=cr.json()['id'])
+        self.assertEqual(k.user, self.user)
+
+    def test_logout_closes_session(self):
+        self.c.force_login(self.user)
+        self.assertEqual(self.c.get('/api/projects/').status_code, 200)
+        out = self.c.post('/api/auth/logout/')
+        self.assertEqual(out.status_code, 204)
+        self.assertEqual(self.c.get('/api/projects/').status_code, 403)

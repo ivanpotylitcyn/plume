@@ -2,9 +2,11 @@
 // (одна, без вкладок) + статус-бар. Навигация по сущностям, проект — ось.
 // Волна 2: третий режим «Комплектации» — записываемый кокпит сборки.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type ProjectRow, type ItemRow, type KittingRow, type ReceiptRow,
-  type PurchaseRow, type SupplierRow, type TransferRow, type WriteoffRow,
-  type RequisitionRow, type ProcurementRow, type InventoryRow } from './api'
+import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
+  type KittingRow, type ReceiptRow, type PurchaseRow, type SupplierRow,
+  type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
+  type InventoryRow } from './api'
+import { Login } from './Login'
 import { DeficitView } from './DeficitView'
 import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
@@ -52,6 +54,8 @@ const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
 }
 
 export default function App() {
+  // Аутентификация (волна 12): undefined = грузим me(); null = не залогинен → Login.
+  const [user, setUser] = useState<User | null | undefined>(undefined)
   const [mode, setMode] = useState<Mode>('projects')
   const [projects, setProjects] = useState<ProjectRow[]>([])
   const [items, setItems] = useState<ItemRow[]>([])
@@ -84,7 +88,16 @@ export default function App() {
   const reloadProjects = useCallback(() => api.projects().then(setProjects), [])
   const reloadItems = useCallback(() => api.items().then(setItems), [])
 
+  // На старте: узнать «кто я» + завести хук на протухшую сессию (401 в любом
+  // запросе → назад на логин). Регистрируем один раз.
   useEffect(() => {
+    setUnauthorizedHandler(() => setUser(null))
+    api.me().then(setUser).catch(() => setUser(null))
+  }, [])
+
+  // Данные грузим только под логином (и перезагружаем при смене пользователя).
+  useEffect(() => {
+    if (!user) return
     api.projects().then(ps => {
       setProjects(ps)
       const ext = ps.find(p => p.kind === 'external') ?? ps[0]
@@ -103,7 +116,7 @@ export default function App() {
     reloadRequisitions()
     reloadProcurements()
     reloadInventories()
-  }, [reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
+  }, [user, reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
       reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
@@ -160,6 +173,14 @@ export default function App() {
   const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
   const openInventory = (id: number) => { setMode('inventories'); setSel({ kind: 'inventory', id }) }
 
+  const doLogout = () => { api.logout().catch(() => {}); setUser(null) }
+
+  // Гейт аутентификации: загрузка → логин → приложение.
+  if (user === undefined)
+    return <div className="login-screen"><div className="login-sub">Загрузка…</div></div>
+  if (user === null)
+    return <Login onSuccess={setUser} />
+
   return (
     <div className="app">
       <div className="activity">
@@ -183,6 +204,9 @@ export default function App() {
           title="Закупки-план — командный свод + order.xlsx" onClick={() => setMode('procurements')}>⛁</button>
         <button className={mode === 'inventories' ? 'active' : ''}
           title="Инвентаризации — найденные партии + ре-материализация" onClick={() => setMode('inventories')}>🔍</button>
+        <span className="spacer" />
+        <button className="logout" title={`${user.full_name} — выйти`}
+          onClick={doLogout}>⏻</button>
       </div>
 
       <div className="sidebar">
@@ -445,7 +469,7 @@ export default function App() {
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 11 · вложения к документам (PDF/сканы)</span>
+        <span>plume · волна 12 · логин / аутентификация · {user.full_name}</span>
         <span className="spacer" />
         <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length} · инвентаризаций {inventories.length}</span>
       </div>

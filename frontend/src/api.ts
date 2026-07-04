@@ -270,13 +270,24 @@ export interface AttachmentRow {
   label: string; uploaded_at: string; user: string; url: string
 }
 
+// ── Аутентификация (волна 12) ──
+export interface User {
+  id: number; username: string; full_name: string; is_superuser: boolean
+}
+
+// Сессия истекла посреди работы → App перекинет на логин. get/send/upload зовут
+// этот хук на 401 (кроме me(), где 401 = «просто не залогинен», ожидаемо).
+let onUnauthorized: (() => void) | null = null
+export function setUnauthorizedHandler(fn: () => void) { onUnauthorized = fn }
+
 function getCookie(name: string): string | null {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
   return m ? decodeURIComponent(m[2]) : null
 }
 
 async function get<T>(url: string): Promise<T> {
-  const r = await fetch(url, { headers: { Accept: 'application/json' } })
+  const r = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+  if (r.status === 401 || r.status === 403) { onUnauthorized?.(); throw new Error('unauthorized') }
   if (!r.ok) throw new Error(`${r.status} ${url}`)
   return r.json()
 }
@@ -292,6 +303,7 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
     method, headers, credentials: 'same-origin',
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+  if (r.status === 401 || r.status === 403) { onUnauthorized?.(); throw new Error('unauthorized') }
   if (!r.ok) {
     let msg = `${r.status} ${url}`
     try { const j = await r.json(); if (j.detail) msg = j.detail } catch { /* no body */ }
@@ -310,6 +322,7 @@ async function upload<T>(url: string, file: File, label?: string): Promise<T> {
   const csrf = getCookie('csrftoken')
   if (csrf) headers['X-CSRFToken'] = csrf
   const r = await fetch(url, { method: 'POST', headers, credentials: 'same-origin', body: fd })
+  if (r.status === 401 || r.status === 403) { onUnauthorized?.(); throw new Error('unauthorized') }
   if (!r.ok) {
     let msg = `${r.status} ${url}`
     try { const j = await r.json(); if (j.detail) msg = j.detail } catch { /* no body */ }
@@ -319,6 +332,20 @@ async function upload<T>(url: string, file: File, label?: string): Promise<T> {
 }
 
 export const api = {
+  // ── Аутентификация (волна 12) ──
+  // me() зовётся на старте: 401 = не залогинен (null, без хука), заодно ставит
+  // CSRF-cookie. Собственный fetch (не get()), чтобы 401 не дёргал onUnauthorized.
+  me: async (): Promise<User | null> => {
+    const r = await fetch('/api/auth/me/', {
+      headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+    if (r.status === 401) return null
+    if (!r.ok) throw new Error(`${r.status} /api/auth/me/`)
+    return r.json()
+  },
+  login: (username: string, password: string) =>
+    send<User>('POST', '/api/auth/login/', { username, password }),
+  logout: () => send<void>('POST', '/api/auth/logout/'),
+
   projects: () => get<ProjectRow[]>('/api/projects/'),
   createProject: (b: { code: string; name: string; budget?: number; started_at?: string }) =>
     send<ProjectRow>('POST', '/api/projects/', b),
