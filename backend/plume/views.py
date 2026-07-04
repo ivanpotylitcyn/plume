@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status as http
@@ -1174,3 +1174,69 @@ def procurement_autopeg(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.procurement_pegging(p))
+
+
+# --------------------------------------------------------------------------- #
+#  Вложения (волна 11): PDF/сканы к документам и изделиям (exclusive-arc владелец)
+# --------------------------------------------------------------------------- #
+@api_view(['GET', 'POST'])
+def attachments(request, owner_type, owner_id):
+    """Список вложений владельца (GET) / загрузка файла (POST, multipart).
+
+    owner_type — имя FK-владельца (`receipt`/`transfer`/`item`/…); файл в поле
+    `file`, подпись — в `label`. Автор берётся из документа (`_actor`).
+    """
+    if request.method == 'POST':
+        try:
+            owner = engine.resolve_attachment_owner(owner_type, owner_id)
+            att = engine.add_attachment(
+                owner_type, owner, request.FILES.get('file'),
+                _actor(request), label=request.data.get('label') or '')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.attachment_row(att), status=http.HTTP_201_CREATED)
+    try:
+        rows = engine.attachments_for(owner_type, owner_id)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(rows)
+
+
+@api_view(['PATCH', 'DELETE'])
+def attachment_detail(request, pk):
+    """Правка подписи (PATCH `label`) / удаление вложения (DELETE — файл с диска)."""
+    att = get_object_or_404(models.Attachment, pk=pk)
+    if request.method == 'DELETE':
+        engine.delete_attachment(att)
+        return Response(status=http.HTTP_204_NO_CONTENT)
+    d = request.data
+    engine.update_attachment(att, label=d['label'] if 'label' in d else None)
+    return Response(engine.attachment_row(att))
+
+
+# Inline-безопасные типы: браузер их не выполнит как код. Всё прочее (html/svg с
+# JS, zip, STEP, xlsx, …) отдаём как загрузку — иначе html/svg исполнился бы в
+# нашем origin (хранимый XSS: доступ к сессии/CSRF, вызовы API от лица юзера).
+# Вместе с nosniff это надёжно и против подделки content_type: даже если клиент
+# соврёт «image/png» для html-файла, браузер не сниффит и как HTML не отрендерит.
+_INLINE_CONTENT_TYPES = frozenset({
+    'application/pdf',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp',
+})
+
+
+@api_view(['GET'])
+def attachment_download(request, pk):
+    """Отдать файл вложения (стрим через WSGI; публичного /media/ нет).
+
+    Безопасные типы (PDF/картинки) — inline (смотреть во вкладке), остальное —
+    принудительная загрузка + `nosniff`. Место под проверку логина/прав — здесь.
+    """
+    att = get_object_or_404(models.Attachment, pk=pk)
+    inline = att.content_type in _INLINE_CONTENT_TYPES
+    resp = FileResponse(att.file.open('rb'), as_attachment=not inline,
+                        filename=att.filename or f'attachment-{att.id}')
+    if att.content_type:
+        resp['Content-Type'] = att.content_type
+    resp['X-Content-Type-Options'] = 'nosniff'
+    return resp

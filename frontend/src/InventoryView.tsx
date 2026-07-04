@@ -9,6 +9,7 @@ import { api, type ItemRow, type InventoryCockpit, type InventoryCockpitLot,
   type WrittenOffLot } from './api'
 import { num } from './status'
 import { CommitInput } from './ReceiptView'
+import { AttachmentPanel } from './AttachmentPanel'
 
 export function InventoryView({ inventoryId, items, openItem, onChanged }: {
   inventoryId: number; items: ItemRow[]
@@ -78,6 +79,8 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
       {c.lots.length === 0 && <div className="empty">Акт пуст — добавьте найденную партию.</div>}
 
       <RematerializePanel inventoryId={c.id} busy={busy} run={run} />
+
+      <AttachmentPanel ownerType="inventory" ownerId={c.id} />
     </div>
   )
 }

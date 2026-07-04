@@ -8,6 +8,7 @@ import { api, type AvailableLot, type TransferCockpit,
   type TransferCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { num } from './status'
+import { AttachmentPanel } from './AttachmentPanel'
 
 export function TransferView({ transferId, openItem, onChanged }: {
   transferId: number
@@ -93,6 +94,8 @@ export function TransferView({ transferId, openItem, onChanged }: {
       </table>
       {c.lines.length === 0 &&
         <div className="empty">Накладная пуста — добавьте партию к отгрузке.</div>}
+
+      <AttachmentPanel ownerType="transfer" ownerId={c.id} />
     </div>
   )
 }

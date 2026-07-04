@@ -8,6 +8,7 @@ import { api, type AvailableLot, type WriteoffCockpit,
   type WriteoffCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { num } from './status'
+import { AttachmentPanel } from './AttachmentPanel'
 
 export function WriteoffView({ writeoffId, openItem, onChanged }: {
   writeoffId: number
@@ -86,6 +87,8 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
       </table>
       {c.lines.length === 0 &&
         <div className="empty">Акт пуст — добавьте партию к списанию.</div>}
+
+      <AttachmentPanel ownerType="writeoff" ownerId={c.id} />
     </div>
   )
 }

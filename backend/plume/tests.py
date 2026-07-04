@@ -2,11 +2,15 @@
 
 Каждый тест строит минимальный сценарий и проверяет одну формулу.
 """
+import os
+import shutil
+import tempfile
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import Client, TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
 
 from plume import models
 from plume import engine
@@ -14,6 +18,15 @@ from plume import engine
 
 def D(x):
     return Decimal(str(x))
+
+
+# Изолированный MEDIA_ROOT для тестов вложений (волна 11): загрузки не пачкают
+# рабочий backend/media; чистим на выходе модуля.
+_TEST_MEDIA = tempfile.mkdtemp(prefix='plume-test-media-')
+
+
+def tearDownModule():
+    shutil.rmtree(_TEST_MEDIA, ignore_errors=True)
 
 
 class EngineTestBase(TestCase):
@@ -1710,3 +1723,122 @@ class ProjectBudgetHttpTests(TestCase):
         self.assertEqual(float(body['plan']), 1000.0)     # 20×50
         self.assertEqual(float(body['compass']), 4000.0)  # 5000−1000
         self.assertEqual(float(body['spent']), 0.0)
+
+
+@override_settings(MEDIA_ROOT=_TEST_MEDIA)
+class AttachmentTests(EngineTestBase):
+    """Волна 11: вложения — файл на диск, exclusive-arc владелец, метаданные с сервера."""
+
+    def setUp(self):
+        super().setUp()
+        self.receipt = models.Receipt.objects.create(
+            number='УПД-1', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+
+    def _file(self, name='scan.pdf', body=b'%PDF-1.4 test', ctype='application/pdf'):
+        return SimpleUploadedFile(name, body, content_type=ctype)
+
+    def test_add_fills_metadata_and_owner(self):
+        att = engine.add_attachment('receipt', self.receipt, self._file(),
+                                    self.user, label='  скан УПД ')
+        self.assertEqual(att.receipt_id, self.receipt.id)
+        self.assertEqual(att.filename, 'scan.pdf')
+        self.assertEqual(att.size, len(b'%PDF-1.4 test'))
+        self.assertEqual(att.content_type, 'application/pdf')
+        self.assertEqual(att.label, 'скан УПД')            # подрезано
+        self.assertEqual(att.user_id, self.user.id)
+        self.assertIsNone(att.transfer_id)                 # ровно один владелец
+
+    def test_attachments_for_lists_newest_first(self):
+        a1 = engine.add_attachment('receipt', self.receipt, self._file('a.pdf'), self.user)
+        a2 = engine.add_attachment('receipt', self.receipt, self._file('b.pdf'), self.user)
+        rows = engine.attachments_for('receipt', self.receipt.id)
+        self.assertEqual([r['id'] for r in rows], [a2.id, a1.id])
+        self.assertEqual(rows[0]['url'], f'/api/attachments/{a2.id}/download/')
+
+    def test_unknown_owner_type_rejected(self):
+        # purchase/procurement НЕ владельцы вложений (нет FK в модели)
+        with self.assertRaises(ValidationError):
+            engine.resolve_attachment_owner('purchase', 1)
+        with self.assertRaises(ValidationError):
+            engine.attachments_for('bogus', 1)
+
+    def test_oversize_rejected(self):
+        big = SimpleUploadedFile('big.bin', b'x' * 10, content_type='application/octet-stream')
+        with override_settings(MAX_ATTACHMENT_SIZE=5):
+            with self.assertRaises(ValidationError):
+                engine.add_attachment('receipt', self.receipt, big, self.user)
+
+    def test_update_and_delete_removes_file(self):
+        att = engine.add_attachment('receipt', self.receipt, self._file(), self.user)
+        path = att.file.path
+        self.assertTrue(os.path.exists(path))
+        engine.update_attachment(att, label='новая подпись')
+        att.refresh_from_db()
+        self.assertEqual(att.label, 'новая подпись')
+        engine.delete_attachment(att)
+        self.assertFalse(models.Attachment.objects.filter(pk=att.id).exists())
+        self.assertFalse(os.path.exists(path))             # файл удалён с диска
+
+
+@override_settings(MEDIA_ROOT=_TEST_MEDIA)
+class AttachmentHttpTests(TestCase):
+    """Волна 11: HTTP-путь вложений — multipart upload → list → patch → download → delete."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create(username='admin', is_superuser=True)
+        self.supplier = models.Supplier.objects.create(name='П')
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект', kind=models.Project.Kind.EXTERNAL)
+        self.receipt = models.Receipt.objects.create(
+            number='УПД-1', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        self.c = Client()
+
+    def test_full_cycle(self):
+        up = SimpleUploadedFile('scan.pdf', b'%PDF data', content_type='application/pdf')
+        r = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
+                        {'file': up, 'label': 'скан'})
+        self.assertEqual(r.status_code, 201)
+        aid = r.json()['id']
+        lst = self.c.get(f'/api/attachments/receipt/{self.receipt.id}/').json()
+        self.assertEqual(len(lst), 1)
+        self.assertEqual(lst[0]['filename'], 'scan.pdf')
+        self.assertEqual(lst[0]['user'], 'admin')          # автор с документа
+        pr = self.c.patch(f'/api/attachments/{aid}/', {'label': 'скан УПД №1'},
+                          content_type='application/json')
+        self.assertEqual(pr.status_code, 200)
+        self.assertEqual(pr.json()['label'], 'скан УПД №1')
+        dl = self.c.get(f'/api/attachments/{aid}/download/')
+        self.assertEqual(dl.status_code, 200)
+        self.assertEqual(b''.join(dl.streaming_content), b'%PDF data')
+        dr = self.c.delete(f'/api/attachments/{aid}/')
+        self.assertEqual(dr.status_code, 204)
+        self.assertEqual(self.c.get(f'/api/attachments/receipt/{self.receipt.id}/').json(), [])
+
+    def test_download_disposition_safe_inline_else_attachment(self):
+        # PDF — inline (смотреть во вкладке), html — принудительная загрузка (XSS),
+        # оба с nosniff.
+        pdf = SimpleUploadedFile('scan.pdf', b'%PDF', content_type='application/pdf')
+        html = SimpleUploadedFile('bom.html', b'<script>x()</script>',
+                                  content_type='text/html')
+        pid = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
+                          {'file': pdf}).json()['id']
+        hid = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
+                          {'file': html}).json()['id']
+        dp = self.c.get(f'/api/attachments/{pid}/download/')
+        self.assertIn('inline', dp['Content-Disposition'])
+        self.assertEqual(dp['X-Content-Type-Options'], 'nosniff')
+        dh = self.c.get(f'/api/attachments/{hid}/download/')
+        self.assertIn('attachment', dh['Content-Disposition'])
+        self.assertEqual(dh['X-Content-Type-Options'], 'nosniff')
+
+    def test_bad_owner_type(self):
+        up = SimpleUploadedFile('x.pdf', b'x', content_type='application/pdf')
+        r = self.c.post('/api/attachments/purchase/1/', {'file': up})
+        self.assertEqual(r.status_code, 400)
+
+    def test_missing_file(self):
+        r = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
+                        {'label': 'нет файла'})
+        self.assertEqual(r.status_code, 400)

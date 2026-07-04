@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { api, type Cockpit, type CockpitRow } from './api'
 import { CommitInput } from './ReceiptView'
 import { Glyph, Segment, num } from './status'
+import { AttachmentPanel } from './AttachmentPanel'
 
 const KIT_STATUS: Record<string, string> = {
   wip: 'в работе', closed: 'закрыт', cancelled: 'отменён',
@@ -77,6 +78,8 @@ export function KittingView({ kittingId, openItem, onChanged }:
         <Component key={row.component_id} row={row} cockpit={c} wip={wip} busy={busy}
           openItem={openItem} run={run} />
       ))}
+
+      <AttachmentPanel ownerType="kitting" ownerId={c.id} />
     </div>
   )
 }

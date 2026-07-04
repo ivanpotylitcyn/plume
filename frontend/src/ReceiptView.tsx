@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
   type ReceiptLot } from './api'
 import { num } from './status'
+import { AttachmentPanel } from './AttachmentPanel'
 
 export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged }: {
   receiptId: number; items: ItemRow[]
@@ -96,6 +97,8 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
       </table>
       {c.lots.length === 0 && locked &&
         <div className="empty">Приход пуст.</div>}
+
+      <AttachmentPanel ownerType="receipt" ownerId={c.id} />
     </div>
   )
 }

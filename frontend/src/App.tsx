@@ -445,7 +445,7 @@ export default function App() {
       </div>
 
       <div className="statusbar">
-        <span>plume · волна 10 · бюджет проекта: потрачено/план + себестоимость/экономия</span>
+        <span>plume · волна 11 · вложения к документам (PDF/сканы)</span>
         <span className="spacer" />
         <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length} · инвентаризаций {inventories.length}</span>
       </div>

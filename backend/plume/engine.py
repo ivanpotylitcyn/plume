@@ -71,6 +71,7 @@
 """
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Sum
 from django.utils import timezone
@@ -2099,3 +2100,80 @@ def create_project(code, name, budget=None, started_at=None):
         code=code, name=name, kind=models.Project.Kind.EXTERNAL,
         status=models.Project.Status.ACTIVE,
         budget=budget, started_at=started_at or None)
+
+
+# --------------------------------------------------------------------------- #
+#  Вложения (волна 11): PDF/сканы к документам и изделиям (exclusive-arc владелец)
+# --------------------------------------------------------------------------- #
+# Владелец вложения — ровно один FK (как в модели, `Attachment.OWNER_FIELDS`).
+# owner_type в API = имя этого поля; модель выводим из него (item→Item, …).
+ATTACHMENT_OWNERS = {
+    f: getattr(models, f.capitalize()) for f in models.Attachment.OWNER_FIELDS
+}
+
+
+def resolve_attachment_owner(owner_type, owner_id):
+    """Найти документ-владельца по типу (имя FK) и id. Ошибка на неизвестный тип."""
+    model = ATTACHMENT_OWNERS.get(owner_type)
+    if model is None:
+        raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
+    try:
+        return model.objects.get(pk=owner_id)
+    except model.DoesNotExist:
+        raise ValidationError('Документ-владелец вложения не найден.')
+
+
+def attachment_row(att):
+    """Проекция вложения для витрины (путь к файлу не отдаём — качаем эндпоинтом)."""
+    return {
+        'id': att.id, 'filename': att.filename or att.file.name,
+        'size': att.size, 'content_type': att.content_type,
+        'label': att.label, 'uploaded_at': att.uploaded_at,
+        'user': att.user.get_username() if att.user_id else '',
+        'url': f'/api/attachments/{att.id}/download/',
+    }
+
+
+def attachments_for(owner_type, owner_id):
+    """Список вложений владельца (свежие сверху)."""
+    if owner_type not in ATTACHMENT_OWNERS:
+        raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
+    qs = (models.Attachment.objects.filter(**{owner_type: owner_id})
+          .select_related('user').order_by('-id'))
+    return [attachment_row(a) for a in qs]
+
+
+def add_attachment(owner_type, owner, upload, user, label=''):
+    """Прикрепить файл к владельцу: файл на диск, метаданные из upload (не с клиента).
+
+    filename/size/content_type заполняет сервер из загруженного файла. Владелец
+    ровно один (exclusive arc) — задаётся по owner_type. Синхронно, без Celery.
+    """
+    if owner_type not in ATTACHMENT_OWNERS:
+        raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
+    if upload is None:
+        raise ValidationError('Нужен файл вложения.')
+    limit = settings.MAX_ATTACHMENT_SIZE
+    if upload.size and upload.size > limit:
+        raise ValidationError(f'Файл больше лимита ({limit // (1024 * 1024)} МБ).')
+    att = models.Attachment(
+        file=upload, filename=upload.name or '', size=upload.size or 0,
+        content_type=getattr(upload, 'content_type', '') or '',
+        label=(label or '').strip(), user=user, **{owner_type: owner})
+    att.full_clean(exclude=['file'])   # exclusive-arc + длины полей (file уже валиден)
+    att.save()
+    return att
+
+
+def update_attachment(att, label=None):
+    """Правка подписи вложения (label). Метаданные файла неизменны."""
+    if label is not None:
+        att.label = (label or '').strip()
+        att.save(update_fields=['label'])
+    return att
+
+
+def delete_attachment(att):
+    """Удалить вложение: строку в БД и физический файл с диска."""
+    att.file.delete(save=False)
+    att.delete()

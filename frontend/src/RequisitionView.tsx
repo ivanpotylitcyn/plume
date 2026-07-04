@@ -9,6 +9,7 @@ import { api, type AllAvailableLot, type RequisitionCockpit,
   type RequisitionCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { num } from './status'
+import { AttachmentPanel } from './AttachmentPanel'
 
 export function RequisitionView({ requisitionId, openItem, onChanged }: {
   requisitionId: number
@@ -83,6 +84,8 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
       </table>
       {c.lines.length === 0 &&
         <div className="empty">Требование пусто — выберите лот-источник.</div>}
+
+      <AttachmentPanel ownerType="requisition" ownerId={c.id} />
     </div>
   )
 }

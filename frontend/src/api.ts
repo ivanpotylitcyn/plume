@@ -264,6 +264,12 @@ export interface Pegging {
   rows: PeggingRow[]; fan: PeggingFanRow[]
 }
 
+// ── Вложения (волна 11): PDF/сканы к документам и изделиям ──
+export interface AttachmentRow {
+  id: number; filename: string; size: number; content_type: string
+  label: string; uploaded_at: string; user: string; url: string
+}
+
 function getCookie(name: string): string | null {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
   return m ? decodeURIComponent(m[2]) : null
@@ -292,6 +298,24 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
     throw new Error(msg)
   }
   return r.status === 204 ? (undefined as T) : r.json()
+}
+
+// Загрузка файла (multipart): Content-Type НЕ ставим — браузер сам добавит
+// boundary. CSRF-токен подхватываем как в send() (на проде — сессия admin).
+async function upload<T>(url: string, file: File, label?: string): Promise<T> {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (label) fd.append('label', label)
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const csrf = getCookie('csrftoken')
+  if (csrf) headers['X-CSRFToken'] = csrf
+  const r = await fetch(url, { method: 'POST', headers, credentials: 'same-origin', body: fd })
+  if (!r.ok) {
+    let msg = `${r.status} ${url}`
+    try { const j = await r.json(); if (j.detail) msg = j.detail } catch { /* no body */ }
+    throw new Error(msg)
+  }
+  return r.json()
 }
 
 export const api = {
@@ -451,6 +475,15 @@ export const api = {
   unpeg: (id: number, b: { item_id: number; project_id: number }) =>
     send<Pegging>('POST', `/api/procurements/${id}/unpeg/`, b),
   autopeg: (id: number) => send<Pegging>('POST', `/api/procurements/${id}/autopeg/`),
+
+  // ── Вложения (волна 11) ──
+  attachments: (ownerType: string, ownerId: number) =>
+    get<AttachmentRow[]>(`/api/attachments/${ownerType}/${ownerId}/`),
+  uploadAttachment: (ownerType: string, ownerId: number, file: File, label?: string) =>
+    upload<AttachmentRow>(`/api/attachments/${ownerType}/${ownerId}/`, file, label),
+  updateAttachment: (id: number, label: string) =>
+    send<AttachmentRow>('PATCH', `/api/attachments/${id}/`, { label }),
+  deleteAttachment: (id: number) => send<void>('DELETE', `/api/attachments/${id}/`),
 
   closure: (id: number) => get<ProjectClosure>(`/api/projects/${id}/closure/`),
   writeoffLot: (id: number, b: { lot_id: number; qty: number }) =>

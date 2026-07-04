@@ -172,6 +172,18 @@ STORAGES = {
     },
 }
 
+# Медиа (волна 11 — вложения к документам): PDF/сканы УПД, накладных и т.п.
+# Файлы лежат на диске (FileField → MEDIA_ROOT), а не BLOB в БД. Публичного
+# раздатчика /media/ НЕТ: скачивание идёт через прикладной эндпоинт
+# `attachment_download` (FileResponse) — портируемо (dev/прод-Passenger, без
+# Apache Alias) и оставляет естественное место навесить логин следующей волной.
+# Приход/загрузка синхронны в запросе (без Celery — как весь движок).
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+# Потолок размера одного вложения (защитить shared-диск и память WSGI). 50 МБ —
+# хватает на STEP-модели, интерактивный BOM (html), zip производственного пакета.
+MAX_ATTACHMENT_SIZE = int(env('MAX_ATTACHMENT_SIZE', str(50 * 1024 * 1024)))
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 

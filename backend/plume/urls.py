@@ -88,4 +88,9 @@ urlpatterns = [
     path('procurements/<int:pk>/peg/', views.procurement_peg, name='procurement-peg'),
     path('procurements/<int:pk>/unpeg/', views.procurement_unpeg, name='procurement-unpeg'),
     path('procurements/<int:pk>/autopeg/', views.procurement_autopeg, name='procurement-autopeg'),
+    # вложения (волна 11): PDF/сканы к документам и изделиям. download/detail (int)
+    # идут раньше owner-маршрута (str) — коллизии нет, но порядок нагляднее.
+    path('attachments/<int:pk>/download/', views.attachment_download, name='attachment-download'),
+    path('attachments/<int:pk>/', views.attachment_detail, name='attachment-detail'),
+    path('attachments/<str:owner_type>/<int:owner_id>/', views.attachments, name='attachments'),
 ]

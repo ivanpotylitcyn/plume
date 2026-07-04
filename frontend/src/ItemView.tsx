@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemDetail } from './api'
 import { num } from './status'
+import { AttachmentPanel } from './AttachmentPanel'
 
 const KIND_RU: Record<string, string> = {
   device: 'изделие', component: 'компонент', material: 'материал',
@@ -99,6 +100,8 @@ export function ItemView({ itemId, openItem }:
                 <td style={{ color: 'var(--fg-dim)' }}>{s.display_name || '—'}</td>
               </tr>))}</tbody>
           </table>}
+
+      <AttachmentPanel ownerType="item" ownerId={d.id} />
     </div>
   )
 }
