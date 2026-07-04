@@ -104,6 +104,13 @@ def project_deficit(request, pk):
 
 
 @api_view(['GET'])
+def project_budget(request, pk):
+    """Бюджет проекта (north-star окупаемости): потрачено/план/компас + себестоимость/экономия."""
+    project = get_object_or_404(models.Project, pk=pk)
+    return Response(engine.project_budget(project))
+
+
+@api_view(['GET'])
 def item_detail(request, pk):
     """Экран изделия: свойства + окружение из связей (where-used, лоты) + карта."""
     item = get_object_or_404(models.Item, pk=pk)

@@ -31,3 +31,8 @@ export function Segment({ status, value }: { status: Status; value: number }) {
 export function num(x: number): string {
   return Number.isInteger(x) ? String(x) : String(x)
 }
+
+// Деньги: разряды пробелом + ₽ (округляем до рубля — копейки в бюджете не важны).
+export function money(x: number): string {
+  return Math.round(x).toLocaleString('ru-RU') + ' ₽'
+}

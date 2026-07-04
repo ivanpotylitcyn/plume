@@ -24,6 +24,17 @@ export interface Deficit {
   demands: DeficitDemand[]
 }
 
+export interface Budget {
+  project_id: number; project_code: string; project_name: string
+  budget: number | null      // бюджет на материалы (может быть не задан)
+  spent: number              // потрачено (факт по Receipt-лотам)
+  plan: number               // прогноз полной стоимости («факт где есть, оценка где нет»)
+  compass: number | null     // budget − plan (запас/перерасход); null без бюджета
+  unestimated: string[]      // коды покупных позиций без estimated_cost
+  cost: number               // себестоимость (для КП; заём по реальной цене)
+  economy: number            // экономия = cost − spent (польза внутреннего заёма)
+}
+
 export interface StockMapRow {
   project_id: number; project_code: string; project_name: string
   project_kind: string; available: number
@@ -292,6 +303,7 @@ export const api = {
     is_manufactured?: boolean; estimated_cost?: number }) =>
     send<ItemRow>('POST', '/api/items/', b),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
+  budget: (id: number) => get<Budget>(`/api/projects/${id}/budget/`),
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
 
   kittings: () => get<KittingRow[]>('/api/kittings/'),

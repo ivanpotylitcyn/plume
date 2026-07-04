@@ -10,6 +10,7 @@ urlpatterns = [
     path('ping/', views.ping, name='ping'),
     path('projects/', views.projects, name='projects'),
     path('projects/<int:pk>/deficit/', views.project_deficit, name='project-deficit'),
+    path('projects/<int:pk>/budget/', views.project_budget, name='project-budget'),
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
     path('projects/<int:pk>/order/', views.project_order, name='project-order'),
     path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),

@@ -60,8 +60,14 @@
   строки плана в проектные заказы под **этим** планом-родителем (ломает 1:1-заглушку
   `_solo_procurement`: план теперь родитель веера `Purchase`, а не только своих строк).
 
-Следующие волны: инвентаризация (Inventory — «найденные» партии), бюджет/экономия,
-логин-экран, UI вложений.
+Волна 10 (бюджет/экономия — north-star окупаемости линзы):
+- `project_budget(project)` — проекция денег проекта: **потрачено** (факт по
+  `Receipt`-лотам, заём/свои бесплатны, только покупные) + **план** (прогноз «факт
+  где есть, оценка где нет» через `estimated_cost`) + компас `budget − план` +
+  позиции без оценки; **себестоимость** (Σ снимков лотов-приборов верхних целей,
+  заём по реальной цене) + **экономия** = себестоимость − потрачено. Чистая витрина.
+
+Следующие волны: логин-экран, UI вложений (`Attachment`).
 """
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -299,6 +305,105 @@ def project_deficit(project):
         'project_code': project.code,
         'project_name': project.name,
         'demands': demands,
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  Бюджет проекта: два числа денег + себестоимость/экономия (north-star окупаемости)
+# --------------------------------------------------------------------------- #
+def _project_spent(project):
+    """Потрачено (факт) = Σ(unit_cost×qty) приходных (`Receipt`) лотов проекта.
+
+    Точная застывшая цифра «кэша ФЛС». Заёмные/свои бесплатные лоты (origin
+    requisition/inventory/kitting) сюда не входят → бесплатны в бюджете (платил
+    источник). Только покупные материалы — снимок цены собранного узла (лот-прибор
+    из Kitting) в бюджет не складываем (иначе двойной счёт).
+    """
+    total = ZERO
+    for lot in project.lots.filter(receipt__isnull=False):
+        total += lot.qty * lot.unit_cost
+    return total
+
+
+def _project_estimate(project):
+    """Прогнозная стоимость ещё-не-полученного покупного материала (по estimated_cost).
+
+    Потребность агрегируем по компоненту (1 уровень BOM, как `project_deficit`),
+    затем один разбор `_coverage` на компонент. Оцениваем «в пути + к заказу»
+    (● заказано + ▲ заказать) — то, что ещё потребует денег; ✓ уже покрыто (склад
+    приходной = в «потрачено», заём = бесплатно). Возвращает
+    `(estimate, unestimated_codes)` — сумма оценки и коды покупных позиций без
+    `estimated_cost` (план по ним неполон, не молчим 0).
+    """
+    need_by_item = {}
+    for demand in project.demands.select_related('target_item'):
+        for bl in demand.target_item.bom_lines.select_related('component'):
+            need_by_item[bl.component] = (
+                need_by_item.get(bl.component, ZERO) + bl.qty * demand.qty
+            )
+
+    estimate = ZERO
+    unestimated = []
+    for component, need in need_by_item.items():
+        if component.is_manufactured:
+            continue  # снимок себестоимости узла считаем отдельно, не в деньгах бюджета
+        cov = _coverage(need, item_available(component, project),
+                        item_on_order(component, project))
+        remaining = cov['on_order'] + cov['to_order']
+        if remaining <= 0:
+            continue
+        if component.estimated_cost is None:
+            unestimated.append(component.code)
+            continue
+        estimate += remaining * component.estimated_cost
+    return estimate, unestimated
+
+
+def _project_cost(project):
+    """Себестоимость проекта = Σ(qty×снимок) по лотам-приборам закрытых комплектаций,
+    чьё изделие — цель потребности проекта (только верхние приборы, без задвоения
+    подсборок: их цена уже в снимке верхнего прибора).
+
+    Снимок `unit_cost` лота-прибора взят на закрытии (`_device_unit_cost`) и включает
+    заёмные компоненты по реальной цене (Requisition-лот наследует цену предка) —
+    честная цена для КП.
+    """
+    targets = {d.target_item_id for d in project.demands.all()}
+    if not targets:
+        return ZERO
+    total = ZERO
+    lots = project.lots.filter(
+        kitting__status=models.Kitting.Status.CLOSED, item_id__in=targets,
+    )
+    for lot in lots:
+        total += lot.qty * lot.unit_cost
+    return total
+
+
+def project_budget(project):
+    """Проекция бюджета проекта (north-star окупаемости линзы).
+
+    Два числа денег (не путать): **потрачено** (факт по `Receipt`-лотам) и **план**
+    (прогноз «факт где есть, оценка где нет»). Компас `budget − план` = запас/
+    перерасход. **Себестоимость** (честная цена, заём по реальной цене) и **экономия**
+    = себестоимость − потрачено (оцифрованная польза внутреннего заёма = польза PLM).
+    """
+    spent = _project_spent(project)
+    estimate, unestimated = _project_estimate(project)
+    plan = spent + estimate
+    cost = _project_cost(project)
+    budget = project.budget
+    return {
+        'project_id': project.id,
+        'project_code': project.code,
+        'project_name': project.name,
+        'budget': budget,                       # может быть None
+        'spent': spent,                         # потрачено (факт)
+        'plan': plan,                           # прогноз полной стоимости
+        'compass': (budget - plan) if budget is not None else None,
+        'unestimated': unestimated,             # покупные позиции без оценки
+        'cost': cost,                           # себестоимость (для КП)
+        'economy': cost - spent,                # экономия = польза заёма
     }
 
 

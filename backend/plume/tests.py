@@ -1573,3 +1573,140 @@ class InventoryHttpTests(TestCase):
         self.assertEqual(row['predecessor_id'], self.lot.id)
         self.assertEqual(float(row['unit_cost']), 2.50)       # цена унаследована
         self.assertEqual(row['serial_number'], 'ЗН-9')        # зав.№ унаследован
+
+
+class ProjectBudgetTests(EngineTestBase):
+    """Волна 10: бюджет проекта — потрачено/план/компас + себестоимость/экономия."""
+
+    def make_demand(self, device, qty):
+        models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(qty))
+
+    def test_spent_counts_only_receipt_lots(self):
+        # приходной лот считается по (цена×кол-во); заём (requisition) — бесплатен
+        case = self.make_item('CASE')
+        self.receipt_lot(case, self.prj, 1)  # добавит default unit_cost=0
+        r = models.Receipt.objects.create(number='U-2', date='2026-05-02',
+            supplier=self.supplier, project=self.prj, user=self.user)
+        paid = models.Lot.objects.create(item=case, project=self.prj, receipt=r,
+            qty=D(3), unit_cost=D(800))
+        engine.rebuild_movements(paid)
+        # заём из белого склада → born-лот в prj (origin requisition), цена наследуется
+        white = models.Project.objects.create(code='WHT', name='Склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        src = models.Lot.objects.create(item=case, project=white,
+            inventory=models.Inventory.objects.create(project=white, user=self.user,
+                number='INV-W', date='2026-05-01'), qty=D(5), unit_cost=D(700))
+        engine.rebuild_movements(src)
+        req = engine.create_requisition(self.prj, self.user, 'ТРБ-1')
+        engine.add_requisition_line(req, src, D(2))
+
+        b = engine.project_budget(self.prj)
+        self.assertEqual(b['spent'], D(2400))   # только 3×800; заём не в счёт
+
+    def test_plan_estimate_then_replaced_by_fact(self):
+        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        screw = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        screw.estimated_cost = D(50)
+        screw.save()
+        models.BomLine.objects.create(parent=device, component=screw, qty=D(4))
+        self.make_demand(device, 10)  # need SCR 40
+        self.prj.budget = D(3000)
+        self.prj.save()
+
+        # склада/заказа нет → план = оценка 40×50 = 2000, компас = 3000−2000
+        b = engine.project_budget(self.prj)
+        self.assertEqual(b['spent'], D(0))
+        self.assertEqual(b['plan'], D(2000))
+        self.assertEqual(b['compass'], D(1000))
+        self.assertEqual(b['unestimated'], [])
+
+        # пришёл УПД на все 40 по реальной цене 45 → оценка сменилась фактом
+        r = models.Receipt.objects.create(number='U-3', date='2026-05-03',
+            supplier=self.supplier, project=self.prj, user=self.user)
+        lot = models.Lot.objects.create(item=screw, project=self.prj, receipt=r,
+            qty=D(40), unit_cost=D(45))
+        engine.rebuild_movements(lot)
+        b = engine.project_budget(self.prj)
+        self.assertEqual(b['spent'], D(1800))
+        self.assertEqual(b['plan'], D(1800))      # факт заместил оценку → сошлось
+        self.assertEqual(b['compass'], D(1200))
+
+    def test_unestimated_flagged_not_silently_zero(self):
+        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        screw = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)  # без estimated_cost
+        models.BomLine.objects.create(parent=device, component=screw, qty=D(4))
+        self.make_demand(device, 10)
+
+        b = engine.project_budget(self.prj)
+        self.assertEqual(b['unestimated'], ['SCR'])
+        self.assertEqual(b['plan'], D(0))   # неполон — но флаг поднят
+
+    def test_economy_equals_borrow_value(self):
+        # прибор из купленного CASE (спот) + заёмного RES (бесплатно в бюджете,
+        # но по реальной цене в себестоимости) → экономия = стоимость заёма
+        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        case = self.make_item('CASE')
+        res = self.make_item('RES')
+        models.BomLine.objects.create(parent=device, component=case, qty=D(1))
+        models.BomLine.objects.create(parent=device, component=res, qty=D(2))
+        self.make_demand(device, 1)
+
+        # CASE: куплен ровно 1 @ 800
+        r = models.Receipt.objects.create(number='U-4', date='2026-05-04',
+            supplier=self.supplier, project=self.prj, user=self.user)
+        case_lot = models.Lot.objects.create(item=case, project=self.prj, receipt=r,
+            qty=D(1), unit_cost=D(800))
+        engine.rebuild_movements(case_lot)
+        # RES: заём 2 @ 10 из белого склада
+        white = models.Project.objects.create(code='WHT', name='Склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        src = models.Lot.objects.create(item=res, project=white,
+            inventory=models.Inventory.objects.create(project=white, user=self.user,
+                number='INV-W2', date='2026-05-01'), qty=D(2), unit_cost=D(10))
+        engine.rebuild_movements(src)
+        req = engine.create_requisition(self.prj, self.user, 'ТРБ-2')
+        engine.add_requisition_line(req, src, D(2))
+        res_lot = req.lots.first()
+
+        # собираем прибор
+        k = models.Kitting.objects.create(project=self.prj, target_item=device,
+            user=self.user, qty=D(1), status=models.Kitting.Status.WIP)
+        engine.add_kitting_line(k, case, case_lot, D(1))
+        engine.add_kitting_line(k, res, res_lot, D(2))
+        engine.close_kitting(k)
+
+        b = engine.project_budget(self.prj)
+        self.assertEqual(b['spent'], D(800))    # только CASE
+        self.assertEqual(b['cost'], D(820))     # снимок: 800 + 2×10 (заём по реальной цене)
+        self.assertEqual(b['economy'], D(20))   # польза заёма = 2×10
+
+    def test_compass_none_without_budget(self):
+        b = engine.project_budget(self.prj)
+        self.assertIsNone(b['budget'])
+        self.assertIsNone(b['compass'])
+
+
+class ProjectBudgetHttpTests(TestCase):
+    """Волна 10: HTTP-путь бюджета проекта."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.prj = models.Project.objects.create(code='P1', name='Проект 1',
+            kind=models.Project.Kind.EXTERNAL, budget=D(5000))
+        self.sup = models.Supplier.objects.create(name='П')
+        self.c = Client()
+
+    def test_budget_projection(self):
+        device = models.Item.objects.create(code='DEV', name='DEV',
+            kind=models.Item.Kind.DEVICE, is_manufactured=True)
+        scr = models.Item.objects.create(code='SCR', name='SCR',
+            kind=models.Item.Kind.MATERIAL, estimated_cost=D(50))
+        models.BomLine.objects.create(parent=device, component=scr, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(10))
+        r = self.c.get(f'/api/projects/{self.prj.id}/budget/')
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(float(body['plan']), 1000.0)     # 20×50
+        self.assertEqual(float(body['compass']), 4000.0)  # 5000−1000
+        self.assertEqual(float(body['spent']), 0.0)

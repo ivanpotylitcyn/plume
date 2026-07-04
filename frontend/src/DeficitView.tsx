@@ -1,8 +1,8 @@
 // Витрина волны 1: проектный дашборд дефицита (ось Project).
 // Тройной разбор ✓/●/▲, цвет шапки прибора = worst-of + бейдж лучшего прогресса.
 import { useEffect, useState } from 'react'
-import { api, type Deficit, type DeficitDemand } from './api'
-import { GLYPH, Glyph, Segment, num } from './status'
+import { api, type Budget, type Deficit, type DeficitDemand } from './api'
+import { GLYPH, Glyph, Segment, money, num } from './status'
 
 export function DeficitView({ projectId, openItem, openPurchase }:
   { projectId: number; openItem: (id: number) => void
@@ -32,9 +32,61 @@ export function DeficitView({ projectId, openItem, openPurchase }:
     <div>
       <h1 className="title"><span className="pn">{data.project_code}</span> <span className="lit">— {data.project_name}</span></h1>
       <div className="subtitle">Дефицит проекта · надо − склад − заказано · 1 уровень BOM</div>
+      <BudgetPanel projectId={projectId} />
       {data.demands.length === 0 && <div className="empty">Нет потребностей (ProjectDemand)</div>}
       {data.demands.map(d => <Demand key={d.demand_id} d={d} openItem={openItem}
         order={order} busy={busy} />)}
+    </div>
+  )
+}
+
+// Панель бюджета (north-star окупаемости): два числа денег (потрачено/план) +
+// компас против бюджета, и справа окупаемость — себестоимость/экономия заёма.
+function BudgetPanel({ projectId }: { projectId: number }) {
+  const [b, setB] = useState<Budget | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    setB(null); setErr(null)
+    api.budget(projectId).then(setB).catch(e => setErr(String(e)))
+  }, [projectId])
+
+  if (err) return <div className="empty">Бюджет: ошибка {err}</div>
+  if (!b) return null
+
+  const over = b.compass !== null && b.compass < 0   // перерасход
+  return (
+    <div className="budget">
+      <div className="bgroup">
+        <Stat label="потрачено (факт)" value={money(b.spent)} />
+        <Stat label="план (прогноз)" value={money(b.plan)} />
+        {b.budget !== null
+          ? <Stat label="бюджет на материалы" value={money(b.budget)} />
+          : <Stat label="бюджет на материалы" value="— не задан" dim />}
+        {b.compass !== null &&
+          <Stat label={over ? 'перерасход' : 'запас бюджета'}
+            value={money(Math.abs(b.compass))} tone={over ? 'bad' : 'ok'} />}
+      </div>
+      <div className="bgroup okup">
+        <Stat label="себестоимость (для КП)" value={money(b.cost)} />
+        <Stat label="экономия (польза заёма)" value={money(b.economy)}
+          tone={b.economy > 0 ? 'ok' : b.economy < 0 ? 'bad' : undefined} />
+      </div>
+      {b.unestimated.length > 0 &&
+        <div className="bwarn" title={`нет estimated_cost: ${b.unestimated.join(', ')}`}>
+          ▲ {b.unestimated.length} поз. без оценки — план неполон
+        </div>}
+    </div>
+  )
+}
+
+function Stat({ label, value, tone, dim }: {
+  label: string; value: string; tone?: 'ok' | 'bad'; dim?: boolean
+}) {
+  return (
+    <div className="bstat">
+      <div className="blabel">{label}</div>
+      <div className={'bval' + (tone ? ` t-${tone}` : '') + (dim ? ' dim' : '')}>{value}</div>
     </div>
   )
 }
