@@ -311,7 +311,7 @@ export default function App() {
               glyph: <span className="glyph g-info">○</span> }))} />}
 
         {mode === 'procurements' &&
-          <ModeList heading="Закупки-план" newLabel="＋ Новая закупка"
+          <ModeList heading="Закупки" newLabel="＋ Новая закупка"
             newSel={sel?.kind === 'new-procurement'} onNew={() => setSel({ kind: 'new-procurement' })}
             selId={sel?.kind === 'procurement' ? sel.id : null}
             onSelect={id => setSel({ kind: 'procurement', id })}
@@ -420,17 +420,18 @@ export default function App() {
   )
 }
 
-// Панель режимов (§2): Codicons, монохром. Порядок = как в старой панели.
+// Панель режимов (§2): Codicons, монохром. Порядок = поток жизненного цикла изделия
+// (планирование → исполнение → приёмка → сборка → выбытие → сверка).
 const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'projects',     icon: 'project',       title: 'Проекты — дефицит, панель проекта' },
   { mode: 'items',        icon: 'circuit-board', title: 'Изделия — справочник, остатки, состав' },
-  { mode: 'kittings',     icon: 'tools',         title: 'Комплектации — сборка, списание под прибор' },
-  { mode: 'receipts',     icon: 'inbox',         title: 'Поставки — УПД, рождение лотов' },
+  { mode: 'procurements', icon: 'table',         title: 'Закупки — командный свод, order.xlsx' },
   { mode: 'purchases',    icon: 'checklist',     title: 'Заказы — обязательства поставщику' },
+  { mode: 'receipts',     icon: 'inbox',         title: 'Поставки — УПД, рождение лотов' },
+  { mode: 'kittings',     icon: 'tools',         title: 'Комплектации — сборка, списание под прибор' },
   { mode: 'transfers',    icon: 'export',        title: 'Передачи — отгрузка заказчику' },
-  { mode: 'writeoffs',    icon: 'trash',         title: 'Списания — выбытие, серый путь' },
   { mode: 'requisitions', icon: 'arrow-swap',    title: 'Требования — отпочкование, постановка на баланс' },
-  { mode: 'procurements', icon: 'table',         title: 'Закупки-план — командный свод, order.xlsx' },
+  { mode: 'writeoffs',    icon: 'trash',         title: 'Списания — выбытие, серый путь' },
   { mode: 'inventories',  icon: 'search',        title: 'Инвентаризации — найденные партии' },
 ]
 
