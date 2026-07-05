@@ -102,6 +102,9 @@ body { overflow: hidden; }
 .ci-search::before       { content: '\ea6d'; }
 .ci-sign-out::before     { content: '\ea6e'; }
 .ci-package::before      { content: '\eb29'; }
+.ci-rocket::before       { content: '\eb44'; }  /* изделие (device) */
+.ci-chip::before         { content: '\ec19'; }  /* компонент (component) */
+.ci-beaker::before       { content: '\ea79'; }  /* материал (material) */
 
 /* ---- каркас (строки состояния больше нет — §11) ---- */
 .app { display: grid; grid-template-columns: 48px 240px 1fr; height: 100vh; }
@@ -197,6 +200,9 @@ body { overflow: hidden; }
 
 /* legacy-заголовок (постепенно вытесняется .form-head) */
 h1.title { font-size: 16px; font-weight: 500; margin: 0 0 2px; color: var(--fg-bright); }
+/* шапка формы проекта: заголовок слева, замок §5 справа (реквизиты под замком) */
+.proj-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.proj-head .fh-right { padding-top: 1px; }
 h1.title .pn { font-family: var(--font-mono); }
 h1.title .lit { font-family: var(--font-base); font-weight: 400; }
 .subtitle { color: var(--fg-dim); margin-bottom: 16px; font-size: 12px; }
@@ -207,6 +213,7 @@ h1.title .lit { font-family: var(--font-base); font-weight: 400; }
   letter-spacing: 0; font-family: var(--font-base); }
 .closure { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 4px; }
 .closure .section-h .lit { text-transform: none; letter-spacing: 0; }
+.closure-foot { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 .hdr-edit { display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
   margin-bottom: 12px; }
 .hdr-edit label { color: var(--fg-dim); font-size: 12px; display: inline-flex;
@@ -228,6 +235,30 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .device { margin: 14px 0 4px; display: flex; align-items: baseline; gap: 8px; }
 .device .name { font-weight: 500; color: var(--fg-bright); }
 .device .triple { color: var(--fg-dim); font-size: 12px; }
+
+/* Синхронная сетка секций «Приборы» и «Потребность»: строка прибора и строки его
+   состава делят один шаблон колонок → «потребность»↔«Надо», прогресс↔«Разбор»,
+   код↔«Компонент» стоят по одной вертикали. Все треки фиксированы/fr (без content-
+   auto) — колонки выравниваются между всеми строками. Имя усекается, не расталкивает. */
+.pgrid { max-width: 840px; }
+.prow { display: grid; align-items: baseline; column-gap: 8px;
+  grid-template-columns: 18px 148px minmax(140px, 1fr) 96px 124px 60px 88px;
+  border-left: 2px solid transparent; padding: 3px 0 3px 8px; }
+.prow .pnum { text-align: right; font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; }
+.prow .name { color: var(--fg-dim); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow.s-to_order { border-left-color: var(--st-order); }
+.prow.s-on_order { border-left-color: var(--st-wip); }
+.prow.s-available { border-left-color: var(--st-ok); }
+.prow--head { color: var(--fg-dim); font-size: 11px; text-transform: none;
+  border-bottom: 1px solid var(--border); padding-bottom: 4px; margin: 2px 0; }
+.prow--comp { border-bottom: 1px solid var(--border); }
+.prow--device { margin-top: 6px; }
+.prow .chev { background: none; border: none; color: var(--fg-dim); cursor: pointer;
+  padding: 0; font-size: 12px; line-height: 1; justify-self: start; }
+.prow .chev:hover { color: var(--fg-bright); }
+.prow .act { text-align: right; }
 
 /* значки статусов */
 .glyph { font-weight: 500; }

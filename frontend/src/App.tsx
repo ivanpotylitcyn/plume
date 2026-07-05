@@ -250,7 +250,7 @@ export default function App() {
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
             rows={[...items].sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
-              id: i.id, code: i.code, name: i.name, glyph: <span className={`ci ci-${itemIcon(i)}`} /> }))} />}
+              id: i.id, code: i.code, name: i.name, glyph: <span className={`ci ci-${itemIcon(i.kind)}`} /> }))} />}
 
         {mode === 'kittings' &&
           <ModeList heading="Комплектации" newLabel="＋ Новая" projectFilter
@@ -350,15 +350,18 @@ export default function App() {
             return <ProjectStockPanel key={sel.id} projectId={sel.id}
               projectName={p.name} openItem={openItem} />
           return <>
-            <DeficitView projectId={sel.id} openItem={openItem}
-              openPurchase={id => { reloadPurchases(); openPurchase(id) }} />
+            <DeficitView key={sel.id} projectId={sel.id} items={items}
+              closed={p?.status === 'closed'} openItem={openItem}
+              openPurchase={id => { reloadPurchases(); openPurchase(id) }}
+              onChanged={reloadProjects} />
             <ClosurePanel key={sel.id} projectId={sel.id} openItem={openItem}
               onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }} />
           </>
         })()}
         {sel?.kind === 'new-project' &&
           <NewProject onCreated={id => { reloadProjects(); openProject(id) }} />}
-        {sel?.kind === 'item' && <ItemView itemId={sel.id} openItem={openItem} />}
+        {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
+          openItem={openItem} onChanged={reloadItems} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
         {sel?.kind === 'kitting' &&
@@ -434,9 +437,12 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
 // Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
 const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
 
-// Codicon вида изделия (§7): tools — производимое, package — прибор, circuit-board — компонент/материал.
-function itemIcon(i: ItemRow): string {
-  return i.is_manufactured ? 'tools' : i.kind === 'device' ? 'package' : 'circuit-board'
+// Codicon вида изделия (§7) по kind: изделие — rocket, компонент — chip, материал — beaker.
+const ITEM_ICON: Record<string, string> = {
+  device: 'rocket', component: 'chip', material: 'beaker',
+}
+function itemIcon(kind: string): string {
+  return ITEM_ICON[kind] ?? 'chip'
 }
 
 // Единый список режима (§7): призрачный «＋ Новая…» первым, строка = глиф · моно-код

@@ -1909,3 +1909,171 @@ class AuthHttpTests(TestCase):
         out = self.c.post('/api/auth/logout/')
         self.assertEqual(out.status_code, 204)
         self.assertEqual(self.c.get('/api/projects/').status_code, 403)
+
+
+class BomEditTests(EngineTestBase):
+    """Редактор состава (BOM): добавление/правка/удаление, гварды дублей и циклов."""
+
+    def test_add_update_remove_bom_line(self):
+        dev = self.make_item('DEV', manufactured=True)
+        comp = self.make_item('R')
+        line = engine.add_bom_line(dev, comp, D(3), position='C1')
+        self.assertEqual(line.qty, D(3))
+        self.assertEqual(line.position, 'C1')
+        engine.update_bom_line(line, qty=D(5))
+        line.refresh_from_db()
+        self.assertEqual(line.qty, D(5))
+        engine.remove_bom_line(line)
+        self.assertFalse(models.BomLine.objects.filter(pk=line.pk).exists())
+
+    def test_bom_rejects_self_and_duplicate_and_nonpositive(self):
+        dev = self.make_item('DEV', manufactured=True)
+        comp = self.make_item('R')
+        with self.assertRaises(ValidationError):
+            engine.add_bom_line(dev, dev, D(1))           # сам на себя
+        with self.assertRaises(ValidationError):
+            engine.add_bom_line(dev, comp, D(0))          # qty <= 0
+        engine.add_bom_line(dev, comp, D(1))
+        with self.assertRaises(ValidationError):
+            engine.add_bom_line(dev, comp, D(2))          # дубль (parent, component)
+
+    def test_bom_rejects_cycle(self):
+        a = self.make_item('A', manufactured=True)
+        b = self.make_item('B', manufactured=True)
+        c = self.make_item('C', manufactured=True)
+        engine.add_bom_line(a, b, D(1))
+        engine.add_bom_line(b, c, D(1))
+        with self.assertRaises(ValidationError):
+            engine.add_bom_line(c, a, D(1))               # C ⊃ A замкнул бы цикл A→B→C→A
+
+
+class ProjectDemandEditTests(EngineTestBase):
+    """Редактор потребности проекта (секция «Приборы»)."""
+
+    def test_add_update_remove_demand(self):
+        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        d = engine.add_project_demand(self.prj, dev, D(4))
+        self.assertEqual(d.qty, D(4))
+        engine.update_project_demand(d, D(7))
+        d.refresh_from_db()
+        self.assertEqual(d.qty, D(7))
+        engine.remove_project_demand(d)
+        self.assertFalse(models.ProjectDemand.objects.filter(pk=d.pk).exists())
+
+    def test_demand_rejects_duplicate_and_nonpositive(self):
+        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        with self.assertRaises(ValidationError):
+            engine.add_project_demand(self.prj, dev, D(0))
+        engine.add_project_demand(self.prj, dev, D(1))
+        with self.assertRaises(ValidationError):
+            engine.add_project_demand(self.prj, dev, D(2))
+
+    def test_demand_blocked_on_closed_and_internal(self):
+        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        closed = models.Project.objects.create(
+            code='PC', name='Закрытый', kind=models.Project.Kind.EXTERNAL,
+            status=models.Project.Status.CLOSED)
+        with self.assertRaises(ValidationError):
+            engine.add_project_demand(closed, dev, D(1))
+        internal = models.Project.objects.create(
+            code='WH', name='Склад', kind=models.Project.Kind.INTERNAL_STOCK)
+        with self.assertRaises(ValidationError):
+            engine.add_project_demand(internal, dev, D(1))
+
+    def test_deficit_components_aggregate(self):
+        # Два прибора делят компонент R → сводная потребность суммируется.
+        r = self.make_item('R')
+        c = self.make_item('C')
+        dev1 = self.make_item('DEV1', manufactured=True, kind=models.Item.Kind.DEVICE)
+        dev2 = self.make_item('DEV2', manufactured=True, kind=models.Item.Kind.DEVICE)
+        engine.add_bom_line(dev1, r, D(2))
+        engine.add_bom_line(dev1, c, D(1))
+        engine.add_bom_line(dev2, r, D(3))
+        engine.add_project_demand(self.prj, dev1, D(5))   # R: 10
+        engine.add_project_demand(self.prj, dev2, D(4))   # R: 12 → всего 22
+        out = engine.project_deficit(self.prj)
+        agg = {c['component_code']: c for c in out['components']}
+        self.assertEqual(agg['R']['need'], D(22))
+        self.assertEqual(agg['C']['need'], D(5))
+        # Сортировка «горит вперёд»: одинаковый статус (всё к заказу) → по коду.
+        codes = [c['component_code'] for c in out['components']]
+        self.assertEqual(codes, ['C', 'R'])
+
+
+class ItemProjectUpdateTests(EngineTestBase):
+    """Правка свойств изделия и реквизитов проекта под замком формы (§6)."""
+
+    def test_update_item_fields(self):
+        it = self.make_item('X', kind=models.Item.Kind.COMPONENT)
+        engine.update_item(it, {'name': 'Новое имя', 'kind': 'device',
+                                'uom': 'кг', 'estimated_cost': D('12.50'),
+                                'is_manufactured': True})
+        it.refresh_from_db()
+        self.assertEqual(it.name, 'Новое имя')
+        self.assertEqual(it.kind, 'device')
+        self.assertEqual(it.uom, 'кг')
+        self.assertEqual(it.estimated_cost, D('12.50'))
+        self.assertTrue(it.is_manufactured)
+
+    def test_update_item_estimated_cost_can_clear(self):
+        it = self.make_item('X')
+        it.estimated_cost = D('5'); it.save()
+        engine.update_item(it, {'estimated_cost': None})
+        it.refresh_from_db()
+        self.assertIsNone(it.estimated_cost)
+
+    def test_update_item_rejects_dup_code_empty_name_bad_kind(self):
+        self.make_item('A')
+        it = self.make_item('B')
+        with self.assertRaises(ValidationError):
+            engine.update_item(it, {'code': 'A'})          # дубль артикула
+        with self.assertRaises(ValidationError):
+            engine.update_item(it, {'name': '   '})        # пустое название
+        with self.assertRaises(ValidationError):
+            engine.update_item(it, {'kind': 'gadget'})     # неизвестный вид
+
+    def test_update_item_partial_leaves_others(self):
+        it = self.make_item('X', kind=models.Item.Kind.COMPONENT)
+        it.uom = 'м'; it.save()
+        engine.update_item(it, {'name': 'Y'})              # прислали только name
+        it.refresh_from_db()
+        self.assertEqual(it.uom, 'м')                      # uom не тронут
+        self.assertEqual(it.kind, 'component')
+
+    def test_update_project_fields_and_clear_budget(self):
+        engine.update_project(self.prj, {'name': 'Переименован',
+                                         'budget': D('1000'), 'started_at': '2026-01-15'})
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.name, 'Переименован')
+        self.assertEqual(self.prj.budget, D('1000'))
+        self.assertEqual(str(self.prj.started_at), '2026-01-15')
+        engine.update_project(self.prj, {'budget': None})
+        self.prj.refresh_from_db()
+        self.assertIsNone(self.prj.budget)
+
+    def test_update_project_rejects_empty_name(self):
+        with self.assertRaises(ValidationError):
+            engine.update_project(self.prj, {'name': '  '})
+
+    def test_project_detail_patch_endpoint(self):
+        self.c = Client()
+        self.c.force_login(self.user)
+        r = self.c.patch(f'/api/projects/{self.prj.id}/',
+                         {'budget': '2500'}, content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(D(str(r.json()['budget'])), D('2500'))
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.budget, D('2500'))
+
+    def test_item_detail_patch_endpoint(self):
+        it = self.make_item('Z')
+        self.c = Client()
+        self.c.force_login(self.user)
+        r = self.c.patch(f'/api/items/{it.id}/',
+                         {'name': 'Обновлён', 'estimated_cost': '9.9'},
+                         content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['name'], 'Обновлён')
+        it.refresh_from_db()
+        self.assertEqual(it.name, 'Обновлён')
+        self.assertEqual(it.estimated_cost, D('9.9'))

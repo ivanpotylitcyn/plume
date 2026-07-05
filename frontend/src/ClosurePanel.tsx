@@ -1,8 +1,8 @@
-// Витрина волны 6: панель закрытия проекта (под дашбордом дефицита).
-// Сведение остаточных лотов (live≠0) в 0 закрывающими выходами + мягкий замок-веха
-// статуса. Один клик на строке: «списать» (→ серый, `−ISSUE`) или «на баланс» (→
-// белый «Собственный склад», отпочкование). Отгрузка заказчику — через режим
-// «Передачи». Закрыть можно внешний проект, когда остатков нет; переоткрытие свободно.
+// Секция «Склад проекта» (форма проекта, внешний): живые лоты проекта, за которыми
+// следим каждый день. По каждому лоту — быстрый выход: «списать» (→ серый,
+// `−ISSUE`) или «на баланс» (→ белый «Собственный склад», отпочкование). Отгрузка
+// заказчику — через режим «Передачи». Закрытие проекта (свод остатков в 0 + замок-веха)
+// — редкое действие, тихой строкой внизу; переоткрытие свободно.
 import { useEffect, useState } from 'react'
 import { api, type ProjectClosure, type ResidualLot } from './api'
 import { num } from './status'
@@ -31,36 +31,24 @@ export function ClosurePanel({ projectId, openItem, onChanged }: {
   if (!c.is_external) return null         // внутренние склады не закрываются
 
   const closed = c.status === 'closed'
+  const lots = c.residuals.length
   return (
     <div className="closure">
-      <h2 className="section-h">
-        <span className={`glyph ${closed ? 'g-lock' : 'g-info'}`}>{closed ? '🔒' : '○'}</span>{' '}
-        Закрытие проекта
-        {closed && <span className="lit"> — закрыт {c.closed_at}</span>}
+      <h2 className="section-h">Склад проекта
+        <span className="hint">
+          {closed
+            ? <>закрыт {c.closed_at} · остатков нет</>
+            : lots === 0
+              ? <>склад пуст · живых остатков нет</>
+              : <>живых лотов {lots}
+                 {c.anomaly_count > 0 && <> · аномалий {c.anomaly_count} ▲</>}</>}
+        </span>
       </h2>
-      <div className="subtitle">
-        Свести остаточные лоты в 0 → замок-веха ·{' '}
-        {c.residuals.length === 0
-          ? <span className="g-available">остатков нет ✓</span>
-          : <>остаточных лотов <span className="seg">{c.residuals.length}</span>
-             {c.anomaly_count > 0 &&
-               <span className="anomaly"> · аномалий {c.anomaly_count} ▲</span>}</>}
-      </div>
 
-      <div className="kit-actions">
-        {closed
-          ? <button className="btn" disabled={busy}
-              onClick={() => run(api.reopenProject(c.project_id))}>Переоткрыть</button>
-          : <button className="btn" disabled={busy || !c.can_close}
-              title={c.can_close ? 'закрыть проект' : c.blocker}
-              onClick={() => run(api.closeProject(c.project_id))}>Закрыть проект</button>}
-        {!closed && !c.can_close && c.blocker &&
-          <span className="hint">{c.blocker}</span>}
-        {busy && <span className="hint">сохраняю…</span>}
-        {err && <span className="anomaly">{err}</span>}
-      </div>
+      {busy && <div className="hint">сохраняю…</div>}
+      {err && <div className="anomaly">{err}</div>}
 
-      {c.residuals.length > 0 && !closed &&
+      {lots > 0 && !closed &&
         <table className="grid">
           <thead>
             <tr>
@@ -75,11 +63,28 @@ export function ClosurePanel({ projectId, openItem, onChanged }: {
             ))}
           </tbody>
         </table>}
+
+      {/* Закрытие проекта — редкое действие (свод остатков в 0 + замок-веха), тихой строкой. */}
+      <div className="closure-foot">
+        {closed
+          ? <>
+              <span className="hint">Проект закрыт {c.closed_at}.</span>
+              <button className="btn sm" disabled={busy}
+                onClick={() => run(api.reopenProject(c.project_id))}>Переоткрыть проект</button>
+            </>
+          : <>
+              <button className="btn sm" disabled={busy || !c.can_close}
+                title={c.can_close ? 'свести остатки в 0 и закрыть проект' : c.blocker}
+                onClick={() => { if (confirm('Закрыть проект? Остатков быть не должно.')) run(api.closeProject(c.project_id)) }}>
+                Закрыть проект</button>
+              <span className="hint">{c.can_close ? 'остатков нет — можно закрыть' : c.blocker}</span>
+            </>}
+      </div>
     </div>
   )
 }
 
-// Остаточный лот: один клик сводит его в 0 (списать → серый / на баланс → белый).
+// Живой лот проекта: один клик сводит его в 0 (списать → серый / на баланс → белый).
 function ResidualRow({ r, projectId, busy, openItem, run }: {
   r: ResidualLot; projectId: number; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<ProjectClosure>) => void

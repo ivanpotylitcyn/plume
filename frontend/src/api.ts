@@ -4,6 +4,9 @@ export type Status = 'available' | 'on_order' | 'to_order'
 export interface ProjectRow {
   id: number; code: string; name: string; kind: string; status: string
 }
+export interface ProjectDetail extends ProjectRow {
+  budget: number | null; started_at: string | null
+}
 export interface ItemRow {
   id: number; code: string; name: string; kind: string; uom: string
   is_manufactured: boolean
@@ -19,9 +22,16 @@ export interface DeficitDemand {
   qty: number; device: { done: number; wip: number; not_started: number }
   status: Status; badge: Status; lines: DeficitLine[]
 }
+// Свод потребности по компонентам на весь проект (секция «Потребность»).
+export interface DeficitComponent {
+  component_id: number; component_code: string; component_name: string; uom: string
+  need: number; have: number; on_order: number; to_order: number
+  status: Status; available_raw: number; anomaly: boolean
+}
 export interface Deficit {
   project_id: number; project_code: string; project_name: string
   demands: DeficitDemand[]
+  components: DeficitComponent[]
 }
 
 export interface Budget {
@@ -51,7 +61,8 @@ export interface ItemShipment {
 export interface ItemDetail {
   id: number; code: string; name: string; kind: string; uom: string
   is_manufactured: boolean; estimated_cost: number | null
-  bom: { component_id: number; component_code: string; component_name: string; qty: number }[]
+  bom: { id: number; component_id: number; component_code: string;
+         component_name: string; component_uom: string; qty: number; position: string }[]
   where_used: { parent_id: number; parent_code: string; parent_name: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
           live_qty: number; unit_cost: number; serial_number: string }[]
@@ -353,9 +364,27 @@ export const api = {
   createItem: (b: { code: string; name: string; kind?: string; uom?: string;
     is_manufactured?: boolean; estimated_cost?: number }) =>
     send<ItemRow>('POST', '/api/items/', b),
+  project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
+  updateProject: (id: number, b: Partial<{ name: string; budget: number | null; started_at: string | null }>) =>
+    send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
+  addDemand: (projectId: number, b: { target_item_id: number; qty: number }) =>
+    send<Deficit>('POST', `/api/projects/${projectId}/demands/`, b),
+  updateDemand: (demandId: number, qty: number) =>
+    send<Deficit>('PATCH', `/api/project-demands/${demandId}/`, { qty }),
+  deleteDemand: (demandId: number) =>
+    send<Deficit>('DELETE', `/api/project-demands/${demandId}/`),
   budget: (id: number) => get<Budget>(`/api/projects/${id}/budget/`),
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
+  updateItem: (id: number, b: Partial<{ code: string; name: string; kind: string;
+    uom: string; is_manufactured: boolean; estimated_cost: number | null }>) =>
+    send<ItemDetail>('PATCH', `/api/items/${id}/`, b),
+  addBomLine: (itemId: number, b: { component_id: number; qty: number; position?: string }) =>
+    send<ItemDetail>('POST', `/api/items/${itemId}/bom/`, b),
+  updateBomLine: (lineId: number, b: Partial<{ qty: number; position: string }>) =>
+    send<ItemDetail>('PATCH', `/api/bom-lines/${lineId}/`, b),
+  deleteBomLine: (lineId: number) =>
+    send<ItemDetail>('DELETE', `/api/bom-lines/${lineId}/`),
 
   kittings: () => get<KittingRow[]>('/api/kittings/'),
   kitting: (id: number) => get<Cockpit>(`/api/kittings/${id}/`),

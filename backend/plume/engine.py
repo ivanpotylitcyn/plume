@@ -260,6 +260,10 @@ def project_deficit(project):
     Возвращает структуру, готовую к сериализации (Decimal → строки на уровне DRF).
     """
     demands = []
+    # Свод потребности по компонентам на весь проект (секция «Потребность»):
+    # need по компоненту = Σ(bl.qty × demand.qty) по всем приборам. Склад/заказано —
+    # общие по компоненту в проекте (не per-demand), считаем один раз ниже.
+    need_by_component = {}      # component → суммарная потребность (Decimal)
     for demand in project.demands.select_related('target_item'):
         target = demand.target_item
         lines = []
@@ -267,6 +271,7 @@ def project_deficit(project):
         for bl in target.bom_lines.select_related('component'):
             component = bl.component
             need = bl.qty * demand.qty
+            need_by_component[component] = need_by_component.get(component, ZERO) + need
             available = item_available(component, project)
             on_order = item_on_order(component, project)
             cov = _coverage(need, available, on_order)
@@ -301,11 +306,31 @@ def project_deficit(project):
             'badge': _best_of(statuses),
             'lines': lines,
         })
+
+    # Сводная таблица по компонентам (полная картина проекта, всегда видна).
+    components = []
+    for component, need in need_by_component.items():
+        available = item_available(component, project)
+        on_order = item_on_order(component, project)
+        cov = _coverage(need, available, on_order)
+        cov.update({
+            'component_id': component.id,
+            'component_code': component.code,
+            'component_name': component.name,
+            'uom': component.uom,
+            'available_raw': available,
+            'anomaly': item_has_negative_lot(component, project),
+        })
+        components.append(cov)
+    # «Горит вперёд»: сначала ▲ к заказу, затем ● в пути, затем ✓; внутри — по коду.
+    components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_code']))
+
     return {
         'project_id': project.id,
         'project_code': project.code,
         'project_name': project.name,
         'demands': demands,
+        'components': components,
     }
 
 
@@ -2082,6 +2107,44 @@ def create_item(code, name, kind=None, uom='шт', is_manufactured=False,
         estimated_cost=estimated_cost)
 
 
+def update_item(item, changes):
+    """Правка свойств изделия под замком формы (§6). `changes` — только присланные
+    поля (частичный PATCH). Артикул уникален; вид из словаря; название непустое."""
+    fields = []
+    if 'code' in changes:
+        code = (changes['code'] or '').strip()
+        if not code:
+            raise ValidationError('Нужен артикул изделия.')
+        if models.Item.objects.filter(code=code).exclude(pk=item.pk).exists():
+            raise ValidationError(f'Изделие с артикулом {code} уже есть.')
+        item.code = code
+        fields.append('code')
+    if 'name' in changes:
+        name = (changes['name'] or '').strip()
+        if not name:
+            raise ValidationError('Нужно название изделия.')
+        item.name = name
+        fields.append('name')
+    if 'kind' in changes:
+        kind = changes['kind'] or ''
+        if kind not in models.Item.Kind.values:
+            raise ValidationError(f'Неизвестный вид изделия: {kind}.')
+        item.kind = kind
+        fields.append('kind')
+    if 'uom' in changes:
+        item.uom = (changes['uom'] or '').strip() or 'шт'
+        fields.append('uom')
+    if 'estimated_cost' in changes:
+        item.estimated_cost = changes['estimated_cost']    # Decimal или None (сброс)
+        fields.append('estimated_cost')
+    if 'is_manufactured' in changes:
+        item.is_manufactured = bool(changes['is_manufactured'])
+        fields.append('is_manufactured')
+    if fields:
+        item.save(update_fields=fields)
+    return item
+
+
 def create_project(code, name, budget=None, started_at=None):
     """Создать внешний проект (НИР/контракт) из мини-формы «＋ Новый». Код уникален.
 
@@ -2100,6 +2163,119 @@ def create_project(code, name, budget=None, started_at=None):
         code=code, name=name, kind=models.Project.Kind.EXTERNAL,
         status=models.Project.Status.ACTIVE,
         budget=budget, started_at=started_at or None)
+
+
+def update_project(project, changes):
+    """Правка реквизитов проекта под замком формы (§6): название, бюджет, дата начала.
+    Код и статус (закрытие/переоткрытие) — отдельными путями, здесь не трогаем."""
+    fields = []
+    if 'name' in changes:
+        name = (changes['name'] or '').strip()
+        if not name:
+            raise ValidationError('Нужно название проекта.')
+        project.name = name
+        fields.append('name')
+    if 'budget' in changes:
+        project.budget = changes['budget']                 # Decimal или None (сброс)
+        fields.append('budget')
+    if 'started_at' in changes:
+        project.started_at = changes['started_at'] or None
+        fields.append('started_at')
+    if fields:
+        project.save(update_fields=fields)
+    return project
+
+
+# --------------------------------------------------------------------------- #
+#  Потребность проекта (секция «Приборы» формы проекта): что и сколько делаем
+# --------------------------------------------------------------------------- #
+def _editable_project(project):
+    """Потребность правится только у активного внешнего проекта (не склад, не закрыт)."""
+    if project.kind in models.Project.INTERNAL_KINDS:
+        raise ValidationError('У внутреннего склада нет потребностей.')
+    if project.status == models.Project.Status.CLOSED:
+        raise ValidationError('Проект закрыт — переоткройте, чтобы править потребность.')
+
+
+def add_project_demand(project, item, qty):
+    """Добавить прибор в потребность проекта. Пара (проект, изделие) уникальна."""
+    _editable_project(project)
+    if qty is None or qty <= ZERO:
+        raise ValidationError('Кол-во приборов должно быть больше нуля.')
+    if models.ProjectDemand.objects.filter(project=project, target_item=item).exists():
+        raise ValidationError(f'Прибор {item.code} уже в потребности проекта.')
+    return models.ProjectDemand.objects.create(
+        project=project, target_item=item, qty=qty)
+
+
+def update_project_demand(demand, qty):
+    """Правка кол-ва приборов в потребности (автосейв)."""
+    _editable_project(demand.project)
+    if qty is None or qty <= ZERO:
+        raise ValidationError('Кол-во приборов должно быть больше нуля.')
+    demand.qty = qty
+    demand.save(update_fields=['qty'])
+    return demand
+
+
+def remove_project_demand(demand):
+    """Убрать прибор из потребности проекта."""
+    _editable_project(demand.project)
+    demand.delete()
+
+
+# --------------------------------------------------------------------------- #
+#  Состав изделия / BOM (редактор на экране изделия)
+# --------------------------------------------------------------------------- #
+def _bom_would_cycle(parent, component):
+    """True, если component (через свой BOM вглубь) содержит parent → цикл."""
+    seen = set()
+    stack = [component]
+    while stack:
+        cur = stack.pop()
+        if cur.id == parent.id:
+            return True
+        if cur.id in seen:
+            continue
+        seen.add(cur.id)
+        stack.extend(bl.component for bl in cur.bom_lines.select_related('component'))
+    return False
+
+
+def add_bom_line(parent, component, qty, position=''):
+    """Добавить компонент в состав изделия. Без самоссылки, циклов и дублей."""
+    if qty is None or qty <= ZERO:
+        raise ValidationError('Кол-во должно быть больше нуля.')
+    if component.id == parent.id:
+        raise ValidationError('Изделие не может входить само в себя.')
+    if models.BomLine.objects.filter(parent=parent, component=component).exists():
+        raise ValidationError(f'Компонент {component.code} уже в составе.')
+    if _bom_would_cycle(parent, component):
+        raise ValidationError(f'Цикл в составе: {component.code} уже содержит {parent.code}.')
+    return models.BomLine.objects.create(
+        parent=parent, component=component, qty=qty,
+        position=(position or '').strip())
+
+
+def update_bom_line(line, qty=None, position=None):
+    """Правка строки состава (кол-во/позиция, автосейв)."""
+    fields = []
+    if qty is not None:
+        if qty <= ZERO:
+            raise ValidationError('Кол-во должно быть больше нуля.')
+        line.qty = qty
+        fields.append('qty')
+    if position is not None:
+        line.position = (position or '').strip()
+        fields.append('position')
+    if fields:
+        line.save(update_fields=fields)
+    return line
+
+
+def remove_bom_line(line):
+    """Убрать строку из состава изделия."""
+    line.delete()
 
 
 # --------------------------------------------------------------------------- #

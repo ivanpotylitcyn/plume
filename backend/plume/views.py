@@ -101,6 +101,28 @@ def _project_row(p):
             'status': p.status}
 
 
+def _project_detail_row(p):
+    """Полный ряд проекта для формы (шапка под замком §6): + бюджет и дата начала."""
+    return {**_project_row(p), 'budget': p.budget, 'started_at': p.started_at}
+
+
+@api_view(['GET', 'PATCH'])
+def project_detail(request, pk):
+    """Реквизиты проекта для шапки формы (GET) / правка под замком §6 (PATCH):
+    название, бюджет, дата начала — частичный, только присланные поля."""
+    project = get_object_or_404(models.Project, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        changes = {k: d[k] for k in ('name', 'started_at') if k in d}
+        if 'budget' in d:
+            changes['budget'] = _dec(d['budget'])
+        try:
+            engine.update_project(project, changes)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(_project_detail_row(project))
+
+
 @api_view(['GET', 'POST'])
 def projects(request):
     """Список проектов (дерево) / создание нового внешнего проекта (канон «＋ Новый»)."""
@@ -147,6 +169,37 @@ def project_deficit(request, pk):
     return Response(engine.project_deficit(project))
 
 
+@api_view(['POST'])
+def project_demands(request, pk):
+    """Добавить прибор в потребность проекта (секция «Приборы»). Возвращает дефицит."""
+    project = get_object_or_404(models.Project, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['target_item_id'])
+        engine.add_project_demand(project, item, _dec(d.get('qty')))
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны target_item_id и qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.project_deficit(project), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def project_demand_detail(request, pk):
+    """Автосейв кол-ва приборов (PATCH) / удаление прибора из потребности (DELETE)."""
+    demand = get_object_or_404(
+        models.ProjectDemand.objects.select_related('project'), pk=pk)
+    project = demand.project
+    try:
+        if request.method == 'DELETE':
+            engine.remove_project_demand(demand)
+        else:
+            engine.update_project_demand(demand, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.project_deficit(project))
+
+
 @api_view(['GET'])
 def project_budget(request, pk):
     """Бюджет проекта (north-star окупаемости): потрачено/план/компас + себестоимость/экономия."""
@@ -154,18 +207,18 @@ def project_budget(request, pk):
     return Response(engine.project_budget(project))
 
 
-@api_view(['GET'])
-def item_detail(request, pk):
-    """Экран изделия: свойства + окружение из связей (where-used, лоты) + карта."""
-    item = get_object_or_404(models.Item, pk=pk)
+def _item_detail_payload(item):
+    """Проекция экрана изделия: свойства + окружение из связей (where-used, лоты)."""
     where_used = [
         {'parent_id': bl.parent_id, 'parent_code': bl.parent.code,
          'parent_name': bl.parent.name, 'qty': bl.qty}
         for bl in item.used_in.select_related('parent')
     ]
     bom = [
-        {'component_id': bl.component_id, 'component_code': bl.component.code,
-         'component_name': bl.component.name, 'qty': bl.qty}
+        {'id': bl.id, 'component_id': bl.component_id,
+         'component_code': bl.component.code,
+         'component_name': bl.component.name, 'component_uom': bl.component.uom,
+         'qty': bl.qty, 'position': bl.position}
         for bl in item.bom_lines.select_related('component')
     ]
     lots = [
@@ -174,13 +227,68 @@ def item_detail(request, pk):
          'unit_cost': lot.unit_cost, 'serial_number': lot.serial_number}
         for lot in item.lots.select_related('project')
     ]
-    return Response({
+    return {
         'id': item.id, 'code': item.code, 'name': item.name, 'kind': item.kind,
         'uom': item.uom, 'is_manufactured': item.is_manufactured,
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'shipments': engine.item_shipments(item),
-    })
+    }
+
+
+_ITEM_TEXT_FIELDS = ('code', 'name', 'kind', 'uom', 'is_manufactured')
+
+
+@api_view(['GET', 'PATCH'])
+def item_detail(request, pk):
+    """Экран изделия: свойства + окружение из связей (where-used, лоты) + карта.
+    PATCH — правка свойств под замком формы (§6): частичный, только присланные поля."""
+    item = get_object_or_404(models.Item, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        changes = {k: d[k] for k in _ITEM_TEXT_FIELDS if k in d}
+        if 'estimated_cost' in d:
+            changes['estimated_cost'] = _dec(d['estimated_cost'])
+        try:
+            engine.update_item(item, changes)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(_item_detail_payload(item))
+
+
+@api_view(['POST'])
+def item_bom(request, pk):
+    """Добавить компонент в состав изделия (редактор BOM). Возвращает экран изделия."""
+    parent = get_object_or_404(models.Item, pk=pk)
+    d = request.data
+    try:
+        component = models.Item.objects.get(pk=d['component_id'])
+        engine.add_bom_line(parent, component, _dec(d.get('qty')),
+                            position=d.get('position') or '')
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны component_id и qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(_item_detail_payload(parent), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def bom_line_detail(request, pk):
+    """Автосейв кол-ва/позиции строки состава (PATCH) / удаление (DELETE)."""
+    line = get_object_or_404(models.BomLine.objects.select_related('parent'), pk=pk)
+    parent = line.parent
+    try:
+        if request.method == 'DELETE':
+            engine.remove_bom_line(line)
+        else:
+            d = request.data
+            engine.update_bom_line(
+                line,
+                qty=_dec(d['qty']) if 'qty' in d else None,
+                position=d['position'] if 'position' in d else None)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(_item_detail_payload(parent))
 
 
 # --------------------------------------------------------------------------- #
