@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { api, type AvailableLot, type WriteoffCockpit,
   type WriteoffCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -19,6 +20,7 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
   const [lots, setLots] = useState<AvailableLot[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   const reloadLots = (projectId: number) =>
     api.projectAvailableLots(projectId).then(setLots)
@@ -41,33 +43,29 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
+  const locked = !unlocked                 // списание не фиксируется — только личный замок
   return (
-    <div>
-      <h1 className="title">
-        <span className="glyph g-info">🗑</span>{' '}
-        <span className="pn">Списание {c.number}</span>{' '}
-        <span className="lit">— {c.project_name}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит списания · выбытие из проекта {c.project_code} · {c.date}
-        {c.reason && <> · причина: <span className="lit">{c.reason}</span></>}
-        {' · списано '}<span className="seg">{num(c.total_qty)}</span>
-      </div>
+    <div className={unlocked ? '' : 'form-locked'}>
+      <FormHeader
+        name={`Списание ${c.number}`}
+        meta={<>
+          <span className="glyph g-info">○</span>
+          {c.project_code} · {c.project_name} · {c.date}
+          {c.reason && <> · {c.reason}</>} · списано {num(c.total_qty)}
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        error={err}
+      />
 
       <div className="hdr-edit">
-        <label>№ акта <CommitInput value={c.number} width={140} disabled={busy}
+        <label>№ акта <CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { number: v }))}
           validate={v => v.trim().length > 0} /></label>
-        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={busy}
+        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { date: v }))}
           validate={v => v.trim().length > 0} /></label>
-        <label>причина <CommitInput value={c.reason} width={220} disabled={busy}
+        <label>причина <CommitInput value={c.reason} width={220} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></label>
-      </div>
-
-      <div className="kit-actions">
-        {busy && <span className="hint">сохраняю…</span>}
-        {err && <span className="anomaly">{err}</span>}
       </div>
 
       <table className="grid">
@@ -80,9 +78,9 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
         </thead>
         <tbody>
           {c.lines.map(ln => (
-            <LineRow key={ln.id} ln={ln} busy={busy} openItem={openItem} run={run} />
+            <LineRow key={ln.id} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
           ))}
-          <GhostRow writeoffId={c.id} lots={lots} busy={busy} run={run} />
+          {!locked && <GhostRow writeoffId={c.id} lots={lots} busy={busy} run={run} />}
         </tbody>
       </table>
       {c.lines.length === 0 &&
@@ -94,8 +92,8 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
 }
 
 // Реальная строка списания (лот): автосейв кол-ва, удаление (коррекция).
-function LineRow({ ln, busy, openItem, run }: {
-  ln: WriteoffCockpitLine; busy: boolean
+function LineRow({ ln, locked, busy, openItem, run }: {
+  ln: WriteoffCockpitLine; locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<WriteoffCockpit>) => void
 }) {
   const negative = ln.lot_live_qty < 0   // пересписали — источник в минусе
@@ -110,7 +108,7 @@ function LineRow({ ln, busy, openItem, run }: {
         <span style={{ color: 'var(--fg-dim)' }}>{ln.item_name}</span>
       </td>
       <td className="num">
-        <CommitInput value={String(ln.qty)} width={60} disabled={busy}
+        <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoffLine(ln.id, Number(v)))}
           validate={v => Number(v) > 0} /> {ln.uom}
       </td>
@@ -119,8 +117,9 @@ function LineRow({ ln, busy, openItem, run }: {
         {negative && <span className="anomaly" title="пересписали — источник в минусе">▲</span>}
       </td>
       <td style={{ textAlign: 'right' }}>
-        <button className="x" title="убрать строку" disabled={busy}
-          onClick={() => run(api.deleteWriteoffLine(ln.id))}>×</button>
+        {!locked &&
+          <button className="x" title="убрать строку" disabled={busy}
+            onClick={() => run(api.deleteWriteoffLine(ln.id))}>×</button>}
       </td>
     </tr>
   )

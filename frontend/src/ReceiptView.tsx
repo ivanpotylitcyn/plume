@@ -7,6 +7,7 @@ import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
   type ReceiptLot } from './api'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
+import { FormHeader, useFormLock } from './FormHeader'
 
 export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged }: {
   receiptId: number; items: ItemRow[]
@@ -17,6 +18,7 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -36,19 +38,21 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const locked = c.approved
+  const fixed = c.approved                 // фиксация (проведена/сверена) — read-only
+  const locked = fixed || !unlocked        // + личный замок формы
   return (
-    <div>
-      <h1 className="title">
-        <span className={`glyph ${locked ? 'g-lock' : 'g-on_order'}`}>{locked ? '🔒' : '●'}</span>{' '}
-        <span className="pn">УПД {c.number}</span>{' '}
-        <span className="lit">— {c.supplier_name}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит прихода · проект {c.project_code} · {c.date} ·{' '}
-        <span className={locked ? 'g-lock' : 'g-on_order'}>{locked ? 'сверено (замок)' : 'в работе'}</span>
-        {' · сумма '}<span className="seg">{num(c.total_cost)} ₽</span>
-      </div>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
+      <FormHeader
+        name={c.supplier_name}
+        meta={<>
+          <span className={`glyph ${fixed ? 'g-lock' : 'g-on_order'}`}>{fixed ? '🔒' : '●'}</span>
+          УПД {c.number} · {c.date} · {c.project_code} · сумма {num(c.total_cost)} ₽
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel="сверена"
+        onUnfix={() => { if (confirm('Снять фиксацию поставки? Форма станет черновиком.')) run(api.unapproveReceipt(c.id)) }}
+        error={err}
+      />
 
       <div className="hdr-edit">
         <label>№ УПД <CommitInput value={c.number} width={140} disabled={locked || busy}
@@ -60,11 +64,10 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
       </div>
 
       <div className="kit-actions">
-        {locked
-          ? <button className="btn" disabled={busy}
-              onClick={() => run(api.unapproveReceipt(c.id))}>Снять замок</button>
-          : <button className="btn" disabled={busy}
-              onClick={() => run(api.approveReceipt(c.id))}>Сверено со сканом</button>}
+        {!fixed &&
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.approveReceipt(c.id))}>Сверено со сканом · зафиксировать</button>}
         <span className="hint">Заказ (закрывает):</span>
         <select className="lot-sel" value={c.purchase_id ?? ''} disabled={locked || busy}
           onChange={e => run(api.linkReceiptPurchase(
@@ -76,7 +79,6 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         </select>
         {c.purchase_id &&
           <a className="link" onClick={() => openPurchase(c.purchase_id!)}>открыть заказ ›</a>}
-        {busy && <span className="hint">сохраняю…</span>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

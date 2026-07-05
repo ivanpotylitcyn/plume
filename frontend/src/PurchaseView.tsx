@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type PurchaseCockpit, type PurchaseCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { Glyph, num } from './status'
 
 // Статус заказа → значок/цвет: draft ▲ (твой ход), sent ● (ждём), cancelled ○.
@@ -23,6 +24,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
   const [c, setC] = useState<PurchaseCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -41,20 +43,23 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
 
   const st = PURCH_ST[c.status] ?? PURCH_ST.draft
   const editable = c.editable
+  const fixed = !editable                  // отправлен/отменён — read-only (фиксация)
   return (
-    <div>
-      <h1 className="title">
-        <span className={`glyph ${st.cls}`}>{st.g}</span>{' '}
-        <span className="pn">Заказ #{c.id}</span>{' '}
-        <span className="lit">— {c.project_code} {c.project_name}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит заказа · <span className={st.cls}>{st.label}</span>
-        {c.date && <> · {c.date}</>}
-        {' · заказано '}<span className="seg">{num(c.total_ordered)}</span>
-        {' · поступило '}<span className="seg">{num(c.total_received)}</span>
-        {c.note && <> · {c.note}</>}
-      </div>
+    <div className={unlocked && editable ? '' : 'form-locked'}>
+      <FormHeader
+        name={`Заказ #${c.id} · ${c.project_name}`}
+        meta={<>
+          <span className={`glyph ${st.cls}`}>{st.g}</span> {c.project_code} · {st.label}
+          {c.date && <> · {c.date}</>} · заказано {num(c.total_ordered)} · поступило {num(c.total_received)}
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel={st.label}
+        onUnfix={() => {
+          if (c.status === 'sent' && confirm('Вернуть заказ в черновик?')) run(api.unsendPurchase(c.id))
+          else if (c.status === 'cancelled' && confirm('Восстановить заказ из отменённых?')) run(api.restorePurchase(c.id))
+        }}
+        error={err}
+      />
 
       <div className="hdr-edit">
         <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
@@ -65,21 +70,15 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
 
       <div className="kit-actions">
         {c.status === 'draft' && <>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.sendPurchase(c.id))}>Отправить</button>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.cancelPurchase(c.id))}>Отменить</button>
-        </>}
-        {c.status === 'sent' && <>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.unsendPurchase(c.id))}>Вернуть в черновик</button>
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.sendPurchase(c.id))}>Отправить · зафиксировать</button>
           <button className="btn" disabled={busy}
             onClick={() => run(api.cancelPurchase(c.id))}>Отменить</button>
         </>}
-        {c.status === 'cancelled' &&
+        {c.status === 'sent' &&
           <button className="btn" disabled={busy}
-            onClick={() => run(api.restorePurchase(c.id))}>Восстановить</button>}
-        {busy && <span className="hint">сохраняю…</span>}
+            onClick={() => run(api.cancelPurchase(c.id))}>Отменить</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

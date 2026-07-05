@@ -4,10 +4,15 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemDetail } from './api'
 import { num } from './status'
+import { FormHeader } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 
 const KIND_RU: Record<string, string> = {
   device: 'изделие', component: 'компонент', material: 'материал',
+}
+// Codicon вида изделия (§7): tools — производимое, package — прибор, circuit-board — прочее.
+function itemIcon(d: ItemDetail): string {
+  return d.is_manufactured ? 'tools' : d.kind === 'device' ? 'package' : 'circuit-board'
 }
 
 export function ItemView({ itemId, openItem }:
@@ -25,7 +30,14 @@ export function ItemView({ itemId, openItem }:
 
   return (
     <div>
-      <h1 className="title"><span className="pn">{d.code}</span> <span className="lit">— {d.name}</span></h1>
+      <FormHeader
+        name={d.name}
+        meta={<>
+          <span className={`ci ci-${itemIcon(d)}`} style={{ fontSize: 12, marginRight: 5 }} />
+          {d.code} · {KIND_RU[d.kind] ?? d.kind}{d.is_manufactured ? ' · производимое' : ''} · {d.uom}
+          {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
+        </>}
+      />
       <dl className="props">
         <dt>Вид</dt><dd>{KIND_RU[d.kind] ?? d.kind}{d.is_manufactured ? ' · производимое' : ''}</dd>
         <dt>Ед. изм.</dt><dd>{d.uom}</dd>
@@ -90,7 +102,7 @@ export function ItemView({ itemId, openItem }:
             <tbody>{d.shipments.map((s, i) => (
               <tr key={`${s.transfer_id}-${s.lot_id}-${i}`} className="row">
                 <td>
-                  <span className={`glyph ${s.posted ? 'g-lock' : 'g-info'}`}>{s.posted ? '🔒' : '📦'}</span>{' '}
+                  <span className={`glyph ${s.posted ? 'g-lock' : 'g-on_order'}`}>{s.posted ? '🔒' : '●'}</span>{' '}
                   {s.number}
                 </td>
                 <td style={{ color: 'var(--fg-dim)' }}>{s.date}</td>

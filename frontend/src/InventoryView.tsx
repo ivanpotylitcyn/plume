@@ -9,6 +9,7 @@ import { api, type ItemRow, type InventoryCockpit, type InventoryCockpitLot,
   type WrittenOffLot } from './api'
 import { num } from './status'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 
 export function InventoryView({ inventoryId, items, openItem, onChanged }: {
@@ -18,6 +19,7 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
   const [c, setC] = useState<InventoryCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -34,32 +36,29 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
+  const locked = !unlocked                 // инвентаризация не фиксируется — только личный замок
   return (
-    <div>
-      <h1 className="title">
-        <span className="glyph g-available">🔍</span>{' '}
-        <span className="pn">Инвентаризация {c.number}</span>{' '}
-        <span className="lit">— {c.project_code}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит инвентаризации · рождение «найденных» партий (+RECEIPT) · проект{' '}
-        {c.project_name} · {c.date}
-        {' · сумма '}<span className="seg">{num(c.total_cost)} ₽</span>
-      </div>
+    <div className={unlocked ? '' : 'form-locked'}>
+      <FormHeader
+        name={`Инвентаризация ${c.number}`}
+        meta={<>
+          <span className="glyph g-info">○</span>
+          {c.project_code} · {c.project_name} · {c.date} · сумма {num(c.total_cost)} ₽
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        error={err}
+      />
 
       <div className="hdr-edit">
-        <label>№ акта <CommitInput value={c.number} width={140} disabled={busy}
+        <label>№ акта <CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateInventory(c.id, { number: v }))}
           validate={v => v.trim().length > 0} /></label>
-        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={busy}
+        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateInventory(c.id, { date: v }))}
           validate={v => v.trim().length > 0} /></label>
-        <label>примечание <CommitInput value={c.note} width={220} disabled={busy}
+        <label>примечание <CommitInput value={c.note} width={220} disabled={locked || busy}
           onCommit={v => run(api.updateInventory(c.id, { note: v }))} /></label>
       </div>
-
-      {busy && <span className="hint">сохраняю…</span>}
-      {err && <span className="anomaly">{err}</span>}
 
       <table className="grid">
         <thead>
@@ -71,9 +70,9 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
         </thead>
         <tbody>
           {c.lots.map(lot => (
-            <LotRow key={lot.id} lot={lot} busy={busy} openItem={openItem} run={run} />
+            <LotRow key={lot.id} lot={lot} locked={locked} busy={busy} openItem={openItem} run={run} />
           ))}
-          <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />
+          {!locked && <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />}
         </tbody>
       </table>
       {c.lots.length === 0 && <div className="empty">Акт пуст — добавьте найденную партию.</div>}
@@ -86,8 +85,8 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
 }
 
 // Реальная строка акта (найденный лот): автосейв кол-ва/цены/названия, удаление.
-function LotRow({ lot, busy, openItem, run }: {
-  lot: InventoryCockpitLot; busy: boolean
+function LotRow({ lot, locked, busy, openItem, run }: {
+  lot: InventoryCockpitLot; locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<InventoryCockpit>) => void
 }) {
   const short = lot.live_qty !== lot.qty   // просел под последующий расход
@@ -100,17 +99,17 @@ function LotRow({ lot, busy, openItem, run }: {
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
-        <CommitInput value={String(lot.qty)} width={60} disabled={busy}
+        <CommitInput value={String(lot.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { qty: Number(v) }))}
           validate={v => Number(v) > 0} /> {lot.uom}
       </td>
       <td className="num">
-        <CommitInput value={String(lot.unit_cost)} width={72} disabled={busy}
+        <CommitInput value={String(lot.unit_cost)} width={72} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { unit_cost: Number(v) }))}
           validate={v => Number(v) >= 0} />
       </td>
       <td>
-        <CommitInput value={lot.received_name} width={160} disabled={busy}
+        <CommitInput value={lot.received_name} width={160} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { received_name: v }))} />
       </td>
       <td>
@@ -120,7 +119,7 @@ function LotRow({ lot, busy, openItem, run }: {
           : <span style={{ color: 'var(--fg-dim)' }}>излишек</span>}
       </td>
       <td style={{ textAlign: 'right' }}>
-        {!lot.consumed &&
+        {!locked && !lot.consumed &&
           <button className="x" title="убрать строку" disabled={busy}
             onClick={() => run(api.deleteInventoryLot(lot.id))}>×</button>}
         {lot.consumed && <span className="hint">потреблён</span>}

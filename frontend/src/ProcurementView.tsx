@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { PURCH_ST } from './PurchaseView'
 import { PeggingPanel } from './PeggingPanel'
 import { num } from './status'
@@ -18,6 +19,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)     // растёт на мутациях — освежает панель pegging
+  const { unlocked, toggle } = useFormLock(true)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -36,20 +38,24 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
 
   const st = PURCH_ST[c.status] ?? PURCH_ST.draft
   const editable = c.editable
+  const fixed = !editable                  // отправлен/отменён — read-only (фиксация)
   return (
-    <div>
-      <h1 className="title">
-        <span className={`glyph ${st.cls}`}>{st.g}</span>{' '}
-        <span className="pn">Закупка #{c.id}</span>{' '}
-        <span className="lit">— план (командная высота)</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит закупки-плана · <span className={st.cls}>{st.label}</span>
-        {c.date && <> · {c.date}</>}
-        {' · позиций '}<span className="seg">{c.lines.length}</span>
-        {' · всего '}<span className="seg">{num(c.total_qty)}</span>
-        {c.note && <> · {c.note}</>}
-      </div>
+    <div className={unlocked && editable ? '' : 'form-locked'}>
+      <FormHeader
+        name={`Закупка #${c.id} · план (командная высота)`}
+        meta={<>
+          <span className={`glyph ${st.cls}`}>{st.g}</span> {st.label}
+          {c.date && <> · {c.date}</>} · позиций {c.lines.length} · всего {num(c.total_qty)}
+          {c.note && <> · {c.note}</>}
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel={st.label}
+        onUnfix={() => {
+          if (c.status === 'sent' && confirm('Вернуть закупку в черновик?')) run(api.unsendProcurement(c.id))
+          else if (c.status === 'cancelled' && confirm('Восстановить закупку из отменённых?')) run(api.restoreProcurement(c.id))
+        }}
+        error={err}
+      />
 
       <div className="hdr-edit">
         <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
@@ -60,23 +66,17 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
 
       <div className="kit-actions">
         {c.status === 'draft' && <>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.sendProcurement(c.id))}>Отправить</button>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.cancelProcurement(c.id))}>Отменить</button>
-        </>}
-        {c.status === 'sent' && <>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.unsendProcurement(c.id))}>Вернуть в черновик</button>
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.sendProcurement(c.id))}>Отправить · зафиксировать</button>
           <button className="btn" disabled={busy}
             onClick={() => run(api.cancelProcurement(c.id))}>Отменить</button>
         </>}
-        {c.status === 'cancelled' &&
+        {c.status === 'sent' &&
           <button className="btn" disabled={busy}
-            onClick={() => run(api.restoreProcurement(c.id))}>Восстановить</button>}
+            onClick={() => run(api.cancelProcurement(c.id))}>Отменить</button>}
         <a className="btn" href={api.orderXlsxUrl(c.id)} download
           title="выгрузить order.xlsx для поставщика">Скачать order.xlsx</a>
-        {busy && <span className="hint">сохраняю…</span>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Cockpit, type CockpitRow } from './api'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { Glyph, Segment, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -17,6 +18,7 @@ export function KittingView({ kittingId, openItem, onChanged }:
   const [c, setC] = useState<Cockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -35,33 +37,37 @@ export function KittingView({ kittingId, openItem, onChanged }:
   if (!c) return <div className="empty">Загрузка…</div>
 
   const wip = c.status === 'wip'
+  const fixed = !wip                       // закрыт/отменён — read-only (фиксация)
+  const locked = fixed || !unlocked
   return (
-    <div>
-      <h1 className="title">
-        <Glyph status={c.cockpit_status} />{' '}
-        <span className="pn">{c.target_code}</span>{' '}
-        <span className="lit">— {c.target_name}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит комплектации · проект {c.project_code} · образцов {num(c.qty)} ·{' '}
-        <span className={wip ? 'g-on_order' : 'g-available'}>{KIT_STATUS[c.status] ?? c.status}</span>
-      </div>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
+      <FormHeader
+        name={c.target_name}
+        meta={<>
+          <Glyph status={c.cockpit_status} /> {c.target_code} · {c.project_code} ·
+          {' '}образцов {num(c.qty)} · {KIT_STATUS[c.status] ?? c.status}
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel={KIT_STATUS[c.status] ?? c.status}
+        onUnfix={c.status === 'closed'
+          ? () => { if (confirm('Переоткрыть комплектацию? Рождённый прибор откатится.')) run(api.reopenKitting(c.id)) }
+          : undefined}
+        error={err}
+      />
 
       <div className="hdr-edit">
-        <label>образцов <CommitInput value={String(c.qty)} width={72} disabled={!wip || busy}
+        <label>образцов <CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
           onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
           validate={v => Number(v) > 0} /></label>
-        <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={!wip || busy}
+        <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></label>
       </div>
 
       <div className="kit-actions">
-        {wip
-          ? <button className="btn" disabled={busy}
-              onClick={() => run(api.closeKitting(c.id))}>Закрыть (родить прибор)</button>
-          : <button className="btn" disabled={busy}
-              onClick={() => run(api.reopenKitting(c.id))}>Переоткрыть</button>}
-        {busy && <span className="hint">сохраняю…</span>}
+        {wip &&
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.closeKitting(c.id))}>Закрыть · родить прибор</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 
@@ -75,7 +81,7 @@ export function KittingView({ kittingId, openItem, onChanged }:
       )}
 
       {c.rows.map(row => (
-        <Component key={row.component_id} row={row} cockpit={c} wip={wip} busy={busy}
+        <Component key={row.component_id} row={row} cockpit={c} wip={!locked} busy={busy}
           openItem={openItem} run={run} />
       ))}
 

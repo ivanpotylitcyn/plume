@@ -1,12 +1,13 @@
-// Каркас витрин (VS Code-подобный): activity-bar + дерево + рабочая область
-// (одна, без вкладок) + статус-бар. Навигация по сущностям, проект — ось.
-// Волна 2: третий режим «Комплектации» — записываемый кокпит сборки.
-import { useCallback, useEffect, useRef, useState } from 'react'
+// Каркас витрин (VS Code-подобный): панель режимов (Codicons) + список режима +
+// рабочее поле (одно, без вкладок). Навигация по сущностям, проект — ось.
+// Строки состояния нет (UI_GUIDE §11). Список режима — единый шаблон (§7).
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type KittingRow, type ReceiptRow, type PurchaseRow, type SupplierRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
   type InventoryRow } from './api'
 import { Login } from './Login'
+import { CommandPalette, type PaletteEntry } from './CommandPalette'
 import { DeficitView } from './DeficitView'
 import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
@@ -68,6 +69,7 @@ export default function App() {
   const [procurements, setProcurements] = useState<ProcurementRow[]>([])
   const [inventories, setInventories] = useState<InventoryRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
   // единым эффектом (не трогая десятки call-sites); back() восстанавливает. Всё
@@ -162,6 +164,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [history.length])
 
+  // Палитра ⌘K (§8): глобальный поиск-переход.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault(); setPaletteOpen(o => !o)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const openProject = (id: number) => { setMode('projects'); setSel({ kind: 'project', id }) }
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
@@ -175,6 +188,31 @@ export default function App() {
 
   const doLogout = () => { api.logout().catch(() => {}); setUser(null) }
 
+  // Записи палитры ⌘K: проекты, изделия и документы — по коду/номеру/названию.
+  const paletteEntries = useMemo<PaletteEntry[]>(() => {
+    const e: PaletteEntry[] = []
+    projects.forEach(p => e.push({ key: `p${p.id}`, code: p.code, name: p.name,
+      kind: 'Проект', open: () => openProject(p.id) }))
+    items.forEach(i => e.push({ key: `i${i.id}`, code: i.code, name: i.name,
+      kind: 'Изделие', open: () => openItem(i.id) }))
+    receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.number, name: r.supplier_name,
+      kind: 'Поставка', open: () => openReceipt(r.id) }))
+    transfers.forEach(t => e.push({ key: `t${t.id}`, code: t.number, name: t.project_code,
+      kind: 'Передача', open: () => openTransfer(t.id) }))
+    writeoffs.forEach(w => e.push({ key: `w${w.id}`, code: w.number, name: w.project_code,
+      kind: 'Списание', open: () => openWriteoff(w.id) }))
+    requisitions.forEach(r => e.push({ key: `q${r.id}`, code: r.number, name: r.project_code,
+      kind: 'Требование', open: () => openRequisition(r.id) }))
+    inventories.forEach(i => e.push({ key: `v${i.id}`, code: i.number, name: i.project_code,
+      kind: 'Инвентаризация', open: () => openInventory(i.id) }))
+    purchases.forEach(p => e.push({ key: `u${p.id}`, code: `Заказ #${p.id}`, name: p.project_code,
+      kind: 'Заказ', open: () => openPurchase(p.id) }))
+    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.target_code, name: k.target_name,
+      kind: 'Комплектация', open: () => openKitting(k.id) }))
+    return e
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, items, receipts, transfers, writeoffs, requisitions, inventories, purchases, kittings])
+
   // Гейт аутентификации: загрузка → логин → приложение.
   if (user === undefined)
     return <div className="login-screen"><div className="login-sub">Загрузка…</div></div>
@@ -184,214 +222,119 @@ export default function App() {
   return (
     <div className="app">
       <div className="activity">
-        <button className={mode === 'projects' ? 'active' : ''}
-          title="Проекты — дефицит" onClick={() => setMode('projects')}>▣</button>
-        <button className={mode === 'items' ? 'active' : ''}
-          title="Изделия — остатки" onClick={() => setMode('items')}>≡</button>
-        <button className={mode === 'kittings' ? 'active' : ''}
-          title="Комплектации — кокпит сборки" onClick={() => setMode('kittings')}>⛭</button>
-        <button className={mode === 'receipts' ? 'active' : ''}
-          title="Приходы — УПД, рождение лотов" onClick={() => setMode('receipts')}>📥</button>
-        <button className={mode === 'purchases' ? 'active' : ''}
-          title="Заказы — обязательства, закрытие приходом" onClick={() => setMode('purchases')}>🛒</button>
-        <button className={mode === 'transfers' ? 'active' : ''}
-          title="Передачи — отгрузка заказчику по накладной" onClick={() => setMode('transfers')}>📦</button>
-        <button className={mode === 'writeoffs' ? 'active' : ''}
-          title="Списания — выбытие из проекта (серый путь)" onClick={() => setMode('writeoffs')}>🗑</button>
-        <button className={mode === 'requisitions' ? 'active' : ''}
-          title="Требования — отпочкование / постановка на баланс" onClick={() => setMode('requisitions')}>⇄</button>
-        <button className={mode === 'procurements' ? 'active' : ''}
-          title="Закупки-план — командный свод + order.xlsx" onClick={() => setMode('procurements')}>⛁</button>
-        <button className={mode === 'inventories' ? 'active' : ''}
-          title="Инвентаризации — найденные партии + ре-материализация" onClick={() => setMode('inventories')}>🔍</button>
+        {MODES.map(m => (
+          <button key={m.mode} className={mode === m.mode ? 'active' : ''}
+            title={m.title} onClick={() => setMode(m.mode)}>
+            <span className={`ci ci-${m.icon}`} />
+          </button>
+        ))}
         <span className="spacer" />
         <button className="logout" title={`${user.full_name} — выйти`}
-          onClick={doLogout}>⏻</button>
+          onClick={doLogout}><span className="ci ci-sign-out" /></button>
       </div>
 
       <div className="sidebar">
-        {mode === 'projects' && <>
-          <h2>Проекты</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-project' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-project' })}>
-            <span className="code">＋ Новый проект</span>
-          </div>
-          {projects.map(p => (
-            <div key={p.id}
-              className={'tree-item' + (sel?.kind === 'project' && sel.id === p.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'project', id: p.id })}>
-              {p.status === 'closed' && <span className="glyph g-lock">🔒</span>}
-              <span className="code">{p.code}</span>
-              <span className="sub">{p.name}</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'projects' &&
+          <ModeList heading="Проекты" newLabel="＋ Новый проект"
+            newSel={sel?.kind === 'new-project'} onNew={() => setSel({ kind: 'new-project' })}
+            selId={sel?.kind === 'project' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'project', id })}
+            rows={[...projects].map(p => ({ id: p.id, code: p.code, name: p.name,
+              glyph: p.status === 'closed'
+                ? <span className="glyph g-lock">🔒</span>
+                : <span className="glyph g-info">○</span> }))} />}
 
-        {mode === 'items' && <>
-          <h2>Изделия</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-item' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-item' })}>
-            <span className="code">＋ Новое изделие</span>
-          </div>
-          {items.map(i => (
-            <div key={i.id}
-              className={'tree-item' + (sel?.kind === 'item' && sel.id === i.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'item', id: i.id })}>
-              <span className="code">{i.code}</span>
-              <span className="sub">{i.name}</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'items' &&
+          <ModeList heading="Изделия" newLabel="＋ Новое изделие"
+            newSel={sel?.kind === 'new-item'} onNew={() => setSel({ kind: 'new-item' })}
+            selId={sel?.kind === 'item' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'item', id })}
+            rows={[...items].sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
+              id: i.id, code: i.code, name: i.name, glyph: <span className={`ci ci-${itemIcon(i)}`} /> }))} />}
 
-        {mode === 'kittings' && <>
-          <h2>Комплектации</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-kitting' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-kitting' })}>
-            <span className="code">＋ Новая</span>
-          </div>
-          {kittings.map(k => {
-            const gl = KIT_GLYPH[k.status] ?? KIT_GLYPH.cancelled
-            return (
-              <div key={k.id}
-                className={'tree-item' + (sel?.kind === 'kitting' && sel.id === k.id ? ' sel' : '')}
-                onClick={() => setSel({ kind: 'kitting', id: k.id })}>
-                <span className={`glyph ${gl.cls}`}>{gl.g}</span>
-                <span className="code">{k.target_code}</span>
-                <span className="sub">{k.project_code} ×{k.qty}</span>
-              </div>
-            )
-          })}
-        </>}
+        {mode === 'kittings' &&
+          <ModeList heading="Комплектации" newLabel="＋ Новая" projectFilter
+            newSel={sel?.kind === 'new-kitting'} onNew={() => setSel({ kind: 'new-kitting' })}
+            selId={sel?.kind === 'kitting' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'kitting', id })}
+            rows={[...kittings].reverse().map(k => {
+              const gl = KIT_GLYPH[k.status] ?? KIT_GLYPH.cancelled
+              return { id: k.id, code: k.target_code, name: `${k.target_name} ${k.project_code}`,
+                projectCode: k.project_code, glyph: <span className={`glyph ${gl.cls}`}>{gl.g}</span> }
+            })} />}
 
-        {mode === 'receipts' && <>
-          <h2>Приходы</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-receipt' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-receipt' })}>
-            <span className="code">＋ Новый УПД</span>
-          </div>
-          {receipts.map(r => (
-            <div key={r.id}
-              className={'tree-item' + (sel?.kind === 'receipt' && sel.id === r.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'receipt', id: r.id })}>
-              <span className={`glyph ${r.approved ? 'g-lock' : 'g-on_order'}`}>{r.approved ? '🔒' : '●'}</span>
-              <span className="code">{r.number}</span>
-              <span className="sub">{r.project_code} · {r.lines} стр.</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'receipts' &&
+          <ModeList heading="Поставки" newLabel="＋ Новая поставка (УПД)" projectFilter
+            newSel={sel?.kind === 'new-receipt'} onNew={() => setSel({ kind: 'new-receipt' })}
+            selId={sel?.kind === 'receipt' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'receipt', id })}
+            rows={[...receipts].reverse().map(r => ({ id: r.id, code: r.number,
+              name: `${r.supplier_name} ${r.project_code}`, projectCode: r.project_code,
+              glyph: <span className={`glyph ${r.approved ? 'g-lock' : 'g-on_order'}`}>{r.approved ? '🔒' : '●'}</span> }))} />}
 
-        {mode === 'purchases' && <>
-          <h2>Заказы</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-purchase' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-purchase' })}>
-            <span className="code">＋ Новый заказ</span>
-          </div>
-          {purchases.map(p => {
-            const st = PURCH_ST[p.status] ?? PURCH_ST.draft
-            return (
-              <div key={p.id}
-                className={'tree-item' + (sel?.kind === 'purchase' && sel.id === p.id ? ' sel' : '')}
-                onClick={() => setSel({ kind: 'purchase', id: p.id })}>
-                <span className={`glyph ${st.cls}`}>{st.g}</span>
-                <span className="code">Заказ #{p.id}</span>
-                <span className="sub">{p.project_code} · {p.lines} стр.</span>
-              </div>
-            )
-          })}
-        </>}
+        {mode === 'purchases' &&
+          <ModeList heading="Заказы" newLabel="＋ Новый заказ" projectFilter
+            newSel={sel?.kind === 'new-purchase'} onNew={() => setSel({ kind: 'new-purchase' })}
+            selId={sel?.kind === 'purchase' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'purchase', id })}
+            rows={[...purchases].reverse().map(p => {
+              const st = PURCH_ST[p.status] ?? PURCH_ST.draft
+              return { id: p.id, code: `Заказ #${p.id}`, name: p.project_code,
+                projectCode: p.project_code, glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
+            })} />}
 
-        {mode === 'transfers' && <>
-          <h2>Передачи</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-transfer' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-transfer' })}>
-            <span className="code">＋ Новая передача</span>
-          </div>
-          {transfers.map(t => (
-            <div key={t.id}
-              className={'tree-item' + (sel?.kind === 'transfer' && sel.id === t.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'transfer', id: t.id })}>
-              <span className={`glyph ${t.posted ? 'g-lock' : 'g-info'}`}>{t.posted ? '🔒' : '📦'}</span>
-              <span className="code">{t.number}</span>
-              <span className="sub">{t.project_code} · {t.lines} стр.</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'transfers' &&
+          <ModeList heading="Передачи" newLabel="＋ Новая передача" projectFilter
+            newSel={sel?.kind === 'new-transfer'} onNew={() => setSel({ kind: 'new-transfer' })}
+            selId={sel?.kind === 'transfer' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'transfer', id })}
+            rows={[...transfers].reverse().map(t => ({ id: t.id, code: t.number,
+              name: t.project_code, projectCode: t.project_code,
+              glyph: <span className={`glyph ${t.posted ? 'g-lock' : 'g-on_order'}`}>{t.posted ? '🔒' : '●'}</span> }))} />}
 
-        {mode === 'writeoffs' && <>
-          <h2>Списания</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-writeoff' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-writeoff' })}>
-            <span className="code">＋ Новое списание</span>
-          </div>
-          {writeoffs.map(w => (
-            <div key={w.id}
-              className={'tree-item' + (sel?.kind === 'writeoff' && sel.id === w.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'writeoff', id: w.id })}>
-              <span className="glyph g-info">🗑</span>
-              <span className="code">{w.number}</span>
-              <span className="sub">{w.project_code} · {w.lines} стр.</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'writeoffs' &&
+          <ModeList heading="Списания" newLabel="＋ Новое списание" projectFilter
+            newSel={sel?.kind === 'new-writeoff'} onNew={() => setSel({ kind: 'new-writeoff' })}
+            selId={sel?.kind === 'writeoff' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'writeoff', id })}
+            rows={[...writeoffs].reverse().map(w => ({ id: w.id, code: w.number,
+              name: `${w.project_code} ${w.reason}`, projectCode: w.project_code,
+              glyph: <span className="glyph g-info">○</span> }))} />}
 
-        {mode === 'requisitions' && <>
-          <h2>Требования</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-requisition' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-requisition' })}>
-            <span className="code">＋ Новое требование</span>
-          </div>
-          {requisitions.map(r => (
-            <div key={r.id}
-              className={'tree-item' + (sel?.kind === 'requisition' && sel.id === r.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'requisition', id: r.id })}>
-              <span className="glyph g-info">⇄</span>
-              <span className="code">{r.number}</span>
-              <span className="sub">→ {r.project_code} · {r.lines} стр.</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'requisitions' &&
+          <ModeList heading="Требования" newLabel="＋ Новое требование" projectFilter
+            newSel={sel?.kind === 'new-requisition'} onNew={() => setSel({ kind: 'new-requisition' })}
+            selId={sel?.kind === 'requisition' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'requisition', id })}
+            rows={[...requisitions].reverse().map(r => ({ id: r.id, code: r.number,
+              name: r.project_code, projectCode: r.project_code,
+              glyph: <span className="glyph g-info">○</span> }))} />}
 
-        {mode === 'procurements' && <>
-          <h2>Закупки-план</h2>
-          <div className={'tree-item' + (sel?.kind === 'command' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'command' })}>
-            <span className="glyph g-to_order">⛁</span>
-            <span className="code">Командный свод</span>
-          </div>
-          <div className={'tree-item new' + (sel?.kind === 'new-procurement' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-procurement' })}>
-            <span className="code">＋ Новая закупка</span>
-          </div>
-          {procurements.map(p => {
-            const st = PURCH_ST[p.status] ?? PURCH_ST.draft
-            return (
-              <div key={p.id}
-                className={'tree-item' + (sel?.kind === 'procurement' && sel.id === p.id ? ' sel' : '')}
-                onClick={() => setSel({ kind: 'procurement', id: p.id })}>
-                <span className={`glyph ${st.cls}`}>{st.g}</span>
-                <span className="code">Закупка #{p.id}</span>
-                <span className="sub">{p.lines} поз.{p.note ? ' · ' + p.note : ''}</span>
-              </div>
-            )
-          })}
-        </>}
+        {mode === 'procurements' &&
+          <ModeList heading="Закупки-план" newLabel="＋ Новая закупка"
+            newSel={sel?.kind === 'new-procurement'} onNew={() => setSel({ kind: 'new-procurement' })}
+            selId={sel?.kind === 'procurement' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'procurement', id })}
+            extraTop={
+              <div className={'tree-item' + (sel?.kind === 'command' ? ' sel' : '')}
+                onClick={() => setSel({ kind: 'command' })}>
+                <span className="ci ci-table" />
+                <span className="code">Командный свод</span>
+              </div>}
+            rows={[...procurements].reverse().map(p => {
+              const st = PURCH_ST[p.status] ?? PURCH_ST.draft
+              return { id: p.id, code: `Закупка #${p.id}`, name: p.note,
+                glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
+            })} />}
 
-        {mode === 'inventories' && <>
-          <h2>Инвентаризации</h2>
-          <div className={'tree-item new' + (sel?.kind === 'new-inventory' ? ' sel' : '')}
-            onClick={() => setSel({ kind: 'new-inventory' })}>
-            <span className="code">＋ Новая инвентаризация</span>
-          </div>
-          {inventories.map(i => (
-            <div key={i.id}
-              className={'tree-item' + (sel?.kind === 'inventory' && sel.id === i.id ? ' sel' : '')}
-              onClick={() => setSel({ kind: 'inventory', id: i.id })}>
-              <span className="glyph g-available">🔍</span>
-              <span className="code">{i.number}</span>
-              <span className="sub">{i.project_code} · {i.lines} стр.</span>
-            </div>
-          ))}
-        </>}
+        {mode === 'inventories' &&
+          <ModeList heading="Инвентаризации" newLabel="＋ Новая инвентаризация" projectFilter
+            newSel={sel?.kind === 'new-inventory'} onNew={() => setSel({ kind: 'new-inventory' })}
+            selId={sel?.kind === 'inventory' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'inventory', id })}
+            rows={[...inventories].reverse().map(i => ({ id: i.id, code: i.number,
+              name: `${i.project_code} ${i.note}`, projectCode: i.project_code,
+              glyph: <span className="glyph g-info">○</span> }))} />}
       </div>
 
       <div className="work">
@@ -465,15 +408,88 @@ export default function App() {
         {sel?.kind === 'new-inventory' &&
           <NewInventory projects={projects}
             onCreated={id => { reloadInventories(); openInventory(id) }} />}
-        {!sel && <div className="empty">Выберите объект слева</div>}
+        {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}
       </div>
 
-      <div className="statusbar">
-        <span>plume · волна 12 · логин / аутентификация · {user.full_name}</span>
-        <span className="spacer" />
-        <span>проектов {projects.length} · изделий {items.length} · комплектаций {kittings.length} · приходов {receipts.length} · заказов {purchases.length} · передач {transfers.length} · списаний {writeoffs.length} · требований {requisitions.length} · закупок {procurements.length} · инвентаризаций {inventories.length}</span>
-      </div>
+      {paletteOpen &&
+        <CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />}
     </div>
+  )
+}
+
+// Панель режимов (§2): Codicons, монохром. Порядок = как в старой панели.
+const MODES: { mode: Mode; icon: string; title: string }[] = [
+  { mode: 'projects',     icon: 'project',       title: 'Проекты — дефицит, панель проекта' },
+  { mode: 'items',        icon: 'circuit-board', title: 'Изделия — справочник, остатки, состав' },
+  { mode: 'kittings',     icon: 'tools',         title: 'Комплектации — сборка, списание под прибор' },
+  { mode: 'receipts',     icon: 'inbox',         title: 'Поставки — УПД, рождение лотов' },
+  { mode: 'purchases',    icon: 'checklist',     title: 'Заказы — обязательства поставщику' },
+  { mode: 'transfers',    icon: 'export',        title: 'Передачи — отгрузка заказчику' },
+  { mode: 'writeoffs',    icon: 'trash',         title: 'Списания — выбытие, серый путь' },
+  { mode: 'requisitions', icon: 'arrow-swap',    title: 'Требования — отпочкование, постановка на баланс' },
+  { mode: 'procurements', icon: 'table',         title: 'Закупки-план — командный свод, order.xlsx' },
+  { mode: 'inventories',  icon: 'search',        title: 'Инвентаризации — найденные партии' },
+]
+
+// Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
+const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
+
+// Codicon вида изделия (§7): tools — производимое, package — прибор, circuit-board — компонент/материал.
+function itemIcon(i: ItemRow): string {
+  return i.is_manufactured ? 'tools' : i.kind === 'device' ? 'package' : 'circuit-board'
+}
+
+// Единый список режима (§7): призрачный «＋ Новая…» первым, строка = глиф · моно-код
+// (подписи нет), фильтр-строка и — где есть проект — дропдаун по проекту.
+interface ListRow { id: number; code: string; name: string; glyph: ReactNode; projectCode?: string }
+function ModeList({ heading, newLabel, newSel, onNew, rows, selId, onSelect, projectFilter, extraTop }: {
+  heading: string; newLabel: string; newSel: boolean; onNew: () => void
+  rows: ListRow[]; selId: number | null; onSelect: (id: number) => void
+  projectFilter?: boolean; extraTop?: ReactNode
+}) {
+  const [q, setQ] = useState('')
+  const [proj, setProj] = useState('')
+  useEffect(() => { setQ(''); setProj('') }, [heading])
+
+  const projOptions = useMemo(() => {
+    if (!projectFilter) return []
+    return [...new Set(rows.map(r => r.projectCode).filter((x): x is string => !!x))].sort()
+  }, [rows, projectFilter])
+
+  const shown = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return rows.filter(r =>
+      (!proj || r.projectCode === proj) &&
+      (!s || r.code.toLowerCase().includes(s) || r.name.toLowerCase().includes(s)))
+  }, [rows, q, proj])
+
+  return (
+    <>
+      <h2>{heading}</h2>
+      <div className="list-filters">
+        <input className="list-filter" value={q} placeholder="фильтр — код или название"
+          onChange={e => setQ(e.target.value)} />
+        {projectFilter && projOptions.length > 1 &&
+          <select className="list-proj" value={proj} onChange={e => setProj(e.target.value)}>
+            <option value="">все проекты</option>
+            {projOptions.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>}
+      </div>
+      <div className="list-scroll">
+        {extraTop}
+        <div className={'tree-item new' + (newSel ? ' sel' : '')} onClick={onNew}>
+          <span className="code">{newLabel}</span>
+        </div>
+        {shown.map(r => (
+          <div key={r.id} className={'tree-item' + (selId === r.id ? ' sel' : '')}
+            onClick={() => onSelect(r.id)}>
+            {r.glyph}
+            <span className="code">{r.code}</span>
+          </div>
+        ))}
+        {shown.length === 0 && <div className="list-empty">ничего не найдено</div>}
+      </div>
+    </>
   )
 }
 
@@ -935,7 +951,7 @@ function NewReceipt({ projects, onCreated }: {
 
   return (
     <div>
-      <h1 className="title">Новый приход (УПД)</h1>
+      <h1 className="title">Новая поставка (УПД)</h1>
       <div className="subtitle">Поставщик + № УПД + дата + проект-получатель</div>
       <dl className="props">
         <dt>Поставщик</dt>

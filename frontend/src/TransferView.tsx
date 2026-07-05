@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { api, type AvailableLot, type TransferCockpit,
   type TransferCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -19,6 +20,7 @@ export function TransferView({ transferId, openItem, onChanged }: {
   const [lots, setLots] = useState<AvailableLot[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   const reloadLots = (projectId: number) =>
     api.projectAvailableLots(projectId).then(setLots)
@@ -41,19 +43,21 @@ export function TransferView({ transferId, openItem, onChanged }: {
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const locked = c.posted
+  const fixed = c.posted                   // отгружено (проведена) — read-only
+  const locked = fixed || !unlocked
   return (
-    <div>
-      <h1 className="title">
-        <span className={`glyph ${locked ? 'g-lock' : 'g-info'}`}>{locked ? '🔒' : '📦'}</span>{' '}
-        <span className="pn">Накладная {c.number}</span>{' '}
-        <span className="lit">— {c.project_name}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит передачи · отгрузка заказчику · проект {c.project_code} · {c.date} ·{' '}
-        <span className={locked ? 'g-lock' : 'g-info'}>{locked ? 'отгружено (замок)' : 'в работе'}</span>
-        {' · отдано '}<span className="seg">{num(c.total_qty)}</span>
-      </div>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
+      <FormHeader
+        name={`Накладная ${c.number}`}
+        meta={<>
+          <span className={`glyph ${fixed ? 'g-lock' : 'g-on_order'}`}>{fixed ? '🔒' : '●'}</span>
+          {c.project_code} · {c.project_name} · {c.date} · отдано {num(c.total_qty)}
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel="отгружена"
+        onUnfix={() => { if (confirm('Снять фиксацию передачи? Отгрузка откатится, форма станет черновиком.')) run(api.unpostTransfer(c.id)) }}
+        error={err}
+      />
 
       <div className="hdr-edit">
         <label>№ накладной <CommitInput value={c.number} width={140} disabled={locked || busy}
@@ -65,13 +69,10 @@ export function TransferView({ transferId, openItem, onChanged }: {
       </div>
 
       <div className="kit-actions">
-        {locked
-          ? <button className="btn" disabled={busy}
-              onClick={() => run(api.unpostTransfer(c.id))}>Снять замок</button>
-          : <button className="btn" disabled={busy}
-              onClick={() => run(api.postTransfer(c.id))}>Отгружено</button>}
-        {locked && <span className="hint">подписанную накладную приложим отдельной волной (вложения)</span>}
-        {busy && <span className="hint">сохраняю…</span>}
+        {!fixed &&
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.postTransfer(c.id))}>Отгружено · зафиксировать</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

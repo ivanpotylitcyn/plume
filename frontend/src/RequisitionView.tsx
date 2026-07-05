@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { api, type AllAvailableLot, type RequisitionCockpit,
   type RequisitionCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
+import { FormHeader, useFormLock } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -20,6 +21,7 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
   const [lots, setLots] = useState<AllAvailableLot[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(true)
 
   const reloadLots = () => api.allAvailableLots().then(setLots)
 
@@ -41,30 +43,26 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
 
   // Источник ≠ получатель: прячем из пикера лоты самого проекта-получателя.
   const pickable = lots.filter(l => l.project_id !== c.project_id)
+  const locked = !unlocked                 // требование не фиксируется — только личный замок
   return (
-    <div>
-      <h1 className="title">
-        <span className="glyph g-info">⇄</span>{' '}
-        <span className="pn">Требование {c.number}</span>{' '}
-        <span className="lit">→ {c.project_name}</span>
-      </h1>
-      <div className="subtitle">
-        Кокпит требования · отпочкование в получатель {c.project_code} · {c.date} ·{' '}
-        поставлено <span className="seg">{num(c.total_qty)}</span>
-      </div>
+    <div className={unlocked ? '' : 'form-locked'}>
+      <FormHeader
+        name={`Требование ${c.number} → ${c.project_name}`}
+        meta={<>
+          <span className="glyph g-info">○</span>
+          получатель {c.project_code} · {c.date} · поставлено {num(c.total_qty)}
+        </>}
+        unlocked={unlocked} onToggleLock={toggle}
+        error={err}
+      />
 
       <div className="hdr-edit">
-        <label>№ требования <CommitInput value={c.number} width={140} disabled={busy}
+        <label>№ требования <CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateRequisition(c.id, { number: v }))}
           validate={v => v.trim().length > 0} /></label>
-        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={busy}
+        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateRequisition(c.id, { date: v }))}
           validate={v => v.trim().length > 0} /></label>
-      </div>
-
-      <div className="kit-actions">
-        {busy && <span className="hint">сохраняю…</span>}
-        {err && <span className="anomaly">{err}</span>}
       </div>
 
       <table className="grid">
@@ -77,9 +75,9 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
         </thead>
         <tbody>
           {c.lines.map(ln => (
-            <LineRow key={ln.id} ln={ln} busy={busy} openItem={openItem} run={run} />
+            <LineRow key={ln.id} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
           ))}
-          <GhostRow requisitionId={c.id} lots={pickable} busy={busy} run={run} />
+          {!locked && <GhostRow requisitionId={c.id} lots={pickable} busy={busy} run={run} />}
         </tbody>
       </table>
       {c.lines.length === 0 &&
@@ -91,8 +89,8 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
 }
 
 // Реальная строка требования: автосейв кол-ва (синхронит источник и потомок), удаление.
-function LineRow({ ln, busy, openItem, run }: {
-  ln: RequisitionCockpitLine; busy: boolean
+function LineRow({ ln, locked, busy, openItem, run }: {
+  ln: RequisitionCockpitLine; locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<RequisitionCockpit>) => void
 }) {
   const negative = ln.source_live_qty < 0
@@ -108,7 +106,7 @@ function LineRow({ ln, busy, openItem, run }: {
       </td>
       <td style={{ color: 'var(--fg-dim)' }}>{ln.source_project_code}</td>
       <td className="num">
-        <CommitInput value={String(ln.qty)} width={60} disabled={busy}
+        <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateRequisitionLine(ln.id, Number(v)))}
           validate={v => Number(v) > 0} /> {ln.uom}
       </td>
@@ -117,8 +115,9 @@ function LineRow({ ln, busy, openItem, run }: {
         {negative && <span className="anomaly" title="перетянули — источник в минусе">▲</span>}
       </td>
       <td style={{ textAlign: 'right' }}>
-        <button className="x" title="убрать строку" disabled={busy}
-          onClick={() => run(api.deleteRequisitionLine(ln.id))}>×</button>
+        {!locked &&
+          <button className="x" title="убрать строку" disabled={busy}
+            onClick={() => run(api.deleteRequisitionLine(ln.id))}>×</button>}
       </td>
     </tr>
   )
