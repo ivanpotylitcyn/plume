@@ -2525,3 +2525,81 @@ class Wave13Fase2bTests(EngineTestBase):
         f = SimpleUploadedFile('s.pdf', b'%PDF-1.4', content_type='application/pdf')
         att = engine.add_attachment('receipt', r, f, self.user)
         self.assertEqual(list(r.attachments.all()), [att])
+
+
+class Wave13Fase2cTests(EngineTestBase):
+    """Волна 13 Ф2c: общие поля `project`/`user`/`date`/`number`/`note` подняты с
+    6 детей в MTI-родителя `StockDocument` (дедуп). Прямой доступ с ребёнка
+    прозрачен через MTI; специфика осталась на детях; реверс — `project.documents`."""
+
+    def _one_of_each(self):
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        k = models.Kitting.objects.create(
+            project=self.prj, target_item=self.make_item('DEV', manufactured=True),
+            user=self.user, qty=D(1), date='2026-05-02')
+        inv = models.Inventory.objects.create(
+            project=self.prj, user=self.user, number='И-1', date='2026-05-03',
+            note='примечание акта')
+        req = models.Requisition.objects.create(
+            project=self.prj, user=self.user, number='Т-1', date='2026-05-04')
+        t = models.Transfer.objects.create(
+            project=self.prj, user=self.user, number='Н-1', date='2026-05-05')
+        w = models.Writeoff.objects.create(
+            project=self.prj, user=self.user, number='С-1', date='2026-05-06',
+            reason='порча')
+        return {'receipt': r, 'kitting': k, 'inventory': inv,
+                'requisition': req, 'transfer': t, 'writeoff': w}
+
+    def test_common_fields_live_on_parent(self):
+        """`project`/`user`/`date`/`number`/`note` — поля StockDocument, НЕ детей."""
+        parent = {f.name for f in models.StockDocument._meta.get_fields()}
+        for name in ('project', 'user', 'date', 'number', 'note'):
+            self.assertIn(name, parent)
+        # у детей своих копий этих полей больше нет (только своя специфика)
+        for child in (models.Receipt, models.Kitting, models.Inventory,
+                      models.Requisition, models.Transfer, models.Writeoff):
+            own = {f.name for f in child._meta.get_fields()
+                   if getattr(f, 'model', None) is child}
+            self.assertFalse({'project', 'user', 'date', 'number', 'note'} & own,
+                             f'{child.__name__} держит поднятое поле: {own}')
+
+    def test_child_specifics_stay(self):
+        """Специфика осталась на детях: Receipt.supplier/purchase, Kitting.target_item/
+        qty, Writeoff.reason."""
+        self.assertIn('supplier', {f.name for f in models.Receipt._meta.get_fields()})
+        self.assertIn('target_item', {f.name for f in models.Kitting._meta.get_fields()})
+        self.assertIn('reason', {f.name for f in models.Writeoff._meta.get_fields()})
+
+    def test_mti_transparent_read_and_create(self):
+        """Создание с общими kwargs и чтение полей прозрачны через MTI на каждом типе."""
+        for kind, doc in self._one_of_each().items():
+            doc.refresh_from_db()
+            self.assertEqual(doc.project_id, self.prj.id)
+            self.assertEqual(doc.user_id, self.user.id)
+            self.assertIsNotNone(doc.date)
+            # то же значение видно на строке родителя
+            sd = models.StockDocument.objects.get(pk=doc.pk)
+            self.assertEqual((sd.project_id, sd.user_id, sd.date),
+                             (doc.project_id, doc.user_id, doc.date))
+
+    def test_reverse_accessor_is_documents(self):
+        """Реверс общего `project` — `project.documents` (единый по всем видам),
+        типизированный дочерний фильтр по родительскому полю тоже работает."""
+        docs = self._one_of_each()
+        self.assertEqual(self.prj.documents.count(), len(docs))
+        self.assertEqual(
+            models.Writeoff.objects.filter(project=self.prj).count(), 1)
+        self.assertEqual(
+            self.prj.documents.filter(kind=models.StockDocument.Kind.TRANSFER).count(), 1)
+
+    def test_filter_by_parent_field_on_child_manager(self):
+        """Дочерний менеджер фильтрует/сортирует по поднятому полю прозрачно
+        (как в движке `Writeoff.objects.filter(project=…)`)."""
+        self._one_of_each()
+        r2 = models.Receipt.objects.create(
+            number='У-2', date='2026-06-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        latest = models.Receipt.objects.filter(project=self.prj).order_by('-date').first()
+        self.assertEqual(latest, r2)

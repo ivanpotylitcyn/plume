@@ -1503,7 +1503,9 @@ def writeoff_lot(project, lot, qty, user):
     """
     if lot.project_id != project.id:
         raise ValidationError('Лот из другого проекта.')
-    writeoff = project.writeoffs.order_by('-id').first()
+    # Ф2c: `project` поднят в StockDocument (реверс — `project.documents`); типизированный
+    # доступ через дочерний менеджер (прозрачно фильтрует по родительскому полю).
+    writeoff = models.Writeoff.objects.filter(project=project).order_by('-id').first()
     if writeoff is None or writeoff.lines.filter(lot=lot).exists():
         writeoff = create_writeoff(
             project, user, _auto_number('СПИС', project), reason='закрытие проекта')

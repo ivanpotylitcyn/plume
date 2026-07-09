@@ -16,6 +16,49 @@
 
 ---
 
+## 2026-07-09 — Волна 13, Ф2c: подъём общих полей ордера в MTI-родителя
+**Тип:** решение + реализация + грабли
+**Контекст:** Третий укус Ф2 (по согласованию с Иваном — из 4 кандидатов: подъём полей /
+переименования Lot+Counterparty / relocation+мультисклад / admin-гибрид). Ф2a/Ф2b дали
+конкретного MTI-родителя и схлопнули дуги, но общие поля документа (`project`/`user`/
+`date`/`number`/`note`) всё ещё жили **копиями на каждом из 6 детей** — этот укус их
+дедуплицирует, поднимая в `StockDocument`. Дисциплина «модель+движок сейчас, вьюхи потом».
+**Итог (сделано, только бэкенд):** `project`/`user`/`date`/`number`/`note` → на родителя;
+специфика (`Receipt.supplier`/`purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`)
+осталась на детях. `Inventory`/`Requisition`/`Transfer` стали **безполевыми** MTI-детьми
+(только ptr + `kind`). Реверс-аксессор общего `project` — единый `project.documents`
+(было 6: `project.receipts`/…). `date` поднят **nullable**, `number`/`note` — **blank**
+(на детях `date` был NOT NULL у 5 из 6, `number` — у 5, `note` — только Inventory):
+строгость per-kind осознанно ослаблена, её восстановление — условной валидацией (Ф2d).
+**Ключевое решение — `SeparateDatabaseAndState` (как 0005), а НЕ обычные Add/RemoveField.**
+Замер ряби (Ф2a обещал «1 аксессор») подтвердился: в коде правится ровно один —
+`project.writeoffs` (engine bridge закрытия проекта) → `Writeoff.objects.filter(project=…)`
+(зеркалит соседний `Requisition.objects.filter(project=dest)`). Всё остальное прозрачно
+через MTI: прямой `receipt.project`, `.objects.create(project=…)`, `.filter(project=…,
+status=…)`, `select_related('project')`, admin `list_display`/`list_filter`/`search_fields`
+— **ноль правок**, API байт-в-байт, фронт/вьюхи не тронуты.
+**Грабли — почему нельзя обычным AddField+RemoveField:** в MTI поле родителя и
+одноимённое поле ребёнка **не могут сосуществовать в состоянии** (Django падает на клэше
+имён при рендере промежуточного state). Автодетектор это обходит **порядком** (сперва все
+`RemoveField` детей, потом `AddField` родителя) — поэтому СОСТОЯНИЕ берём его же
+операциями (гарантирует `--check` чист), а ФИЗИКУ пишем raw-SQL: на DB-уровне колонки на
+разных таблицах не конфликтуют, и мы контролируем nullability (project/user: `ADD ... NULL`
+→ backfill → `MODIFY ... NOT NULL` → FK) и порядок. Бэкфилл **без ремапа** — id ребёнка ==
+`stockdocument_ptr_id` == id родителя (Ф2a), поэтому `UPDATE stockdocument p JOIN child ch
+ON p.id=ch.stockdocument_ptr_id`. `user_id` — **INT** (auth.User = AutoField), не BIGINT;
+поймано интроспекцией колонок до написания SQL. MySQL-only (как вся цепочка с 0005).
+**Проверка:** 193 теста (было 188; +5 `Wave13Fase2cTests` — поля на родителе/не на детях,
+специфика цела, прозрачность MTI create/read, реверс `project.documents`, фильтр дочернего
+менеджера по родительскому полю) зелёные на MySQL 8.0.25; `makemigrations --check` чист;
+`seed_demo` ок; system check 0 issues. Круговой прогон на dev-БД (0007 → reverse@0006 →
+forward@0007): **SNAP_A == SNAP_C побайтово** (sha256 остатков/движений/шапок); при 0006
+дочерние колонки восстановлены с данными + NOT-NULL + FK. Обе mermaid-диаграммы README +
+проза обновлены (общая шапка на STOCKDOCUMENT; дети — только специфика). Прод не трогали.
+**Последствия:** родитель несёт полную общую шапку — путь к **условной валидации по `kind`**
+(Ф2d) и **своду матрицы полей** (один row-set с видимостью по виду, Ф2c #7) открыт. Осталось
+Ф2: валидация, переименования `Lot`+`Counterparty`, admin-гибрид, `relocation`+мультисклад,
+миграция прод-базы. См. [WAVE13.md](WAVE13.md).
+
 ## 2026-07-09 — Волна 13, Ф2b: коллапс дуг в единый FK на `StockDocument`
 **Тип:** решение + реализация + грабли
 **Контекст:** Второй укус Ф2. Ф2a унифицировала id-пространство ордеров (PK ребёнка =

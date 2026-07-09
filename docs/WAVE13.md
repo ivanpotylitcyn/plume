@@ -220,10 +220,29 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       Dev-MySQL догнан на 0006 (stale pre-Ф2a `source_id` починены rebuild'ом, drift=0).
       Обе mermaid-диаграммы README + проза обновлены. См. JOURNAL 2026-07-09 Ф2b.
 
-**Ф2c+ — оставшееся Ф2 (следующими укусами):**
-- [ ] Подъём общих полей (`project`/`user`/`date`/`number`/`note`) в родителя (дедуп;
-      правит 1 обратный аксессор `project.writeoffs`).
-- [ ] Условная валидация специфики по `kind` (NOT NULL держит дочерняя таблица).
+**Ф2c — подъём общих полей ордера в родителя (дедуп) ✅ 2026-07-09**
+- [x] `project`/`user`/`date`/`number`/`note` подняты с 6 детей в `StockDocument`
+      (реверс — `project.documents`/`user.documents`); специфика (`Receipt.supplier`/
+      `purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`) осталась на детях.
+      `date` — nullable (Kitting-черновик), `number`/`note` — blank (видимость по `kind`
+      → форма/матрица, Ф2c #7). Единственная рябь в коде — `project.writeoffs` (engine)
+      → `Writeoff.objects.filter(project=…)`; прямой доступ (`receipt.project`),
+      `.objects.create(project=…)`, `select_related('project')`, admin `list_filter`/
+      `search_fields` — прозрачны через MTI (API байт-в-байт, фронт/вьюхи не тронуты).
+- [x] Миграция `0007_lift_common_fields` (реверсивна): **`SeparateDatabaseAndState`**
+      (как 0005) — в MTI поле родителя и одноимённое поле ребёнка не сосуществуют в
+      состоянии (клэш), поэтому СОСТОЯНИЕ = операции автодетектора (RemoveField детей →
+      AddField родителя; `--check` чист), ФИЗИКА = raw-SQL под `FK_CHECKS=0` (бэкфилл по
+      `p.id = ch.stockdocument_ptr_id`, без ремапа — id едины с Ф2a). MySQL-only.
+- [x] **Проверка:** 193 теста (было 188; +5 `Wave13Fase2cTests`) зелёные на MySQL 8.0.25;
+      `makemigrations --check` чист; `seed_demo` ок; system check 0 issues (admin через
+      MTI). Круговой прогон на dev-БД (0007 → reverse@0006 → forward@0007): **SNAP_A ==
+      SNAP_C побайтово** (sha256 остатков/движений/шапок), при 0006 дочерние колонки
+      восстановлены с данными и NOT-NULL/FK. Обе mermaid-диаграммы README + проза обновлены.
+
+**Ф2d+ — оставшееся Ф2 (следующими укусами):**
+- [ ] Условная валидация специфики по `kind` (`date`/`number` NOT NULL по видам — на
+      подъёме ослаблены до nullable/blank; строгость восстановить валидацией).
 - [ ] Переименования `Lot` (`part_number`, `lot_name`) + `Supplier → Counterparty`
       (+ контрагент на передаче); обновить `api.ts` и вьюхи.
 - [ ] **Admin — гибрид:** родитель `StockDocument` = read-only обзор «все ордера»

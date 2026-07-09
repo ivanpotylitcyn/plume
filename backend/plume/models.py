@@ -79,8 +79,10 @@ class StockDocument(models.Model):
     «Ордера».
     **Ф2b:** дуги `Lot.origin` (4 FK) / `StockLine.document` (4 FK) схлопнуты в один FK
     на этот PK (реверс — `lots`/`lines`), `Attachment.document` — один FK (владелец теперь
-    Item ИЛИ ордер). Специфичные поля (project/user/date/number/supplier/…) пока живут на
-    детях; их подъём в родителя — следующим укусом Ф2.
+    Item ИЛИ ордер).
+    **Ф2c:** общие поля `project`/`user`/`date`/`number`/`note` подняты сюда с 6 детей
+    (дедуп; реверс — `project.documents`/`user.documents`). Специфика осталась на детях:
+    `Receipt.supplier`/`purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`.
     """
 
     class Kind(models.TextChoices):
@@ -101,6 +103,20 @@ class StockDocument(models.Model):
                             blank=True, default='')
     status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
                               default=DocStatus.DRAFT)
+
+    # Ф2c — общие поля подняты с 6 детей в родителя (дедуп). Специфика (supplier/
+    # purchase/target_item/qty/reason) осталась на детях. `project` строкой ('Project'
+    # определён ниже), `user` — settings-строкой. `date` nullable (Kitting-черновик
+    # мог быть без даты; строгий per-kind NOT NULL — условная валидация, Ф2c #2).
+    # `number`/`note` blank (Kitting без номера, note только у инвентаризации) — их
+    # видимость по `kind` рулит форма/матрица (Ф2c #7). Реверс-аксессор — `documents`.
+    project = models.ForeignKey('Project', on_delete=models.PROTECT,
+                                related_name='documents', verbose_name='проект')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name='documents', verbose_name='автор')
+    date = models.DateField('дата', null=True, blank=True)
+    number = models.CharField('номер', max_length=64, blank=True, default='')
+    note = models.CharField('примечание', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'ордер'
@@ -358,16 +374,10 @@ class Receipt(StockDocument):
 
     KIND = StockDocument.Kind.RECEIPT
 
-    number = models.CharField('№ УПД', max_length=64)
-    date = models.DateField('дата')
     supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT,
                                  related_name='receipts')
     purchase = models.ForeignKey(Purchase, on_delete=models.SET_NULL, null=True,
                                  blank=True, related_name='receipts')
-    project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='receipts')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='receipts', verbose_name='автор')
 
     class Meta:
         verbose_name = 'приход (УПД)'
@@ -383,14 +393,9 @@ class Kitting(StockDocument):
 
     KIND = StockDocument.Kind.KITTING
 
-    project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='kittings')
     target_item = models.ForeignKey(Item, on_delete=models.PROTECT,
                                     related_name='kittings')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='kittings', verbose_name='автор')
     qty = qty(verbose_name='кол-во образцов')
-    date = models.DateField('дата открытия', null=True, blank=True)
 
     class Meta:
         verbose_name = 'комплектация'
@@ -406,13 +411,7 @@ class Inventory(StockDocument):
 
     KIND = StockDocument.Kind.INVENTORY
 
-    project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='inventories')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='inventories', verbose_name='автор')
-    number = models.CharField('№ акта', max_length=64)
-    date = models.DateField('дата')
-    note = models.CharField('примечание', max_length=255, blank=True, default='')
+    # Все поля (project/user/number/date/note) подняты в StockDocument (Ф2c).
 
     class Meta:
         verbose_name = 'инвентаризация'
@@ -427,13 +426,7 @@ class Requisition(StockDocument):
 
     KIND = StockDocument.Kind.REQUISITION
 
-    project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='requisitions',
-                                verbose_name='проект-получатель')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='requisitions', verbose_name='автор')
-    number = models.CharField('№ требования', max_length=64)
-    date = models.DateField('дата')
+    # Все поля (project — «проект-получатель», user/number/date) подняты в StockDocument (Ф2c).
 
     class Meta:
         verbose_name = 'требование'
@@ -564,12 +557,7 @@ class Transfer(StockDocument):
 
     KIND = StockDocument.Kind.TRANSFER
 
-    project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='transfers')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='transfers', verbose_name='автор')
-    date = models.DateField('дата')
-    number = models.CharField('№ накладной', max_length=64)
+    # Все поля (project/user/date/number) подняты в StockDocument (Ф2c).
 
     class Meta:
         verbose_name = 'передача'
@@ -584,12 +572,7 @@ class Writeoff(StockDocument):
 
     KIND = StockDocument.Kind.WRITEOFF
 
-    project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='writeoffs')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='writeoffs', verbose_name='автор')
-    number = models.CharField('№ акта', max_length=64)
-    date = models.DateField('дата')
+    # project/user/number/date подняты в StockDocument (Ф2c); `reason` — специфика.
     reason = models.CharField('причина', max_length=255, blank=True, default='')
 
     class Meta:
