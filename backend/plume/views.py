@@ -236,7 +236,7 @@ def _item_detail_payload(item):
         {'id': lot.id, 'project_code': lot.project.code, 'origin': lot.origin_kind,
          'qty_born': lot.qty, 'live_qty': engine.lot_live_qty(lot),
          'unit_cost': lot.unit_cost, 'serial_number': lot.serial_number}
-        for lot in item.lots.select_related('project')
+        for lot in item.lots.select_related('project', 'origin')
     ]
     return {
         'id': item.id, 'code': item.code, 'name': item.name, 'kind': item.kind,
@@ -373,9 +373,9 @@ def kitting_lines(request, pk):
 def kitting_line_detail(request, pk):
     """Автосейв количества пайки (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('kitting', 'lot'),
-        pk=pk, kitting__isnull=False)
-    kitting = line.kitting
+        models.StockLine.objects.select_related('document__kitting', 'lot'),
+        pk=pk, document__kind=models.StockDocument.Kind.KITTING)
+    kitting = line.document.kitting
     try:
         if request.method == 'DELETE':
             engine.remove_kitting_line(line)
@@ -501,10 +501,10 @@ def receipt_lots(request, pk):
 def receipt_lot_detail(request, pk):
     """Автосейв строки УПД (PATCH) / удаление строки (DELETE)."""
     lot = get_object_or_404(
-        models.Lot.objects.select_related('receipt', 'item'), pk=pk)
-    if lot.receipt_id is None:
+        models.Lot.objects.select_related('origin__receipt', 'item'), pk=pk)
+    if lot.origin.kind != models.StockDocument.Kind.RECEIPT:
         return _bad('Партия не из прихода — правка через её origin-документ.')
-    receipt = lot.receipt
+    receipt = lot.origin.receipt
     try:
         if request.method == 'DELETE':
             engine.remove_receipt_lot(lot)
@@ -769,9 +769,9 @@ def transfer_lines(request, pk):
 def transfer_line_detail(request, pk):
     """Автосейв строки передачи (кол-во/имя) (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('transfer', 'lot'),
-        pk=pk, transfer__isnull=False)
-    transfer = line.transfer
+        models.StockLine.objects.select_related('document__transfer', 'lot'),
+        pk=pk, document__kind=models.StockDocument.Kind.TRANSFER)
+    transfer = line.document.transfer
     try:
         if request.method == 'DELETE':
             engine.remove_transfer_line(line)
@@ -890,9 +890,9 @@ def writeoff_lines(request, pk):
 def writeoff_line_detail(request, pk):
     """Автосейв количества строки списания (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('writeoff', 'lot'),
-        pk=pk, writeoff__isnull=False)
-    writeoff = line.writeoff
+        models.StockLine.objects.select_related('document__writeoff', 'lot'),
+        pk=pk, document__kind=models.StockDocument.Kind.WRITEOFF)
+    writeoff = line.document.writeoff
     try:
         if request.method == 'DELETE':
             engine.remove_writeoff_line(line)
@@ -989,9 +989,9 @@ def requisition_lines(request, pk):
 def requisition_line_detail(request, pk):
     """Автосейв количества строки требования (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('requisition', 'lot'),
-        pk=pk, requisition__isnull=False)
-    requisition = line.requisition
+        models.StockLine.objects.select_related('document__requisition', 'lot'),
+        pk=pk, document__kind=models.StockDocument.Kind.REQUISITION)
+    requisition = line.document.requisition
     try:
         if request.method == 'DELETE':
             engine.remove_requisition_line(line)
@@ -1110,10 +1110,10 @@ def inventory_lots(request, pk):
 def inventory_lot_detail(request, pk):
     """Автосейв строки акта (PATCH) / удаление строки (DELETE)."""
     lot = get_object_or_404(
-        models.Lot.objects.select_related('inventory', 'item'), pk=pk)
-    if lot.inventory_id is None:
+        models.Lot.objects.select_related('origin__inventory', 'item'), pk=pk)
+    if lot.origin.kind != models.StockDocument.Kind.INVENTORY:
         return _bad('Партия не из инвентаризации — правка через её origin-документ.')
-    inventory = lot.inventory
+    inventory = lot.origin.inventory
     try:
         if request.method == 'DELETE':
             engine.remove_inventory_lot(lot)

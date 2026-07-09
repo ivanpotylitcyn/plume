@@ -45,7 +45,7 @@ class EngineTestBase(TestCase):
         r = models.Receipt.objects.create(
             number=f'UPD-{item.code}-{qty}', date='2026-05-01', supplier=self.supplier,
             project=project, user=self.user, purchase=purchase)
-        lot = models.Lot.objects.create(item=item, project=project, receipt=r, qty=D(qty))
+        lot = models.Lot.objects.create(item=item, project=project, origin=r, qty=D(qty))
         engine.rebuild_movements(lot)
         return lot
 
@@ -63,7 +63,7 @@ class RebuildAndStockTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           status=models.DocStatus.DRAFT)
-        models.StockLine.objects.create(kitting=k, lot=lot,
+        models.StockLine.objects.create(document=k, lot=lot,
                                         location=self.main, qty=D(-30))
         engine.rebuild_movements(lot)
         self.assertEqual(engine.lot_live_qty(lot), D(70))
@@ -75,7 +75,7 @@ class RebuildAndStockTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           status=models.DocStatus.DRAFT)
-        models.StockLine.objects.create(kitting=k, lot=lot,
+        models.StockLine.objects.create(document=k, lot=lot,
                                         location=self.main, qty=D(-8))
         engine.rebuild_movements(lot)
         self.assertEqual(engine.item_available(comp, self.prj), D(-3))
@@ -86,9 +86,10 @@ class RebuildAndStockTests(EngineTestBase):
         комплектацию с born-лотом сперва расфиксируют. Расфиксация чисто сносит
         лот-прибор (не фантом), удаление черновика освобождает компоненты.
 
-        (Прямое `posted.delete()` на MySQL упирается в CHECK `exactly_one_origin`:
-        каскад обнуляет `kitting_id` born-лота → ноль origin. Это и есть замок «сперва
-        расфиксировать» на уровне БД — см. JOURNAL 2026-07-09 Ф1.)"""
+        (Историческая грабля Ф1: прямое `posted.delete()` на MySQL упиралось в CHECK
+        `exactly_one_origin`. В Ф2b дуга схлопнута в один CASCADE-FK `Lot.origin` — CHECK
+        умер; замок «сперва расфиксировать» держит прикладной guard `delete_stock_document`.
+        Тут проверяем корректный путь reopen→delete. См. JOURNAL 2026-07-09 Ф1/Ф2b.)"""
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 10)
         dev = self.make_item('DEV', manufactured=True)
@@ -124,9 +125,9 @@ class RebuildAndStockTests(EngineTestBase):
         t = models.Transfer.objects.create(project=self.prj, user=self.user,
                                             number='T-1', date='2026-06-01')
         # знаковые строки (− расход) трёх разных документов на один лот
-        models.StockLine.objects.create(kitting=k, lot=lot, location=self.main, qty=D(-30))
-        models.StockLine.objects.create(writeoff=w, lot=lot, location=self.main, qty=D(-10))
-        models.StockLine.objects.create(transfer=t, lot=lot, location=self.main, qty=D(-5))
+        models.StockLine.objects.create(document=k, lot=lot, location=self.main, qty=D(-30))
+        models.StockLine.objects.create(document=w, lot=lot, location=self.main, qty=D(-10))
+        models.StockLine.objects.create(document=t, lot=lot, location=self.main, qty=D(-5))
         engine.rebuild_movements(lot)
         # 100 − 30 − 10 − 5 = 55; born-приход + три расхода = 4 движения
         self.assertEqual(engine.lot_live_qty(lot), D(55))
@@ -134,7 +135,7 @@ class RebuildAndStockTests(EngineTestBase):
         srcs = set(lot.movements.values_list('source_type', flat=True))
         self.assertEqual(srcs, {'receipt', 'kitting', 'writeoff', 'transfer'})
         # exclusive-arc: строка ссылается ровно на один документ
-        sl = models.StockLine.objects.filter(kitting=k).get()
+        sl = models.StockLine.objects.filter(document=k).get()
         self.assertEqual(sl.doc_kind, 'kitting')
         self.assertLess(sl.qty, D(0))            # хранится со знаком (− расход)
 
@@ -237,7 +238,7 @@ class StockMapTests(EngineTestBase):
         self.receipt_lot(item, self.prj, 12)
         inv = models.Inventory.objects.create(project=white, user=self.user,
                                               number='INV-1', date='2026-06-01')
-        lot = models.Lot.objects.create(item=item, project=white, inventory=inv, qty=D(5))
+        lot = models.Lot.objects.create(item=item, project=white, origin=inv, qty=D(5))
         engine.rebuild_movements(lot)
 
         m = engine.stock_map(item)
@@ -377,7 +378,7 @@ class KittingCockpitTests(EngineTestBase):
         # прибор передан заказчику → потомок вниз, переоткрытие запрещено
         transfer = models.Transfer.objects.create(
             project=self.prj, user=self.user, date='2026-06-01', number='TN-1')
-        models.StockLine.objects.create(transfer=transfer, lot=device_lot,
+        models.StockLine.objects.create(document=transfer, lot=device_lot,
                                         location=self.main, qty=D(-1))
         engine.rebuild_movements(device_lot)
         with self.assertRaises(ValidationError):
@@ -1245,7 +1246,7 @@ class ClosureHttpTests(TestCase):
             supplier=self.sup, project=self.prj,
             user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
-            receipt=r, qty=D(10))
+            origin=r, qty=D(10))
         engine.rebuild_movements(self.lot)
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
@@ -1595,7 +1596,7 @@ class InventoryHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             supplier=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
-            receipt=r, qty=D(10), unit_cost=D('2.50'), serial_number='ЗН-9')
+            origin=r, qty=D(10), unit_cost=D('2.50'), serial_number='ЗН-9')
         engine.rebuild_movements(self.lot)
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
@@ -1658,7 +1659,7 @@ class OrderDeleteHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             supplier=self.sup, project=self.prj, user=self.user)
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
-            receipt=r, qty=D(10))
+            origin=r, qty=D(10))
         engine.rebuild_movements(self.lot)
         self.c = Client()
         self.c.force_login(self.user)
@@ -1705,14 +1706,14 @@ class ProjectBudgetTests(EngineTestBase):
         self.receipt_lot(case, self.prj, 1)  # добавит default unit_cost=0
         r = models.Receipt.objects.create(number='U-2', date='2026-05-02',
             supplier=self.supplier, project=self.prj, user=self.user)
-        paid = models.Lot.objects.create(item=case, project=self.prj, receipt=r,
+        paid = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(3), unit_cost=D(800))
         engine.rebuild_movements(paid)
         # заём из белого склада → born-лот в prj (origin requisition), цена наследуется
         white = models.Project.objects.create(code='WHT', name='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=case, project=white,
-            inventory=models.Inventory.objects.create(project=white, user=self.user,
+            origin=models.Inventory.objects.create(project=white, user=self.user,
                 number='INV-W', date='2026-05-01'), qty=D(5), unit_cost=D(700))
         engine.rebuild_movements(src)
         req = engine.create_requisition(self.prj, self.user, 'ТРБ-1')
@@ -1741,7 +1742,7 @@ class ProjectBudgetTests(EngineTestBase):
         # пришёл УПД на все 40 по реальной цене 45 → оценка сменилась фактом
         r = models.Receipt.objects.create(number='U-3', date='2026-05-03',
             supplier=self.supplier, project=self.prj, user=self.user)
-        lot = models.Lot.objects.create(item=screw, project=self.prj, receipt=r,
+        lot = models.Lot.objects.create(item=screw, project=self.prj, origin=r,
             qty=D(40), unit_cost=D(45))
         engine.rebuild_movements(lot)
         b = engine.project_budget(self.prj)
@@ -1772,14 +1773,14 @@ class ProjectBudgetTests(EngineTestBase):
         # CASE: куплен ровно 1 @ 800
         r = models.Receipt.objects.create(number='U-4', date='2026-05-04',
             supplier=self.supplier, project=self.prj, user=self.user)
-        case_lot = models.Lot.objects.create(item=case, project=self.prj, receipt=r,
+        case_lot = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(1), unit_cost=D(800))
         engine.rebuild_movements(case_lot)
         # RES: заём 2 @ 10 из белого склада
         white = models.Project.objects.create(code='WHT', name='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=res, project=white,
-            inventory=models.Inventory.objects.create(project=white, user=self.user,
+            origin=models.Inventory.objects.create(project=white, user=self.user,
                 number='INV-W2', date='2026-05-01'), qty=D(2), unit_cost=D(10))
         engine.rebuild_movements(src)
         req = engine.create_requisition(self.prj, self.user, 'ТРБ-2')
@@ -1848,13 +1849,13 @@ class AttachmentTests(EngineTestBase):
     def test_add_fills_metadata_and_owner(self):
         att = engine.add_attachment('receipt', self.receipt, self._file(),
                                     self.user, label='  скан УПД ')
-        self.assertEqual(att.receipt_id, self.receipt.id)
+        self.assertEqual(att.document_id, self.receipt.id)
         self.assertEqual(att.filename, 'scan.pdf')
         self.assertEqual(att.size, len(b'%PDF-1.4 test'))
         self.assertEqual(att.content_type, 'application/pdf')
         self.assertEqual(att.label, 'скан УПД')            # подрезано
         self.assertEqual(att.user_id, self.user.id)
-        self.assertIsNone(att.transfer_id)                 # ровно один владелец
+        self.assertIsNone(att.item_id)                     # ровно один владелец (item↔document)
 
     def test_attachments_for_lists_newest_first(self):
         a1 = engine.add_attachment('receipt', self.receipt, self._file('a.pdf'), self.user)
@@ -2380,7 +2381,7 @@ class Wave13Fase1bTests(EngineTestBase):
 class Wave13Fase2aTests(EngineTestBase):
     """Волна 13 Ф2a: MTI-ядро — `StockDoc` (миксин) → `StockDocument` (конкретный
     родитель); 6 документов стали наследниками, id-пространство унифицировано,
-    дискриминатор `kind` штампуется. Дуги пока на детях (их PK = единый id родителя)."""
+    дискриминатор `kind` штампуется. (Коллапс дуг в единый FK — Ф2b, ниже.)"""
 
     def _one_of_each(self):
         r = models.Receipt.objects.create(
@@ -2424,8 +2425,8 @@ class Wave13Fase2aTests(EngineTestBase):
             number='У-2', date='2026-05-01', supplier=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        self.assertEqual(lot.receipt_id, r.pk)
-        self.assertTrue(models.StockDocument.objects.filter(pk=lot.receipt_id).exists())
+        self.assertEqual(lot.origin_id, r.pk)
+        self.assertTrue(models.StockDocument.objects.filter(pk=lot.origin_id).exists())
 
     def test_mti_delete_removes_parent_row(self):
         """Удаление ребёнка-черновика сносит и строку родителя (MTI-каскад вверх)."""
@@ -2435,3 +2436,92 @@ class Wave13Fase2aTests(EngineTestBase):
         w.delete()
         self.assertFalse(models.Writeoff.objects.filter(pk=pk).exists())
         self.assertFalse(models.StockDocument.objects.filter(pk=pk).exists())
+
+
+class Wave13Fase2bTests(EngineTestBase):
+    """Волна 13 Ф2b: коллапс дуг в единый FK на `StockDocument`. `Lot.origin` и
+    `StockLine.document` — по одному FK (Check «ровно один» умер); `Attachment` —
+    двухпутный владелец (Item ↔ ордер). Инвариант проекции движений сохранён."""
+
+    def _constraint_names(self, model):
+        return {c.name for c in model._meta.constraints}
+
+    def test_lot_origin_is_single_fk_no_arc(self):
+        """`Lot.origin` — один FK на родителя; старых 4 FK и Check origin нет."""
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        self.assertEqual(lot.origin_id, r.pk)
+        self.assertEqual(lot.origin_kind, models.StockDocument.Kind.RECEIPT)
+        field_names = {f.name for f in models.Lot._meta.get_fields()}
+        self.assertIn('origin', field_names)
+        self.assertFalse({'receipt', 'kitting', 'inventory', 'requisition'}
+                         & field_names)
+        self.assertNotIn('lot_exactly_one_origin', self._constraint_names(models.Lot))
+
+    def test_stockline_document_is_single_fk_no_arc(self):
+        """`StockLine.document` — один FK; старых 4 FK и Check document нет."""
+        lot = self.receipt_lot(self.make_item('R'), self.prj, 100)
+        w = engine.create_writeoff(self.prj, self.user, 'С-1')
+        line = engine.add_writeoff_line(w, lot, D(3))
+        self.assertEqual(line.document_id, w.pk)
+        self.assertEqual(line.doc_kind, models.StockDocument.Kind.WRITEOFF)
+        field_names = {f.name for f in models.StockLine._meta.get_fields()}
+        self.assertIn('document', field_names)
+        self.assertFalse({'kitting', 'transfer', 'writeoff', 'requisition'}
+                         & field_names)
+        self.assertNotIn('stockline_exactly_one_document',
+                         self._constraint_names(models.StockLine))
+
+    def test_movement_projection_source_preserved_after_collapse(self):
+        """Проекция движений неизменна: source_type = document.kind, source_id = id
+        родителя (то же, что раньше давали `origin_kind`/`{kind}_id`)."""
+        lot = self.receipt_lot(self.make_item('R'), self.prj, 50)
+        w = engine.create_writeoff(self.prj, self.user, 'С-2')
+        engine.add_writeoff_line(w, lot, D(4))
+        born = lot.movements.get(type=models.StockMovement.Type.RECEIPT)
+        self.assertEqual(born.source_type, models.StockDocument.Kind.RECEIPT)
+        self.assertEqual(born.source_id, lot.origin_id)
+        issue = lot.movements.get(type=models.StockMovement.Type.ISSUE)
+        self.assertEqual(issue.source_type, models.StockDocument.Kind.WRITEOFF)
+        self.assertEqual(issue.source_id, w.pk)
+
+    def test_attachment_owner_two_way_arc(self):
+        """Владелец вложения — Item ИЛИ ордер: 'receipt' → `document`, 'item' → `item`;
+        API-строки owner_type те же; ровно один задан (Check жив, но двухпутный)."""
+        r = models.Receipt.objects.create(
+            number='У-2', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        item = self.make_item('A')
+        f = SimpleUploadedFile('s.pdf', b'%PDF-1.4', content_type='application/pdf')
+        att_doc = engine.add_attachment('receipt', r, f, self.user)
+        self.assertEqual(att_doc.document_id, r.pk)
+        self.assertIsNone(att_doc.item_id)
+        f2 = SimpleUploadedFile('d.pdf', b'%PDF-1.4', content_type='application/pdf')
+        att_item = engine.add_attachment('item', item, f2, self.user)
+        self.assertEqual(att_item.item_id, item.pk)
+        self.assertIsNone(att_item.document_id)
+        # список по виду ордера строг: чужой вид → пусто (id глобально уникален)
+        self.assertEqual(len(engine.attachments_for('receipt', r.pk)), 1)
+        self.assertEqual(len(engine.attachments_for('transfer', r.pk)), 0)
+        field_names = {f.name for f in models.Attachment._meta.get_fields()}
+        self.assertFalse({'transfer', 'kitting', 'inventory', 'writeoff',
+                          'requisition'} & field_names)
+        self.assertIn('attachment_exactly_one_owner',
+                      self._constraint_names(models.Attachment))
+
+    def test_reverse_accessors_resolve_through_mti(self):
+        """Реверсы дуг живут на родителе, но доступны с ребёнка через MTI:
+        `receipt.lots`, `writeoff.lines`, `receipt.attachments`."""
+        r = models.Receipt.objects.create(
+            number='У-3', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(7))
+        self.assertEqual(list(r.lots.all()), [lot])
+        w = engine.create_writeoff(self.prj, self.user, 'С-3')
+        line = engine.add_writeoff_line(w, lot, D(2))
+        self.assertEqual(list(w.lines.all()), [line])
+        f = SimpleUploadedFile('s.pdf', b'%PDF-1.4', content_type='application/pdf')
+        att = engine.add_attachment('receipt', r, f, self.user)
+        self.assertEqual(list(r.attachments.all()), [att])

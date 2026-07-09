@@ -30,32 +30,34 @@ class PurchaseLineInline(admin.TabularInline):
     extra = 0
 
 
-# Строки движения — единая `StockLine` (волна 13, Ф0). Один инлайн на каждый
-# документ-владелец через `fk_name`; `qty` знаковый (− расход).
+# Строки движения — единая `StockLine` (волна 13, Ф0). После коллапса дуги (Ф2b)
+# владелец — один FK `document` → `StockDocument`; инлайн-FK указывает на родителя
+# MTI, а Django принимает его через `get_parent_list()` (StockDocument ∈ предки
+# Kitting/Transfer/…). `qty` знаковый (− расход).
 class KittingLineInline(admin.TabularInline):
     model = models.StockLine
-    fk_name = 'kitting'
+    fk_name = 'document'
     fields = ('lot', 'location', 'qty', 'date')
     extra = 0
 
 
 class TransferLineInline(admin.TabularInline):
     model = models.StockLine
-    fk_name = 'transfer'
+    fk_name = 'document'
     fields = ('lot', 'location', 'qty', 'display_name')
     extra = 0
 
 
 class WriteoffLineInline(admin.TabularInline):
     model = models.StockLine
-    fk_name = 'writeoff'
+    fk_name = 'document'
     fields = ('lot', 'location', 'qty')
     extra = 0
 
 
 class RequisitionLineInline(admin.TabularInline):
     model = models.StockLine
-    fk_name = 'requisition'
+    fk_name = 'document'
     fields = ('lot', 'location', 'qty')
     extra = 0
 

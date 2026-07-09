@@ -46,13 +46,12 @@ def _validate_exactly_one(instance, fields, label):
         )
 
 
-# exclusive-arc наборы FK (модульные — нужны и в Meta-констрейнтах, и в методах)
-LOT_ORIGIN_FIELDS = ('receipt', 'kitting', 'inventory', 'requisition')
-ATTACHMENT_OWNER_FIELDS = ('item', 'receipt', 'transfer', 'kitting', 'inventory',
-                           'writeoff', 'requisition')
-# документ-владелец знаковой строки движения (волна 13, Ф0): пока 4 FK + Check,
-# в Ф2 (MTI) схлопнётся в один FK на родитель `StockDocument`.
-STOCKLINE_DOC_FIELDS = ('kitting', 'transfer', 'writeoff', 'requisition')
+# exclusive-arc наборы FK (модульные — нужны и в Meta-констрейнтах, и в методах).
+# Волна 13, Ф2b: дуги `Lot.origin` (4 FK) и `StockLine.document` (4 FK) СХЛОПНУТЫ в
+# один FK на MTI-родителя `StockDocument` (id-пространство унифицировано в Ф2a) —
+# их exclusive-arc наборы и Check умерли. У `Attachment` владельца два (Item — не
+# ордер — не поднимается в MTI), поэтому дуга остаётся, но всего из двух полей.
+ATTACHMENT_OWNER_FIELDS = ('item', 'document')
 
 
 # --------------------------------------------------------------------------- #
@@ -77,9 +76,11 @@ class StockDocument(models.Model):
     **Ф2a:** абстрактный миксин `StockDoc` схлопнут в этого конкретного родителя —
     6 документов стали MTI-наследниками, их PK = единый `id` этой таблицы (унификация
     id-пространства). Дискриминатор `kind` («Тип = поле одной сущности») мостит к режиму
-    «Ордера». Специфичные поля (project/user/date/number/supplier/…) пока живут на детях;
-    их подъём в родителя и коллапс дуг `Lot.origin`/`Attachment.owner`/`StockLine.document`
-    в один FK на этот PK — следующими укусами Ф2.
+    «Ордера».
+    **Ф2b:** дуги `Lot.origin` (4 FK) / `StockLine.document` (4 FK) схлопнуты в один FK
+    на этот PK (реверс — `lots`/`lines`), `Attachment.document` — один FK (владелец теперь
+    Item ИЛИ ордер). Специфичные поля (project/user/date/number/supplier/…) пока живут на
+    детях; их подъём в родителя — следующим укусом Ф2.
     """
 
     class Kind(models.TextChoices):
@@ -447,22 +448,16 @@ class Requisition(StockDocument):
 # --------------------------------------------------------------------------- #
 class Lot(models.Model):
     """Партия — физическое воплощение изделия, главная учётная единица склада.
-    Ровно один origin-документ (exclusive arc)."""
-
-    ORIGIN_FIELDS = LOT_ORIGIN_FIELDS
+    Ровно один origin-документ (`origin` → `StockDocument`)."""
 
     item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name='lots')
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='lots', verbose_name='home-проект')
-    # origin (exclusive arc) — ровно один задан
-    receipt = models.ForeignKey(Receipt, on_delete=models.CASCADE, null=True,
-                                blank=True, related_name='lots')
-    kitting = models.ForeignKey(Kitting, on_delete=models.CASCADE, null=True,
-                                blank=True, related_name='lots')
-    inventory = models.ForeignKey(Inventory, on_delete=models.CASCADE, null=True,
-                                  blank=True, related_name='lots')
-    requisition = models.ForeignKey(Requisition, on_delete=models.CASCADE, null=True,
-                                    blank=True, related_name='lots')
+    # origin: рождающий ордер (born-direct). Волна 13, Ф2b — дуга из 4 FK
+    # (receipt/kitting/inventory/requisition) схлопнута в один FK на MTI-родителя;
+    # вид origin читается из `origin.kind` (дискриминатор Ф2a).
+    origin = models.ForeignKey(StockDocument, on_delete=models.CASCADE,
+                               related_name='lots', verbose_name='ордер-origin')
     predecessor = models.ForeignKey('self', on_delete=models.SET_NULL, null=True,
                                     blank=True, related_name='successors')
     qty = qty(verbose_name='рождённое кол-во')
@@ -475,28 +470,18 @@ class Lot(models.Model):
     class Meta:
         verbose_name = 'партия'
         verbose_name_plural = 'партии'
-        constraints = [
-            models.CheckConstraint(condition=_exactly_one_q(LOT_ORIGIN_FIELDS),
-                                   name='lot_exactly_one_origin'),
-        ]
 
     @property
     def origin_kind(self):
-        for f in self.ORIGIN_FIELDS:
-            if getattr(self, f'{f}_id', None) is not None:
-                return f
-        return None
-
-    @property
-    def origin(self):
-        kind = self.origin_kind
-        return getattr(self, kind) if kind else None
+        """Вид origin-ордера ('receipt'/'kitting'/'inventory'/'requisition') —
+        из дискриминатора родителя (совместим со старым именем FK)."""
+        return self.origin.kind if self.origin_id else None
 
     def clean(self):
-        _validate_exactly_one(self, self.ORIGIN_FIELDS, 'Lot')
         # Чистота: лот по поставке живёт в проекте этой поставки.
-        if self.receipt_id and self.project_id \
-                and self.receipt.project_id != self.project_id:
+        if self.origin_id and self.origin.kind == StockDocument.Kind.RECEIPT \
+                and self.project_id \
+                and self.origin.receipt.project_id != self.project_id:
             raise ValidationError(
                 'Lot.project должен совпадать с project прихода-origin (УПД ↔ проект).'
             )
@@ -540,22 +525,14 @@ class StockLine(models.Model):
     Сворачивает четыре таблицы строк-расхода (`KittingLine`/`TransferLine`/
     `WriteoffLine`/`RequisitionLine`) в одну. `qty` со знаком (− = расход/списание/
     пайка; в Ф2 «Перемещение» даст пару −/+ между локациями). Документ-владелец —
-    exclusive arc (ровно один из четырёх FK), схлопнется в один FK при MTI (Ф2).
-    Рождение лотов сюда НЕ входит: born-лоты остаются на `Lot.origin` (born-direct).
-    Компонент строки комплектации не храним — он выводится из `lot.item`.
+    `document` → `StockDocument`: волна 13, Ф2b схлопнула дугу из 4 FK в один FK на
+    MTI-родителя (id-пространство унифицировано в Ф2a). Рождение лотов сюда НЕ входит:
+    born-лоты остаются на `Lot.origin` (born-direct). Компонент строки комплектации
+    не храним — он выводится из `lot.item`.
     """
 
-    DOC_FIELDS = STOCKLINE_DOC_FIELDS
-
-    # документ-владелец (exclusive arc) — ровно один задан
-    kitting = models.ForeignKey('Kitting', on_delete=models.CASCADE, null=True,
-                                blank=True, related_name='lines')
-    transfer = models.ForeignKey('Transfer', on_delete=models.CASCADE, null=True,
-                                 blank=True, related_name='lines')
-    writeoff = models.ForeignKey('Writeoff', on_delete=models.CASCADE, null=True,
-                                 blank=True, related_name='lines')
-    requisition = models.ForeignKey('Requisition', on_delete=models.CASCADE, null=True,
-                                    blank=True, related_name='lines')
+    document = models.ForeignKey(StockDocument, on_delete=models.CASCADE,
+                                 related_name='lines', verbose_name='ордер-владелец')
     lot = models.ForeignKey('Lot', on_delete=models.PROTECT,
                             related_name='stock_lines',
                             verbose_name='лот (расходуемый источник)')
@@ -568,25 +545,12 @@ class StockLine(models.Model):
     class Meta:
         verbose_name = 'строка движения'
         verbose_name_plural = 'строки движения'
-        constraints = [
-            models.CheckConstraint(condition=_exactly_one_q(STOCKLINE_DOC_FIELDS),
-                                   name='stockline_exactly_one_document'),
-        ]
 
     @property
     def doc_kind(self):
-        for f in self.DOC_FIELDS:
-            if getattr(self, f'{f}_id', None) is not None:
-                return f
-        return None
-
-    @property
-    def document(self):
-        kind = self.doc_kind
-        return getattr(self, kind) if kind else None
-
-    def clean(self):
-        _validate_exactly_one(self, self.DOC_FIELDS, 'StockLine')
+        """Вид документа-владельца ('kitting'/'transfer'/'writeoff'/'requisition')
+        — из дискриминатора родителя (совместим со старым именем FK)."""
+        return self.document.kind if self.document_id else None
 
     def __str__(self):
         return f'{self.doc_kind} lot{self.lot_id} {self.qty:+}'
@@ -652,21 +616,14 @@ class Attachment(models.Model):
     uploaded_at = models.DateTimeField('загружено', auto_now_add=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='attachments', verbose_name='загрузил')
-    # владелец (exclusive arc)
+    # владелец (exclusive arc из двух): изделие ИЛИ ордер. Волна 13, Ф2b схлопнула
+    # 6 документных FK в один `document` → `StockDocument` (MTI-родитель); `item`
+    # остаётся — изделие не ордер, в MTI не входит.
     item = models.ForeignKey(Item, on_delete=models.CASCADE, null=True, blank=True,
                              related_name='attachments')
-    receipt = models.ForeignKey(Receipt, on_delete=models.CASCADE, null=True,
-                                blank=True, related_name='attachments')
-    transfer = models.ForeignKey(Transfer, on_delete=models.CASCADE, null=True,
-                                 blank=True, related_name='attachments')
-    kitting = models.ForeignKey(Kitting, on_delete=models.CASCADE, null=True,
-                                blank=True, related_name='attachments')
-    inventory = models.ForeignKey(Inventory, on_delete=models.CASCADE, null=True,
-                                  blank=True, related_name='attachments')
-    writeoff = models.ForeignKey(Writeoff, on_delete=models.CASCADE, null=True,
-                                 blank=True, related_name='attachments')
-    requisition = models.ForeignKey(Requisition, on_delete=models.CASCADE, null=True,
-                                    blank=True, related_name='attachments')
+    document = models.ForeignKey(StockDocument, on_delete=models.CASCADE, null=True,
+                                 blank=True, related_name='attachments',
+                                 verbose_name='ордер-владелец')
 
     class Meta:
         verbose_name = 'вложение'

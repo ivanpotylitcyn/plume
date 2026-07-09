@@ -16,6 +16,63 @@
 
 ---
 
+## 2026-07-09 — Волна 13, Ф2b: коллапс дуг в единый FK на `StockDocument`
+**Тип:** решение + реализация + грабли
+**Контекст:** Второй укус Ф2. Ф2a унифицировала id-пространство ордеров (PK ребёнка =
+id MTI-родителя), что открыло **коллапс трёх exclusive-arc** в один FK на
+`StockDocument`. По согласованию с Иваном взяты **все три дуги** (не только `Lot.origin`):
+`Lot.origin` (4 FK+Check), `StockLine.document` (4 FK+Check), `Attachment.owner`
+(7 FK+Check → двухпутный `item ↔ document`). Дисциплина «модель+движок сейчас, вьюхи
+потом»; фронт не тронут (API байт-в-байт).
+**Ключевое решение — бэкфилл через COALESCE, без ремапа id.** В отличие от 0005 (где
+физику id пришлось раздавать raw-SQL), здесь старая FK-колонка (`receipt_id`/…) **уже
+хранит id ребёнка, равный id родителя** — поэтому
+`origin_id = COALESCE(receipt_id, kitting_id, inventory_id, requisition_id)` — прямое
+значение нового FK. Миграция `0006_collapse_arcs` — обычные `AddField`/`AlterField`/
+`RemoveField`/`Remove|AddConstraint` (state автодетект прозрачен, `--check` чист) +
+три `RunSQL` только для данных. Реверсивна: обратный `RunSQL` раздаёт свёрнутый FK по
+старым колонкам согласно `document.kind` (`UPDATE … WHERE id IN (SELECT id FROM
+plume_stockdocument WHERE kind='…')`) — портируемо MySQL+SQLite.
+**Проекция движений — байт-в-байт.** `origin_kind`/`doc_kind` теперь читаются из
+`origin.kind`/`document.kind` (дискриминатор Ф2a совпадает со старыми именами FK), а
+`source_id` = `origin_id`/`document_id` (== прежнему child-id). Реверсы дуг
+(`receipt.lots`, `kitting.lines`, `receipt.attachments`) **уцелели через MTI**: reverse
+на родителе доступен с ребёнка. Ripple в движке — только query-lookups
+(`receipt__isnull` → `origin__kind='receipt'`; `receipt__purchase` →
+`origin__receipt__purchase`) и 6 detail-вью. Attachment API-контракт `owner_type`
+(строки item/receipt/…) сохранён: 'item' → поле `item`, вид ордера → `document`.
+**Итог (сделано, только бэкенд):** `Lot.origin`/`StockLine.document` — по одному
+NOT-NULL FK (Check «ровно один» умер); `Attachment` — `item ↔ document` (Check жив,
+двухпутный). Снесены `LOT_ORIGIN_FIELDS`/`STOCKLINE_DOC_FIELDS`; `ATTACHMENT_OWNER_FIELDS
+= ('item','document')`. Админ-инлайны `StockLine` переключены на `fk_name='document'` —
+Django принимает FK на MTI-родителя через `get_parent_list()`.
+**Грабли:**
+- `makemigrations --check` ловит дрейф `condition` у `CheckConstraint`: hand-made
+  `Q(...)` не совпал бы по deconstruct с модельным `_exactly_one_q(('item','document'))`
+  → в миграцию вставлен **инлайн-клон** `_exactly_one_q` (историческая миграция не
+  зависит от будущих правок модели, но даёт байт-идентичный condition).
+- **Порядок ↔ реверсивность:** `RemoveConstraint` идёт ПЕРВЫМ в forward, чтобы его
+  реверс (`AddConstraint`) выполнился ПОСЛЕДНИМ при откате — уже после обратного
+  бэкфилла. Иначе Check «ровно один» упал бы на пустых восстановленных колонках.
+- **Stale `source_id` на dev:** dev-движения хранили pre-Ф2a child-id (напр. 20),
+  который 0005 перецепил на parent-id (1), НЕ пересобрав движения. После 0006 `rebuild`
+  привёл их к корректному parent-id — детектор «дрейфа» показал это как расхождение,
+  на деле это **починка dangling-id** (idempotent-прогон → drift=0). `seed_demo` тоже
+  чинён (создавал `Lot(receipt=…)`).
+**Проверка:** 188 тестов (было 183; +5 `Wave13Fase2bTests` — одиночный FK+смерть Check
+у Lot/StockLine, двухпутный владелец Attachment, инвариант проекции, реверсы через MTI)
+зелёные на MySQL 8.0.25; `makemigrations --check` чист. **Круговой прогон** на scratch-БД
+(seed@0006 → reverse@0005 → forward@0006): SNAP_A==SNAP_C **побайтово** (sha256 остатков/
+движений/строк/владельцев), при 0005 арк-колонки восстановлены по видам (4 лота → 2
+receipt/1 kitting/1 inventory). Свежая сборка @0006 — drift=0. Dev-MySQL догнан на 0006
+(stale source_id починены, drift=0). Фронт не тронут (`l.origin`/`owner_type` те же).
+Обе mermaid-диаграммы README + прозу обновил (Lot/StockLine/Attachment → один FK).
+**Последствия:** три дуги мертвы. Остаток Ф2: подъём общих полей (project/user/date/
+number/note) в родителя, условная валидация по `kind`, переименования `Lot`
+(`part_number`/`lot_name`) + `Supplier → Counterparty`, гибрид-admin, `relocation`+
+мультисклад, свод матрицы полей, миграция прод-базы. Прод не трогали. См.
+[WAVE13.md](WAVE13.md).
+
 ## 2026-07-09 — Волна 13, Ф2a: MTI-ядро (`StockDoc` → конкретный `StockDocument`)
 **Тип:** решение + реализация + грабли
 **Контекст:** Первый укус Ф2 (осознанный слом заморозки). По согласованию с Иваном —

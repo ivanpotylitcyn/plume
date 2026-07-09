@@ -47,7 +47,7 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 | `Item` | Изделие | Единица справочника, **абстракция** (для прибора — конструкторская документация, для покупного — datasheet). Едина для приборов, компонентов и материалов; конкретный вид — поле `kind`. Может состоять из изделий (рекурсивный состав через `BomLine`). |
 | `BomLine` | Строка состава | Одна позиция состава изделия: «изделие-родитель → компонент × количество». |
 | `Lot` | Партия | Главная учётная единица склада — **физическое воплощение** изделия. Хранит цену (`unit_cost`), название из УПД, заводской №. Рождается ровно одним документом-источником, живёт в одном проекте. |
-| `StockLine` | Строка движения | Единая знаковая строка расхода/перемещения существующей партии `(документ, лот, место, ±кол-во)`. Свернула четыре таблицы строк-расхода (комплектация/передача/списание/требование) в одну (волна 13, Ф0); владелец — ровно один из четырёх документов (exclusive arc). Рождение лотов сюда не входит (born-direct через `Lot.origin`). |
+| `StockLine` | Строка движения | Единая знаковая строка расхода/перемещения существующей партии `(документ, лот, место, ±кол-во)`. Свернула четыре таблицы строк-расхода (комплектация/передача/списание/требование) в одну (волна 13, Ф0); владелец — один FK `document → StockDocument` (дуга схлопнута в Ф2b; вид = `document.kind`). Рождение лотов сюда не входит (born-direct через `Lot.origin`). |
 | `StockMovement` | Движение склада | Строка реестра движений: ±количество по партии и месту. Проекция: пересчитывается из документов (born-лоты + `StockLine`), остаток = сумма движений. |
 | `Location` | Место хранения | Где лежит партия. В MVP — одно («Основной склад»). |
 | `Project` | Проект | НИР или контракт, ограниченный во времени; сквозное измерение всего. Бывает внешним и внутренним (`kind`: «Собственный склад» / «Свободные неучтённые»). |
@@ -69,7 +69,7 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 | English / жаргон | Русский | Значение |
 |---|---|---|
 | BOM | Состав изделия | Иерархия «изделие → компоненты» (таблица `BomLine`). |
-| origin | Документ-источник | Документ, родивший партию (Приход / Комплектация / Инвентаризация / Требование). Задан ровно один. |
+| origin | Документ-источник | Ордер, родивший партию (Приход / Комплектация / Инвентаризация / Требование) — один FK `Lot.origin → StockDocument` (вид = `origin.kind`; дуга схлопнута в Ф2b). |
 | predecessor | Партия-предшественник | Ссылка на исходную партию при закрытии или отпочковании — несёт генеалогию. |
 | ledger | Реестр движений | Таблица `StockMovement` как пересчитываемая проекция остатков. |
 | BOM explosion | Разузлование | Рекурсивный обход состава: потребность в изделии → потребность в компонентах. |
@@ -172,22 +172,11 @@ erDiagram
   PROCUREMENT ||--o{ PURCHASE : ""
   PURCHASE ||--o{ PURCHASELINE : ""
   PURCHASE ||--o{ RECEIPT : "nullable"
-  RECEIPT ||--o{ LOT : "создаёт партии (поставка)"
-  KITTING ||--o{ STOCKLINE : "расход (пайка)"
-  KITTING ||--o{ LOT : "изготовление"
-  TRANSFER ||--o{ STOCKLINE : "расход (отгрузка)"
-  INVENTORY ||--o{ LOT : "найденные партии"
-  WRITEOFF ||--o{ STOCKLINE : "расход (списание)"
-  REQUISITION ||--o{ STOCKLINE : "расход источника"
-  REQUISITION ||--o{ LOT : "отпочкованные партии"
+  STOCKDOCUMENT ||--o{ LOT : "origin (рождение; receipt/kitting/inventory/requisition — вид = kind)"
+  STOCKDOCUMENT ||--o{ STOCKLINE : "расход/движение (kitting/transfer/writeoff/requisition — вид = kind)"
 
   ITEM ||--o{ ATTACHMENT : "datasheet"
-  RECEIPT ||--o{ ATTACHMENT : "скан УПД"
-  TRANSFER ||--o{ ATTACHMENT : "скан накладной"
-  KITTING ||--o{ ATTACHMENT : "скан акта"
-  INVENTORY ||--o{ ATTACHMENT : "скан акта"
-  WRITEOFF ||--o{ ATTACHMENT : "скан акта"
-  REQUISITION ||--o{ ATTACHMENT : "скан акта"
+  STOCKDOCUMENT ||--o{ ATTACHMENT : "скан ордера (любой вид)"
 
   ITEM {
     int id PK
@@ -227,10 +216,7 @@ erDiagram
     int id PK
     int item_id FK
     int project_id FK "home-проект (immutable)"
-    int receipt_id FK "origin: поставка (nullable)"
-    int kitting_id FK "origin: изготовление (nullable)"
-    int inventory_id FK "origin: инвентаризация (nullable)"
-    int requisition_id FK "origin: требование/отпочкование (nullable)"
+    int origin_id FK "origin-ордер → StockDocument (вид = origin.kind); дуга схлопнута в один FK (Ф2b)"
     int predecessor_id FK "лот-предшественник при закрытии (nullable)"
     decimal qty "рождённое кол-во (origin-количество; живой остаток = qty + Σ движений)"
     decimal unit_cost "цена закупки / себестоимость (снимок)"
@@ -315,10 +301,7 @@ erDiagram
   }
   STOCKLINE {
     int id PK
-    int kitting_id FK "владелец: комплектация (nullable)"
-    int transfer_id FK "владелец: передача (nullable)"
-    int writeoff_id FK "владелец: списание (nullable)"
-    int requisition_id FK "владелец: требование (nullable)"
+    int document_id FK "владелец-ордер → StockDocument (вид = document.kind); дуга схлопнута в один FK (Ф2b)"
     int lot_id FK "расходуемый лот-источник (component = lot.item)"
     int location_id FK
     decimal qty "со знаком: − расход (в Ф2 «Перемещение» даст пару −/+)"
@@ -364,13 +347,8 @@ erDiagram
     string label "опц. подпись (nullable)"
     datetime uploaded_at
     int user_id FK "кто загрузил"
-    int item_id FK "владелец: datasheet (nullable)"
-    int receipt_id FK "владелец: скан УПД (nullable)"
-    int transfer_id FK "владелец: скан накладной (nullable)"
-    int kitting_id FK "владелец: скан акта (nullable)"
-    int inventory_id FK "владелец: скан акта (nullable)"
-    int writeoff_id FK "владелец: скан акта (nullable)"
-    int requisition_id FK "владелец: скан акта (nullable)"
+    int item_id FK "владелец: datasheet изделия (nullable)"
+    int document_id FK "владелец-ордер → StockDocument: скан любого документа (nullable); дуга схлопнута (Ф2b)"
   }
 ```
 
@@ -401,8 +379,10 @@ erDiagram
 - **`Lot` не возникает «из воздуха» — всегда есть origin-документ:** поставка
   (`Receipt`), изготовление (`Kitting`), инвентаризация (`Inventory` — «найденные»
   партии) или отпочкование (`Requisition` — новый лот, отделённый от исходного).
-  **Ровно один origin задан** (инвариант — через `clean()`/констрейнт); явные FK по
-  типу (FK-целостность + удобные join'ы для покрытия закупки и генеалогии).
+  **origin задан всегда** — один FK `Lot.origin → StockDocument` (NOT NULL), вид
+  читается из `origin.kind`. Дуга из четырёх nullable-FK схлопнута в один при MTI
+  (волна 13, Ф2b): id-пространство ордеров едино (Ф2a), поэтому Check «ровно один»
+  больше не нужен — целостность держит обычный FK.
 - **Комплектация (`Kitting`) — инструмент ведения сборки лота, не атомарный акт.**
   Это главная работа, ради неё всё. Акт живёт в статусе `wip` и **копится по ходу
   проекта**: строка `KittingLine` добавляется по факту физической интеграции
@@ -670,13 +650,14 @@ erDiagram
   владелец 1:N. Сам файл лежит на диске (`FileField` → `MEDIA_ROOT`), **не BLOB в
   БД** (иначе раздувание дампов и упор в `max_allowed_packet` на shared-MySQL); в
   таблице — путь, имя, размер, `content_type` (PDF / JPEG / PNG), автор загрузки
-  (`user`) и дата. Связь с владельцем — **тот же приём «взаимоисключающие ссылки»
-  (exclusive arc), что у документа-источника партии (`Lot`)**: семь nullable-FK
-  (`item`/`receipt`/`transfer`/`kitting`/
-  `inventory`/`writeoff`/`requisition`), из которых **задан ровно один** (инвариант
-  через `CheckConstraint` в БД + `clean()` для понятной ошибки в форме). Выбран ради
+  (`user`) и дата. Связь с владельцем — **двухпутный exclusive arc**: `item`
+  (datasheet изделия) ИЛИ `document → StockDocument` (скан любого ордера). Семь
+  документных FK схлопнуты в один при MTI (волна 13, Ф2b: id ордеров едины) —
+  осталась пара `item ↔ document`, из которой **задан ровно один** (инвариант через
+  `CheckConstraint` в БД + `clean()` для понятной ошибки в форме). Выбран ради
   настоящей FK-целостности и каскадного удаления — против `GenericForeignKey`
-  (теряет и то, и другое). Поля «тип файла» нет: datasheet это или скан — ясно из
+  (теряет и то, и другое). API-строки `owner_type` (`item`/`receipt`/…) неизменны:
+  вид ордера читается из `document.kind`. Поля «тип файла» нет: datasheet это или скан — ясно из
   контекста формы-владельца. Удаление владельца — `on_delete=CASCADE` + физическое
   удаление файла с диска (форма переспрашивает и предупреждает, что файлы тоже
   уйдут): доверяем пользователю, лишний повторный дроп лучше осиротевшего мусора на

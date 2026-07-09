@@ -186,26 +186,25 @@ def rebuild_movements(lot):
     main = _main_location()
     rows = []
 
-    # origin: рождение партии (+)
-    origin_kind = lot.origin_kind
-    if origin_kind and lot.qty:
+    # origin: рождение партии (+). Дуга схлопнута в один FK (Ф2b): вид и id берём
+    # из родителя `StockDocument` (`kind` == прежнее имя origin-FK; id == прежнему).
+    if lot.origin_id and lot.qty:
         rows.append(models.StockMovement(
             lot=lot, location=main, type=models.StockMovement.Type.RECEIPT,
-            qty=lot.qty, source_type=origin_kind, source_id=getattr(lot, f'{origin_kind}_id'),
+            qty=lot.qty, source_type=lot.origin.kind, source_id=lot.origin_id,
         ))
 
     # движение существующего лота: единые знаковые строки `StockLine` (волна 13, Ф0)
     # свернули 4 таблицы строк-расхода (комплектация/передача/списание/отпочкование).
     # `StockLine.qty` уже со знаком (− расход); source_type/id — из документа-владельца
-    # (`doc_kind`). Статус документа склад НЕ гейтит (замок чисто интерфейсный); отмена
-    # теперь = удаление документа (каскад строк+лотов), а не `cancelled`-фильтр (Ф1).
-    for sl in lot.stock_lines.select_related('location'):
+    # (`document.kind`/id; дуга схлопнута в один FK в Ф2b). Статус документа склад НЕ
+    # гейтит (замок чисто интерфейсный); отмена = удаление документа (каскад строк+лотов).
+    for sl in lot.stock_lines.select_related('location', 'document'):
         rows.append(models.StockMovement(
             lot=lot, location=sl.location,
             type=(models.StockMovement.Type.RECEIPT if sl.qty > 0
                   else models.StockMovement.Type.ISSUE),
-            qty=sl.qty, source_type=sl.doc_kind,
-            source_id=getattr(sl, f'{sl.doc_kind}_id'),
+            qty=sl.qty, source_type=sl.document.kind, source_id=sl.document_id,
         ))
 
     models.StockMovement.objects.bulk_create(rows)
@@ -253,7 +252,7 @@ def _line_received(line):
     не текущий остаток (получили 100 → спаяли 40 → заказ закрыт на 100).
     """
     return models.Lot.objects.filter(
-        item=line.item, receipt__purchase=line.purchase,
+        item=line.item, origin__receipt__purchase=line.purchase,
     ).aggregate(s=Sum('qty'))['s'] or ZERO
 
 
@@ -359,7 +358,8 @@ def project_deficit(project):
         # триплет прибора: готово (проведённые лоты) / делается (draft) / не начато
         done = models.StockMovement.objects.filter(
             lot__item=target, lot__project=project,
-            lot__kitting__status=models.DocStatus.POSTED,
+            lot__origin__kind=models.StockDocument.Kind.KITTING,
+            lot__origin__status=models.DocStatus.POSTED,
         ).aggregate(s=Sum('qty'))['s'] or ZERO
         wip = _manufactured_in_progress(target, project)
         not_started = max(ZERO, demand.qty - done - wip)
@@ -416,7 +416,7 @@ def _project_spent(project):
     из Kitting) в бюджет не складываем (иначе двойной счёт).
     """
     total = ZERO
-    for lot in project.lots.filter(receipt__isnull=False):
+    for lot in project.lots.filter(origin__kind=models.StockDocument.Kind.RECEIPT):
         total += lot.qty * lot.unit_cost
     return total
 
@@ -469,7 +469,8 @@ def _project_cost(project):
         return ZERO
     total = ZERO
     lots = project.lots.filter(
-        kitting__status=models.DocStatus.POSTED, item_id__in=targets,
+        origin__kind=models.StockDocument.Kind.KITTING,
+        origin__status=models.DocStatus.POSTED, item_id__in=targets,
     )
     for lot in lots:
         total += lot.qty * lot.unit_cost
@@ -635,7 +636,7 @@ def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
     if qty is None or qty <= 0:
         raise ValidationError('Количество пайки должно быть положительным.')
     line = models.StockLine.objects.create(
-        kitting=kitting, lot=lot,
+        document=kitting, lot=lot,
         location=location or _main_location(), qty=-qty, date=date,
     )
     rebuild_movements(lot)
@@ -644,7 +645,7 @@ def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
 
 def update_kitting_line(line, qty):
     """Автосейв количества пайки (правка провизорной строки до замка)."""
-    _require_draft(line.kitting)
+    _require_draft(line.document)
     if qty is None or qty <= 0:
         raise ValidationError('Количество пайки должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход)
@@ -654,7 +655,7 @@ def update_kitting_line(line, qty):
 
 def remove_kitting_line(line):
     """Удалить пробитую строку (коррекция до замка) + пересобрать движения лота."""
-    _require_draft(line.kitting)
+    _require_draft(line.document)
     lot = line.lot
     line.delete()
     rebuild_movements(lot)
@@ -676,7 +677,7 @@ def close_kitting(kitting):
     if kitting.lots.exists():
         raise ValidationError('У комплектации уже есть рождённый лот-прибор.')
     lot = models.Lot.objects.create(
-        item=kitting.target_item, project=kitting.project, kitting=kitting,
+        item=kitting.target_item, project=kitting.project, origin=kitting,
         qty=kitting.qty, unit_cost=_device_unit_cost(kitting),
     )
     kitting.status = models.DocStatus.POSTED
@@ -755,7 +756,7 @@ def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, received_name='',
     if unit_cost is not None and unit_cost < 0:
         raise ValidationError('Цена не может быть отрицательной.')
     lot = models.Lot.objects.create(
-        item=item, project=receipt.project, receipt=receipt, qty=qty,
+        item=item, project=receipt.project, origin=receipt, qty=qty,
         unit_cost=unit_cost or ZERO, received_name=received_name or '',
         serial_number=serial_number or '',
     )
@@ -770,7 +771,7 @@ def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
     Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
     уйдёт в минус (недостача информативнее, в духе мутабельной ДНК).
     """
-    _require_draft(lot.receipt)
+    _require_draft(lot.origin)
     fields = []
     if qty is not None:
         if qty <= 0:
@@ -796,7 +797,7 @@ def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
 
 def remove_receipt_lot(lot):
     """Удалить строку УПД (до замка). Guard: лот не потреблён ниже."""
-    _require_draft(lot.receipt)
+    _require_draft(lot.origin)
     if _lot_consumed_downstream(lot):
         raise ValidationError(
             'Партия уже потреблена ниже (пайка/передача) — удаление заблокировано.')
@@ -1065,10 +1066,11 @@ def item_shipments(item):
     """
     rows = []
     for line in (models.StockLine.objects
-                 .filter(transfer__isnull=False, lot__item=item)
-                 .select_related('transfer__project', 'lot')
-                 .order_by('-transfer__date', '-id')):
-        t = line.transfer
+                 .filter(document__kind=models.StockDocument.Kind.TRANSFER,
+                         lot__item=item)
+                 .select_related('document__transfer__project', 'lot')
+                 .order_by('-document__transfer__date', '-id')):
+        t = line.document.transfer
         rows.append({
             'transfer_id': t.id, 'number': t.number, 'date': t.date,
             'project_code': t.project.code, 'posted': t.is_posted,
@@ -1104,7 +1106,7 @@ def add_transfer_line(transfer, lot, qty, display_name=''):
     if qty is None or qty <= 0:
         raise ValidationError('Количество передачи должно быть положительным.')
     line = models.StockLine.objects.create(
-        transfer=transfer, lot=lot, location=_main_location(), qty=-qty,
+        document=transfer, lot=lot, location=_main_location(), qty=-qty,
         display_name=(display_name or '').strip() or _lot_label(lot))
     rebuild_movements(lot)
     return line
@@ -1112,7 +1114,7 @@ def add_transfer_line(transfer, lot, qty, display_name=''):
 
 def update_transfer_line(line, qty=None, display_name=None):
     """Автосейв строки передачи (кол-во / отображаемое имя для накладной)."""
-    _require_draft(line.transfer)
+    _require_draft(line.document)
     fields = []
     if qty is not None:
         if qty <= 0:
@@ -1131,7 +1133,7 @@ def update_transfer_line(line, qty=None, display_name=None):
 
 def remove_transfer_line(line):
     """Убрать строку передачи (коррекция) — источник возвращает остаток."""
-    _require_draft(line.transfer)
+    _require_draft(line.document)
     lot = line.lot
     line.delete()
     rebuild_movements(lot)
@@ -1255,14 +1257,14 @@ def add_writeoff_line(writeoff, lot, qty, location=None):
     if qty is None or qty <= 0:
         raise ValidationError('Количество списания должно быть положительным.')
     line = models.StockLine.objects.create(
-        writeoff=writeoff, lot=lot, location=location or _main_location(), qty=-qty)
+        document=writeoff, lot=lot, location=location or _main_location(), qty=-qty)
     rebuild_movements(lot)
     return line
 
 
 def update_writeoff_line(line, qty):
     """Автосейв количества строки списания. Только черновик (замок)."""
-    _require_draft(line.writeoff)
+    _require_draft(line.document)
     if qty is None or qty <= 0:
         raise ValidationError('Количество списания должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход)
@@ -1273,7 +1275,7 @@ def update_writeoff_line(line, qty):
 
 def remove_writeoff_line(line):
     """Убрать строку списания (коррекция) — источник возвращает остаток."""
-    _require_draft(line.writeoff)
+    _require_draft(line.document)
     lot = line.lot
     line.delete()
     rebuild_movements(lot)
@@ -1359,10 +1361,10 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
     if requisition.lines.filter(lot=source_lot).exists():
         raise ValidationError('Этот лот уже в требовании — правьте существующую строку.')
     line = models.StockLine.objects.create(
-        requisition=requisition, lot=source_lot,
+        document=requisition, lot=source_lot,
         location=location or _main_location(), qty=-qty)
     born = models.Lot.objects.create(
-        item=source_lot.item, project=requisition.project, requisition=requisition,
+        item=source_lot.item, project=requisition.project, origin=requisition,
         predecessor=source_lot, qty=qty, unit_cost=source_lot.unit_cost,
         received_name=source_lot.received_name, serial_number=source_lot.serial_number)
     rebuild_movements(source_lot)   # −ISSUE у источника
@@ -1373,12 +1375,12 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
 def update_requisition_line(line, qty):
     """Автосейв количества: правит и строку-источник (`−ISSUE`), и потомок (`+RECEIPT`).
     Только черновик (замок)."""
-    _require_draft(line.requisition)
+    _require_draft(line.document)
     if qty is None or qty <= 0:
         raise ValidationError('Количество требования должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход) у источника
     line.save(update_fields=['qty'])
-    born = _requisition_born_lot(line.requisition, line.lot)
+    born = _requisition_born_lot(line.document, line.lot)
     if born is not None:
         born.qty = qty                   # рождённый лот-потомок — положительное кол-во
         born.save(update_fields=['qty'])
@@ -1392,9 +1394,9 @@ def remove_requisition_line(line):
 
     Guard: потомок не должен быть потреблён ниже (спаян/передан/списан из белого).
     """
-    _require_draft(line.requisition)
+    _require_draft(line.document)
     src = line.lot
-    born = _requisition_born_lot(line.requisition, src)
+    born = _requisition_born_lot(line.document, src)
     if born is not None and _lot_consumed_downstream(born):
         raise ValidationError(
             'Поставленный на баланс лот уже потреблён ниже — удаление заблокировано.')
@@ -2045,8 +2047,8 @@ def autopeg_procurement(procurement, user):
 # ре-материализацию серых остатков (списанное → −ISSUE «в серый»; найдено физически
 # → возвращаем на баланс новым лотом с `predecessor` → списанный, наследуя
 # item/цену/название/зав.№). Отдельной `InventoryLine` в модели нет: строки акта =
-# его лоты (`inventory.lots`, как приход/УПД). Origin `inventory` уже знают
-# `LOT_ORIGIN_FIELDS` и `rebuild_movements` — волна добавляет записываемую надстройку.
+# его лоты (`inventory.lots`, как приход/УПД). Origin `inventory` несёт единый
+# `Lot.origin` (Ф2b) и знает `rebuild_movements` — волна добавила записываемую надстройку.
 # Замка нет (у модели нет поля-статуса, как у Writeoff/Requisition): правимо всегда,
 # корректность держат guard'ы + PROTECT.
 def inventory_cockpit(inventory):
@@ -2103,7 +2105,7 @@ def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, received_name='',
     if unit_cost is not None and unit_cost < 0:
         raise ValidationError('Цена не может быть отрицательной.')
     lot = models.Lot.objects.create(
-        item=item, project=inventory.project, inventory=inventory, qty=qty,
+        item=item, project=inventory.project, origin=inventory, qty=qty,
         unit_cost=unit_cost or ZERO, received_name=received_name or '',
         serial_number=serial_number or '', predecessor=predecessor)
     rebuild_movements(lot)
@@ -2114,7 +2116,7 @@ def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
                          serial_number=None):
     """Автосейв строки акта (кол-во/цена/название/зав.№). Кол-во не клампим по расходу.
     Только черновик (замок)."""
-    _require_draft(lot.inventory)
+    _require_draft(lot.origin)
     fields = []
     if qty is not None:
         if qty <= 0:
@@ -2140,7 +2142,7 @@ def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
 
 def remove_inventory_lot(lot):
     """Удалить строку акта (коррекция). Guard: черновик + найденный лот не потреблён ниже."""
-    _require_draft(lot.inventory)
+    _require_draft(lot.origin)
     if _lot_consumed_downstream(lot):
         raise ValidationError(
             'Найденная партия уже потреблена ниже — удаление заблокировано.')
@@ -2177,11 +2179,12 @@ def written_off_lots():
     с лота (сколько «серого» доступно вернуть).
     """
     result = []
-    for lot in (models.Lot.objects.filter(stock_lines__writeoff__isnull=False).distinct()
+    wo = models.StockDocument.Kind.WRITEOFF
+    for lot in (models.Lot.objects.filter(stock_lines__document__kind=wo).distinct()
                 .select_related('item', 'project').order_by('project__code',
                                                             'item__code', 'id')):
         # qty знаковый (− расход) → магнитуда списанного = −Σ
-        written = -(lot.stock_lines.filter(writeoff__isnull=False)
+        written = -(lot.stock_lines.filter(document__kind=wo)
                     .aggregate(s=Sum('qty'))['s'] or ZERO)
         result.append({
             'lot_id': lot.id, 'item_id': lot.item_id,
@@ -2391,16 +2394,26 @@ def remove_bom_line(line):
 # --------------------------------------------------------------------------- #
 #  Вложения (волна 11): PDF/сканы к документам и изделиям (exclusive-arc владелец)
 # --------------------------------------------------------------------------- #
-# Владелец вложения — ровно один FK (как в модели, `Attachment.OWNER_FIELDS`).
-# owner_type в API = имя этого поля; модель выводим из него (item→Item, …).
-ATTACHMENT_OWNERS = {
-    f: getattr(models, f.capitalize()) for f in models.Attachment.OWNER_FIELDS
+# Владелец вложения. API-контракт `owner_type` неизменён (стабильные строки:
+# 'item' + виды ордера) — но после коллапса дуги (Ф2b) физических владельцев два:
+# `Attachment.item` (изделие) и `Attachment.document` (ордер, любой вид). Разрешаем
+# owner_type в КОНКРЕТНУЮ модель (строгая проверка «не найден»/несовпадение вида),
+# а храним в `item` (для 'item') или `document` (для видов ордера).
+ATTACHMENT_OWNER_MODELS = {
+    'item': models.Item, 'receipt': models.Receipt, 'transfer': models.Transfer,
+    'kitting': models.Kitting, 'inventory': models.Inventory,
+    'writeoff': models.Writeoff, 'requisition': models.Requisition,
 }
 
 
+def _attachment_owner_field(owner_type):
+    """Поле-владелец под owner_type: 'item' → item; вид ордера → document."""
+    return 'item' if owner_type == 'item' else 'document'
+
+
 def resolve_attachment_owner(owner_type, owner_id):
-    """Найти документ-владельца по типу (имя FK) и id. Ошибка на неизвестный тип."""
-    model = ATTACHMENT_OWNERS.get(owner_type)
+    """Найти владельца по типу (имя из API) и id. Ошибка на неизвестный тип."""
+    model = ATTACHMENT_OWNER_MODELS.get(owner_type)
     if model is None:
         raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
     try:
@@ -2422,9 +2435,15 @@ def attachment_row(att):
 
 def attachments_for(owner_type, owner_id):
     """Список вложений владельца (свежие сверху)."""
-    if owner_type not in ATTACHMENT_OWNERS:
+    if owner_type not in ATTACHMENT_OWNER_MODELS:
         raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
-    qs = (models.Attachment.objects.filter(**{owner_type: owner_id})
+    if owner_type == 'item':
+        flt = {'item_id': owner_id}
+    else:
+        # id ордеров глобально уникален (Ф2a) → document_id однозначен; фильтр по
+        # kind сохраняет прежнюю строгость (несовпадение вида → пусто).
+        flt = {'document_id': owner_id, 'document__kind': owner_type}
+    qs = (models.Attachment.objects.filter(**flt)
           .select_related('user').order_by('-id'))
     return [attachment_row(a) for a in qs]
 
@@ -2433,9 +2452,9 @@ def add_attachment(owner_type, owner, upload, user, label=''):
     """Прикрепить файл к владельцу: файл на диск, метаданные из upload (не с клиента).
 
     filename/size/content_type заполняет сервер из загруженного файла. Владелец
-    ровно один (exclusive arc) — задаётся по owner_type. Синхронно, без Celery.
+    ровно один (exclusive arc item↔document) — поле задаётся по owner_type. Синхронно.
     """
-    if owner_type not in ATTACHMENT_OWNERS:
+    if owner_type not in ATTACHMENT_OWNER_MODELS:
         raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
     if upload is None:
         raise ValidationError('Нужен файл вложения.')
@@ -2445,7 +2464,8 @@ def add_attachment(owner_type, owner, upload, user, label=''):
     att = models.Attachment(
         file=upload, filename=upload.name or '', size=upload.size or 0,
         content_type=getattr(upload, 'content_type', '') or '',
-        label=(label or '').strip(), user=user, **{owner_type: owner})
+        label=(label or '').strip(), user=user,
+        **{_attachment_owner_field(owner_type): owner})
     att.full_clean(exclude=['file'])   # exclusive-arc + длины полей (file уже валиден)
     att.save()
     return att

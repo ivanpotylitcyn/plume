@@ -201,11 +201,26 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       remap **побайтово** сохранил остатки лотов/счётчики/дуги (SNAP_A==SNAP_C). Dev-MySQL
       догнан на 0005 (остаток движений инвариантен). Обе mermaid-диаграммы README обновлены.
 
-**Ф2b+ — оставшееся Ф2 (следующими укусами):**
-- [ ] `Lot.origin` → один FK на `StockDocument`; снести `LOT_ORIGIN_FIELDS`,
-      `_exactly_one_q`, Check (id-пространство уже унифицировано в Ф2a).
-- [ ] `Attachment.owner` → FK(StockDocument)+Item; снести `ATTACHMENT_OWNER_FIELDS`.
-      `StockLine.document` → один FK; снести `STOCKLINE_DOC_FIELDS`.
+**Ф2b — коллапс дуг: три exclusive-arc → один FK на `StockDocument` ✅ 2026-07-09**
+- [x] `Lot.origin` → один NOT-NULL FK на `StockDocument`; снесены `LOT_ORIGIN_FIELDS` и
+      Check `lot_exactly_one_origin` (вид = `origin.kind`). `_exactly_one_q` жив (нужен
+      двухпутному `Attachment`).
+- [x] `StockLine.document` → один NOT-NULL FK; снесены `STOCKLINE_DOC_FIELDS` + Check.
+      `Attachment.owner` → двухпутный `item ↔ document(StockDocument)`; `ATTACHMENT_OWNER_FIELDS
+      = ('item','document')`, Check переопределён (6 документных FK схлопнуты в один).
+- [x] Миграция `0006_collapse_arcs` (реверсивна): бэкфилл `COALESCE` (id ребёнка == id
+      родителя после Ф2a — ремап не нужен) + обратный раздатчик по `kind`; `RemoveConstraint`
+      первым → `AddConstraint` последним при откате (не падает на пустых колонках). Движок:
+      `origin_kind`/`doc_kind` из `.kind`, query-lookups `origin__kind=…`; реверсы дуг
+      (`receipt.lots`/`kitting.lines`/`receipt.attachments`) целы через MTI; API байт-в-байт
+      (фронт не тронут). Admin-инлайны `StockLine` → `fk_name='document'` (MTI `get_parent_list`).
+- [x] **Проверка:** 188 тестов (+5 `Wave13Fase2bTests`) зелёные на MySQL 8.0.25;
+      `makemigrations --check` чист. Круговой прогон seed@0006→reverse@0005→forward@0006 —
+      SNAP_A==SNAP_C побайтово (sha256), при 0005 арк-колонки восстановлены по видам.
+      Dev-MySQL догнан на 0006 (stale pre-Ф2a `source_id` починены rebuild'ом, drift=0).
+      Обе mermaid-диаграммы README + проза обновлены. См. JOURNAL 2026-07-09 Ф2b.
+
+**Ф2c+ — оставшееся Ф2 (следующими укусами):**
 - [ ] Подъём общих полей (`project`/`user`/`date`/`number`/`note`) в родителя (дедуп;
       правит 1 обратный аксессор `project.writeoffs`).
 - [ ] Условная валидация специфики по `kind` (NOT NULL держит дочерняя таблица).

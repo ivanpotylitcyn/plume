@@ -62,7 +62,7 @@ class Command(BaseCommand):
         receipt = models.Receipt.objects.create(
             number='УПД-1', date=D(2026, 5, 20), supplier=supplier, project=prj,
             user=user, status=models.DocStatus.POSTED)
-        models.Lot.objects.create(item=case, project=prj, receipt=receipt, qty=12,
+        models.Lot.objects.create(item=case, project=prj, origin=receipt, qty=12,
                                   unit_cost=800, received_name='Корпус Al')
 
         # --- ВИНТ-М3: открытый заказ 25 (●), склада нет ---------------- #
@@ -78,28 +78,28 @@ class Command(BaseCommand):
         # источник под пайку резисторов: приход РЕЗ-10К 100
         r_res = models.Receipt.objects.create(
             number='УПД-2', date=D(2026, 5, 21), supplier=supplier, project=prj, user=user)
-        res_lot = models.Lot.objects.create(item=res, project=prj, receipt=r_res,
+        res_lot = models.Lot.objects.create(item=res, project=prj, origin=r_res,
                                             qty=100, unit_cost=1, received_name='Резистор')
 
         closed_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=3, date=D(2026, 5, 25),
             status=models.DocStatus.POSTED)
-        models.StockLine.objects.create(kitting=closed_k, lot=res_lot,
+        models.StockLine.objects.create(document=closed_k, lot=res_lot,
                                         location=main, qty=-6, date=D(2026, 5, 25))
-        models.Lot.objects.create(item=board, project=prj, kitting=closed_k, qty=3,
+        models.Lot.objects.create(item=board, project=prj, origin=closed_k, qty=3,
                                   unit_cost=1506, serial_number='ПЛ-001..003')
 
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
             status=models.DocStatus.DRAFT)
-        models.StockLine.objects.create(kitting=wip_k, lot=res_lot,
+        models.StockLine.objects.create(document=wip_k, lot=res_lot,
                                         location=main, qty=-4, date=D(2026, 6, 2))
 
         # --- КОРПУС-1 на «Собственном складе» (5) — для карты ---------- #
         inv = models.Inventory.objects.create(
             project=white, user=user, number='ИНВ-1', date=D(2026, 6, 3),
             note='Остаток с прошлого НИР')
-        models.Lot.objects.create(item=case, project=white, inventory=inv, qty=5,
+        models.Lot.objects.create(item=case, project=white, origin=inv, qty=5,
                                   unit_cost=800, received_name='Корпус Al (остаток)')
 
         # --- пересборка проекции склада -------------------------------- #
