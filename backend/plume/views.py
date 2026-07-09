@@ -47,6 +47,17 @@ def _bad(exc):
     return Response({'detail': str(exc)}, status=http.HTTP_400_BAD_REQUEST)
 
 
+def _delete_order(doc):
+    """DELETE складского ордера с единым friendly-guard (В13 Ф1b): draft — свободно;
+    posted — «сперва расфиксировать»; `PROTECT` бережёт потраченные лоты. 204 при
+    успехе, 400 с текстом — при отказе."""
+    try:
+        engine.delete_stock_document(doc)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(status=http.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def ping(request):
@@ -323,11 +334,13 @@ def kittings(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def kitting_detail(request, pk):
     """Кокпит комплектации: BOM 1 уровень, реальные + призрачные строки.
-    PATCH — правка шапки (кол-во образцов / дата) прямо в кокпите."""
+    PATCH — правка шапки (кол-во образцов / дата) прямо в кокпите. DELETE — удаление."""
     k = get_object_or_404(models.Kitting, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(k)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -447,11 +460,13 @@ def receipts(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def receipt_detail(request, pk):
     """Кокпит прихода: строки-лоты УПД + живой остаток + сумма.
-    PATCH — правка шапки (№ УПД / дата) прямо в кокпите."""
+    PATCH — правка шапки (№ УПД / дата) прямо в кокпите. DELETE — удаление."""
     r = get_object_or_404(models.Receipt, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(r)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -716,11 +731,13 @@ def transfers(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def transfer_detail(request, pk):
     """Кокпит передачи: строки-лоты накладной + живой остаток источника + итог.
-    PATCH — правка шапки (№ накладной / дата) прямо в кокпите."""
+    PATCH — правка шапки (№ накладной / дата) прямо в кокпите. DELETE — удаление."""
     t = get_object_or_404(models.Transfer, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(t)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -834,11 +851,13 @@ def writeoffs(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def writeoff_detail(request, pk):
     """Кокпит списания: строки-лоты (`−ISSUE`) + живой остаток источника + итог.
-    PATCH — правка шапки (№ акта / дата / причина) прямо в кокпите."""
+    PATCH — правка шапки (№ акта / дата / причина) прямо в кокпите. DELETE — удаление."""
     w = get_object_or_404(models.Writeoff, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(w)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -883,6 +902,25 @@ def writeoff_line_detail(request, pk):
     return Response(engine.writeoff_cockpit(writeoff))
 
 
+@api_view(['POST'])
+def writeoff_post(request, pk):
+    """Провести списание — форма read-only (единый мягкий замок)."""
+    w = get_object_or_404(models.Writeoff, pk=pk)
+    try:
+        engine.post_writeoff(w)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.writeoff_cockpit(w))
+
+
+@api_view(['POST'])
+def writeoff_unpost(request, pk):
+    """Снять замок списания — снова разрешить правку."""
+    w = get_object_or_404(models.Writeoff, pk=pk)
+    engine.unpost_writeoff(w)
+    return Response(engine.writeoff_cockpit(w))
+
+
 # ── Требование / Requisition ──
 def _requisition_row(r):
     return {
@@ -912,11 +950,13 @@ def requisitions(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def requisition_detail(request, pk):
     """Кокпит требования: строки (источник → потомок) + живой остаток источника.
-    PATCH — правка шапки (№ / дата) прямо в кокпите."""
+    PATCH — правка шапки (№ / дата) прямо в кокпите. DELETE — удаление."""
     r = get_object_or_404(models.Requisition, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(r)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -960,6 +1000,25 @@ def requisition_line_detail(request, pk):
     return Response(engine.requisition_cockpit(requisition))
 
 
+@api_view(['POST'])
+def requisition_post(request, pk):
+    """Провести требование — форма read-only (единый мягкий замок)."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    try:
+        engine.post_requisition(r)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_cockpit(r))
+
+
+@api_view(['POST'])
+def requisition_unpost(request, pk):
+    """Снять замок требования — снова разрешить правку."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    engine.unpost_requisition(r)
+    return Response(engine.requisition_cockpit(r))
+
+
 # ── Инвентаризация / Inventory (записываемое ядро, волна 9) ──
 def _inventory_row(i):
     return {
@@ -990,11 +1049,13 @@ def inventories(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def inventory_detail(request, pk):
     """Кокпит инвентаризации: строки-лоты (`+RECEIPT`) + провенанс + итог.
-    PATCH — правка шапки (№ акта / дата / примечание) прямо в кокпите."""
+    PATCH — правка шапки (№ акта / дата / примечание) прямо в кокпите. DELETE — удаление."""
     i = get_object_or_404(models.Inventory, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(i)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -1064,6 +1125,25 @@ def inventory_lot_detail(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.inventory_cockpit(inventory))
+
+
+@api_view(['POST'])
+def inventory_post(request, pk):
+    """Провести инвентаризацию — форма read-only (единый мягкий замок)."""
+    i = get_object_or_404(models.Inventory, pk=pk)
+    try:
+        engine.post_inventory(i)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.inventory_cockpit(i))
+
+
+@api_view(['POST'])
+def inventory_unpost(request, pk):
+    """Снять замок инвентаризации — снова разрешить правку."""
+    i = get_object_or_404(models.Inventory, pk=pk)
+    engine.unpost_inventory(i)
+    return Response(engine.inventory_cockpit(i))
 
 
 @api_view(['GET'])

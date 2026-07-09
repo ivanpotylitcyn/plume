@@ -128,11 +128,32 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       (reopen → delete). См. JOURNAL 2026-07-09 Ф1a.
 
 **Ф1b — фронт-срез + правило удаления (вьюхи потом)**
+
+*Бэкенд-подрез Ф1b — DELETE-эндпойнты + post/unpost/edit-freeze трёх ордеров ✅ 2026-07-09*
+- [x] Обвязка post/unpost + edit-freeze для Инвентаризации/Требования/Списания.
+      Единый `_require_draft` теперь гейтит правку шапки И строк этих трёх (раньше не
+      гейтил — поле `status` завели в Ф1a, обвязки не было). Общие хелперы
+      `post_document`/`unpost_document` (пустой-guard + `draft⇄posted`, зеркалят
+      `approve_receipt`/`post_transfer`); тонкие обёртки `post_writeoff`/`post_requisition`/
+      `post_inventory` (+ unpost). Кокпиты трёх отдают `posted` (аддитивно, под фронт Ф1b).
+- [x] DELETE-эндпойнты **всех 6** ордеров + единый friendly-guard `delete_stock_document`:
+      draft — свободно; **posted — «сперва расфиксировать»**; `PROTECT` бережёт
+      потраченные лоты (born-лот потреблён ниже → дружелюбный отказ, не сырой
+      `ProtectedError`). Механика обходит грабли CHECK `exactly_one_origin` (JOURNAL Ф1a):
+      born-лоты и их движения сносим **явно** (как `reopen_kitting`), затем документ
+      (каскад `StockLine`+вложения), затем `rebuild_movements` источников (снять `−ISSUE`).
+      Файлы вложений чистим отдельно (каскад БД их бы осиротил). `DELETE` на 6 detail-вью
+      (`_delete_order` → 204/400).
+- [x] **Проверка:** 179 тестов (было 169; +8 движковых `Wave13Fase1bTests` +2 HTTP
+      `OrderDeleteHttpTests`) зелёные на SQLite **и** боевом MySQL 8.0.25; `makemigrations
+      --check` чист (модель не менялась — миграции не нужно); `seed_demo` ок; **живой
+      end-to-end** на dev-MySQL (posted-delete заблокирован, unpost+delete вернул остаток
+      источника 12→11→12).
+
+*Фронт-подрез Ф1b — вьюхи (следующим заходом):*
 - [ ] Канон: мягкий замок + «сохранено/редактируется» на `Item`/`Project`.
 - [ ] Фронт: единый режим «Ордера» (список+фильтр по `kind`) + `<OrderForm kind=...>`.
-- [ ] DELETE-эндпойнты ордеров + friendly-guard правила удаления (draft свободно;
-      posted — сперва расфиксировать; `PROTECT` бережёт потраченные лоты).
-- [ ] Обвязка post/unpost + edit-freeze для Инвентаризации/Требования/Списания.
+- [ ] Фронт: кнопки провести/расфиксировать/удалить у Инв/Треб/Списания (эндпойнты готовы).
 
 ### Ф2 — MTI, убить дугу (осознанный слом заморозки)
 - [ ] Родитель `StockDocument`(шапка+`kind`) + дочерние под специфику.

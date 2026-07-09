@@ -16,6 +16,44 @@
 
 ---
 
+## 2026-07-09 — Волна 13, Ф1b (бэкенд-подрез): DELETE + post/unpost/edit-freeze
+**Тип:** решение + реализация
+**Контекст:** Продолжение Ф1. По выбору Ивана взят **бэкенд-срез Ф1b** (фронт-рефактор
+единого режима «Ордера» + канон замка на `Item`/`Project` — отдельным заходом, дисциплина
+«модель+движок сейчас, вьюхи потом»). Две дыры после Ф1a: (1) Инвентаризация/Требование/
+Списание получили поле `status`, но обвязки post/unpost и edit-freeze не было (правку не
+гейтили); (2) удалять ордера было нечем — document-level DELETE не существовал ни у одного.
+**Итог (сделано):**
+- **edit-freeze для трёх:** `_require_draft` навешен на `update_writeoff/requisition/
+  inventory` (шапка) и на все их строки (`add/update/remove`-line, `add/update/remove
+  inventory_lot`). Теперь проведённый акт read-only, как приход/передача/комплектация.
+- **post/unpost для трёх:** общие хелперы `post_document(doc, rows, empty_msg)` /
+  `unpost_document(doc)` в секции единого замка (пустой-guard + `draft⇄posted`, зеркалят
+  `approve_receipt`/`post_transfer`); тонкие обёртки `post_writeoff`/`post_requisition`/
+  `post_inventory` (+unpost). Кокпиты трёх отдают `posted` (аддитивно, безопасно —
+  фронт волны читает по ключам, лишний игнорит; под будущий фронт Ф1b).
+- **Единое правило удаления `delete_stock_document(doc)`** на все 6 ордеров: **draft —
+  свободно; posted — «сперва расфиксировать»** (`is_posted` → отказ); `PROTECT` бережёт
+  потраченные лоты — born-лот, потреблённый ниже (`_lot_consumed_downstream`), даёт
+  дружелюбный отказ вместо сырого `ProtectedError`. Отмена = удаление (канон В13, не копим
+  надгробия). Вью — `DELETE` на 6 detail-эндпойнтах через хелпер `_delete_order` (204/400).
+- **Механика удаления обходит грабли Ф1a** (прямой `delete()` born-дока бьёт CHECK
+  `exactly_one_origin` на MySQL): born-лоты и их движения сносим **явно** (как
+  `reopen_kitting`) → потом `doc.delete()` (каскад `StockLine`+вложений) → потом
+  `rebuild_movements` лотов-источников (снять их `−ISSUE`). Файлы вложений чистим отдельно
+  (`delete_attachment`) — каскад БД удалил бы строки, но **осиротил файлы на диске**.
+**Проверка:** 179 тестов (было 169; +8 `Wave13Fase1bTests` — post/unpost round-trip,
+пустой-guard, edit-freeze шапки+строк ×3, delete draft/posted/born-consumed, rebuild
+источника; +2 `OrderDeleteHttpTests` — HTTP-путь post→unpost→delete + receipt draft
+delete) зелёные на SQLite **и боевом MySQL 8.0.25**. `makemigrations --check` чист —
+**модель не менялась, миграция не нужна** (в отличие от Ф0/Ф1a). `seed_demo` ок. **Живой
+end-to-end** на dev-MySQL: posted-delete заблокирован, `unpost`+`delete` вернул остаток
+источника (12→11→12). Заодно догнали dev-MySQL на `0004` (в Ф1a проверяли на scratch).
+**Последствия:** эндпойнты post/unpost/delete готовы под фронт-подрез Ф1b (единый режим
+«Ордера» + `<OrderForm kind=...>` + канон замка на `Item`/`Project` + кнопки провести/
+расфиксировать/удалить). Компат-шим кокпитов держит текущий фронт нетронутым. Прод не
+трогали. См. [WAVE13.md](WAVE13.md).
+
 ## 2026-07-09 — Волна 13, Ф1a: единый мягкий замок `status {draft ⇄ posted}`
 **Тип:** решение + реализация + грабли
 **Контекст:** Вторая фаза разморозки. По выбору Ивана — только **бэкенд-срез Ф1a**

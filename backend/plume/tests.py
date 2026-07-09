@@ -1645,6 +1645,54 @@ class InventoryHttpTests(TestCase):
         self.assertEqual(row['serial_number'], 'ЗН-9')        # зав.№ унаследован
 
 
+class OrderDeleteHttpTests(TestCase):
+    """Волна 13 Ф1b: HTTP-путь post/unpost + DELETE ордеров (friendly-guard)."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create(username='admin', is_superuser=True)
+        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.item = models.Item.objects.create(code='R100', name='R100')
+        self.sup = models.Supplier.objects.create(name='П')
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+            supplier=self.sup, project=self.prj, user=self.user)
+        self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
+            receipt=r, qty=D(10))
+        engine.rebuild_movements(self.lot)
+        self.c = Client()
+        self.c.force_login(self.user)
+
+    def test_writeoff_post_unpost_delete_flow(self):
+        w = self.c.post('/api/writeoffs/', {'project_id': self.prj.id, 'number': 'СП-1'},
+            content_type='application/json').json()
+        wid = w['id']
+        self.c.post(f'/api/writeoffs/{wid}/lines/', {'lot_id': self.lot.id, 'qty': 4},
+            content_type='application/json')
+        # провести
+        posted = self.c.post(f'/api/writeoffs/{wid}/post/')
+        self.assertEqual(posted.status_code, 200)
+        self.assertTrue(posted.json()['posted'])
+        # posted — удаление отклонено (сперва расфиксировать)
+        blocked = self.c.delete(f'/api/writeoffs/{wid}/')
+        self.assertEqual(blocked.status_code, 400)
+        # расфиксировать → удалить
+        self.assertEqual(self.c.post(f'/api/writeoffs/{wid}/unpost/').status_code, 200)
+        gone = self.c.delete(f'/api/writeoffs/{wid}/')
+        self.assertEqual(gone.status_code, 204)
+        self.assertFalse(models.Writeoff.objects.filter(pk=wid).exists())
+        # источник освобождён (нет −ISSUE)
+        self.assertEqual(engine.lot_live_qty(self.lot), D(10))
+
+    def test_receipt_delete_draft(self):
+        r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
+            supplier=self.sup, project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.item, D(5))
+        resp = self.c.delete(f'/api/receipts/{r.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(models.Lot.objects.filter(pk=lot.pk).exists())
+
+
 class ProjectBudgetTests(EngineTestBase):
     """Волна 10: бюджет проекта — потрачено/план/компас + себестоимость/экономия."""
 
@@ -2180,3 +2228,150 @@ class UnifiedDocStatusTests(EngineTestBase):
         self.assertEqual(engine.kitting_cockpit(k)['status'], 'wip')   # draft
         engine.close_kitting(k)
         self.assertEqual(engine.kitting_cockpit(k)['status'], 'closed')  # posted
+
+
+class Wave13Fase1bTests(EngineTestBase):
+    """Волна 13 Ф1b (бэкенд-срез): обвязка post/unpost + edit-freeze для
+    Инвентаризации/Требования/Списания и единое правило удаления ордеров
+    (draft — свободно; posted — сперва расфиксировать; `PROTECT` бережёт лоты)."""
+
+    def _other_project(self):
+        return models.Project.objects.create(
+            code='P9', name='Проект 9', kind=models.Project.Kind.EXTERNAL)
+
+    # ── post/unpost round-trip + пустой guard ──
+    def test_post_unpost_roundtrip_three_docs(self):
+        """draft → posted → draft для списания/требования/инвентаризации."""
+        # списание
+        lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'С-1')
+        engine.add_writeoff_line(w, lot, D(3))
+        engine.post_writeoff(w); w.refresh_from_db()
+        self.assertTrue(w.is_posted)
+        self.assertTrue(engine.writeoff_cockpit(w)['posted'])
+        engine.unpost_writeoff(w); w.refresh_from_db()
+        self.assertFalse(w.is_posted)
+        # инвентаризация
+        inv = engine.create_inventory(self.prj, self.user, 'И-1')
+        engine.add_inventory_lot(inv, self.make_item('B'), D(4))
+        engine.post_inventory(inv); inv.refresh_from_db()
+        self.assertTrue(inv.is_posted)
+        self.assertTrue(engine.inventory_cockpit(inv)['posted'])
+        engine.unpost_inventory(inv); inv.refresh_from_db()
+        self.assertFalse(inv.is_posted)
+        # требование
+        src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
+        req = engine.create_requisition(self.prj, self.user, 'Т-1')
+        engine.add_requisition_line(req, src, D(2))
+        engine.post_requisition(req); req.refresh_from_db()
+        self.assertTrue(req.is_posted)
+        self.assertTrue(engine.requisition_cockpit(req)['posted'])
+        engine.unpost_requisition(req); req.refresh_from_db()
+        self.assertFalse(req.is_posted)
+
+    def test_post_empty_doc_refused(self):
+        """Пустой ордер нельзя провести (как приход/передача)."""
+        w = engine.create_writeoff(self.prj, self.user, 'С-2')
+        with self.assertRaises(ValidationError):
+            engine.post_writeoff(w)
+        inv = engine.create_inventory(self.prj, self.user, 'И-2')
+        with self.assertRaises(ValidationError):
+            engine.post_inventory(inv)
+        req = engine.create_requisition(self.prj, self.user, 'Т-2')
+        with self.assertRaises(ValidationError):
+            engine.post_requisition(req)
+
+    # ── edit-freeze: проведённый документ read-only ──
+    def test_edit_freeze_blocks_edits_on_posted_three_docs(self):
+        """posted-ордер гейтит правку шапки И строк (единый `_require_draft`)."""
+        # списание
+        lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'С-3')
+        line = engine.add_writeoff_line(w, lot, D(3))
+        engine.post_writeoff(w)
+        with self.assertRaises(ValidationError):
+            engine.update_writeoff(w, number='С-3x')
+        with self.assertRaises(ValidationError):
+            engine.add_writeoff_line(w, lot, D(1))
+        with self.assertRaises(ValidationError):
+            engine.update_writeoff_line(line, D(2))
+        with self.assertRaises(ValidationError):
+            engine.remove_writeoff_line(line)
+        # инвентаризация
+        inv = engine.create_inventory(self.prj, self.user, 'И-3')
+        ilot = engine.add_inventory_lot(inv, self.make_item('B'), D(4))
+        engine.post_inventory(inv)
+        with self.assertRaises(ValidationError):
+            engine.update_inventory(inv, number='И-3x')
+        with self.assertRaises(ValidationError):
+            engine.add_inventory_lot(inv, self.make_item('B2'), D(1))
+        with self.assertRaises(ValidationError):
+            engine.update_inventory_lot(ilot, qty=D(9))
+        with self.assertRaises(ValidationError):
+            engine.remove_inventory_lot(ilot)
+        # требование
+        src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
+        req = engine.create_requisition(self.prj, self.user, 'Т-3')
+        rline = engine.add_requisition_line(req, src, D(2))
+        engine.post_requisition(req)
+        with self.assertRaises(ValidationError):
+            engine.update_requisition(req, number='Т-3x')
+        with self.assertRaises(ValidationError):
+            engine.update_requisition_line(rline, D(1))
+        with self.assertRaises(ValidationError):
+            engine.remove_requisition_line(rline)
+
+    # ── удаление: правило draft/posted ──
+    def test_delete_draft_writeoff_rebuilds_source(self):
+        """Удаление черновика списания снимает `−ISSUE` — источник возвращает остаток."""
+        lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'С-4')
+        engine.add_writeoff_line(w, lot, D(4))
+        self.assertEqual(engine.lot_live_qty(lot), D(6))
+        engine.delete_stock_document(w)
+        self.assertFalse(models.Writeoff.objects.filter(pk=w.pk).exists())
+        self.assertEqual(engine.lot_live_qty(lot), D(10))   # источник освобождён
+
+    def test_delete_posted_refused_until_unpost(self):
+        """posted — «сперва расфиксировать»: удаление отклонено, после unpost — ок."""
+        lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'С-5')
+        engine.add_writeoff_line(w, lot, D(4))
+        engine.post_writeoff(w)
+        with self.assertRaises(ValidationError):
+            engine.delete_stock_document(w)
+        engine.unpost_writeoff(w)
+        engine.delete_stock_document(w)
+        self.assertFalse(models.Writeoff.objects.filter(pk=w.pk).exists())
+
+    def test_delete_draft_requisition_drops_born_and_restores_source(self):
+        """Удаление черновика требования: born-потомок снят, источник восстановлен."""
+        src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
+        req = engine.create_requisition(self.prj, self.user, 'Т-4')
+        engine.add_requisition_line(req, src, D(3))
+        born = req.lots.get()
+        self.assertEqual(engine.lot_live_qty(src), D(7))
+        engine.delete_stock_document(req)
+        self.assertFalse(models.Lot.objects.filter(pk=born.pk).exists())  # born снят
+        self.assertEqual(engine.lot_live_qty(src), D(10))                 # источник цел
+
+    def test_delete_receipt_draft_cascades_born_lot(self):
+        """Удаление черновика прихода уносит рождённый им лот (born-direct)."""
+        r = models.Receipt.objects.create(
+            number='У-9', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        engine.delete_stock_document(r)
+        self.assertFalse(models.Receipt.objects.filter(pk=r.pk).exists())
+        self.assertFalse(models.Lot.objects.filter(pk=lot.pk).exists())
+
+    def test_delete_refused_when_born_lot_consumed_downstream(self):
+        """`PROTECT` бережёт потраченные лоты: born-лот акта потреблён ниже → отказ."""
+        inv = engine.create_inventory(self.prj, self.user, 'И-9')
+        found = engine.add_inventory_lot(inv, self.make_item('A'), D(10))
+        # потребляем найденный лот списанием (downstream `−ISSUE`)
+        w = engine.create_writeoff(self.prj, self.user, 'С-9')
+        engine.add_writeoff_line(w, found, D(2))
+        with self.assertRaises(ValidationError):
+            engine.delete_stock_document(inv)
+        self.assertTrue(models.Inventory.objects.filter(pk=inv.pk).exists())

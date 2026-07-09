@@ -94,6 +94,66 @@ def _require_draft(doc):
         raise ValidationError('Документ проведён (замок) — снимите замок для правки.')
 
 
+def post_document(doc, rows, empty_msg):
+    """Поставить единый мягкий замок `draft → posted` (edit-freeze формы).
+
+    `rows` — менеджер строк документа (`doc.lots` для born-only, `doc.lines` для
+    расходных): нельзя провести пустой документ. Склад не гейтит (замок
+    интерфейсный) — зеркалит `approve_receipt`/`post_transfer`.
+    """
+    if not rows.exists():
+        raise ValidationError(empty_msg)
+    doc.status = models.DocStatus.POSTED
+    doc.save(update_fields=['status'])
+    return doc
+
+
+def unpost_document(doc):
+    """Снять единый мягкий замок `posted → draft`. Ничего не разрушает (строки и
+    их движения остаются) — guard по потомкам не нужен (в отличие от переоткрытия
+    комплектации, где снимается рождённый лот-прибор)."""
+    doc.status = models.DocStatus.DRAFT
+    doc.save(update_fields=['status'])
+    return doc
+
+
+def delete_stock_document(doc):
+    """Удалить складской ордер (отмена = удаление, канон В13 Ф1 — не копим надгробия).
+
+    Правило удаления (единое на 6 ордеров):
+    - **posted** — «сперва расфиксировать» (снять замок): удаляем только черновик;
+    - **draft** — свободно, но `PROTECT` бережёт потраченные лоты: если рождённый
+      документом лот (`doc.lots`, born-direct) уже потреблён/передан/отпочкован ниже
+      — дружелюбный отказ вместо сырого `ProtectedError`.
+
+    Механика (обходит грабли CHECK `lot_exactly_one_origin`, см. JOURNAL Ф1a): born-лоты
+    и их движения сносим **явно** (как `reopen_kitting`), затем документ (каскад
+    расходных `StockLine` + вложений), затем пересобираем движения лотов-источников
+    (снять их `−ISSUE`). Файлы вложений чистим отдельно — каскад БД их бы осиротил.
+    """
+    if doc.is_posted:
+        raise ValidationError(
+            'Документ проведён (замок) — сперва снимите замок (расфиксируйте) для удаления.')
+    born = list(doc.lots.all()) if hasattr(doc, 'lots') else []
+    for lot in born:
+        if _lot_consumed_downstream(lot):
+            raise ValidationError(
+                'Рождённый документом лот уже потреблён/передан ниже — '
+                'удаление заблокировано (сперва снимите потребление).')
+    # лоты-источники расходных строк — их движения пересобрать после каскада строк
+    source_lots = ({sl.lot for sl in doc.lines.select_related('lot')}
+                   if hasattr(doc, 'lines') else set())
+    source_lots -= set(born)                       # born сносим сами, не пересобираем
+    for att in doc.attachments.all():              # физические файлы (каскад их сиротит)
+        delete_attachment(att)
+    for lot in born:                               # явный снос born (обход CHECK-грабли)
+        lot.movements.all().delete()
+        lot.delete()
+    doc.delete()                                   # каскад: StockLine + строки-вложения
+    for lot in source_lots:                        # снять −ISSUE удалённых строк
+        rebuild_movements(lot)
+
+
 # Совместимость наружу: комплектация исторически отдавала `wip`/`closed` (фронт
 # волны 2 читает эти строки). До фронт-среза (Ф1b) проецируем единый статус в старые
 # значения — контракт API байт-в-байт (дисциплина «вьюхи потом»).
@@ -1168,7 +1228,7 @@ def writeoff_cockpit(writeoff):
         'id': writeoff.id, 'number': writeoff.number, 'date': writeoff.date,
         'reason': writeoff.reason,
         'project_id': writeoff.project_id, 'project_code': writeoff.project.code,
-        'project_name': writeoff.project.name,
+        'project_name': writeoff.project.name, 'posted': writeoff.is_posted,
         'total_qty': total_qty, 'lines': lines,
     }
 
@@ -1189,6 +1249,7 @@ def add_writeoff_line(writeoff, lot, qty, location=None):
     остатку (как приход/передача): пересписать можно, лот уйдёт в минус — недостача
     информативнее нуля (мутабельная ДНК).
     """
+    _require_draft(writeoff)
     if lot.project_id != writeoff.project_id:
         raise ValidationError('Лот из другого проекта — списываем только своё.')
     if qty is None or qty <= 0:
@@ -1200,7 +1261,8 @@ def add_writeoff_line(writeoff, lot, qty, location=None):
 
 
 def update_writeoff_line(line, qty):
-    """Автосейв количества строки списания."""
+    """Автосейв количества строки списания. Только черновик (замок)."""
+    _require_draft(line.writeoff)
     if qty is None or qty <= 0:
         raise ValidationError('Количество списания должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход)
@@ -1211,9 +1273,21 @@ def update_writeoff_line(line, qty):
 
 def remove_writeoff_line(line):
     """Убрать строку списания (коррекция) — источник возвращает остаток."""
+    _require_draft(line.writeoff)
     lot = line.lot
     line.delete()
     rebuild_movements(lot)
+
+
+def post_writeoff(writeoff):
+    """Провести списание (замок «списано», форма read-only)."""
+    return post_document(writeoff, writeoff.lines,
+                         'Нельзя провести пустой акт списания — добавьте строку.')
+
+
+def unpost_writeoff(writeoff):
+    """Снять замок списания — снова разрешить правку."""
+    return unpost_document(writeoff)
 
 
 # ── Требование / Requisition (белый путь: −ISSUE источника + рождение потомка) ──
@@ -1255,7 +1329,7 @@ def requisition_cockpit(requisition):
     return {
         'id': requisition.id, 'number': requisition.number, 'date': requisition.date,
         'project_id': requisition.project_id, 'project_code': requisition.project.code,
-        'project_name': requisition.project.name,
+        'project_name': requisition.project.name, 'posted': requisition.is_posted,
         'total_qty': total_qty, 'lines': lines,
     }
 
@@ -1277,6 +1351,7 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
     `predecessor` → источник (генеалогия/провенанс для kitting из остатков). Один
     источник = одна строка (пара строки↔потомок однозначна). Кол-во не клампим.
     """
+    _require_draft(requisition)
     if qty is None or qty <= 0:
         raise ValidationError('Количество требования должно быть положительным.')
     if source_lot.project_id == requisition.project_id:
@@ -1296,7 +1371,9 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
 
 
 def update_requisition_line(line, qty):
-    """Автосейв количества: правит и строку-источник (`−ISSUE`), и потомок (`+RECEIPT`)."""
+    """Автосейв количества: правит и строку-источник (`−ISSUE`), и потомок (`+RECEIPT`).
+    Только черновик (замок)."""
+    _require_draft(line.requisition)
     if qty is None or qty <= 0:
         raise ValidationError('Количество требования должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход) у источника
@@ -1315,6 +1392,7 @@ def remove_requisition_line(line):
 
     Guard: потомок не должен быть потреблён ниже (спаян/передан/списан из белого).
     """
+    _require_draft(line.requisition)
     src = line.lot
     born = _requisition_born_lot(line.requisition, src)
     if born is not None and _lot_consumed_downstream(born):
@@ -1325,6 +1403,17 @@ def remove_requisition_line(line):
         born.movements.all().delete()
         born.delete()
     rebuild_movements(src)
+
+
+def post_requisition(requisition):
+    """Провести требование (замок, форма read-only)."""
+    return post_document(requisition, requisition.lines,
+                         'Нельзя провести пустое требование — добавьте строку.')
+
+
+def unpost_requisition(requisition):
+    """Снять замок требования — снова разрешить правку."""
+    return unpost_document(requisition)
 
 
 # ── Панель закрытия проекта + мягкий замок статуса ──
@@ -1501,7 +1590,8 @@ def update_transfer(transfer, number=None, date=None):
 
 
 def update_writeoff(writeoff, number=None, date=None, reason=None):
-    """Правка шапки списания (№ акта / дата / причина)."""
+    """Правка шапки списания (№ акта / дата / причина). Только черновик (замок)."""
+    _require_draft(writeoff)
     _require_number(number)
     _require_date(date)
     return _apply(writeoff, {'number': number and number.strip(), 'date': date,
@@ -1509,7 +1599,8 @@ def update_writeoff(writeoff, number=None, date=None, reason=None):
 
 
 def update_requisition(requisition, number=None, date=None):
-    """Правка шапки требования (№ / дата)."""
+    """Правка шапки требования (№ / дата). Только черновик (замок)."""
+    _require_draft(requisition)
     _require_number(number)
     _require_date(date)
     return _apply(requisition, {'number': number and number.strip(), 'date': date})
@@ -1985,7 +2076,7 @@ def inventory_cockpit(inventory):
         'id': inventory.id, 'number': inventory.number, 'date': inventory.date,
         'note': inventory.note,
         'project_id': inventory.project_id, 'project_code': inventory.project.code,
-        'project_name': inventory.project.name,
+        'project_name': inventory.project.name, 'posted': inventory.is_posted,
         'total_cost': total, 'lots': lots,
     }
 
@@ -2006,6 +2097,7 @@ def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, received_name='',
     `predecessor` (опц.) связывает найденный лот со списанным-источником
     (ре-материализация серого остатка — провенанс/генеалогия). Кол-во не клампим.
     """
+    _require_draft(inventory)
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
     if unit_cost is not None and unit_cost < 0:
@@ -2020,7 +2112,9 @@ def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, received_name='',
 
 def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
                          serial_number=None):
-    """Автосейв строки акта (кол-во/цена/название/зав.№). Кол-во не клампим по расходу."""
+    """Автосейв строки акта (кол-во/цена/название/зав.№). Кол-во не клампим по расходу.
+    Только черновик (замок)."""
+    _require_draft(lot.inventory)
     fields = []
     if qty is not None:
         if qty <= 0:
@@ -2045,7 +2139,8 @@ def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
 
 
 def remove_inventory_lot(lot):
-    """Удалить строку акта (коррекция). Guard: найденный лот не потреблён ниже."""
+    """Удалить строку акта (коррекция). Guard: черновик + найденный лот не потреблён ниже."""
+    _require_draft(lot.inventory)
     if _lot_consumed_downstream(lot):
         raise ValidationError(
             'Найденная партия уже потреблена ниже — удаление заблокировано.')
@@ -2053,8 +2148,20 @@ def remove_inventory_lot(lot):
     lot.delete()
 
 
+def post_inventory(inventory):
+    """Провести инвентаризацию (замок, форма read-only)."""
+    return post_document(inventory, inventory.lots,
+                         'Нельзя провести пустой акт инвентаризации — добавьте строку.')
+
+
+def unpost_inventory(inventory):
+    """Снять замок инвентаризации — снова разрешить правку."""
+    return unpost_document(inventory)
+
+
 def update_inventory(inventory, number=None, date=None, note=None):
-    """Правка шапки инвентаризации (№ акта / дата / примечание)."""
+    """Правка шапки инвентаризации (№ акта / дата / примечание). Только черновик."""
+    _require_draft(inventory)
     _require_number(number)
     _require_date(date)
     return _apply(inventory, {'number': number and number.strip(), 'date': date,

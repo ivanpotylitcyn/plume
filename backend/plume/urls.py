@@ -68,16 +68,22 @@ urlpatterns = [
     path('writeoffs/', views.writeoffs, name='writeoffs'),
     path('writeoffs/<int:pk>/', views.writeoff_detail, name='writeoff-detail'),
     path('writeoffs/<int:pk>/lines/', views.writeoff_lines, name='writeoff-lines'),
+    path('writeoffs/<int:pk>/post/', views.writeoff_post, name='writeoff-post'),
+    path('writeoffs/<int:pk>/unpost/', views.writeoff_unpost, name='writeoff-unpost'),
     path('writeoff-lines/<int:pk>/', views.writeoff_line_detail, name='writeoff-line'),
     # требование / Requisition (записываемое ядро, волна 6)
     path('requisitions/', views.requisitions, name='requisitions'),
     path('requisitions/<int:pk>/', views.requisition_detail, name='requisition-detail'),
     path('requisitions/<int:pk>/lines/', views.requisition_lines, name='requisition-lines'),
+    path('requisitions/<int:pk>/post/', views.requisition_post, name='requisition-post'),
+    path('requisitions/<int:pk>/unpost/', views.requisition_unpost, name='requisition-unpost'),
     path('requisition-lines/<int:pk>/', views.requisition_line_detail, name='requisition-line'),
     # инвентаризация / Inventory (записываемое ядро, волна 9)
     path('inventories/', views.inventories, name='inventories'),
     path('inventories/<int:pk>/', views.inventory_detail, name='inventory-detail'),
     path('inventories/<int:pk>/lots/', views.inventory_lots, name='inventory-lots'),
+    path('inventories/<int:pk>/post/', views.inventory_post, name='inventory-post'),
+    path('inventories/<int:pk>/unpost/', views.inventory_unpost, name='inventory-unpost'),
     path('inventory-lots/<int:pk>/', views.inventory_lot_detail, name='inventory-lot'),
     path('written-off-lots/', views.written_off_lots, name='written-off-lots'),
     # планирование закупок (волна 7): командный свод + записываемый Procurement + order.xlsx
