@@ -134,6 +134,13 @@ erDiagram
 
   SUPPLIER ||--o{ RECEIPT : ""
 
+  STOCKDOCUMENT ||--|| RECEIPT : "MTI-наследник"
+  STOCKDOCUMENT ||--|| KITTING : "MTI-наследник"
+  STOCKDOCUMENT ||--|| INVENTORY : "MTI-наследник"
+  STOCKDOCUMENT ||--|| REQUISITION : "MTI-наследник"
+  STOCKDOCUMENT ||--|| TRANSFER : "MTI-наследник"
+  STOCKDOCUMENT ||--|| WRITEOFF : "MTI-наследник"
+
   LOCATION ||--o{ STOCKMOVEMENT : ""
   LOCATION ||--o{ STOCKLINE : ""
 
@@ -284,24 +291,27 @@ erDiagram
     int item_id FK "uniq в рамках закупки"
     decimal qty "заказано"
   }
+  STOCKDOCUMENT {
+    int id PK "единый id-пространство ордера (MTI-родитель)"
+    string kind "receipt/kitting/inventory/requisition/transfer/writeoff/relocation — дискриминатор"
+    string status "draft/posted (единый мягкий замок)"
+  }
   RECEIPT {
-    int id PK
+    int id PK "= StockDocument.id (MTI parent_link)"
     string number "УПД №"
     date date
     int supplier_id FK
     int purchase_id FK "nullable"
     int project_id FK
     int user_id FK "автор"
-    string status "draft/posted (единый мягкий замок StockDoc)"
   }
   KITTING {
-    int id PK
+    int id PK "= StockDocument.id (MTI parent_link)"
     int project_id FK
     int target_item_id FK
     int user_id FK "автор"
     decimal qty "кол-во образцов"
     date date "дата открытия акта"
-    string status "draft/posted (единый мягкий замок StockDoc)"
   }
   STOCKLINE {
     int id PK
@@ -316,38 +326,34 @@ erDiagram
     string display_name "имя для накладной (nullable, передача)"
   }
   TRANSFER {
-    int id PK
+    int id PK "= StockDocument.id (MTI parent_link)"
     int project_id FK
     int user_id FK "автор"
     date date
     string number "накладная №"
-    string status "draft/posted (единый мягкий замок StockDoc)"
   }
   INVENTORY {
-    int id PK
+    int id PK "= StockDocument.id (MTI parent_link)"
     int project_id FK
     int user_id FK "автор"
     string number "акт инвентаризации №"
     date date
     string note
-    string status "draft/posted (единый мягкий замок StockDoc)"
   }
   WRITEOFF {
-    int id PK
+    int id PK "= StockDocument.id (MTI parent_link)"
     int project_id FK
     int user_id FK "автор"
     string number "акт списания №"
     date date
     string reason "причина"
-    string status "draft/posted (единый мягкий замок StockDoc)"
   }
   REQUISITION {
-    int id PK
+    int id PK "= StockDocument.id (MTI parent_link)"
     int project_id FK "проект-получатель новых лотов"
     int user_id FK "автор"
     string number "требование №"
     date date
-    string status "draft/posted (единый мягкий замок StockDoc)"
   }
   ATTACHMENT {
     int id PK
@@ -377,8 +383,10 @@ erDiagram
   сколько заказать — и потребность (`ProjectDemand`). Отвечает на «что нужно купить».
 - **Партия (`Lot`) — склад, движения и комплектация.** Главная учётная единица:
   вокруг неё `StockMovement` (проекция остатков) и все складские документы —
-  `Kitting` / `Transfer` / `Writeoff` / `Requisition` / `Inventory` с их строками.
-  Отвечает на «что физически есть и куда движется».
+  `Kitting` / `Transfer` / `Writeoff` / `Requisition` / `Inventory` (+ `Receipt`) с их
+  строками. Все шесть — **MTI-наследники единого родителя `StockDocument` («Ордер»)**:
+  общая шапка (`kind`-дискриминатор + `status`) и единое id-пространство (волна 13,
+  Ф2a); специфика — на детях. Отвечает на «что физически есть и куда движется».
 - **Вложение (`Attachment`) рядом с `User` — оффлайн-факты.** Сканы документов и datasheet'ы
   плюс авторство (`user` на всех документах). Отвечает на «чем подтверждено и кто
   отвечает».

@@ -2375,3 +2375,63 @@ class Wave13Fase1bTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.delete_stock_document(inv)
         self.assertTrue(models.Inventory.objects.filter(pk=inv.pk).exists())
+
+
+class Wave13Fase2aTests(EngineTestBase):
+    """Волна 13 Ф2a: MTI-ядро — `StockDoc` (миксин) → `StockDocument` (конкретный
+    родитель); 6 документов стали наследниками, id-пространство унифицировано,
+    дискриминатор `kind` штампуется. Дуги пока на детях (их PK = единый id родителя)."""
+
+    def _one_of_each(self):
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        k = models.Kitting.objects.create(
+            project=self.prj, target_item=self.make_item('DEV', manufactured=True),
+            user=self.user, qty=D(1))
+        inv = models.Inventory.objects.create(
+            project=self.prj, user=self.user, number='И-1', date='2026-05-01')
+        req = models.Requisition.objects.create(
+            project=self.prj, user=self.user, number='Т-1', date='2026-05-01')
+        t = models.Transfer.objects.create(
+            project=self.prj, user=self.user, number='Н-1', date='2026-05-01')
+        w = models.Writeoff.objects.create(
+            project=self.prj, user=self.user, number='С-1', date='2026-05-01')
+        return {'receipt': r, 'kitting': k, 'inventory': inv,
+                'requisition': req, 'transfer': t, 'writeoff': w}
+
+    def test_kind_stamped_on_each_doc_type(self):
+        """`save()` штампует свой `kind` в родителя на плоской вставке каждого типа."""
+        for kind, doc in self._one_of_each().items():
+            self.assertEqual(doc.kind, kind)
+            self.assertTrue(models.StockDocument.objects.filter(
+                pk=doc.pk, kind=kind).exists())
+
+    def test_child_pk_is_unified_stockdocument_id(self):
+        """PK каждого ребёнка = id `StockDocument`; id глобально уникальны между таблицами
+        (готовность к схлопыванию дуг `Lot.origin`/`Attachment.owner` в один FK)."""
+        docs = self._one_of_each()
+        pks = [d.pk for d in docs.values()]
+        self.assertEqual(len(pks), len(set(pks)))          # глобально уникальны
+        for d in docs.values():
+            self.assertTrue(models.StockDocument.objects.filter(pk=d.pk).exists())
+        # ровно один родитель на каждого ребёнка, ничего лишнего
+        self.assertEqual(models.StockDocument.objects.count(), len(docs))
+
+    def test_origin_arc_points_at_unified_parent_id(self):
+        """Дуга `Lot.origin` теперь указывает на единый id (= PK ребёнка = id родителя)."""
+        r = models.Receipt.objects.create(
+            number='У-2', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        self.assertEqual(lot.receipt_id, r.pk)
+        self.assertTrue(models.StockDocument.objects.filter(pk=lot.receipt_id).exists())
+
+    def test_mti_delete_removes_parent_row(self):
+        """Удаление ребёнка-черновика сносит и строку родителя (MTI-каскад вверх)."""
+        w = models.Writeoff.objects.create(
+            project=self.prj, user=self.user, number='С-2', date='2026-05-01')
+        pk = w.pk
+        w.delete()
+        self.assertFalse(models.Writeoff.objects.filter(pk=pk).exists())
+        self.assertFalse(models.StockDocument.objects.filter(pk=pk).exists())

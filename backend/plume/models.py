@@ -64,29 +64,56 @@ class DocStatus(models.TextChoices):
     POSTED = 'posted', 'Проведён'
 
 
-class StockDoc(models.Model):
-    """Абстрактная общая шапка складских ордеров (Приход/Комплектация/Инвентаризация/
-    Требование/Передача/Списание).
+class StockDocument(models.Model):
+    """Конкретный MTI-родитель складского ордера (Приход/Комплектация/Инвентаризация/
+    Требование/Передача/Списание) — «Ордер» в UI (волна 13, Ф2a).
 
     Несёт **единый мягкий замок** `status {draft ⇄ posted}` (волна 13, Ф1): свернул
     разнородные `Receipt.approved`, `Transfer.posted`, `Kitting.status{wip/closed/
     cancelled}` в одну ось. `posted` = edit-freeze (форма read-only); склад **НЕ
     гейтится** — замок чисто интерфейсный (остатки собираются независимо от статуса).
-    `cancelled` снят: отмена = удаление. В Ф2 (MTI) абстракция схлопнется в
-    конкретного родителя `StockDocument` (шапка + `kind`).
+    `cancelled` снят: отмена = удаление.
+
+    **Ф2a:** абстрактный миксин `StockDoc` схлопнут в этого конкретного родителя —
+    6 документов стали MTI-наследниками, их PK = единый `id` этой таблицы (унификация
+    id-пространства). Дискриминатор `kind` («Тип = поле одной сущности») мостит к режиму
+    «Ордера». Специфичные поля (project/user/date/number/supplier/…) пока живут на детях;
+    их подъём в родителя и коллапс дуг `Lot.origin`/`Attachment.owner`/`StockLine.document`
+    в один FK на этот PK — следующими укусами Ф2.
     """
+
+    class Kind(models.TextChoices):
+        RECEIPT = 'receipt', 'Приход (УПД)'
+        KITTING = 'kitting', 'Комплектация'
+        INVENTORY = 'inventory', 'Инвентаризация'
+        REQUISITION = 'requisition', 'Требование'
+        TRANSFER = 'transfer', 'Передача'
+        WRITEOFF = 'writeoff', 'Списание'
+        RELOCATION = 'relocation', 'Перемещение'  # ← новый вид, дочерней таблицы пока нет
 
     Status = DocStatus
 
+    # Дочерний класс объявляет свой вид (`KIND`); `save()` штампует его в `kind`.
+    KIND = None
+
+    kind = models.CharField('вид ордера', max_length=16, choices=Kind.choices,
+                            blank=True, default='')
     status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
                               default=DocStatus.DRAFT)
 
     class Meta:
-        abstract = True
+        verbose_name = 'ордер'
+        verbose_name_plural = 'ордера'
 
     @property
     def is_posted(self):
         return self.status == DocStatus.POSTED
+
+    def save(self, *args, **kwargs):
+        # MTI-дети штампуют свой вид; прямых bare-StockDocument не создаём.
+        if self.KIND and not self.kind:
+            self.kind = self.KIND
+        super().save(*args, **kwargs)
 
 
 # --------------------------------------------------------------------------- #
@@ -325,8 +352,10 @@ class PurchaseLine(models.Model):
 # --------------------------------------------------------------------------- #
 #  Документы-origin партий + приёмка
 # --------------------------------------------------------------------------- #
-class Receipt(StockDoc):
+class Receipt(StockDocument):
     """Приход / УПД — приёмка по передаточному документу, рождает партии."""
+
+    KIND = StockDocument.Kind.RECEIPT
 
     number = models.CharField('№ УПД', max_length=64)
     date = models.DateField('дата')
@@ -347,9 +376,11 @@ class Receipt(StockDoc):
         return f'УПД {self.number} от {self.date}'
 
 
-class Kitting(StockDoc):
+class Kitting(StockDocument):
     """Комплектация — инструмент ведения сборки лота: списывает компоненты и
     рождает партию-прибор. Замок `draft → posted` (закрытие рождает лот-прибор)."""
+
+    KIND = StockDocument.Kind.KITTING
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='kittings')
@@ -369,8 +400,10 @@ class Kitting(StockDoc):
                 f'[{self.get_status_display()}]')
 
 
-class Inventory(StockDoc):
+class Inventory(StockDocument):
     """Инвентаризация — рождает «найденные» партии (излишки/ре-материализация)."""
+
+    KIND = StockDocument.Kind.INVENTORY
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='inventories')
@@ -388,8 +421,10 @@ class Inventory(StockDoc):
         return f'Инвентаризация {self.number}'
 
 
-class Requisition(StockDoc):
+class Requisition(StockDocument):
     """Требование/отпочкование — рождает лоты в проекте-получателе из source-лота."""
+
+    KIND = StockDocument.Kind.REQUISITION
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='requisitions',
@@ -560,8 +595,10 @@ class StockLine(models.Model):
 # --------------------------------------------------------------------------- #
 #  Выбытие / передача / закрытие
 # --------------------------------------------------------------------------- #
-class Transfer(StockDoc):
+class Transfer(StockDocument):
     """Передача — только заказчикам, по накладной в рамках проекта."""
+
+    KIND = StockDocument.Kind.TRANSFER
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='transfers')
@@ -578,8 +615,10 @@ class Transfer(StockDoc):
         return f'Передача {self.number}'
 
 
-class Writeoff(StockDoc):
+class Writeoff(StockDocument):
     """Списание — с причиной (серый путь: → «Свободные неучтённые»)."""
+
+    KIND = StockDocument.Kind.WRITEOFF
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='writeoffs')

@@ -178,10 +178,36 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       **Отложено (глубже флагмана):** свод тел кокпитов 6 detail-вьюх в **одну**
       `<OrderForm kind=...>` (общая шапка + kind-переключаемое тело) — отдельным заходом.
 
-### Ф2 — MTI, убить дугу (осознанный слом заморозки)
-- [ ] Родитель `StockDocument`(шапка+`kind`) + дочерние под специфику.
-- [ ] `Lot.origin` → один FK; снести `LOT_ORIGIN_FIELDS`, `_exactly_one_q`, Check.
+### Ф2 — MTI, убить дугу (осознанный слом заморозки) — фазами
+
+**Ф2a — MTI-ядро: родитель `StockDocument` + 6 детей-наследников ✅ 2026-07-09**
+- [x] `StockDoc` (абстрактный миксин) → `StockDocument` (**конкретный MTI-родитель**);
+      6 складских документов (`Receipt`/`Kitting`/`Inventory`/`Requisition`/`Transfer`/
+      `Writeoff`) стали наследниками — их PK = единый `id` родителя (**унификация
+      id-пространства**, готовность к схлопыванию дуг в один FK). Дискриминатор `kind`
+      (7 значений, `relocation` — на будущее) штампуется в `save()` каждого ребёнка.
+- [x] **Lean-глубина (API байт-в-байт):** в родителя подняты только `status`+`kind`;
+      специфичные и общие FK-поля (`project`/`user`/`date`/`number`/`supplier`/…) пока
+      на детях → обратные аксессоры (`project.writeoffs`, `purchase.receipts`) целы,
+      прямые (`receipt.project`) прозрачны через MTI. Ноль правок в engine/views/`api.ts`.
+- [x] Миграция `0005_stockdocument_mti` (реверсивна): `CreateModel(StockDocument)` реально
+      + превращение детей через `SeparateDatabaseAndState` (СОСТОЯНИЕ декларируем сами,
+      ФИЗИКА — raw-SQL под `FK_CHECKS=0`: раздать parent-id, перецепить 14 входящих дуг
+      Lot×4/Attachment×6/StockLine×4, PK ребёнка → ptr, снять `status`; констрейнты — по
+      интроспекции, не хардкод). `makemigrations --check` чист.
+- [x] **Проверка:** 183 теста (было 179; +4 `Wave13Fase2aTests` — штамп `kind` ×6, PK=id
+      родителя+глобальная уникальность, дуга на едином id, MTI-каскад удаления) зелёные на
+      MySQL 8.0.25. Круговой прогон на `seed_demo`-данных (scratch-БД): reverse+forward
+      remap **побайтово** сохранил остатки лотов/счётчики/дуги (SNAP_A==SNAP_C). Dev-MySQL
+      догнан на 0005 (остаток движений инвариантен). Обе mermaid-диаграммы README обновлены.
+
+**Ф2b+ — оставшееся Ф2 (следующими укусами):**
+- [ ] `Lot.origin` → один FK на `StockDocument`; снести `LOT_ORIGIN_FIELDS`,
+      `_exactly_one_q`, Check (id-пространство уже унифицировано в Ф2a).
 - [ ] `Attachment.owner` → FK(StockDocument)+Item; снести `ATTACHMENT_OWNER_FIELDS`.
+      `StockLine.document` → один FK; снести `STOCKLINE_DOC_FIELDS`.
+- [ ] Подъём общих полей (`project`/`user`/`date`/`number`/`note`) в родителя (дедуп;
+      правит 1 обратный аксессор `project.writeoffs`).
 - [ ] Условная валидация специфики по `kind` (NOT NULL держит дочерняя таблица).
 - [ ] Переименования `Lot` (`part_number`, `lot_name`) + `Supplier → Counterparty`
       (+ контрагент на передаче); обновить `api.ts` и вьюхи.
@@ -189,7 +215,6 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       (зеркало режима); дочерние админки = правка по типу с инлайнами.
 - [ ] Новый вид `relocation` + активация мультисклада (движок по `(лот, локация)`).
 - [ ] Миграция данных на живой прод-базе (развёрнут 2026-07-01).
-- [ ] **Обновить ОБЕ mermaid-диаграммы README** в этом же изменении.
 - [ ] Свернуть матрицу полей: B1–B4 + C1–C2 → один row-set с видимостью по `kind`.
 
 ### Дисциплина
