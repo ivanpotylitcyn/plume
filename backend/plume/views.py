@@ -360,7 +360,9 @@ def kitting_lines(request, pk):
 @api_view(['PATCH', 'DELETE'])
 def kitting_line_detail(request, pk):
     """Автосейв количества пайки (PATCH) / удаление строки (DELETE)."""
-    line = get_object_or_404(models.KittingLine.objects.select_related('kitting', 'lot'), pk=pk)
+    line = get_object_or_404(
+        models.StockLine.objects.select_related('kitting', 'lot'),
+        pk=pk, kitting__isnull=False)
     kitting = line.kitting
     try:
         if request.method == 'DELETE':
@@ -751,7 +753,8 @@ def transfer_lines(request, pk):
 def transfer_line_detail(request, pk):
     """Автосейв строки передачи (кол-во/имя) (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.TransferLine.objects.select_related('transfer', 'lot'), pk=pk)
+        models.StockLine.objects.select_related('transfer', 'lot'),
+        pk=pk, transfer__isnull=False)
     transfer = line.transfer
     try:
         if request.method == 'DELETE':
@@ -868,7 +871,8 @@ def writeoff_lines(request, pk):
 def writeoff_line_detail(request, pk):
     """Автосейв количества строки списания (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.WriteoffLine.objects.select_related('writeoff', 'lot'), pk=pk)
+        models.StockLine.objects.select_related('writeoff', 'lot'),
+        pk=pk, writeoff__isnull=False)
     writeoff = line.writeoff
     try:
         if request.method == 'DELETE':
@@ -944,8 +948,8 @@ def requisition_lines(request, pk):
 def requisition_line_detail(request, pk):
     """Автосейв количества строки требования (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.RequisitionLine.objects.select_related('requisition', 'source_lot'),
-        pk=pk)
+        models.StockLine.objects.select_related('requisition', 'lot'),
+        pk=pk, requisition__isnull=False)
     requisition = line.requisition
     try:
         if request.method == 'DELETE':

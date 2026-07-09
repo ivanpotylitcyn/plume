@@ -84,16 +84,16 @@ class Command(BaseCommand):
         closed_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=3, date=D(2026, 5, 25),
             status=models.Kitting.Status.CLOSED)
-        models.KittingLine.objects.create(kitting=closed_k, component=res, lot=res_lot,
-                                          location=main, qty=6, date=D(2026, 5, 25))
+        models.StockLine.objects.create(kitting=closed_k, lot=res_lot,
+                                        location=main, qty=-6, date=D(2026, 5, 25))
         models.Lot.objects.create(item=board, project=prj, kitting=closed_k, qty=3,
                                   unit_cost=1506, serial_number='ПЛ-001..003')
 
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
             status=models.Kitting.Status.WIP)
-        models.KittingLine.objects.create(kitting=wip_k, component=res, lot=res_lot,
-                                          location=main, qty=4, date=D(2026, 6, 2))
+        models.StockLine.objects.create(kitting=wip_k, lot=res_lot,
+                                        location=main, qty=-4, date=D(2026, 6, 2))
 
         # --- КОРПУС-1 на «Собственном складе» (5) — для карты ---------- #
         inv = models.Inventory.objects.create(
@@ -112,8 +112,7 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ #
     def _wipe(self):
         """Снести демо/учётные данные (auth не трогаем). Порядок child→parent."""
-        for m in (models.StockMovement, models.KittingLine, models.TransferLine,
-                  models.WriteoffLine, models.RequisitionLine, models.Attachment,
+        for m in (models.StockMovement, models.StockLine, models.Attachment,
                   models.Lot, models.PurchaseLine, models.ProcurementLine,
                   models.ProjectDemand, models.BomLine,
                   models.Receipt, models.Kitting, models.Transfer, models.Writeoff,

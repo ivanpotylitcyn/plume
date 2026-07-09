@@ -50,6 +50,9 @@ def _validate_exactly_one(instance, fields, label):
 LOT_ORIGIN_FIELDS = ('receipt', 'kitting', 'inventory', 'requisition')
 ATTACHMENT_OWNER_FIELDS = ('item', 'receipt', 'transfer', 'kitting', 'inventory',
                            'writeoff', 'requisition')
+# документ-владелец знаковой строки движения (волна 13, Ф0): пока 4 FK + Check,
+# в Ф2 (MTI) схлопнётся в один FK на родитель `StockDocument`.
+STOCKLINE_DOC_FIELDS = ('kitting', 'transfer', 'writeoff', 'requisition')
 
 
 # --------------------------------------------------------------------------- #
@@ -340,26 +343,6 @@ class Kitting(models.Model):
                 f'[{self.get_status_display()}]')
 
 
-class KittingLine(models.Model):
-    """Строка комплектации — факт интеграции (пайки) компонента из лота."""
-
-    kitting = models.ForeignKey(Kitting, on_delete=models.CASCADE,
-                                related_name='lines')
-    component = models.ForeignKey(Item, on_delete=models.PROTECT, related_name='+')
-    lot = models.ForeignKey('Lot', on_delete=models.PROTECT,
-                            related_name='kitting_lines')
-    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='+')
-    qty = qty(verbose_name='кол-во')
-    date = models.DateField('дата пайки', null=True, blank=True)
-
-    class Meta:
-        verbose_name = 'строка комплектации'
-        verbose_name_plural = 'строки комплектации'
-
-    def __str__(self):
-        return f'{self.component.code} ←lot{self.lot_id} ×{self.qty}'
-
-
 class Inventory(models.Model):
     """Инвентаризация — рождает «найденные» партии (излишки/ре-материализация)."""
 
@@ -490,6 +473,64 @@ class StockMovement(models.Model):
         return f'{self.type} lot{self.lot_id} {self.qty:+}'
 
 
+class StockLine(models.Model):
+    """Знаковая строка движения СУЩЕСТВУЮЩЕГО лота — единая (волна 13, Ф0).
+
+    Сворачивает четыре таблицы строк-расхода (`KittingLine`/`TransferLine`/
+    `WriteoffLine`/`RequisitionLine`) в одну. `qty` со знаком (− = расход/списание/
+    пайка; в Ф2 «Перемещение» даст пару −/+ между локациями). Документ-владелец —
+    exclusive arc (ровно один из четырёх FK), схлопнется в один FK при MTI (Ф2).
+    Рождение лотов сюда НЕ входит: born-лоты остаются на `Lot.origin` (born-direct).
+    Компонент строки комплектации не храним — он выводится из `lot.item`.
+    """
+
+    DOC_FIELDS = STOCKLINE_DOC_FIELDS
+
+    # документ-владелец (exclusive arc) — ровно один задан
+    kitting = models.ForeignKey('Kitting', on_delete=models.CASCADE, null=True,
+                                blank=True, related_name='lines')
+    transfer = models.ForeignKey('Transfer', on_delete=models.CASCADE, null=True,
+                                 blank=True, related_name='lines')
+    writeoff = models.ForeignKey('Writeoff', on_delete=models.CASCADE, null=True,
+                                 blank=True, related_name='lines')
+    requisition = models.ForeignKey('Requisition', on_delete=models.CASCADE, null=True,
+                                    blank=True, related_name='lines')
+    lot = models.ForeignKey('Lot', on_delete=models.PROTECT,
+                            related_name='stock_lines',
+                            verbose_name='лот (расходуемый источник)')
+    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='+')
+    qty = qty(verbose_name='кол-во (со знаком: − расход)')
+    date = models.DateField('дата (пайка)', null=True, blank=True)
+    display_name = models.CharField('отображаемое имя (накладная)', max_length=255,
+                                    blank=True, default='')
+
+    class Meta:
+        verbose_name = 'строка движения'
+        verbose_name_plural = 'строки движения'
+        constraints = [
+            models.CheckConstraint(condition=_exactly_one_q(STOCKLINE_DOC_FIELDS),
+                                   name='stockline_exactly_one_document'),
+        ]
+
+    @property
+    def doc_kind(self):
+        for f in self.DOC_FIELDS:
+            if getattr(self, f'{f}_id', None) is not None:
+                return f
+        return None
+
+    @property
+    def document(self):
+        kind = self.doc_kind
+        return getattr(self, kind) if kind else None
+
+    def clean(self):
+        _validate_exactly_one(self, self.DOC_FIELDS, 'StockLine')
+
+    def __str__(self):
+        return f'{self.doc_kind} lot{self.lot_id} {self.qty:+}'
+
+
 # --------------------------------------------------------------------------- #
 #  Выбытие / передача / закрытие
 # --------------------------------------------------------------------------- #
@@ -512,22 +553,6 @@ class Transfer(models.Model):
         return f'Передача {self.number}'
 
 
-class TransferLine(models.Model):
-    transfer = models.ForeignKey(Transfer, on_delete=models.CASCADE,
-                                 related_name='lines')
-    lot = models.ForeignKey(Lot, on_delete=models.PROTECT, related_name='transfer_lines')
-    qty = qty(verbose_name='кол-во')
-    display_name = models.CharField('отображаемое имя', max_length=255,
-                                    blank=True, default='')
-
-    class Meta:
-        verbose_name = 'строка передачи'
-        verbose_name_plural = 'строки передачи'
-
-    def __str__(self):
-        return f'lot{self.lot_id} ×{self.qty}'
-
-
 class Writeoff(models.Model):
     """Списание — с причиной (серый путь: → «Свободные неучтённые»)."""
 
@@ -545,38 +570,6 @@ class Writeoff(models.Model):
 
     def __str__(self):
         return f'Списание {self.number}'
-
-
-class WriteoffLine(models.Model):
-    writeoff = models.ForeignKey(Writeoff, on_delete=models.CASCADE,
-                                 related_name='lines')
-    lot = models.ForeignKey(Lot, on_delete=models.PROTECT, related_name='writeoff_lines')
-    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='+')
-    qty = qty(verbose_name='кол-во')
-
-    class Meta:
-        verbose_name = 'строка списания'
-        verbose_name_plural = 'строки списания'
-
-    def __str__(self):
-        return f'lot{self.lot_id} ×{self.qty}'
-
-
-class RequisitionLine(models.Model):
-    requisition = models.ForeignKey(Requisition, on_delete=models.CASCADE,
-                                    related_name='lines')
-    source_lot = models.ForeignKey(Lot, on_delete=models.PROTECT,
-                                   related_name='requisition_lines',
-                                   verbose_name='лот-источник')
-    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='+')
-    qty = qty(verbose_name='кол-во')
-
-    class Meta:
-        verbose_name = 'строка требования'
-        verbose_name_plural = 'строки требования'
-
-    def __str__(self):
-        return f'←lot{self.source_lot_id} ×{self.qty}'
 
 
 # --------------------------------------------------------------------------- #

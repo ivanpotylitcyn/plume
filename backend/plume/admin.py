@@ -30,23 +30,33 @@ class PurchaseLineInline(admin.TabularInline):
     extra = 0
 
 
+# Строки движения — единая `StockLine` (волна 13, Ф0). Один инлайн на каждый
+# документ-владелец через `fk_name`; `qty` знаковый (− расход).
 class KittingLineInline(admin.TabularInline):
-    model = models.KittingLine
+    model = models.StockLine
+    fk_name = 'kitting'
+    fields = ('lot', 'location', 'qty', 'date')
     extra = 0
 
 
 class TransferLineInline(admin.TabularInline):
-    model = models.TransferLine
+    model = models.StockLine
+    fk_name = 'transfer'
+    fields = ('lot', 'location', 'qty', 'display_name')
     extra = 0
 
 
 class WriteoffLineInline(admin.TabularInline):
-    model = models.WriteoffLine
+    model = models.StockLine
+    fk_name = 'writeoff'
+    fields = ('lot', 'location', 'qty')
     extra = 0
 
 
 class RequisitionLineInline(admin.TabularInline):
-    model = models.RequisitionLine
+    model = models.StockLine
+    fk_name = 'requisition'
+    fields = ('lot', 'location', 'qty')
     extra = 0
 
 
@@ -135,6 +145,12 @@ class StockMovementAdmin(admin.ModelAdmin):
     list_display = ('id', 'lot', 'location', 'type', 'qty', 'source_type',
                     'source_id', 'created_at')
     list_filter = ('type', 'location')
+
+
+@admin.register(models.StockLine)
+class StockLineAdmin(admin.ModelAdmin):
+    list_display = ('id', 'doc_kind', 'lot', 'location', 'qty')
+    list_filter = ('location',)
 
 
 # --- выбытие / передача --------------------------------------------------- #

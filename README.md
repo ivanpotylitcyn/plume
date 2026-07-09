@@ -47,7 +47,8 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 | `Item` | Изделие | Единица справочника, **абстракция** (для прибора — конструкторская документация, для покупного — datasheet). Едина для приборов, компонентов и материалов; конкретный вид — поле `kind`. Может состоять из изделий (рекурсивный состав через `BomLine`). |
 | `BomLine` | Строка состава | Одна позиция состава изделия: «изделие-родитель → компонент × количество». |
 | `Lot` | Партия | Главная учётная единица склада — **физическое воплощение** изделия. Хранит цену (`unit_cost`), название из УПД, заводской №. Рождается ровно одним документом-источником, живёт в одном проекте. |
-| `StockMovement` | Движение склада | Строка реестра движений: ±количество по партии и месту. Проекция: пересчитывается из документов, остаток = сумма движений. |
+| `StockLine` | Строка движения | Единая знаковая строка расхода/перемещения существующей партии `(документ, лот, место, ±кол-во)`. Свернула четыре таблицы строк-расхода (комплектация/передача/списание/требование) в одну (волна 13, Ф0); владелец — ровно один из четырёх документов (exclusive arc). Рождение лотов сюда не входит (born-direct через `Lot.origin`). |
+| `StockMovement` | Движение склада | Строка реестра движений: ±количество по партии и месту. Проекция: пересчитывается из документов (born-лоты + `StockLine`), остаток = сумма движений. |
 | `Location` | Место хранения | Где лежит партия. В MVP — одно («Основной склад»). |
 | `Project` | Проект | НИР или контракт, ограниченный во времени; сквозное измерение всего. Бывает внешним и внутренним (`kind`: «Собственный склад» / «Свободные неучтённые»). |
 | `ProjectDemand` | Потребность проекта | Сколько изделий нужно выпустить. Вход разузлования состава. |
@@ -130,12 +131,11 @@ erDiagram
   ITEM ||--o{ PROCUREMENTLINE : ""
   ITEM ||--o{ PROJECTDEMAND : "target"
   ITEM ||--o{ KITTING : "target"
-  ITEM ||--o{ KITTINGLINE : "component"
 
   SUPPLIER ||--o{ RECEIPT : ""
 
   LOCATION ||--o{ STOCKMOVEMENT : ""
-  LOCATION ||--o{ KITTINGLINE : ""
+  LOCATION ||--o{ STOCKLINE : ""
 
   USER ||--o{ PROCUREMENT : "автор"
   USER ||--o{ PURCHASE : "автор"
@@ -148,10 +148,7 @@ erDiagram
   USER ||--o{ ATTACHMENT : "загрузил"
 
   LOT ||--o{ STOCKMOVEMENT : ""
-  LOT ||--o{ KITTINGLINE : ""
-  LOT ||--o{ TRANSFERLINE : ""
-  LOT ||--o{ WRITEOFFLINE : ""
-  LOT ||--o{ REQUISITIONLINE : "source"
+  LOT ||--o{ STOCKLINE : "расход/движение (знаковая строка)"
   LOT ||--o{ LOT : "predecessor (закрытие/отпочкование)"
 
   PROJECT ||--o{ PROJECTDEMAND : ""
@@ -169,15 +166,13 @@ erDiagram
   PURCHASE ||--o{ PURCHASELINE : ""
   PURCHASE ||--o{ RECEIPT : "nullable"
   RECEIPT ||--o{ LOT : "создаёт партии (поставка)"
-  KITTING ||--o{ KITTINGLINE : ""
+  KITTING ||--o{ STOCKLINE : "расход (пайка)"
   KITTING ||--o{ LOT : "изготовление"
-  TRANSFER ||--o{ TRANSFERLINE : ""
+  TRANSFER ||--o{ STOCKLINE : "расход (отгрузка)"
   INVENTORY ||--o{ LOT : "найденные партии"
-  WRITEOFF ||--o{ WRITEOFFLINE : ""
-  REQUISITION ||--o{ REQUISITIONLINE : ""
+  WRITEOFF ||--o{ STOCKLINE : "расход (списание)"
+  REQUISITION ||--o{ STOCKLINE : "расход источника"
   REQUISITION ||--o{ LOT : "отпочкованные партии"
-  LOCATION ||--o{ WRITEOFFLINE : ""
-  LOCATION ||--o{ REQUISITIONLINE : ""
 
   ITEM ||--o{ ATTACHMENT : "datasheet"
   RECEIPT ||--o{ ATTACHMENT : "скан УПД"
@@ -308,14 +303,17 @@ erDiagram
     date date "дата открытия акта"
     string status "wip/closed/cancelled (инструмент ведения сборки лота)"
   }
-  KITTINGLINE {
+  STOCKLINE {
     int id PK
-    int kitting_id FK
-    int component_id FK
-    int lot_id FK
+    int kitting_id FK "владелец: комплектация (nullable)"
+    int transfer_id FK "владелец: передача (nullable)"
+    int writeoff_id FK "владелец: списание (nullable)"
+    int requisition_id FK "владелец: требование (nullable)"
+    int lot_id FK "расходуемый лот-источник (component = lot.item)"
     int location_id FK
-    decimal qty
-    date date "когда фактически интегрировали/спаяли (nullable)"
+    decimal qty "со знаком: − расход (в Ф2 «Перемещение» даст пару −/+)"
+    date date "дата пайки (nullable, комплектация)"
+    string display_name "имя для накладной (nullable, передача)"
   }
   TRANSFER {
     int id PK
@@ -324,13 +322,6 @@ erDiagram
     date date
     string number "накладная №"
     bool posted "замок: отгружено (ручной)"
-  }
-  TRANSFERLINE {
-    int id PK
-    int transfer_id FK
-    int lot_id FK "item выводится из партии"
-    decimal qty
-    string display_name "переопределяет received_name (nullable)"
   }
   INVENTORY {
     int id PK
@@ -348,26 +339,12 @@ erDiagram
     date date
     string reason "причина"
   }
-  WRITEOFFLINE {
-    int id PK
-    int writeoff_id FK
-    int lot_id FK
-    int location_id FK
-    decimal qty
-  }
   REQUISITION {
     int id PK
     int project_id FK "проект-получатель новых лотов"
     int user_id FK "автор"
     string number "требование №"
     date date
-  }
-  REQUISITIONLINE {
-    int id PK
-    int requisition_id FK
-    int source_lot_id FK "откуда отпочковываем (project иной)"
-    int location_id FK
-    decimal qty
   }
   ATTACHMENT {
     int id PK
@@ -455,8 +432,8 @@ erDiagram
   `rebuild_movements(lot)`** (пересобирает все движения партии из её документов-
   источников): origin-`+`-движение берёт **рождённое количество из `Lot.qty`** (его
 «дом»; иначе для приходных/найденных партий количеству негде жить), а расходные
-`ISSUE`/`RETURN` выводятся из строк-потребителей (`KittingLine`/`TransferLine`/
-`WriteoffLine`/`RequisitionLine`). Это не инкрементальные патчи по сигналам каждого
+`ISSUE`/`RETURN` выводятся из единых знаковых строк-потребителей (`StockLine`, волна
+13 Ф0 — свернула четыре прежние таблицы строк-расхода). Это не инкрементальные патчи по сигналам каждого
 документа; периодическая
   `verify`-команда (cron) пересчитывает с нуля и сверяет — детектор дрейфа. Двигается
   **только по `Lot`** (`item` и `project` выводятся из партии); остаток = сумма
@@ -488,7 +465,7 @@ erDiagram
   удаляем (`on_delete=PROTECT`). Физически `User` — стандартная Django-модель
   (`auth_user`); зарезервировано лишь голое `USER`, а имя таблицы и колонка
   `user_id` не конфликтуют.
-- **Передача — только по `Lot`** (`Transfer` + `TransferLine`): отдаём заказчику
+- **Передача — только по `Lot`** (`Transfer` + `StockLine`): отдаём заказчику
   готовое железо, `item` выводится из партии. Так передача конкретного прибора
   однозначно тянет его заводской номер, а движение фиксируется в реестре движений
   (`StockMovement`, `source=передача`). Строка передачи допускает `qty > 1` и

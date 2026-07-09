@@ -63,8 +63,8 @@ class RebuildAndStockTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           status=models.Kitting.Status.WIP)
-        models.KittingLine.objects.create(kitting=k, component=comp, lot=lot,
-                                          location=self.main, qty=D(30))
+        models.StockLine.objects.create(kitting=k, lot=lot,
+                                        location=self.main, qty=D(-30))
         engine.rebuild_movements(lot)
         self.assertEqual(engine.lot_live_qty(lot), D(70))
 
@@ -75,8 +75,8 @@ class RebuildAndStockTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           status=models.Kitting.Status.WIP)
-        models.KittingLine.objects.create(kitting=k, component=comp, lot=lot,
-                                          location=self.main, qty=D(8))
+        models.StockLine.objects.create(kitting=k, lot=lot,
+                                        location=self.main, qty=D(-8))
         engine.rebuild_movements(lot)
         self.assertEqual(engine.item_available(comp, self.prj), D(-3))
         self.assertTrue(engine.item_has_negative_lot(comp, self.prj))
@@ -88,10 +88,44 @@ class RebuildAndStockTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           status=models.Kitting.Status.CANCELLED)
-        models.KittingLine.objects.create(kitting=k, component=comp, lot=lot,
-                                          location=self.main, qty=D(4))
+        models.StockLine.objects.create(kitting=k, lot=lot,
+                                        location=self.main, qty=D(-4))
         engine.rebuild_movements(lot)
         self.assertEqual(engine.lot_live_qty(lot), D(10))
+
+    def test_stockline_rebuild_invariant_across_docs(self):
+        """Волна 13 Ф0: единая `StockLine` покрывает 4 бывших таблицы строк-расхода.
+
+        Один лот, тронутый разными документами-владельцами (комплектация/списание/
+        передача) через знаковые `StockLine`, даёт те же остаток и движения, что и
+        прежние раздельные строки — инвариант остатка при консолидации.
+        """
+        comp = self.make_item('R')
+        lot = self.receipt_lot(comp, self.prj, 100)
+        dev = self.make_item('DEV', manufactured=True)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1),
+                                          status=models.Kitting.Status.WIP)
+        w = models.Writeoff.objects.create(project=self.prj, user=self.user,
+                                           number='W-1', date='2026-06-01')
+        cust = models.Project.objects.create(
+            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        t = models.Transfer.objects.create(project=self.prj, user=self.user,
+                                            number='T-1', date='2026-06-01')
+        # знаковые строки (− расход) трёх разных документов на один лот
+        models.StockLine.objects.create(kitting=k, lot=lot, location=self.main, qty=D(-30))
+        models.StockLine.objects.create(writeoff=w, lot=lot, location=self.main, qty=D(-10))
+        models.StockLine.objects.create(transfer=t, lot=lot, location=self.main, qty=D(-5))
+        engine.rebuild_movements(lot)
+        # 100 − 30 − 10 − 5 = 55; born-приход + три расхода = 4 движения
+        self.assertEqual(engine.lot_live_qty(lot), D(55))
+        self.assertEqual(lot.movements.count(), 4)
+        srcs = set(lot.movements.values_list('source_type', flat=True))
+        self.assertEqual(srcs, {'receipt', 'kitting', 'writeoff', 'transfer'})
+        # exclusive-arc: строка ссылается ровно на один документ
+        sl = models.StockLine.objects.filter(kitting=k).get()
+        self.assertEqual(sl.doc_kind, 'kitting')
+        self.assertLess(sl.qty, D(0))            # хранится со знаком (− расход)
 
 
 class CoverageTests(EngineTestBase):
@@ -332,7 +366,8 @@ class KittingCockpitTests(EngineTestBase):
         # прибор передан заказчику → потомок вниз, переоткрытие запрещено
         transfer = models.Transfer.objects.create(
             project=self.prj, user=self.user, date='2026-06-01', number='TN-1')
-        models.TransferLine.objects.create(transfer=transfer, lot=device_lot, qty=D(1))
+        models.StockLine.objects.create(transfer=transfer, lot=device_lot,
+                                        location=self.main, qty=D(-1))
         engine.rebuild_movements(device_lot)
         with self.assertRaises(ValidationError):
             engine.reopen_kitting(k)

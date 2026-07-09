@@ -108,34 +108,20 @@ def rebuild_movements(lot):
             qty=lot.qty, source_type=origin_kind, source_id=getattr(lot, f'{origin_kind}_id'),
         ))
 
-    # расход: комплектация (пайка компонента из этой партии)
-    for kl in lot.kitting_lines.select_related('kitting', 'location'):
-        if kl.kitting.status == models.Kitting.Status.CANCELLED:
+    # движение существующего лота: единые знаковые строки `StockLine` (волна 13, Ф0)
+    # свернули 4 таблицы строк-расхода (комплектация/передача/списание/отпочкование).
+    # `StockLine.qty` уже со знаком (− расход); source_type/id — из документа-владельца
+    # (`doc_kind`). Отменённая комплектация (draft-снятие волны 13 ещё впереди) движений
+    # не даёт — сохраняем прежний фильтр по статусу.
+    for sl in lot.stock_lines.select_related('location', 'kitting'):
+        if sl.kitting_id and sl.kitting.status == models.Kitting.Status.CANCELLED:
             continue
         rows.append(models.StockMovement(
-            lot=lot, location=kl.location, type=models.StockMovement.Type.ISSUE,
-            qty=-kl.qty, source_type='kitting', source_id=kl.kitting_id,
-        ))
-
-    # расход: передача заказчику
-    for tl in lot.transfer_lines.select_related('transfer'):
-        rows.append(models.StockMovement(
-            lot=lot, location=main, type=models.StockMovement.Type.ISSUE,
-            qty=-tl.qty, source_type='transfer', source_id=tl.transfer_id,
-        ))
-
-    # расход: списание
-    for wl in lot.writeoff_lines.select_related('location'):
-        rows.append(models.StockMovement(
-            lot=lot, location=wl.location, type=models.StockMovement.Type.ISSUE,
-            qty=-wl.qty, source_type='writeoff', source_id=wl.writeoff_id,
-        ))
-
-    # расход: отпочкование (эта партия — источник нового лота)
-    for rl in lot.requisition_lines.select_related('location'):
-        rows.append(models.StockMovement(
-            lot=lot, location=rl.location, type=models.StockMovement.Type.ISSUE,
-            qty=-rl.qty, source_type='requisition', source_id=rl.requisition_id,
+            lot=lot, location=sl.location,
+            type=(models.StockMovement.Type.RECEIPT if sl.qty > 0
+                  else models.StockMovement.Type.ISSUE),
+            qty=sl.qty, source_type=sl.doc_kind,
+            source_id=getattr(sl, f'{sl.doc_kind}_id'),
         ))
 
     models.StockMovement.objects.bulk_create(rows)
@@ -508,12 +494,15 @@ def kitting_cockpit(kitting):
         need = bl.qty * kitting.qty
         real_lines = []
         pierced = ZERO
-        for kl in kitting.lines.filter(component=component).select_related('lot'):
-            pierced += kl.qty
+        # компонент строки выводится из lot.item (StockLine его не хранит);
+        # qty знаковый — наружу отдаём магнитуду (положительную), проекция без изменений.
+        for kl in kitting.lines.filter(lot__item=component).select_related('lot'):
+            mag = -kl.qty
+            pierced += mag
             real_lines.append({
                 'id': kl.id, 'lot_id': kl.lot_id,
                 'lot_label': f'#{kl.lot_id} {kl.lot.received_name or component.code}',
-                'qty': kl.qty, 'date': kl.date,
+                'qty': mag, 'date': kl.date,
             })
         remaining = max(ZERO, need - pierced)
         ghost = None
@@ -566,9 +555,9 @@ def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
         raise ValidationError('Лот из другого проекта (заём — отдельным требованием).')
     if qty is None or qty <= 0:
         raise ValidationError('Количество пайки должно быть положительным.')
-    line = models.KittingLine.objects.create(
-        kitting=kitting, component=component, lot=lot,
-        location=location or _main_location(), qty=qty, date=date,
+    line = models.StockLine.objects.create(
+        kitting=kitting, lot=lot,
+        location=location or _main_location(), qty=-qty, date=date,
     )
     rebuild_movements(lot)
     return line
@@ -579,7 +568,7 @@ def update_kitting_line(line, qty):
     _require_wip(line.kitting)
     if qty is None or qty <= 0:
         raise ValidationError('Количество пайки должно быть положительным.')
-    line.qty = qty
+    line.qty = -qty                      # знаковая строка (− расход)
     line.save(update_fields=['qty'])
     rebuild_movements(line.lot)
 
@@ -596,7 +585,7 @@ def _device_unit_cost(kitting):
     """Снимок себестоимости прибора на закрытии = Σ(qty×цена лотов) / кол-во."""
     total = ZERO
     for kl in kitting.lines.select_related('lot'):
-        total += kl.qty * kl.lot.unit_cost
+        total += -kl.qty * kl.lot.unit_cost     # qty знаковый (− расход) → магнитуда
     if kitting.qty and kitting.qty != ZERO:
         return (total / kitting.qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     return ZERO
@@ -645,8 +634,7 @@ def _lot_consumed_downstream(lot):
     правку (удаление строки прихода, переоткрытие комплектации).
     """
     return (lot.movements.filter(qty__lt=0).exists() or lot.successors.exists()
-            or lot.kitting_lines.exists() or lot.transfer_lines.exists()
-            or lot.writeoff_lines.exists() or lot.requisition_lines.exists())
+            or lot.stock_lines.exists())
 
 
 def receipt_cockpit(receipt):
@@ -976,13 +964,14 @@ def transfer_cockpit(transfer):
     total_qty = ZERO
     for line in transfer.lines.select_related('lot__item').order_by('id'):
         lot = line.lot
-        total_qty += line.qty
+        mag = -line.qty                       # знаковая строка (− расход) → магнитуда
+        total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id,
             'lot_label': _lot_label(lot),
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_name': lot.item.name, 'uom': lot.item.uom,
-            'qty': line.qty, 'display_name': line.display_name,
+            'qty': mag, 'display_name': line.display_name,
             'lot_live_qty': lot_live_qty(lot),   # остаток источника после отгрузки
             'serial_number': lot.serial_number,
         })
@@ -1001,14 +990,15 @@ def item_shipments(item):
     петлю `комплектация → передача`). Порядок — свежие сверху.
     """
     rows = []
-    for line in (models.TransferLine.objects
-                 .filter(lot__item=item).select_related('transfer__project', 'lot')
+    for line in (models.StockLine.objects
+                 .filter(transfer__isnull=False, lot__item=item)
+                 .select_related('transfer__project', 'lot')
                  .order_by('-transfer__date', '-id')):
         t = line.transfer
         rows.append({
             'transfer_id': t.id, 'number': t.number, 'date': t.date,
             'project_code': t.project.code, 'posted': t.posted,
-            'lot_id': line.lot_id, 'qty': line.qty,
+            'lot_id': line.lot_id, 'qty': -line.qty,     # знаковый → магнитуда
             'display_name': line.display_name,
             'serial_number': line.lot.serial_number,
         })
@@ -1044,8 +1034,8 @@ def add_transfer_line(transfer, lot, qty, display_name=''):
         raise ValidationError('Лот из другого проекта — передаём только своё.')
     if qty is None or qty <= 0:
         raise ValidationError('Количество передачи должно быть положительным.')
-    line = models.TransferLine.objects.create(
-        transfer=transfer, lot=lot, qty=qty,
+    line = models.StockLine.objects.create(
+        transfer=transfer, lot=lot, location=_main_location(), qty=-qty,
         display_name=(display_name or '').strip() or _lot_label(lot))
     rebuild_movements(lot)
     return line
@@ -1058,7 +1048,7 @@ def update_transfer_line(line, qty=None, display_name=None):
     if qty is not None:
         if qty <= 0:
             raise ValidationError('Количество передачи должно быть положительным.')
-        line.qty = qty
+        line.qty = -qty                   # знаковая строка (− расход)
         fields.append('qty')
     if display_name is not None:
         line.display_name = display_name
@@ -1156,12 +1146,13 @@ def writeoff_cockpit(writeoff):
     total_qty = ZERO
     for line in writeoff.lines.select_related('lot__item').order_by('id'):
         lot = line.lot
-        total_qty += line.qty
+        mag = -line.qty                       # знаковая строка (− расход) → магнитуда
+        total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id, 'lot_label': _lot_label(lot),
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_name': lot.item.name, 'uom': lot.item.uom,
-            'qty': line.qty, 'lot_live_qty': lot_live_qty(lot),
+            'qty': mag, 'lot_live_qty': lot_live_qty(lot),
             'serial_number': lot.serial_number,
         })
     return {
@@ -1193,8 +1184,8 @@ def add_writeoff_line(writeoff, lot, qty, location=None):
         raise ValidationError('Лот из другого проекта — списываем только своё.')
     if qty is None or qty <= 0:
         raise ValidationError('Количество списания должно быть положительным.')
-    line = models.WriteoffLine.objects.create(
-        writeoff=writeoff, lot=lot, location=location or _main_location(), qty=qty)
+    line = models.StockLine.objects.create(
+        writeoff=writeoff, lot=lot, location=location or _main_location(), qty=-qty)
     rebuild_movements(lot)
     return line
 
@@ -1203,7 +1194,7 @@ def update_writeoff_line(line, qty):
     """Автосейв количества строки списания."""
     if qty is None or qty <= 0:
         raise ValidationError('Количество списания должно быть положительным.')
-    line.qty = qty
+    line.qty = -qty                      # знаковая строка (− расход)
     line.save(update_fields=['qty'])
     rebuild_movements(line.lot)
     return line
@@ -1237,17 +1228,18 @@ def requisition_cockpit(requisition):
     lines = []
     total_qty = ZERO
     for line in (requisition.lines
-                 .select_related('source_lot__item', 'source_lot__project')
+                 .select_related('lot__item', 'lot__project')
                  .order_by('id')):
-        src = line.source_lot
-        total_qty += line.qty
+        src = line.lot                        # StockLine.lot = лот-источник расхода
+        mag = -line.qty                       # знаковая строка (− расход) → магнитуда
+        total_qty += mag
         born = _requisition_born_lot(requisition, src)
         lines.append({
             'id': line.id, 'source_lot_id': src.id, 'lot_label': _lot_label(src),
             'source_project_code': src.project.code,
             'item_id': src.item_id, 'item_code': src.item.code,
             'item_name': src.item.name, 'uom': src.item.uom,
-            'qty': line.qty, 'source_live_qty': lot_live_qty(src),
+            'qty': mag, 'source_live_qty': lot_live_qty(src),
             'born_lot_id': born.id if born else None,
             'serial_number': src.serial_number,
         })
@@ -1280,11 +1272,11 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
         raise ValidationError('Количество требования должно быть положительным.')
     if source_lot.project_id == requisition.project_id:
         raise ValidationError('Источник и получатель — один проект (перекладывать некуда).')
-    if requisition.lines.filter(source_lot=source_lot).exists():
+    if requisition.lines.filter(lot=source_lot).exists():
         raise ValidationError('Этот лот уже в требовании — правьте существующую строку.')
-    line = models.RequisitionLine.objects.create(
-        requisition=requisition, source_lot=source_lot,
-        location=location or _main_location(), qty=qty)
+    line = models.StockLine.objects.create(
+        requisition=requisition, lot=source_lot,
+        location=location or _main_location(), qty=-qty)
     born = models.Lot.objects.create(
         item=source_lot.item, project=requisition.project, requisition=requisition,
         predecessor=source_lot, qty=qty, unit_cost=source_lot.unit_cost,
@@ -1298,14 +1290,14 @@ def update_requisition_line(line, qty):
     """Автосейв количества: правит и строку-источник (`−ISSUE`), и потомок (`+RECEIPT`)."""
     if qty is None or qty <= 0:
         raise ValidationError('Количество требования должно быть положительным.')
-    line.qty = qty
+    line.qty = -qty                      # знаковая строка (− расход) у источника
     line.save(update_fields=['qty'])
-    born = _requisition_born_lot(line.requisition, line.source_lot)
+    born = _requisition_born_lot(line.requisition, line.lot)
     if born is not None:
-        born.qty = qty
+        born.qty = qty                   # рождённый лот-потомок — положительное кол-во
         born.save(update_fields=['qty'])
         rebuild_movements(born)
-    rebuild_movements(line.source_lot)
+    rebuild_movements(line.lot)
     return line
 
 
@@ -1314,7 +1306,7 @@ def remove_requisition_line(line):
 
     Guard: потомок не должен быть потреблён ниже (спаян/передан/списан из белого).
     """
-    src = line.source_lot
+    src = line.lot
     born = _requisition_born_lot(line.requisition, src)
     if born is not None and _lot_consumed_downstream(born):
         raise ValidationError(
@@ -1430,7 +1422,7 @@ def requisition_lot(project, lot, qty, user, dest_kind=None):
         raise ValidationError('Лот из другого проекта.')
     dest = _internal_project(dest_kind or models.Project.Kind.INTERNAL_STOCK)
     requisition = models.Requisition.objects.filter(project=dest).order_by('-id').first()
-    if requisition is None or requisition.lines.filter(source_lot=lot).exists():
+    if requisition is None or requisition.lines.filter(lot=lot).exists():
         requisition = create_requisition(dest, user, _auto_number('ТРБ', dest))
     add_requisition_line(requisition, lot, qty)
     return requisition
@@ -2069,10 +2061,12 @@ def written_off_lots():
     с лота (сколько «серого» доступно вернуть).
     """
     result = []
-    for lot in (models.Lot.objects.filter(writeoff_lines__isnull=False).distinct()
+    for lot in (models.Lot.objects.filter(stock_lines__writeoff__isnull=False).distinct()
                 .select_related('item', 'project').order_by('project__code',
                                                             'item__code', 'id')):
-        written = lot.writeoff_lines.aggregate(s=Sum('qty'))['s'] or ZERO
+        # qty знаковый (− расход) → магнитуда списанного = −Σ
+        written = -(lot.stock_lines.filter(writeoff__isnull=False)
+                    .aggregate(s=Sum('qty'))['s'] or ZERO)
         result.append({
             'lot_id': lot.id, 'item_id': lot.item_id,
             'item_code': lot.item.code, 'item_name': lot.item.name,

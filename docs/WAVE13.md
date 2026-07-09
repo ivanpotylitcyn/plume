@@ -94,11 +94,19 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
 
 ## Фазы
 
-### Ф0 — `StockLine` + знак/локация (безопасно, ортогонально глубине)
-- [ ] `StockLine(document, lot, location, qty ±)` + миграция из
-      `KittingLine/TransferLine/WriteoffLine/RequisitionLine`.
-- [ ] `rebuild_movements` читает `StockLine`; born-лоты остаются на `Lot.origin`.
-- [ ] Инвариант: остаток по лоту до/после миграции не изменился (тесты движка).
+### Ф0 — `StockLine` + знак/локация (безопасно, ортогонально глубине) ✅ 2026-07-09
+- [x] `StockLine(document, lot, location, qty ±)` + миграция из
+      `KittingLine/TransferLine/WriteoffLine/RequisitionLine`. **Владелец в Ф0 — 4 FK +
+      Check (exclusive arc, как `Lot.origin`)**; схлопнётся в один FK на MTI-родитель в
+      Ф2. `qty` знаковый (− расход); `component` строки комплектации не храним —
+      выводится из `lot.item`. Миграция `0003_stockline_consolidation` (create → copy со
+      сменой знака → drop 4 таблиц), реверсивна; передача приземлена на `MAIN`.
+- [x] `rebuild_movements` читает `StockLine`; born-лоты остаются на `Lot.origin`.
+- [x] Инвариант: остаток по лоту до/после миграции не изменился — тест данных миграции
+      (forward+reverse) + движковый `test_stockline_rebuild_invariant_across_docs`.
+      Все 166 тестов + smoke `seed_demo` зелёные; проекции кокпитов **байт-в-байт** (фронт
+      не тронут). Прогон локально на SQLite (рабочий MySQL был не поднят) — на MySQL
+      прогнать при поднятой БД.
 
 ### Ф1 — единый мягкий замок + режим «Ордера» (высокая ценность / низкий риск)
 - [ ] Общая шапка (абстрактно или уже на MTI-родителе): `project/user/date/number/
