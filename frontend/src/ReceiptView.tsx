@@ -9,10 +9,10 @@ import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 import { FormHeader, useFormLock } from './FormHeader'
 
-export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged }: {
+export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged, onDeleted }: {
   receiptId: number; items: ItemRow[]
   openItem: (id: number) => void; openPurchase: (id: number) => void
-  onChanged: () => void
+  onChanged: () => void; onDeleted: () => void
 }) {
   const [c, setC] = useState<ReceiptCockpit | null>(null)
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
@@ -35,6 +35,14 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
       .finally(() => setBusy(false))
   }
 
+  const del = () => {
+    if (!c || !confirm('Удалить поставку (УПД)? Рождённые партии будут сняты. Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteReceipt(c.id).then(() => onDeleted())
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
@@ -51,6 +59,7 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="сверена"
         onUnfix={() => { if (confirm('Снять фиксацию поставки? Форма станет черновиком.')) run(api.unapproveReceipt(c.id)) }}
+        onDelete={del}
         error={err}
       />
 

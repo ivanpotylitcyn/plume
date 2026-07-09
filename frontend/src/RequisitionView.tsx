@@ -12,10 +12,11 @@ import { FormHeader, useFormLock } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function RequisitionView({ requisitionId, openItem, onChanged }: {
+export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted }: {
   requisitionId: number
   openItem: (id: number) => void
   onChanged: () => void
+  onDeleted: () => void
 }) {
   const [c, setC] = useState<RequisitionCockpit | null>(null)
   const [lots, setLots] = useState<AllAvailableLot[]>([])
@@ -38,21 +39,33 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
       .finally(() => setBusy(false))
   }
 
+  const del = () => {
+    if (!c || !confirm('Удалить требование? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteRequisition(c.id).then(() => onDeleted())
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
   // Источник ≠ получатель: прячем из пикера лоты самого проекта-получателя.
   const pickable = lots.filter(l => l.project_id !== c.project_id)
-  const locked = !unlocked                 // требование не фиксируется — только личный замок
+  const fixed = c.posted                   // проведено — read-only (единый мягкий замок)
+  const locked = fixed || !unlocked
   return (
-    <div className={unlocked ? '' : 'form-locked'}>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
         name={`Требование ${c.number} → ${c.project_name}`}
         meta={<>
-          <span className="glyph g-info">○</span>
+          <span className={`glyph ${fixed ? 'g-lock' : 'g-info'}`}>{fixed ? '🔒' : '○'}</span>
           получатель {c.project_code} · {c.date} · поставлено {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel="проведено"
+        onUnfix={() => { if (confirm('Снять фиксацию требования? Форма станет черновиком.')) run(api.unpostRequisition(c.id)) }}
+        onDelete={del}
         error={err}
       />
 
@@ -64,6 +77,14 @@ export function RequisitionView({ requisitionId, openItem, onChanged }: {
           onCommit={v => run(api.updateRequisition(c.id, { date: v }))}
           validate={v => v.trim().length > 0} /></label>
       </div>
+
+      {!fixed &&
+        <div className="kit-actions">
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.postRequisition(c.id))}>Провести · зафиксировать</button>
+          {err && <span className="anomaly">{err}</span>}
+        </div>}
 
       <table className="grid">
         <thead>

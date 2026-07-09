@@ -11,10 +11,11 @@ import { FormHeader, useFormLock } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function TransferView({ transferId, openItem, onChanged }: {
+export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
   transferId: number
   openItem: (id: number) => void
   onChanged: () => void
+  onDeleted: () => void
 }) {
   const [c, setC] = useState<TransferCockpit | null>(null)
   const [lots, setLots] = useState<AvailableLot[]>([])
@@ -40,6 +41,14 @@ export function TransferView({ transferId, openItem, onChanged }: {
       .finally(() => setBusy(false))
   }
 
+  const del = () => {
+    if (!c || !confirm('Удалить передачу (накладную)? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteTransfer(c.id).then(() => onDeleted())
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
@@ -56,6 +65,7 @@ export function TransferView({ transferId, openItem, onChanged }: {
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="отгружена"
         onUnfix={() => { if (confirm('Снять фиксацию передачи? Отгрузка откатится, форма станет черновиком.')) run(api.unpostTransfer(c.id)) }}
+        onDelete={del}
         error={err}
       />
 

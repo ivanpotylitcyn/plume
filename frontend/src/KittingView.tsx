@@ -13,8 +13,9 @@ const KIT_STATUS: Record<string, string> = {
   wip: 'в работе', closed: 'закрыт', cancelled: 'отменён',
 }
 
-export function KittingView({ kittingId, openItem, onChanged }:
-  { kittingId: number; openItem: (id: number) => void; onChanged: () => void }) {
+export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
+  { kittingId: number; openItem: (id: number) => void; onChanged: () => void
+    onDeleted: () => void }) {
   const [c, setC] = useState<Cockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -29,6 +30,14 @@ export function KittingView({ kittingId, openItem, onChanged }:
   const run = (p: Promise<Cockpit>) => {
     setBusy(true); setErr(null)
     p.then(next => { setC(next); onChanged() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  const del = () => {
+    if (!c || !confirm('Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteKitting(c.id).then(() => onDeleted())
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -52,6 +61,7 @@ export function KittingView({ kittingId, openItem, onChanged }:
         onUnfix={c.status === 'closed'
           ? () => { if (confirm('Переоткрыть комплектацию? Рождённый прибор откатится.')) run(api.reopenKitting(c.id)) }
           : undefined}
+        onDelete={del}
         error={err}
       />
 

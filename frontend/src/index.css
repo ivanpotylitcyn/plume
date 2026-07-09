@@ -186,6 +186,11 @@ body { overflow: hidden; }
   display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-base); }
 .lock-btn:hover { background: var(--bg-hover); color: var(--fg); }
 .lock-btn.open { color: var(--accent); }
+/* удаление ордера (тускло по умолчанию, краснеет на наведении) */
+.del-btn { background: none; border: 1px solid transparent; color: var(--fg-dim);
+  cursor: pointer; border-radius: 4px; padding: 3px 6px; font-size: 14px; line-height: 1;
+  display: inline-flex; align-items: center; font-family: var(--font-base); }
+.del-btn:hover { background: var(--bg-hover); color: var(--st-order); }
 /* чип фиксации (заливка) */
 .fix-chip { background: var(--bg-widget); border: 1px solid var(--border-strong);
   color: var(--fg-dim); cursor: pointer; border-radius: 4px; padding: 3px 9px;

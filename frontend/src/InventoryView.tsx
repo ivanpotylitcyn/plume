@@ -12,9 +12,9 @@ import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function InventoryView({ inventoryId, items, openItem, onChanged }: {
+export function InventoryView({ inventoryId, items, openItem, onChanged, onDeleted }: {
   inventoryId: number; items: ItemRow[]
-  openItem: (id: number) => void; onChanged: () => void
+  openItem: (id: number) => void; onChanged: () => void; onDeleted: () => void
 }) {
   const [c, setC] = useState<InventoryCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -33,19 +33,31 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
       .finally(() => setBusy(false))
   }
 
+  const del = () => {
+    if (!c || !confirm('Удалить инвентаризацию? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteInventory(c.id).then(() => onDeleted())
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const locked = !unlocked                 // инвентаризация не фиксируется — только личный замок
+  const fixed = c.posted                   // проведено — read-only (единый мягкий замок)
+  const locked = fixed || !unlocked
   return (
-    <div className={unlocked ? '' : 'form-locked'}>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
         name={`Инвентаризация ${c.number}`}
         meta={<>
-          <span className="glyph g-info">○</span>
+          <span className={`glyph ${fixed ? 'g-lock' : 'g-info'}`}>{fixed ? '🔒' : '○'}</span>
           {c.project_code} · {c.project_name} · {c.date} · сумма {num(c.total_cost)} ₽
         </>}
         unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel="проведено"
+        onUnfix={() => { if (confirm('Снять фиксацию инвентаризации? Форма станет черновиком.')) run(api.unpostInventory(c.id)) }}
+        onDelete={del}
         error={err}
       />
 
@@ -59,6 +71,14 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
         <label>примечание <CommitInput value={c.note} width={220} disabled={locked || busy}
           onCommit={v => run(api.updateInventory(c.id, { note: v }))} /></label>
       </div>
+
+      {!fixed &&
+        <div className="kit-actions">
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.postInventory(c.id))}>Провести · зафиксировать</button>
+          {err && <span className="anomaly">{err}</span>}
+        </div>}
 
       <table className="grid">
         <thead>
@@ -77,7 +97,7 @@ export function InventoryView({ inventoryId, items, openItem, onChanged }: {
       </table>
       {c.lots.length === 0 && <div className="empty">Акт пуст — добавьте найденную партию.</div>}
 
-      <RematerializePanel inventoryId={c.id} busy={busy} run={run} />
+      {!locked && <RematerializePanel inventoryId={c.id} busy={busy} run={run} />}
 
       <AttachmentPanel ownerType="inventory" ownerId={c.id} />
     </div>

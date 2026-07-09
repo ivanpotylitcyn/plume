@@ -299,7 +299,7 @@ export default function App() {
             onSelect={id => setSel({ kind: 'writeoff', id })}
             rows={[...writeoffs].reverse().map(w => ({ id: w.id, code: w.number,
               name: `${w.project_code} ${w.reason}`, projectCode: w.project_code,
-              glyph: <span className="glyph g-info">○</span> }))} />}
+              glyph: <span className={`glyph ${w.posted ? 'g-lock' : 'g-info'}`}>{w.posted ? '🔒' : '○'}</span> }))} />}
 
         {mode === 'requisitions' &&
           <ModeList heading="Требования" newLabel="＋ Новое требование" projectFilter
@@ -308,7 +308,7 @@ export default function App() {
             onSelect={id => setSel({ kind: 'requisition', id })}
             rows={[...requisitions].reverse().map(r => ({ id: r.id, code: r.number,
               name: r.project_code, projectCode: r.project_code,
-              glyph: <span className="glyph g-info">○</span> }))} />}
+              glyph: <span className={`glyph ${r.posted ? 'g-lock' : 'g-info'}`}>{r.posted ? '🔒' : '○'}</span> }))} />}
 
         {mode === 'procurements' &&
           <ModeList heading="Закупки" newLabel="＋ Новая закупка"
@@ -334,7 +334,7 @@ export default function App() {
             onSelect={id => setSel({ kind: 'inventory', id })}
             rows={[...inventories].reverse().map(i => ({ id: i.id, code: i.number,
               name: `${i.project_code} ${i.note}`, projectCode: i.project_code,
-              glyph: <span className="glyph g-info">○</span> }))} />}
+              glyph: <span className={`glyph ${i.posted ? 'g-lock' : 'g-info'}`}>{i.posted ? '🔒' : '○'}</span> }))} />}
       </div>
 
       <div className="work">
@@ -365,13 +365,15 @@ export default function App() {
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
         {sel?.kind === 'kitting' &&
-          <KittingView kittingId={sel.id} openItem={openItem} onChanged={reloadKittings} />}
+          <KittingView kittingId={sel.id} openItem={openItem} onChanged={reloadKittings}
+            onDeleted={() => { reloadKittings(); setSel(null) }} />}
         {sel?.kind === 'new-kitting' &&
           <NewKitting projects={projects} items={items}
             onCreated={id => { reloadKittings(); openKitting(id) }} />}
         {sel?.kind === 'receipt' &&
           <ReceiptView receiptId={sel.id} items={items} openItem={openItem}
-            openPurchase={openPurchase} onChanged={reloadReceipts} />}
+            openPurchase={openPurchase} onChanged={reloadReceipts}
+            onDeleted={() => { reloadReceipts(); setSel(null) }} />}
         {sel?.kind === 'new-receipt' &&
           <NewReceipt projects={projects}
             onCreated={id => { reloadReceipts(); openReceipt(id) }} />}
@@ -382,17 +384,20 @@ export default function App() {
           <NewPurchase projects={projects}
             onCreated={id => { reloadPurchases(); openPurchase(id) }} />}
         {sel?.kind === 'transfer' &&
-          <TransferView transferId={sel.id} openItem={openItem} onChanged={reloadTransfers} />}
+          <TransferView transferId={sel.id} openItem={openItem} onChanged={reloadTransfers}
+            onDeleted={() => { reloadTransfers(); setSel(null) }} />}
         {sel?.kind === 'new-transfer' &&
           <NewTransfer projects={projects}
             onCreated={id => { reloadTransfers(); openTransfer(id) }} />}
         {sel?.kind === 'writeoff' &&
-          <WriteoffView writeoffId={sel.id} openItem={openItem} onChanged={reloadWriteoffs} />}
+          <WriteoffView writeoffId={sel.id} openItem={openItem} onChanged={reloadWriteoffs}
+            onDeleted={() => { reloadWriteoffs(); setSel(null) }} />}
         {sel?.kind === 'new-writeoff' &&
           <NewWriteoff projects={projects}
             onCreated={id => { reloadWriteoffs(); openWriteoff(id) }} />}
         {sel?.kind === 'requisition' &&
-          <RequisitionView requisitionId={sel.id} openItem={openItem} onChanged={reloadRequisitions} />}
+          <RequisitionView requisitionId={sel.id} openItem={openItem} onChanged={reloadRequisitions}
+            onDeleted={() => { reloadRequisitions(); setSel(null) }} />}
         {sel?.kind === 'new-requisition' &&
           <NewRequisition projects={projects}
             onCreated={id => { reloadRequisitions(); openRequisition(id) }} />}
@@ -407,7 +412,8 @@ export default function App() {
           <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
         {sel?.kind === 'inventory' &&
           <InventoryView inventoryId={sel.id} items={items} openItem={openItem}
-            onChanged={reloadInventories} />}
+            onChanged={reloadInventories}
+            onDeleted={() => { reloadInventories(); setSel(null) }} />}
         {sel?.kind === 'new-inventory' &&
           <NewInventory projects={projects}
             onCreated={id => { reloadInventories(); openInventory(id) }} />}

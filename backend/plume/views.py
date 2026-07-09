@@ -825,7 +825,8 @@ def available_lots(request):
 def _writeoff_row(w):
     return {
         'id': w.id, 'number': w.number, 'date': w.date,
-        'project_code': w.project.code, 'reason': w.reason, 'lines': w.lines.count(),
+        'project_code': w.project.code, 'reason': w.reason,
+        'posted': w.is_posted, 'lines': w.lines.count(),
     }
 
 
@@ -925,7 +926,8 @@ def writeoff_unpost(request, pk):
 def _requisition_row(r):
     return {
         'id': r.id, 'number': r.number, 'date': r.date,
-        'project_code': r.project.code, 'lines': r.lines.count(),
+        'project_code': r.project.code, 'posted': r.is_posted,
+        'lines': r.lines.count(),
     }
 
 
@@ -1023,7 +1025,8 @@ def requisition_unpost(request, pk):
 def _inventory_row(i):
     return {
         'id': i.id, 'number': i.number, 'date': i.date,
-        'project_code': i.project.code, 'note': i.note, 'lines': i.lots.count(),
+        'project_code': i.project.code, 'note': i.note,
+        'posted': i.is_posted, 'lines': i.lots.count(),
     }
 
 

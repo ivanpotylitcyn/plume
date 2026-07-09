@@ -11,10 +11,11 @@ import { FormHeader, useFormLock } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function WriteoffView({ writeoffId, openItem, onChanged }: {
+export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
   writeoffId: number
   openItem: (id: number) => void
   onChanged: () => void
+  onDeleted: () => void
 }) {
   const [c, setC] = useState<WriteoffCockpit | null>(null)
   const [lots, setLots] = useState<AvailableLot[]>([])
@@ -40,20 +41,32 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
       .finally(() => setBusy(false))
   }
 
+  const del = () => {
+    if (!c || !confirm('Удалить списание? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteWriteoff(c.id).then(() => onDeleted())
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const locked = !unlocked                 // списание не фиксируется — только личный замок
+  const fixed = c.posted                   // проведено — read-only (единый мягкий замок)
+  const locked = fixed || !unlocked
   return (
-    <div className={unlocked ? '' : 'form-locked'}>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
         name={`Списание ${c.number}`}
         meta={<>
-          <span className="glyph g-info">○</span>
+          <span className={`glyph ${fixed ? 'g-lock' : 'g-info'}`}>{fixed ? '🔒' : '○'}</span>
           {c.project_code} · {c.project_name} · {c.date}
           {c.reason && <> · {c.reason}</>} · списано {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
+        fixed={fixed} fixedLabel="проведено"
+        onUnfix={() => { if (confirm('Снять фиксацию списания? Форма станет черновиком.')) run(api.unpostWriteoff(c.id)) }}
+        onDelete={del}
         error={err}
       />
 
@@ -67,6 +80,14 @@ export function WriteoffView({ writeoffId, openItem, onChanged }: {
         <label>причина <CommitInput value={c.reason} width={220} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></label>
       </div>
+
+      {!fixed &&
+        <div className="kit-actions">
+          <button className="btn primary" disabled={busy || unlocked}
+            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
+            onClick={() => run(api.postWriteoff(c.id))}>Провести · зафиксировать</button>
+          {err && <span className="anomaly">{err}</span>}
+        </div>}
 
       <table className="grid">
         <thead>

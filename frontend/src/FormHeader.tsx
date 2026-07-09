@@ -11,7 +11,7 @@ export function useFormLock(draft: boolean) {
 }
 
 export function FormHeader({
-  name, meta, unlocked, onToggleLock, fixed, fixedLabel, onUnfix, error,
+  name, meta, unlocked, onToggleLock, fixed, fixedLabel, onUnfix, onDelete, error,
 }: {
   name: ReactNode
   meta: ReactNode
@@ -20,6 +20,7 @@ export function FormHeader({
   fixed?: boolean
   fixedLabel?: string
   onUnfix?: () => void
+  onDelete?: () => void   // удаление ордера (только черновик; posted → «сперва расфиксировать»)
   error?: string | null
 }) {
   return (
@@ -51,6 +52,10 @@ export function FormHeader({
                 onClick={onToggleLock}>
                 {unlocked ? '🔓' : '🔒'}
               </button>
+            )}
+            {onDelete && (
+              // Удаление — только у черновика (posted перехватывает ветка чипа выше).
+              <button className="del-btn" title="Удалить документ" onClick={onDelete}>🗑</button>
             )}
           </>
         )}

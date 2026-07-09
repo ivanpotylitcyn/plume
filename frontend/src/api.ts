@@ -163,7 +163,7 @@ export interface TransferCockpit {
 // ── Списание / Writeoff (волна 6 — записываемое ядро) ──
 export interface WriteoffRow {
   id: number; number: string; date: string; project_code: string
-  reason: string; lines: number
+  reason: string; posted: boolean; lines: number
 }
 export interface WriteoffCockpitLine {
   id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
@@ -173,12 +173,13 @@ export interface WriteoffCockpitLine {
 export interface WriteoffCockpit {
   id: number; number: string; date: string; reason: string
   project_id: number; project_code: string; project_name: string
-  total_qty: number; lines: WriteoffCockpitLine[]
+  posted: boolean; total_qty: number; lines: WriteoffCockpitLine[]
 }
 
 // ── Требование / Requisition (волна 6 — записываемое ядро) ──
 export interface RequisitionRow {
-  id: number; number: string; date: string; project_code: string; lines: number
+  id: number; number: string; date: string; project_code: string
+  posted: boolean; lines: number
 }
 export interface AllAvailableLot {
   lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
@@ -194,13 +195,13 @@ export interface RequisitionCockpitLine {
 export interface RequisitionCockpit {
   id: number; number: string; date: string
   project_id: number; project_code: string; project_name: string
-  total_qty: number; lines: RequisitionCockpitLine[]
+  posted: boolean; total_qty: number; lines: RequisitionCockpitLine[]
 }
 
 // ── Инвентаризация / Inventory (волна 9 — записываемое ядро) ──
 export interface InventoryRow {
   id: number; number: string; date: string; project_code: string
-  note: string; lines: number
+  note: string; posted: boolean; lines: number
 }
 export interface InventoryCockpitLot {
   id: number; item_id: number; item_code: string; item_name: string; uom: string
@@ -211,7 +212,7 @@ export interface InventoryCockpitLot {
 export interface InventoryCockpit {
   id: number; number: string; date: string; note: string
   project_id: number; project_code: string; project_name: string
-  total_cost: number; lots: InventoryCockpitLot[]
+  posted: boolean; total_cost: number; lots: InventoryCockpitLot[]
 }
 export interface WrittenOffLot {
   lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
@@ -399,6 +400,7 @@ export const api = {
   deleteLine: (id: number) => send<Cockpit>('DELETE', `/api/kitting-lines/${id}/`),
   closeKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/close/`),
   reopenKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/reopen/`),
+  deleteKitting: (id: number) => send<void>('DELETE', `/api/kittings/${id}/`),
 
   suppliers: () => get<SupplierRow[]>('/api/suppliers/'),
   createSupplier: (b: { name: string; inn?: string }) =>
@@ -421,6 +423,7 @@ export const api = {
   unapproveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/unapprove/`),
   linkReceiptPurchase: (id: number, purchase_id: number | null) =>
     send<ReceiptCockpit>('POST', `/api/receipts/${id}/link/`, { purchase_id }),
+  deleteReceipt: (id: number) => send<void>('DELETE', `/api/receipts/${id}/`),
 
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseCockpit>(`/api/purchases/${id}/`),
@@ -456,6 +459,7 @@ export const api = {
     send<TransferCockpit>('DELETE', `/api/transfer-lines/${id}/`),
   postTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/post/`),
   unpostTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/unpost/`),
+  deleteTransfer: (id: number) => send<void>('DELETE', `/api/transfers/${id}/`),
   projectAvailableLots: (id: number) =>
     get<AvailableLot[]>(`/api/projects/${id}/available-lots/`),
 
@@ -471,6 +475,9 @@ export const api = {
     send<WriteoffCockpit>('PATCH', `/api/writeoff-lines/${id}/`, { qty }),
   deleteWriteoffLine: (id: number) =>
     send<WriteoffCockpit>('DELETE', `/api/writeoff-lines/${id}/`),
+  postWriteoff: (id: number) => send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/post/`),
+  unpostWriteoff: (id: number) => send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/unpost/`),
+  deleteWriteoff: (id: number) => send<void>('DELETE', `/api/writeoffs/${id}/`),
 
   requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
   requisition: (id: number) => get<RequisitionCockpit>(`/api/requisitions/${id}/`),
@@ -484,6 +491,9 @@ export const api = {
     send<RequisitionCockpit>('PATCH', `/api/requisition-lines/${id}/`, { qty }),
   deleteRequisitionLine: (id: number) =>
     send<RequisitionCockpit>('DELETE', `/api/requisition-lines/${id}/`),
+  postRequisition: (id: number) => send<RequisitionCockpit>('POST', `/api/requisitions/${id}/post/`),
+  unpostRequisition: (id: number) => send<RequisitionCockpit>('POST', `/api/requisitions/${id}/unpost/`),
+  deleteRequisition: (id: number) => send<void>('DELETE', `/api/requisitions/${id}/`),
   allAvailableLots: () => get<AllAvailableLot[]>('/api/available-lots/'),
 
   inventories: () => get<InventoryRow[]>('/api/inventories/'),
@@ -501,6 +511,9 @@ export const api = {
   }>) => send<InventoryCockpit>('PATCH', `/api/inventory-lots/${id}/`, b),
   deleteInventoryLot: (id: number) =>
     send<InventoryCockpit>('DELETE', `/api/inventory-lots/${id}/`),
+  postInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/post/`),
+  unpostInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/unpost/`),
+  deleteInventory: (id: number) => send<void>('DELETE', `/api/inventories/${id}/`),
   writtenOffLots: () => get<WrittenOffLot[]>('/api/written-off-lots/'),
 
   // ── Планирование закупок (волна 7) ──
