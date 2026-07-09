@@ -22,36 +22,48 @@ import { WriteoffView } from './WriteoffView'
 import { RequisitionView } from './RequisitionView'
 import { InventoryView } from './InventoryView'
 
-type Mode = 'projects' | 'items' | 'kittings' | 'receipts' | 'purchases'
-  | 'transfers' | 'writeoffs' | 'requisitions' | 'procurements' | 'inventories'
+// Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
+// Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
+// создания — единые. Procurement/Purchase — вне (лотов не трогают).
+type Mode = 'projects' | 'items' | 'orders' | 'procurements' | 'purchases'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'new-project' }
   | { kind: 'item'; id: number }
   | { kind: 'new-item' }
   | { kind: 'kitting'; id: number }
-  | { kind: 'new-kitting' }
   | { kind: 'receipt'; id: number }
-  | { kind: 'new-receipt' }
   | { kind: 'purchase'; id: number }
   | { kind: 'new-purchase' }
   | { kind: 'transfer'; id: number }
-  | { kind: 'new-transfer' }
   | { kind: 'writeoff'; id: number }
-  | { kind: 'new-writeoff' }
   | { kind: 'requisition'; id: number }
-  | { kind: 'new-requisition' }
   | { kind: 'command' }
   | { kind: 'procurement'; id: number }
   | { kind: 'new-procurement' }
   | { kind: 'inventory'; id: number }
-  | { kind: 'new-inventory' }
+  | { kind: 'new-order' }
   | null
 
-const KIT_GLYPH: Record<string, { g: string; cls: string }> = {
-  wip: { g: '●', cls: 'g-on_order' },
-  closed: { g: '✓', cls: 'g-available' },
-  cancelled: { g: '○', cls: 'g-info' },
+// Виды ордера (единый режим). Порядок = поток жизненного цикла
+// (приёмка → сборка → выбытие → сверка); label — подпись типа в списке и форме.
+type OrderKind = 'receipt' | 'kitting' | 'transfer' | 'requisition' | 'writeoff' | 'inventory'
+const ORDER_KINDS: { kind: OrderKind; label: string }[] = [
+  { kind: 'receipt',     label: 'Поставка' },
+  { kind: 'kitting',     label: 'Комплектация' },
+  { kind: 'transfer',    label: 'Передача' },
+  { kind: 'requisition', label: 'Требование' },
+  { kind: 'writeoff',    label: 'Списание' },
+  { kind: 'inventory',   label: 'Инвентаризация' },
+]
+const ORDER_LABEL = Object.fromEntries(ORDER_KINDS.map(k => [k.kind, k.label])) as Record<OrderKind, string>
+// Ключи detail-выбора, относящиеся к ордеру (для подсветки строки в едином списке).
+const ORDER_SEL_KINDS = new Set(ORDER_KINDS.map(k => k.kind as string))
+
+// Нормализованная строка единого списка ордеров (собирается клиентски из 6 фидов).
+interface OrderEntry {
+  kind: OrderKind; id: number; code: string; name: string
+  projectCode: string; posted: boolean; date: string | null
 }
 
 export default function App() {
@@ -177,14 +189,51 @@ export default function App() {
 
   const openProject = (id: number) => { setMode('projects'); setSel({ kind: 'project', id }) }
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
-  const openKitting = (id: number) => { setMode('kittings'); setSel({ kind: 'kitting', id }) }
-  const openReceipt = (id: number) => { setMode('receipts'); setSel({ kind: 'receipt', id }) }
+  // 6 складских документов открываются в едином режиме «Ордера» (Ф1b-флагман).
+  const openKitting = (id: number) => { setMode('orders'); setSel({ kind: 'kitting', id }) }
+  const openReceipt = (id: number) => { setMode('orders'); setSel({ kind: 'receipt', id }) }
+  const openTransfer = (id: number) => { setMode('orders'); setSel({ kind: 'transfer', id }) }
+  const openWriteoff = (id: number) => { setMode('orders'); setSel({ kind: 'writeoff', id }) }
+  const openRequisition = (id: number) => { setMode('orders'); setSel({ kind: 'requisition', id }) }
+  const openInventory = (id: number) => { setMode('orders'); setSel({ kind: 'inventory', id }) }
   const openPurchase = (id: number) => { setMode('purchases'); setSel({ kind: 'purchase', id }) }
-  const openTransfer = (id: number) => { setMode('transfers'); setSel({ kind: 'transfer', id }) }
-  const openWriteoff = (id: number) => { setMode('writeoffs'); setSel({ kind: 'writeoff', id }) }
-  const openRequisition = (id: number) => { setMode('requisitions'); setSel({ kind: 'requisition', id }) }
   const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
-  const openInventory = (id: number) => { setMode('inventories'); setSel({ kind: 'inventory', id }) }
+
+  // Единый фид ордеров: 6 списков нормализуются в общую строку. Новейшие сверху
+  // (по дате, null — вниз, tiebreak id). Диспетчер открытия — по kind.
+  const orderEntries = useMemo<OrderEntry[]>(() => {
+    const es: OrderEntry[] = []
+    receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.number,
+      name: r.supplier_name, projectCode: r.project_code, posted: r.approved, date: r.date }))
+    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.target_code,
+      name: k.target_name, projectCode: k.project_code, posted: k.status === 'closed', date: k.date }))
+    transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.number,
+      name: t.project_code, projectCode: t.project_code, posted: t.posted, date: t.date }))
+    requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.number,
+      name: r.project_code, projectCode: r.project_code, posted: r.posted, date: r.date }))
+    writeoffs.forEach(w => es.push({ kind: 'writeoff', id: w.id, code: w.number,
+      name: w.reason, projectCode: w.project_code, posted: w.posted, date: w.date }))
+    inventories.forEach(i => es.push({ kind: 'inventory', id: i.id, code: i.number,
+      name: i.note, projectCode: i.project_code, posted: i.posted, date: i.date }))
+    return es.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id)
+  }, [receipts, kittings, transfers, requisitions, writeoffs, inventories])
+
+  const openOrder = (e: OrderEntry) => {
+    ({ receipt: openReceipt, kitting: openKitting, transfer: openTransfer,
+      requisition: openRequisition, writeoff: openWriteoff, inventory: openInventory }[e.kind])(e.id)
+  }
+  // После создания в единой форме: перезагрузить нужный фид и открыть detail.
+  const afterCreate: Record<OrderKind, (id: number) => void> = {
+    receipt: id => { reloadReceipts(); openReceipt(id) },
+    kitting: id => { reloadKittings(); openKitting(id) },
+    transfer: id => { reloadTransfers(); openTransfer(id) },
+    requisition: id => { reloadRequisitions(); openRequisition(id) },
+    writeoff: id => { reloadWriteoffs(); openWriteoff(id) },
+    inventory: id => { reloadInventories(); openInventory(id) },
+  }
+  // Ключ выбранного ордера для подсветки строки (id пересекаются между таблицами).
+  const orderSelKey = sel && ORDER_SEL_KINDS.has(sel.kind) && 'id' in sel
+    ? `${sel.kind}:${sel.id}` : null
 
   const doLogout = () => { api.logout().catch(() => {}); setUser(null) }
 
@@ -252,25 +301,10 @@ export default function App() {
             rows={[...items].sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
               id: i.id, code: i.code, name: i.name, glyph: <span className={`ci ci-${itemIcon(i.kind)}`} /> }))} />}
 
-        {mode === 'kittings' &&
-          <ModeList heading="Комплектации" newLabel="＋ Новая" projectFilter
-            newSel={sel?.kind === 'new-kitting'} onNew={() => setSel({ kind: 'new-kitting' })}
-            selId={sel?.kind === 'kitting' ? sel.id : null}
-            onSelect={id => setSel({ kind: 'kitting', id })}
-            rows={[...kittings].reverse().map(k => {
-              const gl = KIT_GLYPH[k.status] ?? KIT_GLYPH.cancelled
-              return { id: k.id, code: k.target_code, name: `${k.target_name} ${k.project_code}`,
-                projectCode: k.project_code, glyph: <span className={`glyph ${gl.cls}`}>{gl.g}</span> }
-            })} />}
-
-        {mode === 'receipts' &&
-          <ModeList heading="Поставки" newLabel="＋ Новая поставка (УПД)" projectFilter
-            newSel={sel?.kind === 'new-receipt'} onNew={() => setSel({ kind: 'new-receipt' })}
-            selId={sel?.kind === 'receipt' ? sel.id : null}
-            onSelect={id => setSel({ kind: 'receipt', id })}
-            rows={[...receipts].reverse().map(r => ({ id: r.id, code: r.number,
-              name: `${r.supplier_name} ${r.project_code}`, projectCode: r.project_code,
-              glyph: <span className={`glyph ${r.approved ? 'g-lock' : 'g-on_order'}`}>{r.approved ? '🔒' : '●'}</span> }))} />}
+        {mode === 'orders' &&
+          <OrderList entries={orderEntries} selKey={orderSelKey}
+            newSel={sel?.kind === 'new-order'} onNew={() => setSel({ kind: 'new-order' })}
+            onSelect={openOrder} />}
 
         {mode === 'purchases' &&
           <ModeList heading="Заказы" newLabel="＋ Новый заказ" projectFilter
@@ -282,33 +316,6 @@ export default function App() {
               return { id: p.id, code: `Заказ #${p.id}`, name: p.project_code,
                 projectCode: p.project_code, glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
             })} />}
-
-        {mode === 'transfers' &&
-          <ModeList heading="Передачи" newLabel="＋ Новая передача" projectFilter
-            newSel={sel?.kind === 'new-transfer'} onNew={() => setSel({ kind: 'new-transfer' })}
-            selId={sel?.kind === 'transfer' ? sel.id : null}
-            onSelect={id => setSel({ kind: 'transfer', id })}
-            rows={[...transfers].reverse().map(t => ({ id: t.id, code: t.number,
-              name: t.project_code, projectCode: t.project_code,
-              glyph: <span className={`glyph ${t.posted ? 'g-lock' : 'g-on_order'}`}>{t.posted ? '🔒' : '●'}</span> }))} />}
-
-        {mode === 'writeoffs' &&
-          <ModeList heading="Списания" newLabel="＋ Новое списание" projectFilter
-            newSel={sel?.kind === 'new-writeoff'} onNew={() => setSel({ kind: 'new-writeoff' })}
-            selId={sel?.kind === 'writeoff' ? sel.id : null}
-            onSelect={id => setSel({ kind: 'writeoff', id })}
-            rows={[...writeoffs].reverse().map(w => ({ id: w.id, code: w.number,
-              name: `${w.project_code} ${w.reason}`, projectCode: w.project_code,
-              glyph: <span className={`glyph ${w.posted ? 'g-lock' : 'g-info'}`}>{w.posted ? '🔒' : '○'}</span> }))} />}
-
-        {mode === 'requisitions' &&
-          <ModeList heading="Требования" newLabel="＋ Новое требование" projectFilter
-            newSel={sel?.kind === 'new-requisition'} onNew={() => setSel({ kind: 'new-requisition' })}
-            selId={sel?.kind === 'requisition' ? sel.id : null}
-            onSelect={id => setSel({ kind: 'requisition', id })}
-            rows={[...requisitions].reverse().map(r => ({ id: r.id, code: r.number,
-              name: r.project_code, projectCode: r.project_code,
-              glyph: <span className={`glyph ${r.posted ? 'g-lock' : 'g-info'}`}>{r.posted ? '🔒' : '○'}</span> }))} />}
 
         {mode === 'procurements' &&
           <ModeList heading="Закупки" newLabel="＋ Новая закупка"
@@ -326,15 +333,6 @@ export default function App() {
               return { id: p.id, code: `Закупка #${p.id}`, name: p.note,
                 glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
             })} />}
-
-        {mode === 'inventories' &&
-          <ModeList heading="Инвентаризации" newLabel="＋ Новая инвентаризация" projectFilter
-            newSel={sel?.kind === 'new-inventory'} onNew={() => setSel({ kind: 'new-inventory' })}
-            selId={sel?.kind === 'inventory' ? sel.id : null}
-            onSelect={id => setSel({ kind: 'inventory', id })}
-            rows={[...inventories].reverse().map(i => ({ id: i.id, code: i.number,
-              name: `${i.project_code} ${i.note}`, projectCode: i.project_code,
-              glyph: <span className={`glyph ${i.posted ? 'g-lock' : 'g-info'}`}>{i.posted ? '🔒' : '○'}</span> }))} />}
       </div>
 
       <div className="work">
@@ -367,16 +365,10 @@ export default function App() {
         {sel?.kind === 'kitting' &&
           <KittingView kittingId={sel.id} openItem={openItem} onChanged={reloadKittings}
             onDeleted={() => { reloadKittings(); setSel(null) }} />}
-        {sel?.kind === 'new-kitting' &&
-          <NewKitting projects={projects} items={items}
-            onCreated={id => { reloadKittings(); openKitting(id) }} />}
         {sel?.kind === 'receipt' &&
           <ReceiptView receiptId={sel.id} items={items} openItem={openItem}
             openPurchase={openPurchase} onChanged={reloadReceipts}
             onDeleted={() => { reloadReceipts(); setSel(null) }} />}
-        {sel?.kind === 'new-receipt' &&
-          <NewReceipt projects={projects}
-            onCreated={id => { reloadReceipts(); openReceipt(id) }} />}
         {sel?.kind === 'purchase' &&
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
             openReceipt={openReceipt} onChanged={reloadPurchases} />}
@@ -386,21 +378,12 @@ export default function App() {
         {sel?.kind === 'transfer' &&
           <TransferView transferId={sel.id} openItem={openItem} onChanged={reloadTransfers}
             onDeleted={() => { reloadTransfers(); setSel(null) }} />}
-        {sel?.kind === 'new-transfer' &&
-          <NewTransfer projects={projects}
-            onCreated={id => { reloadTransfers(); openTransfer(id) }} />}
         {sel?.kind === 'writeoff' &&
           <WriteoffView writeoffId={sel.id} openItem={openItem} onChanged={reloadWriteoffs}
             onDeleted={() => { reloadWriteoffs(); setSel(null) }} />}
-        {sel?.kind === 'new-writeoff' &&
-          <NewWriteoff projects={projects}
-            onCreated={id => { reloadWriteoffs(); openWriteoff(id) }} />}
         {sel?.kind === 'requisition' &&
           <RequisitionView requisitionId={sel.id} openItem={openItem} onChanged={reloadRequisitions}
             onDeleted={() => { reloadRequisitions(); setSel(null) }} />}
-        {sel?.kind === 'new-requisition' &&
-          <NewRequisition projects={projects}
-            onCreated={id => { reloadRequisitions(); openRequisition(id) }} />}
         {sel?.kind === 'command' &&
           <CommandDeficitView openItem={openItem}
             openProcurement={id => { reloadProcurements(); openProcurement(id) }} />}
@@ -414,9 +397,8 @@ export default function App() {
           <InventoryView inventoryId={sel.id} items={items} openItem={openItem}
             onChanged={reloadInventories}
             onDeleted={() => { reloadInventories(); setSel(null) }} />}
-        {sel?.kind === 'new-inventory' &&
-          <NewInventory projects={projects}
-            onCreated={id => { reloadInventories(); openInventory(id) }} />}
+        {sel?.kind === 'new-order' &&
+          <NewOrder projects={projects} items={items} afterCreate={afterCreate} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}
       </div>
 
@@ -433,12 +415,7 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'items',        icon: 'circuit-board', title: 'Изделия — справочник, остатки, состав' },
   { mode: 'procurements', icon: 'table',         title: 'Закупки — командный свод, order.xlsx' },
   { mode: 'purchases',    icon: 'checklist',     title: 'Заказы — обязательства поставщику' },
-  { mode: 'receipts',     icon: 'inbox',         title: 'Поставки — УПД, рождение лотов' },
-  { mode: 'kittings',     icon: 'tools',         title: 'Комплектации — сборка, списание под прибор' },
-  { mode: 'transfers',    icon: 'export',        title: 'Передачи — отгрузка заказчику' },
-  { mode: 'requisitions', icon: 'arrow-swap',    title: 'Требования — отпочкование, постановка на баланс' },
-  { mode: 'writeoffs',    icon: 'trash',         title: 'Списания — выбытие, серый путь' },
-  { mode: 'inventories',  icon: 'search',        title: 'Инвентаризации — найденные партии' },
+  { mode: 'orders',       icon: 'package',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации' },
 ]
 
 // Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
@@ -503,6 +480,96 @@ function ModeList({ heading, newLabel, newSel, onNew, rows, selId, onSelect, pro
         {shown.length === 0 && <div className="list-empty">ничего не найдено</div>}
       </div>
     </>
+  )
+}
+
+// Единый список ордеров (Ф1b-флагман): смешанный фид 6 типов, два фильтра — по типу
+// (kind) и проекту. Строка = статусный глиф · моно-№ · подпись типа справа. Ключ
+// строки — `kind:id` (id пересекаются между таблицами документов).
+function OrderList({ entries, selKey, onSelect, onNew, newSel }: {
+  entries: OrderEntry[]; selKey: string | null
+  onSelect: (e: OrderEntry) => void; onNew: () => void; newSel: boolean
+}) {
+  const [q, setQ] = useState('')
+  const [kind, setKind] = useState('')
+  const [proj, setProj] = useState('')
+
+  const kindOptions = useMemo(() =>
+    ORDER_KINDS.filter(k => entries.some(e => e.kind === k.kind)), [entries])
+  const projOptions = useMemo(() =>
+    [...new Set(entries.map(e => e.projectCode).filter(Boolean))].sort(), [entries])
+
+  const shown = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return entries.filter(e =>
+      (!kind || e.kind === kind) &&
+      (!proj || e.projectCode === proj) &&
+      (!s || e.code.toLowerCase().includes(s) || e.name.toLowerCase().includes(s)))
+  }, [entries, q, kind, proj])
+
+  return (
+    <>
+      <h2>Ордера</h2>
+      <div className="list-filters">
+        <input className="list-filter" value={q} placeholder="фильтр — № или название"
+          onChange={e => setQ(e.target.value)} />
+        <div className="list-filter-row">
+          <select className="list-proj" value={kind} onChange={e => setKind(e.target.value)}>
+            <option value="">все типы</option>
+            {kindOptions.map(k => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+          </select>
+          {projOptions.length > 1 &&
+            <select className="list-proj" value={proj} onChange={e => setProj(e.target.value)}>
+              <option value="">все проекты</option>
+              {projOptions.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>}
+        </div>
+      </div>
+      <div className="list-scroll">
+        <div className={'tree-item new' + (newSel ? ' sel' : '')} onClick={onNew}>
+          <span className="code">＋ Новый ордер</span>
+        </div>
+        {shown.map(e => {
+          const key = `${e.kind}:${e.id}`
+          return (
+            <div key={key} className={'tree-item' + (selKey === key ? ' sel' : '')}
+              onClick={() => onSelect(e)} title={ORDER_LABEL[e.kind]}>
+              <span className={`glyph ${e.posted ? 'g-lock' : 'g-info'}`}>{e.posted ? '🔒' : '○'}</span>
+              <span className="code">{e.code}</span>
+              <span className="row-tag">{ORDER_LABEL[e.kind]}</span>
+            </div>
+          )
+        })}
+        {shown.length === 0 && <div className="list-empty">ничего не найдено</div>}
+      </div>
+    </>
+  )
+}
+
+// Единая форма создания ордера: селектор типа наверху рулит полями — под ним
+// показывается кокпит-специфичная форма создания (те же New*, что и раньше). Их
+// собственный заголовок служит подписью формы.
+function NewOrder({ projects, items, afterCreate }: {
+  projects: ProjectRow[]; items: ItemRow[]
+  afterCreate: Record<OrderKind, (id: number) => void>
+}) {
+  const [kind, setKind] = useState<OrderKind>('receipt')
+  return (
+    <div>
+      <div className="order-new-kind">
+        <span className="sub">Тип ордера</span>
+        <select className="lot-sel" value={kind}
+          onChange={e => setKind(e.target.value as OrderKind)}>
+          {ORDER_KINDS.map(k => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+        </select>
+      </div>
+      {kind === 'receipt' && <NewReceipt projects={projects} onCreated={afterCreate.receipt} />}
+      {kind === 'kitting' && <NewKitting projects={projects} items={items} onCreated={afterCreate.kitting} />}
+      {kind === 'transfer' && <NewTransfer projects={projects} onCreated={afterCreate.transfer} />}
+      {kind === 'requisition' && <NewRequisition projects={projects} onCreated={afterCreate.requisition} />}
+      {kind === 'writeoff' && <NewWriteoff projects={projects} onCreated={afterCreate.writeoff} />}
+      {kind === 'inventory' && <NewInventory projects={projects} onCreated={afterCreate.inventory} />}
+    </div>
   )
 }
 
