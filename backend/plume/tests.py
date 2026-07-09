@@ -2612,13 +2612,14 @@ class Wave13Fase2dTests(EngineTestBase):
     гейтит и админ-форму (`full_clean → clean`), и проведение (`_require_header`)."""
 
     def test_required_map_mirrors_pre_2c_notnull(self):
-        """Пять видов требуют дату+номер; kitting/relocation свободны (как до Ф2c)."""
+        """Строгие виды требуют дату+номер; kitting свободен. Ф2e: relocation стал
+        строгим (реальный документ с номером), только kitting остаётся свободным."""
         req = models.StockDocument.REQUIRED_HEADER_BY_KIND
         K = models.StockDocument.Kind
-        for kind in (K.RECEIPT, K.INVENTORY, K.REQUISITION, K.TRANSFER, K.WRITEOFF):
+        for kind in (K.RECEIPT, K.INVENTORY, K.REQUISITION, K.TRANSFER, K.WRITEOFF,
+                     K.RELOCATION):
             self.assertEqual(set(req[kind]), {'date', 'number'})
         self.assertEqual(req[K.KITTING], ())
-        self.assertEqual(req[K.RELOCATION], ())
 
     def test_clean_rejects_blank_number(self):
         """Админ-путь: Transfer с пустым номером ловится model.clean() (ошибка по полю)."""
@@ -2670,3 +2671,164 @@ class Wave13Fase2dTests(EngineTestBase):
         r.save(update_fields=['date'])
         engine.approve_receipt(r)
         self.assertTrue(r.is_posted)
+
+
+class Wave13Fase2eTests(EngineTestBase):
+    """Волна 13 Ф2e: перемещение (`Relocation`) + мультисклад. Движок считает остаток
+    по паре `(лот, локация)`; ход перемещения = пара знаковых `StockLine`
+    (`−q`@источник, `+q`@приёмник), сохраняющая тотал лота."""
+
+    def setUp(self):
+        super().setUp()
+        # self.main (код MAIN) уже есть; добавим второе место — станок пайки.
+        self.sold = models.Location.objects.create(code='105', name='Место пайки')
+        self.case = self.make_item('CASE')
+        self.lot = self.receipt_lot(self.case, self.prj, 12)   # рождён на self.main
+
+    def _reloc_move(self, qty=4):
+        r = engine.create_relocation(self.prj, self.user, number='ПЕР-1',
+                                     date='2026-06-05')
+        engine.add_relocation_line(r, self.lot, D(qty),
+                                   from_location=self.main, to_location=self.sold)
+        return r
+
+    def test_conserves_total_splits_locations(self):
+        """Тотал лота сохранён (12), распределение расщеплено: 8@103 + 4@105."""
+        self._reloc_move(4)
+        self.assertEqual(engine.lot_live_qty(self.lot), D(12))          # тотал цел
+        self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(8))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(4))
+
+    def test_lot_locations_breakdown(self):
+        self._reloc_move(4)
+        by = {r['location_id']: r['qty'] for r in engine.lot_locations(self.lot)}
+        self.assertEqual(by, {self.main.id: D(8), self.sold.id: D(4)})
+
+    def test_item_available_by_location(self):
+        self._reloc_move(4)
+        self.assertEqual(engine.item_available(self.case, self.prj), D(12))
+        self.assertEqual(engine.item_available(self.case, self.prj, self.main), D(8))
+        self.assertEqual(engine.item_available(self.case, self.prj, self.sold), D(4))
+
+    def test_available_lots_by_location(self):
+        self._reloc_move(4)
+        at_main = engine.available_lots(self.case, self.prj, self.main)
+        at_sold = engine.available_lots(self.case, self.prj, self.sold)
+        self.assertEqual(at_main[0]['live_qty'], D(8))
+        self.assertEqual(at_sold[0]['live_qty'], D(4))
+        # без локации — тотал (байт-в-байт со старым контрактом кокпита)
+        self.assertEqual(engine.available_lots(self.case, self.prj)[0]['live_qty'], D(12))
+
+    def test_stock_map_by_location(self):
+        self._reloc_move(4)
+        row = next(r for r in engine.stock_map(self.case)['rows']
+                   if r['project_id'] == self.prj.id)
+        self.assertEqual(row['available'], D(12))
+        by = {b['location_id']: b['available'] for b in row['by_location']}
+        self.assertEqual(by, {self.main.id: D(8), self.sold.id: D(4)})
+
+    def test_add_line_creates_signed_pair(self):
+        r = self._reloc_move(4)
+        lines = sorted(r.lines.all(), key=lambda l: l.qty)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0].qty, D(-4))   # источник
+        self.assertEqual(lines[0].location_id, self.main.id)
+        self.assertEqual(lines[1].qty, D(4))    # приёмник
+        self.assertEqual(lines[1].location_id, self.sold.id)
+
+    def test_update_line_adjusts_both(self):
+        r = self._reloc_move(4)
+        engine.update_relocation_line(r, self.lot, qty=D(7))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(5))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(7))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(12))
+
+    def test_remove_line_restores(self):
+        r = self._reloc_move(4)
+        engine.remove_relocation_line(r, self.lot)
+        self.assertEqual(r.lines.count(), 0)
+        self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(12))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(0))
+
+    def test_cockpit_move(self):
+        r = self._reloc_move(4)
+        cp = engine.relocation_cockpit(r)
+        self.assertEqual(cp['total_qty'], D(4))
+        self.assertEqual(len(cp['moves']), 1)
+        m = cp['moves'][0]
+        self.assertEqual(m['qty'], D(4))
+        self.assertEqual(m['from_location_id'], self.main.id)
+        self.assertEqual(m['to_location_id'], self.sold.id)
+        self.assertEqual(m['from_live_qty'], D(8))
+        self.assertEqual(m['to_live_qty'], D(4))
+
+    def test_guards(self):
+        r = engine.create_relocation(self.prj, self.user, number='ПЕР-2',
+                                     date='2026-06-05')
+        # одно и то же место
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(r, self.lot, D(1),
+                                       from_location=self.main, to_location=self.main)
+        # чужой проект
+        other = models.Project.objects.create(code='P2', name='P2',
+                                               kind=models.Project.Kind.EXTERNAL)
+        foreign = self.receipt_lot(self.make_item('X'), other, 5)
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(r, foreign, D(1),
+                                       from_location=self.main, to_location=self.sold)
+        # неположительное кол-во
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(r, self.lot, D(0),
+                                       from_location=self.main, to_location=self.sold)
+        # дубль лота
+        engine.add_relocation_line(r, self.lot, D(2),
+                                   from_location=self.main, to_location=self.sold)
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(r, self.lot, D(1),
+                                       from_location=self.main, to_location=self.sold)
+
+    def test_post_gates_empty_and_header(self):
+        # пустое перемещение не проводится
+        empty = engine.create_relocation(self.prj, self.user, number='ПЕР-3',
+                                         date='2026-06-05')
+        with self.assertRaises(ValidationError):
+            engine.post_relocation(empty)
+        # шапка обязательна на проведении (relocation стал строгим, Ф2e); прямой ORM
+        # обходит create-guard пустым номером
+        r = models.Relocation.objects.create(project=self.prj, user=self.user,
+                                              number='', date='2026-06-05')
+        engine.add_relocation_line(r, self.lot, D(2),
+                                   from_location=self.main, to_location=self.sold)
+        with self.assertRaises(ValidationError):
+            engine.post_relocation(r)
+        r.number = 'ПЕР-4'
+        r.save(update_fields=['number'])
+        engine.post_relocation(r)
+        self.assertTrue(r.is_posted)
+        # под замком правка запрещена
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(r, self.lot, D(1),
+                                       from_location=self.main, to_location=self.sold)
+
+    def test_kind_stamp_and_mti(self):
+        r = self._reloc_move(4)
+        self.assertEqual(r.kind, models.StockDocument.Kind.RELOCATION)
+        parent = models.StockDocument.objects.get(id=r.id)
+        self.assertEqual(parent.kind, 'relocation')
+        self.assertEqual(parent.id, r.id)   # PK == id родителя (унификация Ф2a)
+
+    def test_source_lots_picker(self):
+        self._reloc_move(4)
+        picker = engine.relocation_source_lots(self.prj)
+        row = next(p for p in picker if p['lot_id'] == self.lot.id)
+        self.assertEqual(row['live_qty'], D(12))
+        by = {b['location_id']: b['qty'] for b in row['by_location']}
+        self.assertEqual(by, {self.main.id: D(8), self.sold.id: D(4)})
+
+    def test_delete_restores_and_conserves(self):
+        r = self._reloc_move(4)
+        engine.delete_stock_document(r)
+        self.assertFalse(models.Relocation.objects.filter(id=r.id).exists())
+        self.assertEqual(engine.lot_live_qty(self.lot), D(12))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(0))
+        self.assertEqual(self.lot.movements.count(), 1)   # только born +RECEIPT

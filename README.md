@@ -49,7 +49,7 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 | `Lot` | Партия | Главная учётная единица склада — **физическое воплощение** изделия. Хранит цену (`unit_cost`), название из УПД, заводской №. Рождается ровно одним документом-источником, живёт в одном проекте. |
 | `StockLine` | Строка движения | Единая знаковая строка расхода/перемещения существующей партии `(документ, лот, место, ±кол-во)`. Свернула четыре таблицы строк-расхода (комплектация/передача/списание/требование) в одну (волна 13, Ф0); владелец — один FK `document → StockDocument` (дуга схлопнута в Ф2b; вид = `document.kind`). Рождение лотов сюда не входит (born-direct через `Lot.origin`). |
 | `StockMovement` | Движение склада | Строка реестра движений: ±количество по партии и месту. Проекция: пересчитывается из документов (born-лоты + `StockLine`), остаток = сумма движений. |
-| `Location` | Место хранения | Где лежит партия. В MVP — одно («Основной склад»). |
+| `Location` | Место хранения | Где физически лежит партия. Мультисклад (волна 13, Ф2e): мест несколько (напр. «103 Основной склад» и «105 Место пайки»), остаток считается по паре `(лот, локация)`, «Перемещение» двигает лот между ними. |
 | `Project` | Проект | НИР или контракт, ограниченный во времени; сквозное измерение всего. Бывает внешним и внутренним (`kind`: «Собственный склад» / «Свободные неучтённые»). |
 | `ProjectDemand` | Потребность проекта | Сколько изделий нужно выпустить. Вход разузлования состава. |
 | `Procurement` | Закупка | **Планирование**: что и сколько решили купить у контрагента (экспертная оценка). Один поток общения = один `order.xlsx`, может охватывать несколько проектов. Нарезается в Заказы. |
@@ -61,6 +61,7 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 | `Inventory` | Инвентаризация | Рождает «найденные» партии (излишки, возврат в учёт). |
 | `Writeoff` | Списание | Вывод партии из учёта с указанием причины. |
 | `Requisition` | Требование | **Отпочкование**: отделение партии из одного проекта (обычно «Собственного склада») в другой. |
+| `Relocation` | Перемещение | Перенос партии между местами хранения **внутри** проекта (волна 13, Ф2e). Не рождает и не выбывает лот — двигает существующий: пара знаковых `StockLine` (`−q` источник / `+q` приёмник), тотал лота сохранён. В отличие от `Transfer` (терминальна, заказчику) остаётся в учёте. |
 | `Attachment` | Вложение | Файл на диске: скан документа либо datasheet/чертёж изделия. |
 | `User` | Пользователь | Сотрудник-автор документов. |
 
@@ -96,6 +97,8 @@ flowchart TD
   W[("Склад: остатки по<br/>партиям / местам / проекту")]
   W --> KIT["Комплектация (Kitting) — инструмент сборки лота:<br/>WIP: копим строки по факту пайки (списание),<br/>closed: лот выпущен (плата / прибор + №)"]
   KIT --> W
+  W --> REL["Перемещение (Relocation):<br/>лот между местами (напр. 103 → 105 пайка)"]
+  REL --> W
   W --> T["Передача заказчику<br/>(Transfer: прибор + серийник)"]
 
   W --> CLOSE["Закрытие проекта:<br/>остатки (qty>0) свести в 0"]
@@ -140,6 +143,7 @@ erDiagram
   STOCKDOCUMENT ||--|| REQUISITION : "MTI-наследник"
   STOCKDOCUMENT ||--|| TRANSFER : "MTI-наследник"
   STOCKDOCUMENT ||--|| WRITEOFF : "MTI-наследник"
+  STOCKDOCUMENT ||--|| RELOCATION : "MTI-наследник"
 
   LOCATION ||--o{ STOCKMOVEMENT : ""
   LOCATION ||--o{ STOCKLINE : ""
@@ -173,7 +177,7 @@ erDiagram
   PURCHASE ||--o{ PURCHASELINE : ""
   PURCHASE ||--o{ RECEIPT : "nullable"
   STOCKDOCUMENT ||--o{ LOT : "origin (рождение; receipt/kitting/inventory/requisition — вид = kind)"
-  STOCKDOCUMENT ||--o{ STOCKLINE : "расход/движение (kitting/transfer/writeoff/requisition — вид = kind)"
+  STOCKDOCUMENT ||--o{ STOCKLINE : "расход/движение (kitting/transfer/writeoff/requisition/relocation — вид = kind)"
 
   ITEM ||--o{ ATTACHMENT : "datasheet"
   STOCKDOCUMENT ||--o{ ATTACHMENT : "скан ордера (любой вид)"
@@ -302,7 +306,7 @@ erDiagram
     int document_id FK "владелец-ордер → StockDocument (вид = document.kind); дуга схлопнута в один FK (Ф2b)"
     int lot_id FK "расходуемый лот-источник (component = lot.item)"
     int location_id FK
-    decimal qty "со знаком: − расход (в Ф2 «Перемещение» даст пару −/+)"
+    decimal qty "со знаком: − расход; «Перемещение» — пара −/+ между локациями (Ф2e)"
     date date "дата пайки (nullable, комплектация)"
     string display_name "имя для накладной (nullable, передача)"
   }
@@ -318,6 +322,9 @@ erDiagram
   }
   REQUISITION {
     int id PK "= StockDocument.id (MTI parent_link); проект-получатель = StockDocument.project (Ф2c)"
+  }
+  RELOCATION {
+    int id PK "= StockDocument.id (MTI parent_link); перемещение лота между локациями (Ф2e)"
   }
   ATTACHMENT {
     int id PK
@@ -341,9 +348,10 @@ erDiagram
   вьётся плановый контур: Закупка (`Procurement`) / Заказ (`Purchase`) — что и
   сколько заказать — и потребность (`ProjectDemand`). Отвечает на «что нужно купить».
 - **Партия (`Lot`) — склад, движения и комплектация.** Главная учётная единица:
-  вокруг неё `StockMovement` (проекция остатков) и все складские документы —
-  `Kitting` / `Transfer` / `Writeoff` / `Requisition` / `Inventory` (+ `Receipt`) с их
-  строками. Все шесть — **MTI-наследники единого родителя `StockDocument` («Ордер»)**:
+  вокруг неё `StockMovement` (проекция остатков, по паре `(лот, локация)` — мультисклад
+  Ф2e) и все складские документы — `Kitting` / `Transfer` / `Writeoff` / `Requisition` /
+  `Inventory` / `Relocation` (+ `Receipt`) с их строками. Все семь — **MTI-наследники
+  единого родителя `StockDocument` («Ордер»)**:
   общая шапка (`kind`-дискриминатор + `status` + `project`/`user`/`date`/`number`/`note`,
   поднятые с детей в Ф2c) и единое id-пространство (волна 13, Ф2a); специфика
   (`supplier`/`purchase`, `target_item`/`qty`, `reason`) — на детях. Отвечает на «что

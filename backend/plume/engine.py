@@ -67,6 +67,16 @@
   позиции без оценки; **себестоимость** (Σ снимков лотов-приборов верхних целей,
   заём по реальной цене) + **экономия** = себестоимость − потрачено. Чистая витрина.
 
+Волна 13 Ф2e (мультисклад + перемещение):
+- Остаток по паре `(лот, локация)`: `lot_live_qty(lot, location)` / `item_available(…,
+  location)` / `available_lots(…, location)` (опциональный фильтр, по умолчанию — тотал,
+  байт-в-байт), `lot_locations(lot)` — разбивка по местам; `stock_map` несёт аддитивный
+  `by_location`.
+- Перемещение (`Relocation`): `create_relocation` / `relocation_cockpit` / `add|update|
+  remove_relocation_line` (пара знаковых `StockLine` `−q`@источник/`+q`@приёмник на ход,
+  тотал лота сохранён) / `post|unpost_relocation` / `relocation_source_lots` (пикер с
+  разбивкой по местам). HTTP/React — следующим заходом («вьюхи потом»).
+
 Следующие волны: логин-экран, UI вложений (`Attachment`).
 """
 from decimal import ROUND_HALF_UP, Decimal
@@ -226,21 +236,53 @@ def rebuild_all():
         rebuild_movements(lot)
 
 
-def lot_live_qty(lot):
-    """Живой остаток партии = сумма её движений (Lot.qty + Σ расход)."""
-    agg = lot.movements.aggregate(s=Sum('qty'))
-    return agg['s'] or ZERO
+def lot_live_qty(lot, location=None):
+    """Живой остаток партии = сумма её движений (Lot.qty + Σ расход).
+
+    Волна 13, Ф2e (мультисклад): опциональный `location` сужает до остатка партии
+    **в этом месте хранения** (пара `(лот, локация)`). По умолчанию (None) — тотал по
+    всем локациям, как раньше (перемещение `−q/+q` его сохраняет — двигает лишь
+    распределение). Может быть отрицательным (недостача) — не клампим.
+    """
+    qs = lot.movements.all()
+    if location is not None:
+        qs = qs.filter(location=location)
+    return qs.aggregate(s=Sum('qty'))['s'] or ZERO
 
 
-def item_available(item, project):
+def lot_locations(lot):
+    """Разбивка остатка партии по местам хранения (волна 13, Ф2e).
+
+    Возвращает строки `{location_id, code, name, qty}` с ненулевым остатком —
+    «где физически лежит этот лот». Тотал строк == `lot_live_qty(lot)`.
+    """
+    rows = []
+    agg = (lot.movements.values('location').annotate(q=Sum('qty'))
+           .order_by('location'))
+    loc_ids = [r['location'] for r in agg if r['q']]
+    locs = {loc.id: loc for loc in models.Location.objects.filter(id__in=loc_ids)}
+    for r in agg:
+        if not r['q']:
+            continue
+        loc = locs.get(r['location'])
+        rows.append({
+            'location_id': r['location'],
+            'code': loc.code if loc else '', 'name': loc.name if loc else '',
+            'qty': r['q'],
+        })
+    return rows
+
+
+def item_available(item, project, location=None):
     """Доступный остаток Item в проекте — Σ живых остатков своих лотов.
 
+    Волна 13, Ф2e: опциональный `location` сужает до остатка в этом месте хранения.
     Может быть отрицательным (недостача) — не клампим, это информативно.
     """
-    agg = models.StockMovement.objects.filter(
-        lot__item=item, lot__project=project,
-    ).aggregate(s=Sum('qty'))
-    return agg['s'] or ZERO
+    qs = models.StockMovement.objects.filter(lot__item=item, lot__project=project)
+    if location is not None:
+        qs = qs.filter(location=location)
+    return qs.aggregate(s=Sum('qty'))['s'] or ZERO
 
 
 def item_has_negative_lot(item, project):
@@ -530,12 +572,25 @@ def stock_map(item):
         available = item_available(item, project)
         if available == 0:
             continue
+        # Волна 13, Ф2e (мультисклад): аддитивная разбивка остатка проекта по местам
+        # хранения (пары `(лот, локация)` свёрнуты по локации). Ключ новый — фронт его
+        # пока игнорирует (вьюхи потом); строки с нулём не показываем.
+        loc_agg = (models.StockMovement.objects
+                   .filter(lot__item=item, lot__project=project)
+                   .values('location', 'location__code', 'location__name')
+                   .annotate(q=Sum('qty')).order_by('location'))
+        by_location = [
+            {'location_id': r['location'], 'code': r['location__code'],
+             'name': r['location__name'], 'available': r['q']}
+            for r in loc_agg if r['q']
+        ]
         rows.append({
             'project_id': project.id,
             'project_code': project.code,
             'project_name': project.name,
             'project_kind': project.kind,
             'available': available,
+            'by_location': by_location,
         })
     # подсказка-порядок: белый → серый — мягкая сортировка по виду, потом по коду
     kind_rank = {
@@ -556,11 +611,16 @@ def stock_map(item):
 # --------------------------------------------------------------------------- #
 #  Кокпит комплектации (волна 2): реальные строки + призрачные строки
 # --------------------------------------------------------------------------- #
-def available_lots(item, project):
-    """Лоты item в проекте с живым остатком > 0 — кандидаты под пайку."""
+def available_lots(item, project, location=None):
+    """Лоты item в проекте с живым остатком > 0 — кандидаты под пайку.
+
+    Волна 13, Ф2e: опциональный `location` сужает до лотов с остатком > 0 **в этом
+    месте хранения** (пикер под конкретную локацию). По умолчанию — как раньше
+    (остаток по всем локациям), контракт кокпита комплектации байт-в-байт.
+    """
     result = []
     for lot in models.Lot.objects.filter(item=item, project=project).select_related('item'):
-        live = lot_live_qty(lot)
+        live = lot_live_qty(lot, location)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'live_qty': live, 'unit_cost': lot.unit_cost,
@@ -1427,6 +1487,151 @@ def post_requisition(requisition):
 def unpost_requisition(requisition):
     """Снять замок требования — снова разрешить правку."""
     return unpost_document(requisition)
+
+
+# ── Перемещение / Relocation (мультисклад: лот между локациями внутри проекта) ──
+def _relocation_pair(relocation, lot):
+    """Пара знаковых строк одного хода: (источник `−q`, приёмник `+q`). Один лот =
+    один ход в перемещении (guard в `add_relocation_line`), поэтому пара однозначна."""
+    lines = list(relocation.lines.filter(lot=lot).select_related('location'))
+    src = next((l for l in lines if l.qty < 0), None)
+    dst = next((l for l in lines if l.qty > 0), None)
+    return src, dst
+
+
+def relocation_cockpit(relocation):
+    """Проекция кокпита перемещения: шапка + ходы (лот, откуда→куда, кол-во) + итог.
+
+    Каждый ход — пара строк (`−q`@источник, `+q`@приёмник, волна 13 Ф2e). Показываем
+    остаток лота в источнике и приёмнике (пары `(лот,локация)`) — куда и сколько ушло.
+    Перемещение не меняет тотал лота/проекта, только распределение по местам.
+    """
+    moves = []
+    total_qty = ZERO
+    seen = set()
+    for line in relocation.lines.select_related('lot__item').order_by('id'):
+        if line.lot_id in seen:
+            continue
+        seen.add(line.lot_id)
+        lot = line.lot
+        src, dst = _relocation_pair(relocation, lot)
+        mag = (-src.qty) if src else (dst.qty if dst else ZERO)
+        total_qty += mag
+        moves.append({
+            'lot_id': lot.id, 'lot_label': _lot_label(lot),
+            'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_name': lot.item.name, 'uom': lot.item.uom, 'qty': mag,
+            'from_location_id': src.location_id if src else None,
+            'from_location': src.location.code if src else '',
+            'to_location_id': dst.location_id if dst else None,
+            'to_location': dst.location.code if dst else '',
+            'from_live_qty': lot_live_qty(lot, src.location) if src else ZERO,
+            'to_live_qty': lot_live_qty(lot, dst.location) if dst else ZERO,
+        })
+    return {
+        'id': relocation.id, 'number': relocation.number, 'date': relocation.date,
+        'project_id': relocation.project_id, 'project_code': relocation.project.code,
+        'project_name': relocation.project.name, 'posted': relocation.is_posted,
+        'total_qty': total_qty, 'moves': moves,
+    }
+
+
+def create_relocation(project, user, number, date=None):
+    """Создать перемещение внутри проекта (`project` — где двигаем лоты по местам)."""
+    if not (number or '').strip():
+        raise ValidationError('Нужен № перемещения.')
+    return models.Relocation.objects.create(
+        project=project, user=user, number=number.strip(),
+        date=date or timezone.localdate())
+
+
+def add_relocation_line(relocation, lot, qty, from_location, to_location):
+    """Ход перемещения: пара знаковых строк (`−q` на источнике, `+q` на приёмнике).
+
+    Двигаем только свой лот (`lot.project == relocation.project`) между двумя РАЗНЫМИ
+    местами хранения. Один лот = один ход (правьте существующий). Кол-во не клампим по
+    остатку источника (как передача/списание): пересместить можно, источник уйдёт в
+    минус — недостача информативнее нуля (мутабельная ДНК). Тотал лота сохранён
+    (`−q+q=0`) — двигаем распределение, не остаток.
+    """
+    _require_draft(relocation)
+    if lot.project_id != relocation.project_id:
+        raise ValidationError('Лот из другого проекта — перемещаем только своё.')
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество перемещения должно быть положительным.')
+    if from_location is None or to_location is None:
+        raise ValidationError('Нужны место-источник и место-приёмник.')
+    if from_location.id == to_location.id:
+        raise ValidationError('Источник и приёмник — одно место (перемещать некуда).')
+    if relocation.lines.filter(lot=lot).exists():
+        raise ValidationError('Этот лот уже в перемещении — правьте существующий ход.')
+    src = models.StockLine.objects.create(
+        document=relocation, lot=lot, location=from_location, qty=-qty)
+    dst = models.StockLine.objects.create(
+        document=relocation, lot=lot, location=to_location, qty=qty)
+    rebuild_movements(lot)
+    return src, dst
+
+
+def update_relocation_line(relocation, lot, qty=None, from_location=None,
+                           to_location=None):
+    """Автосейв хода перемещения (кол-во/места). Только черновик (замок)."""
+    _require_draft(relocation)
+    src, dst = _relocation_pair(relocation, lot)
+    if src is None or dst is None:
+        raise ValidationError('Ход перемещения не найден.')
+    if qty is not None:
+        if qty <= 0:
+            raise ValidationError('Количество перемещения должно быть положительным.')
+        src.qty = -qty
+        dst.qty = qty
+    if from_location is not None:
+        src.location = from_location
+    if to_location is not None:
+        dst.location = to_location
+    if src.location_id == dst.location_id:
+        raise ValidationError('Источник и приёмник — одно место (перемещать некуда).')
+    src.save(update_fields=['qty', 'location'])
+    dst.save(update_fields=['qty', 'location'])
+    rebuild_movements(lot)
+    return src, dst
+
+
+def remove_relocation_line(relocation, lot):
+    """Убрать ход перемещения (обе строки пары) + пересобрать движения лота."""
+    _require_draft(relocation)
+    relocation.lines.filter(lot=lot).delete()
+    rebuild_movements(lot)
+
+
+def post_relocation(relocation):
+    """Провести перемещение (замок, форма read-only)."""
+    return post_document(relocation, relocation.lines,
+                         'Нельзя провести пустое перемещение — добавьте ход.')
+
+
+def unpost_relocation(relocation):
+    """Снять замок перемещения — снова разрешить правку."""
+    return unpost_document(relocation)
+
+
+def relocation_source_lots(project):
+    """Лоты проекта с живым остатком > 0 — кандидаты на перемещение, с разбивкой по
+    местам хранения (`lot_locations`): пикер видит, где лот лежит и сколько."""
+    result = []
+    for lot in (models.Lot.objects.filter(project=project)
+                .select_related('item').order_by('item__code', 'id')):
+        live = lot_live_qty(lot)
+        if live > 0:
+            result.append({
+                'lot_id': lot.id, 'item_id': lot.item_id,
+                'item_code': lot.item.code, 'item_name': lot.item.name,
+                'uom': lot.item.uom, 'live_qty': live,
+                'serial_number': lot.serial_number,
+                'received_name': lot.received_name,
+                'by_location': lot_locations(lot),
+            })
+    return result
 
 
 # ── Панель закрытия проекта + мягкий замок статуса ──

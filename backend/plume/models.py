@@ -113,8 +113,8 @@ class StockDocument(models.Model):
         Kind.REQUISITION: ('date', 'number'),
         Kind.TRANSFER:    ('date', 'number'),
         Kind.WRITEOFF:    ('date', 'number'),
+        Kind.RELOCATION:  ('date', 'number'),  # Ф2e: реальный документ с номером — строгий
         Kind.KITTING:     (),
-        Kind.RELOCATION:  (),
     }
 
     kind = models.CharField('вид ордера', max_length=16, choices=Kind.choices,
@@ -231,7 +231,10 @@ class Supplier(models.Model):
 
 
 class Location(models.Model):
-    """Место хранения. В MVP — один дефолтный «Основной склад»."""
+    """Место хранения. Волна 13, Ф2e — мультисклад активирован: мест может быть
+    несколько (напр. «Основной склад 103» и «Место пайки 105»), движок считает
+    остаток по паре `(лот, локация)`, «Перемещение» (`Relocation`) двигает лот
+    между ними. Синглтон-заглушка MVP снята (справочник редактируем)."""
 
     code = models.CharField('код', max_length=64, unique=True)
     name = models.CharField('название', max_length=255)
@@ -613,6 +616,27 @@ class Writeoff(StockDocument):
 
     def __str__(self):
         return f'Списание {self.number}'
+
+
+class Relocation(StockDocument):
+    """Перемещение — лот между локациями внутри проекта (волна 13, Ф2e).
+
+    Не рождает и не выбывает лот: только двигает существующий между местами
+    хранения. В отличие от `Transfer` (терминальна, отдаём заказчику), перемещение
+    остаётся внутри учёта — полный остаток лота/проекта сохраняется. Механика — пара
+    знаковых `StockLine` на ход (`−q` на источнике, `+q` на приёмнике), зеркалящих
+    `StockMovement`; лот меняет распределение по локациям, не тотал."""
+
+    KIND = StockDocument.Kind.RELOCATION
+
+    # Все поля (project/user/date/number) подняты в StockDocument (Ф2c).
+
+    class Meta:
+        verbose_name = 'перемещение'
+        verbose_name_plural = 'перемещения'
+
+    def __str__(self):
+        return f'Перемещение {self.number}'
 
 
 # --------------------------------------------------------------------------- #

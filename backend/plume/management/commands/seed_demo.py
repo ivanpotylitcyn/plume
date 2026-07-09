@@ -7,6 +7,9 @@
 - ПЛАТА-1 (производимая): сделано 3 (закрытая комплектация), делается 4 (wip) →
   ✓3 ●4 ▲3.
 Плюс КОРПУС-1 лежит и на «Собственном складе» (5) — для карты остатков.
+
+Мультисклад (волна 13, Ф2e): два места хранения — «103» (основной) и «105» (пайка);
+перемещение ПЕР-1 двигает 4 КОРПУС-1 с 103 на 105 (тотал лота 12 сохранён: 8@103 + 4@105).
 """
 import datetime
 
@@ -14,7 +17,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from plume import models
+from plume import engine, models
 from plume.engine import rebuild_all
 
 D = datetime.date
@@ -27,7 +30,7 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         self._wipe()
         user = self._superuser()
-        main, white, grey = self._infrastructure()
+        main, sold, white, grey = self._infrastructure()
         supplier = models.Supplier.objects.create(name='ООО «Поставщик»', inn='7700000000')
 
         # --- справочник изделий + BOM ---------------------------------- #
@@ -62,8 +65,9 @@ class Command(BaseCommand):
         receipt = models.Receipt.objects.create(
             number='УПД-1', date=D(2026, 5, 20), supplier=supplier, project=prj,
             user=user, status=models.DocStatus.POSTED)
-        models.Lot.objects.create(item=case, project=prj, origin=receipt, qty=12,
-                                  unit_cost=800, received_name='Корпус Al')
+        case_lot = models.Lot.objects.create(item=case, project=prj, origin=receipt,
+                                             qty=12, unit_cost=800,
+                                             received_name='Корпус Al')
 
         # --- ВИНТ-М3: открытый заказ 25 (●), склада нет ---------------- #
         proc = models.Procurement.objects.create(
@@ -102,6 +106,13 @@ class Command(BaseCommand):
         models.Lot.objects.create(item=case, project=white, origin=inv, qty=5,
                                   unit_cost=800, received_name='Корпус Al (остаток)')
 
+        # --- мультисклад: перемещение 4 КОРПУС-1 на место пайки (105) --- #
+        # Волна 13, Ф2e: тотал лота (12) сохранён, распределение — 8@103 + 4@105.
+        reloc = engine.create_relocation(prj, user, number='ПЕР-1', date=D(2026, 6, 5))
+        engine.add_relocation_line(reloc, case_lot, 4, from_location=main,
+                                   to_location=sold)
+        engine.post_relocation(reloc)
+
         # --- пересборка проекции склада -------------------------------- #
         rebuild_all()
 
@@ -116,7 +127,8 @@ class Command(BaseCommand):
                   models.Lot, models.PurchaseLine, models.ProcurementLine,
                   models.ProjectDemand, models.BomLine,
                   models.Receipt, models.Kitting, models.Transfer, models.Writeoff,
-                  models.Requisition, models.Inventory, models.Purchase,
+                  models.Requisition, models.Inventory, models.Relocation,
+                  models.Purchase,
                   models.Procurement, models.Item, models.Supplier,
                   models.Project, models.Location):
             m.objects.all().delete()
@@ -132,11 +144,13 @@ class Command(BaseCommand):
         return user
 
     def _infrastructure(self):
-        main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        main = models.Location.objects.create(code='103', name='Основной склад')
+        sold = models.Location.objects.create(code='105', name='Место пайки',
+                                              kind='workshop')
         white = models.Project.objects.create(
             code='WHITE', name='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK, status=models.Project.Status.ACTIVE)
         grey = models.Project.objects.create(
             code='GREY', name='Свободные неучтённые',
             kind=models.Project.Kind.INTERNAL_WRITEOFF, status=models.Project.Status.ACTIVE)
-        return main, white, grey
+        return main, sold, white, grey

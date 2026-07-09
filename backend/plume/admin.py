@@ -62,6 +62,15 @@ class RequisitionLineInline(admin.TabularInline):
     extra = 0
 
 
+# Перемещение (волна 13, Ф2e): пара знаковых строк на ход (`−q`@источник, `+q`@приёмник).
+# В инлайне это две строки с одним `lot` и разными `location`; `qty` знаковый.
+class RelocationLineInline(admin.TabularInline):
+    model = models.StockLine
+    fk_name = 'document'
+    fields = ('lot', 'location', 'qty')
+    extra = 0
+
+
 # --- справочники ---------------------------------------------------------- #
 @admin.register(models.Item)
 class ItemAdmin(admin.ModelAdmin):
@@ -170,6 +179,14 @@ class WriteoffAdmin(admin.ModelAdmin):
     list_display = ('number', 'project', 'date', 'reason', 'status')
     list_filter = ('status',)
     inlines = [WriteoffLineInline]
+
+
+@admin.register(models.Relocation)
+class RelocationAdmin(admin.ModelAdmin):
+    list_display = ('number', 'project', 'date', 'status')
+    list_filter = ('status', 'project')
+    search_fields = ('number',)
+    inlines = [RelocationLineInline]
 
 
 # --- вложения ------------------------------------------------------------- #
