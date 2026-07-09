@@ -94,6 +94,14 @@ def _require_draft(doc):
         raise ValidationError('Документ проведён (замок) — снимите замок для правки.')
 
 
+def _require_header(doc):
+    """Гейт полноты шапки на проведении — условная валидация специфики по виду
+    (волна 13, Ф2d). Единый kind-driven источник правила живёт на модели
+    (`StockDocument.clean` + `REQUIRED_HEADER_BY_KIND`); проведение не выпускает
+    неполный ордер независимо от пути его создания (API/админ/прямой ORM)."""
+    doc.clean()
+
+
 def post_document(doc, rows, empty_msg):
     """Поставить единый мягкий замок `draft → posted` (edit-freeze формы).
 
@@ -103,6 +111,7 @@ def post_document(doc, rows, empty_msg):
     """
     if not rows.exists():
         raise ValidationError(empty_msg)
+    _require_header(doc)
     doc.status = models.DocStatus.POSTED
     doc.save(update_fields=['status'])
     return doc
@@ -809,6 +818,7 @@ def approve_receipt(receipt):
     """Поставить замок «сверено со сканом» — форма прихода становится read-only."""
     if not receipt.lots.exists():
         raise ValidationError('Нельзя сверить пустой приход — добавьте строку.')
+    _require_header(receipt)
     receipt.status = models.DocStatus.POSTED
     receipt.save(update_fields=['status'])
     return receipt
@@ -1144,6 +1154,7 @@ def post_transfer(transfer):
     `approve_receipt`). Сюда позже ляжет подписанная накладная (Attachment)."""
     if not transfer.lines.exists():
         raise ValidationError('Нельзя отгрузить пустую накладную — добавьте строку.')
+    _require_header(transfer)
     transfer.status = models.DocStatus.POSTED
     transfer.save(update_fields=['status'])
     return transfer
@@ -1548,6 +1559,10 @@ def _apply(instance, updates):
     return instance
 
 
+# `_require_number`/`_require_date` — фаст-фейл входного слоя правки (дружелюбно
+# отклоняют попытку обнулить непустое поле в PATCH). Авторитетная per-kind политика
+# обязательности живёт на модели (`StockDocument.REQUIRED_HEADER_BY_KIND`/`clean`,
+# волна 13, Ф2d) и повторно гейтится на проведении (`_require_header`).
 def _require_number(number):
     if number is not None and not str(number).strip():
         raise ValidationError('Номер не может быть пустым.')

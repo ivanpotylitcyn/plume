@@ -2603,3 +2603,70 @@ class Wave13Fase2cTests(EngineTestBase):
             project=self.prj, user=self.user)
         latest = models.Receipt.objects.filter(project=self.prj).order_by('-date').first()
         self.assertEqual(latest, r2)
+
+
+class Wave13Fase2dTests(EngineTestBase):
+    """Волна 13 Ф2d: условная валидация специфики по виду — восстановление per-kind
+    обязательности `date`/`number`, ослабленной подъёмом полей в родителя (Ф2c).
+    Единый kind-driven источник (`StockDocument.REQUIRED_HEADER_BY_KIND`/`clean`)
+    гейтит и админ-форму (`full_clean → clean`), и проведение (`_require_header`)."""
+
+    def test_required_map_mirrors_pre_2c_notnull(self):
+        """Пять видов требуют дату+номер; kitting/relocation свободны (как до Ф2c)."""
+        req = models.StockDocument.REQUIRED_HEADER_BY_KIND
+        K = models.StockDocument.Kind
+        for kind in (K.RECEIPT, K.INVENTORY, K.REQUISITION, K.TRANSFER, K.WRITEOFF):
+            self.assertEqual(set(req[kind]), {'date', 'number'})
+        self.assertEqual(req[K.KITTING], ())
+        self.assertEqual(req[K.RELOCATION], ())
+
+    def test_clean_rejects_blank_number(self):
+        """Админ-путь: Transfer с пустым номером ловится model.clean() (ошибка по полю)."""
+        t = models.Transfer(project=self.prj, user=self.user, number='', date='2026-05-01')
+        with self.assertRaises(ValidationError) as cm:
+            t.clean()
+        self.assertIn('number', cm.exception.message_dict)
+
+    def test_clean_rejects_null_date(self):
+        """Inventory без даты — ошибка по полю `date`."""
+        inv = models.Inventory(project=self.prj, user=self.user, number='И-1', date=None)
+        with self.assertRaises(ValidationError) as cm:
+            inv.clean()
+        self.assertIn('date', cm.exception.message_dict)
+
+    def test_clean_passes_complete_header(self):
+        """Полная шапка строгого вида проходит без ошибок."""
+        models.Receipt(project=self.prj, user=self.user, supplier=self.supplier,
+                       number='У-1', date='2026-05-01').clean()
+
+    def test_kitting_exempt_from_header(self):
+        """Kitting освобождён: пустой номер/дата в clean() не ошибка (как до Ф2c)."""
+        models.Kitting(project=self.prj, user=self.user, qty=D(1), number='', date=None,
+                       target_item=self.make_item('DEV', manufactured=True)).clean()
+
+    def test_post_gates_incomplete_header(self):
+        """Проведение не выпускает неполный ордер, минуя create-guard (прямой ORM).
+        Гейт после empty-check: строку добавляем, чтобы дойти до валидации шапки."""
+        lot = self.receipt_lot(self.make_item('R'), self.prj, 100)
+        w = models.Writeoff.objects.create(project=self.prj, user=self.user,
+                                            number='', date='2026-05-01', reason='порча')
+        engine.add_writeoff_line(w, lot, D(5))
+        with self.assertRaises(ValidationError):
+            engine.post_writeoff(w)
+        w.number = 'С-1'
+        w.save(update_fields=['number'])
+        engine.post_writeoff(w)
+        self.assertTrue(w.is_posted)
+
+    def test_approve_receipt_gated_on_missing_date(self):
+        """approve_receipt гейтит отсутствующую дату (прямой ORM-обход дефолта create)."""
+        r = models.Receipt.objects.create(project=self.prj, user=self.user,
+                                           supplier=self.supplier, number='У-9', date=None)
+        models.Lot.objects.create(item=self.make_item('B'), project=self.prj,
+                                  origin=r, qty=D(3))
+        with self.assertRaises(ValidationError):
+            engine.approve_receipt(r)
+        r.date = '2026-05-01'
+        r.save(update_fields=['date'])
+        engine.approve_receipt(r)
+        self.assertTrue(r.is_posted)

@@ -99,6 +99,24 @@ class StockDocument(models.Model):
     # Дочерний класс объявляет свой вид (`KIND`); `save()` штампует его в `kind`.
     KIND = None
 
+    # Волна 13, Ф2d — условная валидация специфики по виду. Ф2c подняла общие поля в
+    # родителя, осознанно ослабив их: `date` → nullable, `number` → blank (одной колонкой
+    # на общий MTI-родитель per-kind NOT NULL не выразить). До Ф2c пять видов несли
+    # `date`(NOT NULL)+`number`(required non-blank), а kitting — nullable-дату и вовсе без
+    # поля номера (см. reverse-часть миграции 0007). Здесь это правило живёт **одним
+    # kind-driven источником**: `clean()` зовёт `full_clean` админ-ModelForm; движок
+    # дублирует его гейтом полноты на проведении (`post_document`/`approve_receipt`/
+    # `post_transfer`). `relocation` (дочерней таблицы пока нет) — без обязательной шапки.
+    REQUIRED_HEADER_BY_KIND = {
+        Kind.RECEIPT:     ('date', 'number'),
+        Kind.INVENTORY:   ('date', 'number'),
+        Kind.REQUISITION: ('date', 'number'),
+        Kind.TRANSFER:    ('date', 'number'),
+        Kind.WRITEOFF:    ('date', 'number'),
+        Kind.KITTING:     (),
+        Kind.RELOCATION:  (),
+    }
+
     kind = models.CharField('вид ордера', max_length=16, choices=Kind.choices,
                             blank=True, default='')
     status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
@@ -125,6 +143,20 @@ class StockDocument(models.Model):
     @property
     def is_posted(self):
         return self.status == DocStatus.POSTED
+
+    def clean(self):
+        """Условная валидация шапки по виду (Ф2d): восстанавливает per-kind
+        обязательность `date`/`number`, ослабленную подъёмом полей в родителя (Ф2c).
+        Ошибки — по полям (дружелюбны и в админ-форме, и через `e.messages` в API)."""
+        super().clean()
+        required = self.REQUIRED_HEADER_BY_KIND.get(self.KIND or self.kind, ())
+        errors = {}
+        if 'date' in required and self.date is None:
+            errors['date'] = 'Дата обязательна для этого вида ордера.'
+        if 'number' in required and not (self.number or '').strip():
+            errors['number'] = 'Номер обязателен для этого вида ордера.'
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         # MTI-дети штампуют свой вид; прямых bare-StockDocument не создаём.
