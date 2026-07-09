@@ -56,6 +56,40 @@ STOCKLINE_DOC_FIELDS = ('kitting', 'transfer', 'writeoff', 'requisition')
 
 
 # --------------------------------------------------------------------------- #
+#  Абстрактная шапка складского документа (волна 13, Ф1)
+# --------------------------------------------------------------------------- #
+class DocStatus(models.TextChoices):
+    """Единый мягкий замок складского документа: `draft ⇄ posted`."""
+    DRAFT = 'draft', 'Черновик'
+    POSTED = 'posted', 'Проведён'
+
+
+class StockDoc(models.Model):
+    """Абстрактная общая шапка складских ордеров (Приход/Комплектация/Инвентаризация/
+    Требование/Передача/Списание).
+
+    Несёт **единый мягкий замок** `status {draft ⇄ posted}` (волна 13, Ф1): свернул
+    разнородные `Receipt.approved`, `Transfer.posted`, `Kitting.status{wip/closed/
+    cancelled}` в одну ось. `posted` = edit-freeze (форма read-only); склад **НЕ
+    гейтится** — замок чисто интерфейсный (остатки собираются независимо от статуса).
+    `cancelled` снят: отмена = удаление. В Ф2 (MTI) абстракция схлопнется в
+    конкретного родителя `StockDocument` (шапка + `kind`).
+    """
+
+    Status = DocStatus
+
+    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
+                              default=DocStatus.DRAFT)
+
+    class Meta:
+        abstract = True
+
+    @property
+    def is_posted(self):
+        return self.status == DocStatus.POSTED
+
+
+# --------------------------------------------------------------------------- #
 #  Справочники
 # --------------------------------------------------------------------------- #
 class Item(models.Model):
@@ -291,7 +325,7 @@ class PurchaseLine(models.Model):
 # --------------------------------------------------------------------------- #
 #  Документы-origin партий + приёмка
 # --------------------------------------------------------------------------- #
-class Receipt(models.Model):
+class Receipt(StockDoc):
     """Приход / УПД — приёмка по передаточному документу, рождает партии."""
 
     number = models.CharField('№ УПД', max_length=64)
@@ -304,7 +338,6 @@ class Receipt(models.Model):
                                 related_name='receipts')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='receipts', verbose_name='автор')
-    approved = models.BooleanField('сверено со сканом (замок)', default=False)
 
     class Meta:
         verbose_name = 'приход (УПД)'
@@ -314,14 +347,9 @@ class Receipt(models.Model):
         return f'УПД {self.number} от {self.date}'
 
 
-class Kitting(models.Model):
+class Kitting(StockDoc):
     """Комплектация — инструмент ведения сборки лота: списывает компоненты и
-    рождает партию-прибор. `wip → closed`."""
-
-    class Status(models.TextChoices):
-        WIP = 'wip', 'В работе'
-        CLOSED = 'closed', 'Закрыт'
-        CANCELLED = 'cancelled', 'Отменён'
+    рождает партию-прибор. Замок `draft → posted` (закрытие рождает лот-прибор)."""
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='kittings')
@@ -331,8 +359,6 @@ class Kitting(models.Model):
                              related_name='kittings', verbose_name='автор')
     qty = qty(verbose_name='кол-во образцов')
     date = models.DateField('дата открытия', null=True, blank=True)
-    status = models.CharField('статус', max_length=16, choices=Status.choices,
-                              default=Status.WIP)
 
     class Meta:
         verbose_name = 'комплектация'
@@ -343,7 +369,7 @@ class Kitting(models.Model):
                 f'[{self.get_status_display()}]')
 
 
-class Inventory(models.Model):
+class Inventory(StockDoc):
     """Инвентаризация — рождает «найденные» партии (излишки/ре-материализация)."""
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
@@ -362,7 +388,7 @@ class Inventory(models.Model):
         return f'Инвентаризация {self.number}'
 
 
-class Requisition(models.Model):
+class Requisition(StockDoc):
     """Требование/отпочкование — рождает лоты в проекте-получателе из source-лота."""
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
@@ -534,7 +560,7 @@ class StockLine(models.Model):
 # --------------------------------------------------------------------------- #
 #  Выбытие / передача / закрытие
 # --------------------------------------------------------------------------- #
-class Transfer(models.Model):
+class Transfer(StockDoc):
     """Передача — только заказчикам, по накладной в рамках проекта."""
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
@@ -543,7 +569,6 @@ class Transfer(models.Model):
                              related_name='transfers', verbose_name='автор')
     date = models.DateField('дата')
     number = models.CharField('№ накладной', max_length=64)
-    posted = models.BooleanField('отгружено (замок)', default=False)
 
     class Meta:
         verbose_name = 'передача'
@@ -553,7 +578,7 @@ class Transfer(models.Model):
         return f'Передача {self.number}'
 
 
-class Writeoff(models.Model):
+class Writeoff(StockDoc):
     """Списание — с причиной (серый путь: → «Свободные неучтённые»)."""
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT,

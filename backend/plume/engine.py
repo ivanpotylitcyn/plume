@@ -31,7 +31,7 @@
 - `transfer_cockpit(transfer)` — шапка накладной + строки-лоты (отдаём партию заказчику,
   `−ISSUE`) + живой остаток источника + итог; `project_available_lots(project)` — пикер
   отдаваемых лотов (live>0). `create_transfer`, `add/update/remove_transfer_line`.
-- Мягкий замок «отгружено» (`Transfer.posted`, зеркалит `Receipt.approved`):
+- Мягкий замок «отгружено» (единый `status {draft⇄posted}`, волна 13 Ф1):
   `post_transfer`/`unpost_transfer` — под замком форма read-only; снятие ничего не
   разрушает (guard по потомкам не нужен). `item_shipments(item)` — отгруженные партии
   изделия для его экрана (замыкает петлю `комплектация → передача`).
@@ -82,6 +82,32 @@ ZERO = Decimal('0')
 
 
 # --------------------------------------------------------------------------- #
+#  Единый мягкий замок складского документа (волна 13, Ф1)
+# --------------------------------------------------------------------------- #
+def _require_draft(doc):
+    """Единый guard правки: документ должен быть в черновике (замок снят).
+
+    Свернул разнородные `_require_wip`/`_require_unapproved`/`_require_unposted` —
+    один мягкий замок `status {draft⇄posted}` на всех ордерах. posted = edit-freeze.
+    """
+    if doc.is_posted:
+        raise ValidationError('Документ проведён (замок) — снимите замок для правки.')
+
+
+# Совместимость наружу: комплектация исторически отдавала `wip`/`closed` (фронт
+# волны 2 читает эти строки). До фронт-среза (Ф1b) проецируем единый статус в старые
+# значения — контракт API байт-в-байт (дисциплина «вьюхи потом»).
+_KITTING_STATUS_COMPAT = {
+    models.DocStatus.DRAFT: 'wip',
+    models.DocStatus.POSTED: 'closed',
+}
+
+
+def _kitting_status_out(kitting):
+    return _KITTING_STATUS_COMPAT[kitting.status]
+
+
+# --------------------------------------------------------------------------- #
 #  Склад: пересборка движений и живые остатки
 # --------------------------------------------------------------------------- #
 def _main_location():
@@ -111,11 +137,9 @@ def rebuild_movements(lot):
     # движение существующего лота: единые знаковые строки `StockLine` (волна 13, Ф0)
     # свернули 4 таблицы строк-расхода (комплектация/передача/списание/отпочкование).
     # `StockLine.qty` уже со знаком (− расход); source_type/id — из документа-владельца
-    # (`doc_kind`). Отменённая комплектация (draft-снятие волны 13 ещё впереди) движений
-    # не даёт — сохраняем прежний фильтр по статусу.
-    for sl in lot.stock_lines.select_related('location', 'kitting'):
-        if sl.kitting_id and sl.kitting.status == models.Kitting.Status.CANCELLED:
-            continue
+    # (`doc_kind`). Статус документа склад НЕ гейтит (замок чисто интерфейсный); отмена
+    # теперь = удаление документа (каскад строк+лотов), а не `cancelled`-фильтр (Ф1).
+    for sl in lot.stock_lines.select_related('location'):
         rows.append(models.StockMovement(
             lot=lot, location=sl.location,
             type=(models.StockMovement.Type.RECEIPT if sl.qty > 0
@@ -186,9 +210,9 @@ def _purchased_on_order(item, project):
 
 
 def _manufactured_in_progress(item, project):
-    """Σ кол-во в производимых wip-комплектациях, делающих этот Item в проекте."""
+    """Σ кол-во в производимых draft-комплектациях, делающих этот Item в проекте."""
     agg = models.Kitting.objects.filter(
-        target_item=item, project=project, status=models.Kitting.Status.WIP,
+        target_item=item, project=project, status=models.DocStatus.DRAFT,
     ).aggregate(s=Sum('qty'))
     return agg['s'] or ZERO
 
@@ -272,10 +296,10 @@ def project_deficit(project):
             lines.append(cov)
             statuses.append(cov['status'])
 
-        # триплет прибора: готово (закрытые лоты) / делается (wip) / не начато
+        # триплет прибора: готово (проведённые лоты) / делается (draft) / не начато
         done = models.StockMovement.objects.filter(
             lot__item=target, lot__project=project,
-            lot__kitting__status=models.Kitting.Status.CLOSED,
+            lot__kitting__status=models.DocStatus.POSTED,
         ).aggregate(s=Sum('qty'))['s'] or ZERO
         wip = _manufactured_in_progress(target, project)
         not_started = max(ZERO, demand.qty - done - wip)
@@ -385,7 +409,7 @@ def _project_cost(project):
         return ZERO
     total = ZERO
     lots = project.lots.filter(
-        kitting__status=models.Kitting.Status.CLOSED, item_id__in=targets,
+        kitting__status=models.DocStatus.POSTED, item_id__in=targets,
     )
     for lot in lots:
         total += lot.qty * lot.unit_cost
@@ -488,7 +512,7 @@ def kitting_cockpit(kitting):
     project = kitting.project
     rows = []
     statuses = []
-    is_wip = kitting.status == models.Kitting.Status.WIP
+    is_wip = kitting.status == models.DocStatus.DRAFT
     for bl in target.bom_lines.select_related('component'):
         component = bl.component
         need = bl.qty * kitting.qty
@@ -527,7 +551,7 @@ def kitting_cockpit(kitting):
         for lot in kitting.lots.all()
     ]
     return {
-        'id': kitting.id, 'status': kitting.status,
+        'id': kitting.id, 'status': _kitting_status_out(kitting),
         'project_id': project.id, 'project_code': project.code,
         'target_id': target.id, 'target_code': target.code,
         'target_name': target.name, 'uom': target.uom,
@@ -541,14 +565,9 @@ def kitting_cockpit(kitting):
 # --------------------------------------------------------------------------- #
 #  Мутации кокпита (единый источник правил + пересборка проекции склада)
 # --------------------------------------------------------------------------- #
-def _require_wip(kitting):
-    if kitting.status != models.Kitting.Status.WIP:
-        raise ValidationError('Правка возможна только в комплектации «в работе».')
-
-
 def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
     """Пайка: промоушн призрачной строки в реальную `KittingLine` + `-ISSUE`."""
-    _require_wip(kitting)
+    _require_draft(kitting)
     if lot.item_id != component.id:
         raise ValidationError('Лот не соответствует компоненту строки.')
     if lot.project_id != kitting.project_id:
@@ -565,7 +584,7 @@ def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
 
 def update_kitting_line(line, qty):
     """Автосейв количества пайки (правка провизорной строки до замка)."""
-    _require_wip(line.kitting)
+    _require_draft(line.kitting)
     if qty is None or qty <= 0:
         raise ValidationError('Количество пайки должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход)
@@ -575,7 +594,7 @@ def update_kitting_line(line, qty):
 
 def remove_kitting_line(line):
     """Удалить пробитую строку (коррекция до замка) + пересобрать движения лота."""
-    _require_wip(line.kitting)
+    _require_draft(line.kitting)
     lot = line.lot
     line.delete()
     rebuild_movements(lot)
@@ -592,27 +611,27 @@ def _device_unit_cost(kitting):
 
 
 def close_kitting(kitting):
-    """Закрыть комплектацию: рождается лот-прибор (`+RECEIPT`), `wip → closed`."""
-    _require_wip(kitting)
+    """Закрыть комплектацию: рождается лот-прибор (`+RECEIPT`), `draft → posted`."""
+    _require_draft(kitting)
     if kitting.lots.exists():
         raise ValidationError('У комплектации уже есть рождённый лот-прибор.')
     lot = models.Lot.objects.create(
         item=kitting.target_item, project=kitting.project, kitting=kitting,
         qty=kitting.qty, unit_cost=_device_unit_cost(kitting),
     )
-    kitting.status = models.Kitting.Status.CLOSED
+    kitting.status = models.DocStatus.POSTED
     kitting.save(update_fields=['status'])
     rebuild_movements(lot)
     return lot
 
 
 def reopen_kitting(kitting):
-    """Переоткрыть закрытую комплектацию: снять лот-прибор, `closed → wip`.
+    """Переоткрыть проведённую комплектацию: снять лот-прибор, `posted → draft`.
 
     Guard: лот-прибор не должен быть потреблён/передан/отпочкован ниже.
     """
-    if kitting.status != models.Kitting.Status.CLOSED:
-        raise ValidationError('Переоткрыть можно только закрытую комплектацию.')
+    if not kitting.is_posted:
+        raise ValidationError('Переоткрыть можно только проведённую комплектацию.')
     for lot in kitting.lots.all():
         if _lot_consumed_downstream(lot):
             raise ValidationError(
@@ -620,7 +639,7 @@ def reopen_kitting(kitting):
     for lot in kitting.lots.all():
         lot.movements.all().delete()
         lot.delete()
-    kitting.status = models.Kitting.Status.WIP
+    kitting.status = models.DocStatus.DRAFT
     kitting.save(update_fields=['status'])
 
 
@@ -662,20 +681,15 @@ def receipt_cockpit(receipt):
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
         'project_name': receipt.project.name,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
-        'approved': receipt.approved, 'total_cost': total,
+        'approved': receipt.is_posted, 'total_cost': total,
         'lots': lots,
     }
-
-
-def _require_unapproved(receipt):
-    if receipt.approved:
-        raise ValidationError('Приход сверён (замок) — снимите замок для правки.')
 
 
 def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, received_name='',
                     serial_number=''):
     """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода."""
-    _require_unapproved(receipt)
+    _require_draft(receipt)
     if qty is None or qty <= 0:
         raise ValidationError('Количество прихода должно быть положительным.')
     if unit_cost is not None and unit_cost < 0:
@@ -696,7 +710,7 @@ def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
     Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
     уйдёт в минус (недостача информативнее, в духе мутабельной ДНК).
     """
-    _require_unapproved(lot.receipt)
+    _require_draft(lot.receipt)
     fields = []
     if qty is not None:
         if qty <= 0:
@@ -722,7 +736,7 @@ def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
 
 def remove_receipt_lot(lot):
     """Удалить строку УПД (до замка). Guard: лот не потреблён ниже."""
-    _require_unapproved(lot.receipt)
+    _require_draft(lot.receipt)
     if _lot_consumed_downstream(lot):
         raise ValidationError(
             'Партия уже потреблена ниже (пайка/передача) — удаление заблокировано.')
@@ -734,16 +748,16 @@ def approve_receipt(receipt):
     """Поставить замок «сверено со сканом» — форма прихода становится read-only."""
     if not receipt.lots.exists():
         raise ValidationError('Нельзя сверить пустой приход — добавьте строку.')
-    receipt.approved = True
-    receipt.save(update_fields=['approved'])
+    receipt.status = models.DocStatus.POSTED
+    receipt.save(update_fields=['status'])
     return receipt
 
 
 def unapprove_receipt(receipt):
     """Снять замок — снова разрешить правку. Ничего не разрушает (в отличие от
     переоткрытия комплектации), поэтому guard по потомкам не нужен."""
-    receipt.approved = False
-    receipt.save(update_fields=['approved'])
+    receipt.status = models.DocStatus.DRAFT
+    receipt.save(update_fields=['status'])
     return receipt
 
 
@@ -978,7 +992,7 @@ def transfer_cockpit(transfer):
     return {
         'id': transfer.id, 'number': transfer.number, 'date': transfer.date,
         'project_id': transfer.project_id, 'project_code': transfer.project.code,
-        'project_name': transfer.project.name, 'posted': transfer.posted,
+        'project_name': transfer.project.name, 'posted': transfer.is_posted,
         'total_qty': total_qty, 'lines': lines,
     }
 
@@ -997,7 +1011,7 @@ def item_shipments(item):
         t = line.transfer
         rows.append({
             'transfer_id': t.id, 'number': t.number, 'date': t.date,
-            'project_code': t.project.code, 'posted': t.posted,
+            'project_code': t.project.code, 'posted': t.is_posted,
             'lot_id': line.lot_id, 'qty': -line.qty,     # знаковый → магнитуда
             'display_name': line.display_name,
             'serial_number': line.lot.serial_number,
@@ -1017,11 +1031,6 @@ def create_transfer(project, user, number, date=None):
         date=date or timezone.localdate())
 
 
-def _require_unposted(transfer):
-    if transfer.posted:
-        raise ValidationError('Накладная отгружена (замок) — снимите замок для правки.')
-
-
 def add_transfer_line(transfer, lot, qty, display_name=''):
     """Отгрузить партию заказчику: строка передачи (`−ISSUE` на лоте).
 
@@ -1029,7 +1038,7 @@ def add_transfer_line(transfer, lot, qty, display_name=''):
     клампим по остатку: переотдать можно, лот уйдёт в минус (недостача информативна,
     в духе мутабельной ДНК).
     """
-    _require_unposted(transfer)
+    _require_draft(transfer)
     if lot.project_id != transfer.project_id:
         raise ValidationError('Лот из другого проекта — передаём только своё.')
     if qty is None or qty <= 0:
@@ -1043,7 +1052,7 @@ def add_transfer_line(transfer, lot, qty, display_name=''):
 
 def update_transfer_line(line, qty=None, display_name=None):
     """Автосейв строки передачи (кол-во / отображаемое имя для накладной)."""
-    _require_unposted(line.transfer)
+    _require_draft(line.transfer)
     fields = []
     if qty is not None:
         if qty <= 0:
@@ -1062,7 +1071,7 @@ def update_transfer_line(line, qty=None, display_name=None):
 
 def remove_transfer_line(line):
     """Убрать строку передачи (коррекция) — источник возвращает остаток."""
-    _require_unposted(line.transfer)
+    _require_draft(line.transfer)
     lot = line.lot
     line.delete()
     rebuild_movements(lot)
@@ -1073,16 +1082,16 @@ def post_transfer(transfer):
     `approve_receipt`). Сюда позже ляжет подписанная накладная (Attachment)."""
     if not transfer.lines.exists():
         raise ValidationError('Нельзя отгрузить пустую накладную — добавьте строку.')
-    transfer.posted = True
-    transfer.save(update_fields=['posted'])
+    transfer.status = models.DocStatus.POSTED
+    transfer.save(update_fields=['status'])
     return transfer
 
 
 def unpost_transfer(transfer):
     """Снять замок — снова разрешить правку. Ничего не разрушает (строки и их
     `−ISSUE` остаются), поэтому guard по потомкам не нужен."""
-    transfer.posted = False
-    transfer.save(update_fields=['posted'])
+    transfer.status = models.DocStatus.DRAFT
+    transfer.save(update_fields=['status'])
     return transfer
 
 
@@ -1458,7 +1467,7 @@ def _require_date(date):
 
 def update_receipt(receipt, number=None, date=None):
     """Правка шапки прихода (№ УПД / дата). Только до замка «сверено»."""
-    _require_unapproved(receipt)
+    _require_draft(receipt)
     _require_number(number)
     _require_date(date)
     return _apply(receipt, {'number': number and number.strip(), 'date': date})
@@ -1485,7 +1494,7 @@ def update_purchase(purchase, date=None, note=None):
 
 def update_transfer(transfer, number=None, date=None):
     """Правка шапки передачи (№ накладной / дата). Только до замка «отгружено»."""
-    _require_unposted(transfer)
+    _require_draft(transfer)
     _require_number(number)
     _require_date(date)
     return _apply(transfer, {'number': number and number.strip(), 'date': date})
@@ -1511,7 +1520,7 @@ def update_kitting(kitting, qty=None, date=None):
 
     Кол-во образцов пересчитывает потребности BOM — правится, пока `wip`.
     """
-    _require_wip(kitting)
+    _require_draft(kitting)
     if qty is not None and qty <= 0:
         raise ValidationError('Количество образцов должно быть положительным.')
     fields = []

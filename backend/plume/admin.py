@@ -106,8 +106,8 @@ class PurchaseAdmin(admin.ModelAdmin):
 # --- документы-origin ----------------------------------------------------- #
 @admin.register(models.Receipt)
 class ReceiptAdmin(admin.ModelAdmin):
-    list_display = ('number', 'date', 'supplier', 'project', 'approved')
-    list_filter = ('approved', 'project')
+    list_display = ('number', 'date', 'supplier', 'project', 'status')
+    list_filter = ('status', 'project')
     search_fields = ('number',)
 
 
@@ -120,13 +120,15 @@ class KittingAdmin(admin.ModelAdmin):
 
 @admin.register(models.Inventory)
 class InventoryAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date')
+    list_display = ('number', 'project', 'date', 'status')
+    list_filter = ('status',)
     search_fields = ('number',)
 
 
 @admin.register(models.Requisition)
 class RequisitionAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date')
+    list_display = ('number', 'project', 'date', 'status')
+    list_filter = ('status',)
     search_fields = ('number',)
     inlines = [RequisitionLineInline]
 
@@ -156,13 +158,15 @@ class StockLineAdmin(admin.ModelAdmin):
 # --- выбытие / передача --------------------------------------------------- #
 @admin.register(models.Transfer)
 class TransferAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date')
+    list_display = ('number', 'project', 'date', 'status')
+    list_filter = ('status',)
     inlines = [TransferLineInline]
 
 
 @admin.register(models.Writeoff)
 class WriteoffAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date', 'reason')
+    list_display = ('number', 'project', 'date', 'reason', 'status')
+    list_filter = ('status',)
     inlines = [WriteoffLineInline]
 
 

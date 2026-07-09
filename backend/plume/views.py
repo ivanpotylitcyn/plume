@@ -299,7 +299,7 @@ def _kitting_row(k):
     return {
         'id': k.id, 'project_code': k.project.code,
         'target_code': k.target_item.code, 'target_name': k.target_item.name,
-        'qty': k.qty, 'status': k.status, 'date': k.date,
+        'qty': k.qty, 'status': engine._kitting_status_out(k), 'date': k.date,
     }
 
 
@@ -313,8 +313,7 @@ def kittings(request):
             target = models.Item.objects.get(pk=d['target_item_id'])
             k = models.Kitting.objects.create(
                 project=project, target_item=target, user=_actor(request),
-                qty=d.get('qty') or 1, date=timezone.localdate(),
-                status=models.Kitting.Status.WIP)
+                qty=d.get('qty') or 1, date=timezone.localdate())
         except (KeyError, models.Project.DoesNotExist, models.Item.DoesNotExist) as e:
             return _bad(f'Нужны project_id и target_item_id ({e}).')
         return Response(engine.kitting_cockpit(k), status=http.HTTP_201_CREATED)
@@ -420,7 +419,7 @@ def _receipt_row(r):
     return {
         'id': r.id, 'number': r.number, 'date': r.date,
         'supplier_name': r.supplier.name, 'project_code': r.project.code,
-        'approved': r.approved, 'lines': r.lots.count(),
+        'approved': r.is_posted, 'lines': r.lots.count(),
     }
 
 
@@ -691,7 +690,7 @@ def _transfer_row(t):
     """Строка списка передач для дерева навигации."""
     return {
         'id': t.id, 'number': t.number, 'date': t.date,
-        'project_code': t.project.code, 'posted': t.posted,
+        'project_code': t.project.code, 'posted': t.is_posted,
         'lines': t.lines.count(),
     }
 

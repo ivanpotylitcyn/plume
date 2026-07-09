@@ -62,7 +62,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.Kitting.Status.WIP)
+                                          status=models.DocStatus.DRAFT)
         models.StockLine.objects.create(kitting=k, lot=lot,
                                         location=self.main, qty=D(-30))
         engine.rebuild_movements(lot)
@@ -74,23 +74,34 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.Kitting.Status.WIP)
+                                          status=models.DocStatus.DRAFT)
         models.StockLine.objects.create(kitting=k, lot=lot,
                                         location=self.main, qty=D(-8))
         engine.rebuild_movements(lot)
         self.assertEqual(engine.item_available(comp, self.prj), D(-3))
         self.assertTrue(engine.item_has_negative_lot(comp, self.prj))
 
-    def test_cancelled_kitting_does_not_issue(self):
+    def test_reopen_then_delete_leaves_no_phantom(self):
+        """Волна 13 Ф1: отмена = удаление (`cancelled` снят), но проведённую
+        комплектацию с born-лотом сперва расфиксируют. Расфиксация чисто сносит
+        лот-прибор (не фантом), удаление черновика освобождает компоненты.
+
+        (Прямое `posted.delete()` на MySQL упирается в CHECK `exactly_one_origin`:
+        каскад обнуляет `kitting_id` born-лота → ноль origin. Это и есть замок «сперва
+        расфиксировать» на уровне БД — см. JOURNAL 2026-07-09 Ф1.)"""
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 10)
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
-                                          user=self.user, qty=D(1),
-                                          status=models.Kitting.Status.CANCELLED)
-        models.StockLine.objects.create(kitting=k, lot=lot,
-                                        location=self.main, qty=D(-4))
-        engine.rebuild_movements(lot)
+                                          user=self.user, qty=D(1))
+        engine.add_kitting_line(k, comp, lot, D(4))
+        born = engine.close_kitting(k)              # posted + рождается лот-прибор
+        self.assertTrue(models.Lot.objects.filter(pk=born.pk).exists())
+        engine.reopen_kitting(k)                    # расфиксировать: born-лот снят
+        self.assertFalse(models.Lot.objects.filter(pk=born.pk).exists())  # не фантом
+        self.assertEqual(k.status, models.DocStatus.DRAFT)
+        k.delete()                                  # черновик удаляется свободно
+        engine.rebuild_movements(lot)               # компонент освобождён (нет −ISSUE)
         self.assertEqual(engine.lot_live_qty(lot), D(10))
 
     def test_stockline_rebuild_invariant_across_docs(self):
@@ -105,7 +116,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.Kitting.Status.WIP)
+                                          status=models.DocStatus.DRAFT)
         w = models.Writeoff.objects.create(project=self.prj, user=self.user,
                                            number='W-1', date='2026-06-01')
         cust = models.Project.objects.create(
@@ -183,7 +194,7 @@ class OnOrderTests(EngineTestBase):
         board = self.make_item('BRD', manufactured=True)
         models.Kitting.objects.create(project=self.prj, target_item=board,
                                       user=self.user, qty=D(4),
-                                      status=models.Kitting.Status.WIP)
+                                      status=models.DocStatus.DRAFT)
         self.assertEqual(engine.item_on_order(board, self.prj), D(4))
 
 
@@ -259,7 +270,7 @@ class KittingCockpitTests(EngineTestBase):
     def make_kitting(self, qty=2):
         return models.Kitting.objects.create(
             project=self.prj, target_item=self.device, user=self.user,
-            qty=D(qty), status=models.Kitting.Status.WIP)
+            qty=D(qty), status=models.DocStatus.DRAFT)
 
     def test_ghost_rows_before_piercing(self):
         # склад пуст → обе призрачные строки красные (▲ to_order)
@@ -333,7 +344,7 @@ class KittingCockpitTests(EngineTestBase):
         engine.add_kitting_line(k, self.res, res_lot, D(4))     # 4×1
         lot = engine.close_kitting(k)
         k.refresh_from_db()
-        self.assertEqual(k.status, models.Kitting.Status.CLOSED)
+        self.assertEqual(k.status, models.DocStatus.POSTED)
         self.assertEqual(lot.qty, D(2))
         # (2×800 + 4×1) / 2 = 802
         self.assertEqual(lot.unit_cost, D('802.00'))
@@ -357,7 +368,7 @@ class KittingCockpitTests(EngineTestBase):
         lot = engine.close_kitting(k)
         engine.reopen_kitting(k)
         k.refresh_from_db()
-        self.assertEqual(k.status, models.Kitting.Status.WIP)
+        self.assertEqual(k.status, models.DocStatus.DRAFT)
         self.assertFalse(models.Lot.objects.filter(pk=lot.pk).exists())
 
     def test_reopen_blocked_when_device_consumed(self):
@@ -379,7 +390,8 @@ class ReceiptCockpitTests(EngineTestBase):
     def make_receipt(self, approved=False):
         return models.Receipt.objects.create(
             number='УПД-Т', date='2026-05-01', supplier=self.supplier,
-            project=self.prj, user=self.user, approved=approved)
+            project=self.prj, user=self.user,
+            status=models.DocStatus.POSTED if approved else models.DocStatus.DRAFT)
 
     def test_add_lot_births_receipt_movement(self):
         r = self.make_receipt()
@@ -433,7 +445,7 @@ class ReceiptCockpitTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.Kitting.Status.WIP)
+                                          status=models.DocStatus.DRAFT)
         engine.add_kitting_line(k, comp, lot, D(30))   # спаяли — потреблён ниже
         with self.assertRaises(ValidationError):
             engine.remove_receipt_lot(lot)
@@ -443,7 +455,7 @@ class ReceiptCockpitTests(EngineTestBase):
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
         engine.approve_receipt(r)
         r.refresh_from_db()
-        self.assertTrue(r.approved)
+        self.assertTrue(r.is_posted)
         with self.assertRaises(ValidationError):
             engine.update_receipt_lot(lot, qty=D(9))
         with self.assertRaises(ValidationError):
@@ -460,7 +472,7 @@ class ReceiptCockpitTests(EngineTestBase):
         engine.approve_receipt(r)
         engine.unapprove_receipt(r)
         r.refresh_from_db()
-        self.assertFalse(r.approved)
+        self.assertFalse(r.is_posted)
         engine.update_receipt_lot(lot, qty=D(9))       # снова можно
         self.assertEqual(engine.lot_live_qty(lot), D(9))
 
@@ -473,7 +485,7 @@ class ReceiptCockpitTests(EngineTestBase):
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.Kitting.Status.WIP)
+                                          status=models.DocStatus.DRAFT)
         c = engine.kitting_cockpit(k)
         row = {r['component_code']: r for r in c['rows']}['R']
         self.assertEqual(row['ghost']['status'], 'available')
@@ -950,7 +962,7 @@ class HeaderEditTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
-            user=self.user, qty=D(1), status=models.Kitting.Status.WIP)
+            user=self.user, qty=D(1), status=models.DocStatus.DRAFT)
         self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(2))
         engine.update_kitting(k, qty=D(3))
         self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(6))
@@ -1728,7 +1740,7 @@ class ProjectBudgetTests(EngineTestBase):
 
         # собираем прибор
         k = models.Kitting.objects.create(project=self.prj, target_item=device,
-            user=self.user, qty=D(1), status=models.Kitting.Status.WIP)
+            user=self.user, qty=D(1), status=models.DocStatus.DRAFT)
         engine.add_kitting_line(k, case, case_lot, D(1))
         engine.add_kitting_line(k, res, res_lot, D(2))
         engine.close_kitting(k)
@@ -2112,3 +2124,59 @@ class ItemProjectUpdateTests(EngineTestBase):
         it.refresh_from_db()
         self.assertEqual(it.name, 'Обновлён')
         self.assertEqual(it.estimated_cost, D('9.9'))
+
+
+class UnifiedDocStatusTests(EngineTestBase):
+    """Волна 13 Ф1: единый мягкий замок `status {draft⇄posted}` на всех складских
+    документах (свернул `Receipt.approved`/`Transfer.posted`/`Kitting.wip-closed`)."""
+
+    def test_all_docs_default_to_draft(self):
+        """Плоское создание любого ордера рождает черновик (единый дефолт)."""
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        k = models.Kitting.objects.create(
+            project=self.prj, target_item=self.make_item('DEV', manufactured=True),
+            user=self.user, qty=D(1))
+        inv = models.Inventory.objects.create(
+            project=self.prj, user=self.user, number='И-1', date='2026-05-01')
+        req = models.Requisition.objects.create(
+            project=self.prj, user=self.user, number='Т-1', date='2026-05-01')
+        t = models.Transfer.objects.create(
+            project=self.prj, user=self.user, number='Н-1', date='2026-05-01')
+        w = models.Writeoff.objects.create(
+            project=self.prj, user=self.user, number='С-1', date='2026-05-01')
+        for doc in (r, k, inv, req, t, w):
+            self.assertEqual(doc.status, models.DocStatus.DRAFT)
+            self.assertFalse(doc.is_posted)
+
+    def test_single_guard_freezes_edits_across_doc_types(self):
+        """Один `_require_draft` гейтит правку прихода / передачи / комплектации."""
+        # приход
+        r = models.Receipt.objects.create(
+            number='У-2', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user)
+        engine.add_receipt_lot(r, self.make_item('A'), D(5))
+        engine.approve_receipt(r)
+        self.assertTrue(r.is_posted)
+        with self.assertRaises(ValidationError):
+            engine.add_receipt_lot(r, self.make_item('B'), D(1))
+        # передача
+        dev = self.make_item('DEV', manufactured=True)
+        dlot = self.receipt_lot(dev, self.prj, 5)
+        t = engine.create_transfer(self.prj, self.user, 'Н-2')
+        engine.add_transfer_line(t, dlot, D(1))
+        engine.post_transfer(t)
+        t.refresh_from_db()
+        self.assertTrue(t.is_posted)
+        with self.assertRaises(ValidationError):
+            engine.add_transfer_line(t, dlot, D(1))
+
+    def test_kitting_status_projection_is_backward_compatible(self):
+        """До фронт-среза (Ф1b) кокпит отдаёт исторические `wip`/`closed`."""
+        k = models.Kitting.objects.create(
+            project=self.prj, target_item=self.make_item('DEV', manufactured=True),
+            user=self.user, qty=D(1))
+        self.assertEqual(engine.kitting_cockpit(k)['status'], 'wip')   # draft
+        engine.close_kitting(k)
+        self.assertEqual(engine.kitting_cockpit(k)['status'], 'closed')  # posted

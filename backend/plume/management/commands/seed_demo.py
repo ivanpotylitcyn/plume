@@ -61,7 +61,7 @@ class Command(BaseCommand):
         # --- КОРПУС-1: приход 12 (✓) ----------------------------------- #
         receipt = models.Receipt.objects.create(
             number='УПД-1', date=D(2026, 5, 20), supplier=supplier, project=prj,
-            user=user, approved=True)
+            user=user, status=models.DocStatus.POSTED)
         models.Lot.objects.create(item=case, project=prj, receipt=receipt, qty=12,
                                   unit_cost=800, received_name='Корпус Al')
 
@@ -83,7 +83,7 @@ class Command(BaseCommand):
 
         closed_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=3, date=D(2026, 5, 25),
-            status=models.Kitting.Status.CLOSED)
+            status=models.DocStatus.POSTED)
         models.StockLine.objects.create(kitting=closed_k, lot=res_lot,
                                         location=main, qty=-6, date=D(2026, 5, 25))
         models.Lot.objects.create(item=board, project=prj, kitting=closed_k, qty=3,
@@ -91,7 +91,7 @@ class Command(BaseCommand):
 
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
-            status=models.Kitting.Status.WIP)
+            status=models.DocStatus.DRAFT)
         models.StockLine.objects.create(kitting=wip_k, lot=res_lot,
                                         location=main, qty=-4, date=D(2026, 6, 2))
 

@@ -16,6 +16,56 @@
 
 ---
 
+## 2026-07-09 — Волна 13, Ф1a: единый мягкий замок `status {draft ⇄ posted}`
+**Тип:** решение + реализация + грабли
+**Контекст:** Вторая фаза разморозки. По выбору Ивана — только **бэкенд-срез Ф1a**
+(модель+движок), фронт-срез Ф1b (режим «Ордера», OrderForm, канон замка на
+`Item`/`Project`) отложен — дисциплина «модель+движок сейчас, вьюхи потом». Задача:
+свернуть разнородные замки складских документов в одну ось.
+**Итог (сделано):**
+- **Абстрактный `StockDoc`** (`models.py`) — «общая шапка абстрактно» (Ф1 чеклист):
+  несёт единый `status` + `DocStatus{DRAFT,POSTED}` + `is_posted`. Наследники —
+  все 6 складских документов (`Receipt`/`Kitting`/`Inventory`/`Requisition`/
+  `Transfer`/`Writeoff`). В Ф2 схлопнётся в MTI-родителя `StockDocument`.
+- **Свёрнуты разнородные замки:** `Receipt.approved`(bool) и `Transfer.posted`(bool)
+  → `status`; `Kitting.status{wip/closed/cancelled}` → `{draft/posted}`;
+  Инвентаризация/Требование/Списание раньше замка **не имели** — получили `status`
+  (обвязка post/unpost для них — в Ф1b, поле заведено сейчас).
+- **`cancelled` снят** (канон «отмена = удаление»). Убран skip-фильтр отменённой
+  комплектации в `rebuild_movements` — путь фантомного прибора умер вместе с
+  `cancelled`.
+- **Единый guard `_require_draft(doc)`** заменил `_require_wip`/`_require_unapproved`/
+  `_require_unposted` (один текст ошибки, читает `is_posted`). Замок **чисто
+  интерфейсный** — склад по-прежнему не гейтится статусом.
+- **API байт-в-байт (фронт не тронут):** проекции отдают прежние ключи —
+  `receipt.is_posted → 'approved'`, `transfer.is_posted → 'posted'`, а кокпит
+  комплектации через `_kitting_status_out` проецирует `draft→'wip'`, `posted→'closed'`
+  (фронт волны 2 читает эти строки; компат-шим умрёт в Ф1b).
+- **Миграция `0004_unified_doc_status`** (реверсивна): add `status` (default draft) →
+  `AlterField` kitting → RunPython (`approved/posted→posted`; `closed→posted`,
+  `wip/cancelled→draft`) → drop `approved`/`posted`. Обратный проход восстанавливает
+  булевы. Порядок ручной (как в 0003): новые колонки живут рядом со старыми на время
+  копирования.
+**Грабли (важное):** прямое `posted_kitting.delete()` на MySQL падает по CHECK
+`lot_exactly_one_origin`. Причина: self-FK `Lot.predecessor` (SET_NULL) уводит каскад
+Django с fast-delete на путь, где он **сперва обнуляет `kitting_id` born-лота**
+(`UPDATE lot SET kitting_id=NULL`) → у лота ноль origin → CHECK. По сути это
+БД-замок «сперва расфиксировать»: проведённую комплектацию с born-лотом удаляют не
+напрямую, а через `reopen_kitting` (чисто снимает лот-прибор) → затем `delete()`
+черновика. Совпадает с правилом Ф1 «posted — сначала расфиксировать»; friendly-guard
+на DELETE-эндпойнте ляжет в Ф1b. Тест переписан под этот реальный поток
+(`test_reopen_then_delete_leaves_no_phantom`).
+**Проверка:** 169 тестов зелёные на **боевом локальном MySQL 8.0.25** (Docker); новые —
+`UnifiedDocStatusTests` (дефолт draft на всех 6, единый guard freeze прихода/передачи/
+комплектации, компат-проекция `wip`/`closed`) + переписанный phantom-тест. Миграция
+проверена на **scratch-MySQL**: forward → reverse (0003) → forward — статусы всех
+документов **и** остаток по лотам сохранились байт-в-байт; `seed_demo` зелёный;
+`makemigrations --check` чист.
+**Последствия:** Ф1b (фронт «Ордера» + OrderForm + канон замка на `Item`/`Project` +
+DELETE-эндпойнты с friendly-guard + обвязка post/unpost для Инв/Треб/Списания) и Ф2
+(MTI, смерть дуг, переименования `Lot`, `Supplier→Counterparty`, `relocation`/
+мультисклад) — следующими. Прод не трогали. См. [WAVE13.md](WAVE13.md).
+
 ## 2026-07-09 — Волна 13, Ф0: единая `StockLine` (первый слом заморозки)
 **Тип:** решение + реализация
 **Контекст:** Старт реализации разморозки. По выбору Ивана — только Ф0 за сессию
