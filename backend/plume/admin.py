@@ -88,9 +88,10 @@ class ProjectAdmin(admin.ModelAdmin):
     inlines = [ProjectDemandInline]
 
 
-@admin.register(models.Supplier)
-class SupplierAdmin(admin.ModelAdmin):
-    list_display = ('name', 'inn')
+@admin.register(models.Counterparty)
+class CounterpartyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'inn', 'is_supplier', 'is_customer')
+    list_filter = ('is_supplier', 'is_customer')
     search_fields = ('name', 'inn')
 
 
@@ -117,7 +118,7 @@ class PurchaseAdmin(admin.ModelAdmin):
 # --- документы-origin ----------------------------------------------------- #
 @admin.register(models.Receipt)
 class ReceiptAdmin(admin.ModelAdmin):
-    list_display = ('number', 'date', 'supplier', 'project', 'status')
+    list_display = ('number', 'date', 'contractor', 'project', 'status')
     list_filter = ('status', 'project')
     search_fields = ('number',)
 
@@ -169,7 +170,7 @@ class StockLineAdmin(admin.ModelAdmin):
 # --- выбытие / передача --------------------------------------------------- #
 @admin.register(models.Transfer)
 class TransferAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date', 'status')
+    list_display = ('number', 'project', 'contractor', 'date', 'status')
     list_filter = ('status',)
     inlines = [TransferLineInline]
 

@@ -4,7 +4,7 @@
 // замка нет (у Transfer нет поля статуса) — правимо всегда; guard корректности —
 // «лот не потреблён ниже» на бэке. Отображаемое имя строки печатается в накладной.
 import { useEffect, useState } from 'react'
-import { api, type AvailableLot, type TransferCockpit,
+import { api, type AvailableLot, type CounterpartyRow, type TransferCockpit,
   type TransferCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
@@ -19,9 +19,12 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
 }) {
   const [c, setC] = useState<TransferCockpit | null>(null)
   const [lots, setLots] = useState<AvailableLot[]>([])
+  const [customers, setCustomers] = useState<CounterpartyRow[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const { unlocked, toggle } = useFormLock(true)
+
+  useEffect(() => { api.counterparties('customer').then(setCustomers) }, [])
 
   const reloadLots = (projectId: number) =>
     api.projectAvailableLots(projectId).then(setLots)
@@ -60,7 +63,8 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
         name={`Накладная ${c.number}`}
         meta={<>
           <span className={`glyph ${fixed ? 'g-lock' : 'g-on_order'}`}>{fixed ? '🔒' : '●'}</span>
-          {c.project_code} · {c.project_name} · {c.date} · отдано {num(c.total_qty)}
+          {c.project_code} · {c.project_name}
+          {c.contractor_name && <> · {c.contractor_name}</>} · {c.date} · отдано {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="отгружена"
@@ -76,6 +80,14 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
         <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateTransfer(c.id, { date: v }))}
           validate={v => v.trim().length > 0} /></label>
+        <label>заказчик{' '}
+          <select className="lot-sel" value={c.contractor_id ?? ''} disabled={locked || busy}
+            onChange={e => run(api.updateTransfer(c.id, {
+              contractor_id: e.target.value ? Number(e.target.value) : null }))}>
+            <option value="">— не указан —</option>
+            {customers.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
+          </select>
+        </label>
       </div>
 
       <div className="kit-actions">

@@ -412,27 +412,42 @@ def kitting_reopen(request, pk):
 # --------------------------------------------------------------------------- #
 #  Приход / УПД (волна 3 — записываемое ядро) + справочник поставщиков
 # --------------------------------------------------------------------------- #
+def _counterparty_row(c):
+    return {'id': c.id, 'name': c.name, 'inn': c.inn,
+            'is_supplier': c.is_supplier, 'is_customer': c.is_customer}
+
+
 @api_view(['GET', 'POST'])
-def suppliers(request):
-    """Список поставщиков (пикер) / быстрое создание мелкой сущности."""
+def counterparties(request):
+    """Контрагенты (пикер) с фильтром по роли + быстрое создание.
+
+    GET `?role=supplier|customer` сужает список под пикер (приход → поставщики,
+    передача → заказчики); без `role` — все. POST создаёт с ролью по контексту
+    (`role`), по умолчанию поставщик (историческая роль сущности).
+    """
     if request.method == 'POST':
         name = (request.data.get('name') or '').strip()
         if not name:
-            return _bad('Нужно наименование поставщика.')
-        s = models.Supplier.objects.create(
-            name=name, inn=(request.data.get('inn') or '').strip())
-        return Response({'id': s.id, 'name': s.name, 'inn': s.inn},
-                        status=http.HTTP_201_CREATED)
-    data = [{'id': s.id, 'name': s.name, 'inn': s.inn}
-            for s in models.Supplier.objects.all()]
-    return Response(data)
+            return _bad('Нужно наименование контрагента.')
+        role = request.data.get('role') or 'supplier'
+        c = models.Counterparty.objects.create(
+            name=name, inn=(request.data.get('inn') or '').strip(),
+            is_supplier=(role == 'supplier'), is_customer=(role == 'customer'))
+        return Response(_counterparty_row(c), status=http.HTTP_201_CREATED)
+    qs = models.Counterparty.objects.all()
+    role = request.GET.get('role')
+    if role == 'supplier':
+        qs = qs.filter(is_supplier=True)
+    elif role == 'customer':
+        qs = qs.filter(is_customer=True)
+    return Response([_counterparty_row(c) for c in qs])
 
 
 def _receipt_row(r):
     """Строка списка приходов для дерева навигации."""
     return {
         'id': r.id, 'number': r.number, 'date': r.date,
-        'supplier_name': r.supplier.name, 'project_code': r.project.code,
+        'contractor_name': r.contractor.name, 'project_code': r.project.code,
         'approved': r.is_posted, 'lines': r.lots.count(),
     }
 
@@ -446,18 +461,18 @@ def receipts(request):
         if not number:
             return _bad('Нужен № УПД.')
         try:
-            supplier = models.Supplier.objects.get(pk=d['supplier_id'])
+            contractor = models.Counterparty.objects.get(pk=d['contractor_id'])
             project = models.Project.objects.get(pk=d['project_id'])
             r = models.Receipt.objects.create(
                 number=number, date=d.get('date') or timezone.localdate(),
-                supplier=supplier, project=project, user=_actor(request))
-        except (KeyError, models.Supplier.DoesNotExist,
+                contractor=contractor, project=project, user=_actor(request))
+        except (KeyError, models.Counterparty.DoesNotExist,
                 models.Project.DoesNotExist) as e:
-            return _bad(f'Нужны supplier_id, project_id, number ({e}).')
+            return _bad(f'Нужны contractor_id, project_id, number ({e}).')
         return Response(engine.receipt_cockpit(r), status=http.HTTP_201_CREATED)
 
     rows = [_receipt_row(r) for r in models.Receipt.objects
-            .select_related('supplier', 'project').order_by('-id')]
+            .select_related('contractor', 'project').order_by('-id')]
     return Response(rows)
 
 
@@ -718,17 +733,21 @@ def transfers(request):
         d = request.data
         try:
             project = models.Project.objects.get(pk=d['project_id'])
+            contractor = None
+            if d.get('contractor_id'):
+                contractor = models.Counterparty.objects.get(pk=d['contractor_id'])
             t = engine.create_transfer(
                 project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate())
-        except (KeyError, models.Project.DoesNotExist) as e:
+                date=d.get('date') or timezone.localdate(), contractor=contractor)
+        except (KeyError, models.Project.DoesNotExist,
+                models.Counterparty.DoesNotExist) as e:
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.transfer_cockpit(t), status=http.HTTP_201_CREATED)
 
     rows = [_transfer_row(t) for t in models.Transfer.objects
-            .select_related('project').order_by('-id')]
+            .select_related('project', 'contractor').order_by('-id')]
     return Response(rows)
 
 
@@ -742,9 +761,16 @@ def transfer_detail(request, pk):
     if request.method == 'PATCH':
         d = request.data
         try:
+            contractor = engine._UNSET
+            if 'contractor_id' in d:
+                cid = d['contractor_id']
+                contractor = (models.Counterparty.objects.get(pk=cid)
+                              if cid else None)
             engine.update_transfer(
                 t, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None)
+                date=d['date'] if 'date' in d else None, contractor=contractor)
+        except models.Counterparty.DoesNotExist:
+            return _bad('Контрагент не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.transfer_cockpit(t))

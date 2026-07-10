@@ -35,7 +35,7 @@ class EngineTestBase(TestCase):
         self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
         self.prj = models.Project.objects.create(
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.supplier = models.Supplier.objects.create(name='Поставщик')
+        self.supplier = models.Counterparty.objects.create(name='Поставщик')
 
     def make_item(self, code, manufactured=False, kind=models.Item.Kind.COMPONENT):
         return models.Item.objects.create(code=code, name=code, kind=kind,
@@ -43,7 +43,7 @@ class EngineTestBase(TestCase):
 
     def receipt_lot(self, item, project, qty, purchase=None):
         r = models.Receipt.objects.create(
-            number=f'UPD-{item.code}-{qty}', date='2026-05-01', supplier=self.supplier,
+            number=f'UPD-{item.code}-{qty}', date='2026-05-01', contractor=self.supplier,
             project=project, user=self.user, purchase=purchase)
         lot = models.Lot.objects.create(item=item, project=project, origin=r, qty=D(qty))
         engine.rebuild_movements(lot)
@@ -390,7 +390,7 @@ class ReceiptCockpitTests(EngineTestBase):
 
     def make_receipt(self, approved=False):
         return models.Receipt.objects.create(
-            number='УПД-Т', date='2026-05-01', supplier=self.supplier,
+            number='УПД-Т', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user,
             status=models.DocStatus.POSTED if approved else models.DocStatus.DRAFT)
 
@@ -606,7 +606,7 @@ class PurchaseCockpitTests(EngineTestBase):
             code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
         p = engine.create_purchase(other, self.user)
         r = models.Receipt.objects.create(
-            number='УПД-Х', date='2026-05-01', supplier=self.supplier,
+            number='УПД-Х', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         with self.assertRaises(ValidationError):
             engine.set_receipt_purchase(r, p)           # заказ чужого проекта
@@ -943,7 +943,7 @@ class HeaderEditTests(EngineTestBase):
 
     def test_receipt_header_locked(self):
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
-            supplier=self.supplier, project=self.prj, user=self.user)
+            contractor=self.supplier, project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.make_item('A'), D(2))
         engine.update_receipt(r, number='U-2')
         r.refresh_from_db()
@@ -1243,9 +1243,9 @@ class ClosureHttpTests(TestCase):
         self.prj = models.Project.objects.create(
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(code='R100', name='R100')
-        self.sup = models.Supplier.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(name='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
-            supplier=self.sup, project=self.prj,
+            contractor=self.sup, project=self.prj,
             user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10))
@@ -1594,9 +1594,9 @@ class InventoryHttpTests(TestCase):
             code='GREY', name='Свободные неучтённые',
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
         self.item = models.Item.objects.create(code='R100', name='R100')
-        self.sup = models.Supplier.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(name='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
-            supplier=self.sup, project=self.prj, user=get_user_model().objects.first())
+            contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10), unit_cost=D('2.50'), part_number='ЗН-9')
         engine.rebuild_movements(self.lot)
@@ -1657,9 +1657,9 @@ class OrderDeleteHttpTests(TestCase):
         self.prj = models.Project.objects.create(
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(code='R100', name='R100')
-        self.sup = models.Supplier.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(name='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
-            supplier=self.sup, project=self.prj, user=self.user)
+            contractor=self.sup, project=self.prj, user=self.user)
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10))
         engine.rebuild_movements(self.lot)
@@ -1689,7 +1689,7 @@ class OrderDeleteHttpTests(TestCase):
 
     def test_receipt_delete_draft(self):
         r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
-            supplier=self.sup, project=self.prj, user=self.user)
+            contractor=self.sup, project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.item, D(5))
         resp = self.c.delete(f'/api/receipts/{r.id}/')
         self.assertEqual(resp.status_code, 204)
@@ -1707,7 +1707,7 @@ class ProjectBudgetTests(EngineTestBase):
         case = self.make_item('CASE')
         self.receipt_lot(case, self.prj, 1)  # добавит default unit_cost=0
         r = models.Receipt.objects.create(number='U-2', date='2026-05-02',
-            supplier=self.supplier, project=self.prj, user=self.user)
+            contractor=self.supplier, project=self.prj, user=self.user)
         paid = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(3), unit_cost=D(800))
         engine.rebuild_movements(paid)
@@ -1743,7 +1743,7 @@ class ProjectBudgetTests(EngineTestBase):
 
         # пришёл УПД на все 40 по реальной цене 45 → оценка сменилась фактом
         r = models.Receipt.objects.create(number='U-3', date='2026-05-03',
-            supplier=self.supplier, project=self.prj, user=self.user)
+            contractor=self.supplier, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=screw, project=self.prj, origin=r,
             qty=D(40), unit_cost=D(45))
         engine.rebuild_movements(lot)
@@ -1774,7 +1774,7 @@ class ProjectBudgetTests(EngineTestBase):
 
         # CASE: куплен ровно 1 @ 800
         r = models.Receipt.objects.create(number='U-4', date='2026-05-04',
-            supplier=self.supplier, project=self.prj, user=self.user)
+            contractor=self.supplier, project=self.prj, user=self.user)
         case_lot = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(1), unit_cost=D(800))
         engine.rebuild_movements(case_lot)
@@ -1815,7 +1815,7 @@ class ProjectBudgetHttpTests(TestCase):
         self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
         self.prj = models.Project.objects.create(code='P1', name='Проект 1',
             kind=models.Project.Kind.EXTERNAL, budget=D(5000))
-        self.sup = models.Supplier.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(name='П')
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
@@ -1842,7 +1842,7 @@ class AttachmentTests(EngineTestBase):
     def setUp(self):
         super().setUp()
         self.receipt = models.Receipt.objects.create(
-            number='УПД-1', date='2026-05-01', supplier=self.supplier,
+            number='УПД-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
 
     def _file(self, name='scan.pdf', body=b'%PDF-1.4 test', ctype='application/pdf'):
@@ -1897,11 +1897,11 @@ class AttachmentHttpTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create(username='admin', is_superuser=True)
-        self.supplier = models.Supplier.objects.create(name='П')
+        self.supplier = models.Counterparty.objects.create(name='П')
         self.prj = models.Project.objects.create(
             code='P1', name='Проект', kind=models.Project.Kind.EXTERNAL)
         self.receipt = models.Receipt.objects.create(
-            number='УПД-1', date='2026-05-01', supplier=self.supplier,
+            number='УПД-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
@@ -2184,7 +2184,7 @@ class UnifiedDocStatusTests(EngineTestBase):
     def test_all_docs_default_to_draft(self):
         """Плоское создание любого ордера рождает черновик (единый дефолт)."""
         r = models.Receipt.objects.create(
-            number='У-1', date='2026-05-01', supplier=self.supplier,
+            number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         k = models.Kitting.objects.create(
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
@@ -2205,7 +2205,7 @@ class UnifiedDocStatusTests(EngineTestBase):
         """Один `_require_draft` гейтит правку прихода / передачи / комплектации."""
         # приход
         r = models.Receipt.objects.create(
-            number='У-2', date='2026-05-01', supplier=self.supplier,
+            number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.make_item('A'), D(5))
         engine.approve_receipt(r)
@@ -2361,7 +2361,7 @@ class Wave13Fase1bTests(EngineTestBase):
     def test_delete_receipt_draft_cascades_born_lot(self):
         """Удаление черновика прихода уносит рождённый им лот (born-direct)."""
         r = models.Receipt.objects.create(
-            number='У-9', date='2026-05-01', supplier=self.supplier,
+            number='У-9', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
         engine.delete_stock_document(r)
@@ -2387,7 +2387,7 @@ class Wave13Fase2aTests(EngineTestBase):
 
     def _one_of_each(self):
         r = models.Receipt.objects.create(
-            number='У-1', date='2026-05-01', supplier=self.supplier,
+            number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         k = models.Kitting.objects.create(
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
@@ -2424,7 +2424,7 @@ class Wave13Fase2aTests(EngineTestBase):
     def test_origin_arc_points_at_unified_parent_id(self):
         """Дуга `Lot.origin` теперь указывает на единый id (= PK ребёнка = id родителя)."""
         r = models.Receipt.objects.create(
-            number='У-2', date='2026-05-01', supplier=self.supplier,
+            number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
         self.assertEqual(lot.origin_id, r.pk)
@@ -2451,7 +2451,7 @@ class Wave13Fase2bTests(EngineTestBase):
     def test_lot_origin_is_single_fk_no_arc(self):
         """`Lot.origin` — один FK на родителя; старых 4 FK и Check origin нет."""
         r = models.Receipt.objects.create(
-            number='У-1', date='2026-05-01', supplier=self.supplier,
+            number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
         self.assertEqual(lot.origin_id, r.pk)
@@ -2493,7 +2493,7 @@ class Wave13Fase2bTests(EngineTestBase):
         """Владелец вложения — Item ИЛИ ордер: 'receipt' → `document`, 'item' → `item`;
         API-строки owner_type те же; ровно один задан (Check жив, но двухпутный)."""
         r = models.Receipt.objects.create(
-            number='У-2', date='2026-05-01', supplier=self.supplier,
+            number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         item = self.make_item('A')
         f = SimpleUploadedFile('s.pdf', b'%PDF-1.4', content_type='application/pdf')
@@ -2517,7 +2517,7 @@ class Wave13Fase2bTests(EngineTestBase):
         """Реверсы дуг живут на родителе, но доступны с ребёнка через MTI:
         `receipt.lots`, `writeoff.lines`, `receipt.attachments`."""
         r = models.Receipt.objects.create(
-            number='У-3', date='2026-05-01', supplier=self.supplier,
+            number='У-3', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(7))
         self.assertEqual(list(r.lots.all()), [lot])
@@ -2536,7 +2536,7 @@ class Wave13Fase2cTests(EngineTestBase):
 
     def _one_of_each(self):
         r = models.Receipt.objects.create(
-            number='У-1', date='2026-05-01', supplier=self.supplier,
+            number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         k = models.Kitting.objects.create(
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
@@ -2568,9 +2568,9 @@ class Wave13Fase2cTests(EngineTestBase):
                              f'{child.__name__} держит поднятое поле: {own}')
 
     def test_child_specifics_stay(self):
-        """Специфика осталась на детях: Receipt.supplier/purchase, Kitting.target_item/
+        """Специфика осталась на детях: Receipt.contractor/purchase, Kitting.target_item/
         qty, Writeoff.reason."""
-        self.assertIn('supplier', {f.name for f in models.Receipt._meta.get_fields()})
+        self.assertIn('contractor', {f.name for f in models.Receipt._meta.get_fields()})
         self.assertIn('target_item', {f.name for f in models.Kitting._meta.get_fields()})
         self.assertIn('reason', {f.name for f in models.Writeoff._meta.get_fields()})
 
@@ -2601,7 +2601,7 @@ class Wave13Fase2cTests(EngineTestBase):
         (как в движке `Writeoff.objects.filter(project=…)`)."""
         self._one_of_each()
         r2 = models.Receipt.objects.create(
-            number='У-2', date='2026-06-01', supplier=self.supplier,
+            number='У-2', date='2026-06-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         latest = models.Receipt.objects.filter(project=self.prj).order_by('-date').first()
         self.assertEqual(latest, r2)
@@ -2639,7 +2639,7 @@ class Wave13Fase2dTests(EngineTestBase):
 
     def test_clean_passes_complete_header(self):
         """Полная шапка строгого вида проходит без ошибок."""
-        models.Receipt(project=self.prj, user=self.user, supplier=self.supplier,
+        models.Receipt(project=self.prj, user=self.user, contractor=self.supplier,
                        number='У-1', date='2026-05-01').clean()
 
     def test_kitting_exempt_from_header(self):
@@ -2664,7 +2664,7 @@ class Wave13Fase2dTests(EngineTestBase):
     def test_approve_receipt_gated_on_missing_date(self):
         """approve_receipt гейтит отсутствующую дату (прямой ORM-обход дефолта create)."""
         r = models.Receipt.objects.create(project=self.prj, user=self.user,
-                                           supplier=self.supplier, number='У-9', date=None)
+                                           contractor=self.supplier, number='У-9', date=None)
         models.Lot.objects.create(item=self.make_item('B'), project=self.prj,
                                   origin=r, qty=D(3))
         with self.assertRaises(ValidationError):
@@ -2847,7 +2847,7 @@ class Wave13Fase2fTests(EngineTestBase):
 
     def make_receipt(self, approved=False):
         return models.Receipt.objects.create(
-            number='UPD-2f', date='2026-05-01', supplier=self.supplier,
+            number='UPD-2f', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user,
             status=models.DocStatus.POSTED if approved else models.DocStatus.DRAFT)
 
@@ -2895,3 +2895,74 @@ class Wave13Fase2fTests(EngineTestBase):
         born = models.Lot.objects.get(origin=req)
         self.assertEqual(born.lot_name, 'Исходник')
         self.assertEqual(born.part_number, 'PN-SRC')
+
+
+class Wave13Fase2gTests(EngineTestBase):
+    """Волна 13 Ф2f+: `Supplier → Counterparty` (единая сущность с ролями) +
+    структурный контрагент на приходе (`Receipt.contractor`, поставщик) и передаче
+    (`Transfer.contractor`, заказчик). Пикеры фильтруют по роли."""
+
+    def test_supplier_role_default(self):
+        # унаследованный `self.supplier` (без явных ролей) — поставщик по умолчанию
+        self.assertTrue(self.supplier.is_supplier)
+        self.assertFalse(self.supplier.is_customer)
+
+    def test_receipt_cockpit_emits_contractor(self):
+        r = models.Receipt.objects.create(
+            number='U-g', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        cp = engine.receipt_cockpit(r)
+        self.assertEqual(cp['contractor_id'], self.supplier.id)
+        self.assertEqual(cp['contractor_name'], self.supplier.name)
+
+    def test_create_transfer_with_customer(self):
+        cust = models.Counterparty.objects.create(
+            name='Заказчик', is_supplier=False, is_customer=True)
+        t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=cust)
+        self.assertEqual(t.contractor_id, cust.id)
+        cp = engine.transfer_cockpit(t)
+        self.assertEqual(cp['contractor_id'], cust.id)
+        self.assertEqual(cp['contractor_name'], 'Заказчик')
+
+    def test_transfer_contractor_optional_and_settable(self):
+        t = engine.create_transfer(self.prj, self.user, 'Н-2')   # без получателя
+        self.assertIsNone(t.contractor_id)
+        self.assertEqual(engine.transfer_cockpit(t)['contractor_name'], '')
+        cust = models.Counterparty.objects.create(
+            name='Поздний', is_supplier=False, is_customer=True)
+        engine.update_transfer(t, contractor=cust)               # проставить позже
+        t.refresh_from_db()
+        self.assertEqual(t.contractor_id, cust.id)
+        engine.update_transfer(t, contractor=None)               # снять (nullable)
+        t.refresh_from_db()
+        self.assertIsNone(t.contractor_id)
+
+    def test_update_transfer_sentinel_keeps_contractor(self):
+        """Часовой `_UNSET`: правка номера/даты не сбрасывает получателя."""
+        cust = models.Counterparty.objects.create(
+            name='Стойкий', is_supplier=False, is_customer=True)
+        t = engine.create_transfer(self.prj, self.user, 'Н-3', contractor=cust)
+        engine.update_transfer(t, number='Н-3-ред')              # contractor не передан
+        t.refresh_from_db()
+        self.assertEqual(t.contractor_id, cust.id)
+        self.assertEqual(t.number, 'Н-3-ред')
+
+    def test_counterparties_endpoint_role_filter(self):
+        models.Counterparty.objects.create(
+            name='ТолькоЗаказчик', is_supplier=False, is_customer=True)
+        c = Client()
+        c.force_login(self.user)
+        # ?role=supplier — унаследованный поставщик, без заказчика
+        sup_names = {r['name'] for r in c.get('/api/counterparties/?role=supplier').json()}
+        self.assertIn('Поставщик', sup_names)
+        self.assertNotIn('ТолькоЗаказчик', sup_names)
+        # ?role=customer — только заказчик
+        cust_names = {r['name'] for r in c.get('/api/counterparties/?role=customer').json()}
+        self.assertIn('ТолькоЗаказчик', cust_names)
+        self.assertNotIn('Поставщик', cust_names)
+        # быстрое создание с ролью
+        created = c.post('/api/counterparties/',
+                         {'name': 'Новый', 'role': 'customer'},
+                         content_type='application/json').json()
+        self.assertTrue(created['is_customer'])
+        self.assertFalse(created['is_supplier'])

@@ -301,8 +301,38 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       @0008 → forward@0009 — значение стабильно (lot 53 `ПЛ-001..003` цел), live-qty инвариантен.
       Прод не трогали (Ф2 на прод — отдельной экскурсией).
 
-**Ф2f+ — оставшееся Ф2 (следующими укусами):**
-- [ ] `Supplier → Counterparty` (роль/вид) + контрагент на передаче; `api.ts` и вьюхи.
+**Ф2g — `Supplier → Counterparty` (роли) + контрагент на передаче ✅ 2026-07-10**
+- [x] `Supplier → Counterparty` — единая внешняя сторона с ролями `is_supplier`
+      (default True — историческая роль) / `is_customer`. Одно юрлицо может нести обе.
+      `Receipt.supplier → contractor` (RenameField, FK цел); **`Transfer.contractor`** —
+      новый nullable FK (структурный заказчик; закрывает отложенную симметрию «передача =
+      перемещение к внешней точке» — раньше получатель жил только текстом в
+      `StockLine.display_name`). Виды `receipt`/`transfer` **не слиты** (born-direct vs
+      StockLine — хребет ясности), оба ссылаются на `Counterparty` + направление несёт `kind`.
+- [x] Миграция `0010_counterparty` (реверсивна): `RenameModel` + `AddField` ролей
+      (default True/False — бэкфилл поставщиков автоматом) + `RenameField` + `AddField`.
+      Схема-only, MySQL и SQLite. Круговой прогон на dev-MySQL (0010 → reverse@0009 →
+      forward@0010): **SNAP_A == SNAP_C** по приход×контрагент и счётчику (FK-связи
+      инвариантны). Единственный лосс — роль-флаги (аддитивны; reverse их сбрасывает,
+      forward defaults `is_supplier=True`) — как «в каком поле лежал зав.№» у Ф2f.
+- [x] Движок: проекции перешли на **`contractor_*`** (симметрия приход/передача —
+      `receipt_cockpit`/`transfer_cockpit`/purchase-receipts-row; UI-метка по `kind`:
+      «Поставщик»/«Заказчик»). `create_transfer`/`update_transfer` получили контрагента
+      (часовой `_UNSET` — правка номера/даты не сбрасывает получателя, `None` снимает).
+      Эндпойнт `/api/suppliers/` → **`/api/counterparties/?role=supplier|customer`** (один
+      справочник под оба пикера) + быстрое создание с ролью. Admin/`seed_demo` обновлены
+      (демо-заказчик «АО Заказчик»).
+- [x] Фронт: `api.ts` типы/эндпойнты (`CounterpartyRow`, `contractor_*`); `NewReceipt`
+      (поставщик-контрагент), `NewTransfer`+`TransferView` (пикер заказчика +
+      быстрое создание, редактируемо под замком), `ReceiptView`/`PurchaseView`
+      (`contractor_name`). `tsc -b`+`vite build` чисты.
+- [x] **Проверка:** 224 теста (было 218; +6 `Wave13Fase2gTests` — роль по умолчанию,
+      `contractor_*` в кокпите прихода/передачи, опциональный+редактируемый получатель,
+      часовой `_UNSET`, HTTP-фильтр `?role=`) зелёные на боевом MySQL 8.0.25 **и** SQLite;
+      `makemigrations --check` чист; `seed_demo` ок (кокпит несёт контрагента). Прод не
+      трогали (Ф2 на прод — отдельной экскурсией).
+
+**Ф2g+ — оставшееся Ф2 (следующими укусами):**
 - [ ] **Admin — гибрид:** родитель `StockDocument` = read-only обзор «все ордера»
       (зеркало режима); дочерние админки = правка по типу с инлайнами.
 - [ ] Миграция данных на живой прод-базе (развёрнут 2026-07-01).

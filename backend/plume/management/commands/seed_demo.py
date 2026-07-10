@@ -31,7 +31,11 @@ class Command(BaseCommand):
         self._wipe()
         user = self._superuser()
         main, sold, white, grey = self._infrastructure()
-        supplier = models.Supplier.objects.create(name='ООО «Поставщик»', inn='7700000000')
+        supplier = models.Counterparty.objects.create(
+            name='ООО «Поставщик»', inn='7700000000', is_supplier=True)
+        models.Counterparty.objects.create(
+            name='АО «Заказчик»', inn='7811111111',
+            is_supplier=False, is_customer=True)
 
         # --- справочник изделий + BOM ---------------------------------- #
         device = models.Item.objects.create(
@@ -63,7 +67,7 @@ class Command(BaseCommand):
 
         # --- КОРПУС-1: приход 12 (✓) ----------------------------------- #
         receipt = models.Receipt.objects.create(
-            number='УПД-1', date=D(2026, 5, 20), supplier=supplier, project=prj,
+            number='УПД-1', date=D(2026, 5, 20), contractor=supplier, project=prj,
             user=user, status=models.DocStatus.POSTED)
         case_lot = models.Lot.objects.create(item=case, project=prj, origin=receipt,
                                              qty=12, unit_cost=800,
@@ -82,7 +86,7 @@ class Command(BaseCommand):
         # --- ПЛАТА-1: сделано 3 (закрытая компл.) + делается 4 (wip) --- #
         # источник под пайку резисторов: приход РЕЗ-10К 100
         r_res = models.Receipt.objects.create(
-            number='УПД-2', date=D(2026, 5, 21), supplier=supplier, project=prj, user=user)
+            number='УПД-2', date=D(2026, 5, 21), contractor=supplier, project=prj, user=user)
         res_lot = models.Lot.objects.create(item=res, project=prj, origin=r_res,
                                             qty=100, unit_cost=1, lot_name='Резистор',
                                             part_number='RES-10K-0805')
@@ -131,7 +135,7 @@ class Command(BaseCommand):
                   models.Receipt, models.Kitting, models.Transfer, models.Writeoff,
                   models.Requisition, models.Inventory, models.Relocation,
                   models.Purchase,
-                  models.Procurement, models.Item, models.Supplier,
+                  models.Procurement, models.Item, models.Counterparty,
                   models.Project, models.Location):
             m.objects.all().delete()
 

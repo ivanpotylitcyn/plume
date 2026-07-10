@@ -3,7 +3,7 @@
 // Строки состояния нет (UI_GUIDE §11). Список режима — единый шаблон (§7).
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
-  type KittingRow, type ReceiptRow, type PurchaseRow, type SupplierRow,
+  type KittingRow, type ReceiptRow, type PurchaseRow, type CounterpartyRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
   type InventoryRow } from './api'
 import { Login } from './Login'
@@ -204,7 +204,7 @@ export default function App() {
   const orderEntries = useMemo<OrderEntry[]>(() => {
     const es: OrderEntry[] = []
     receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.number,
-      name: r.supplier_name, projectCode: r.project_code, posted: r.approved, date: r.date }))
+      name: r.contractor_name, projectCode: r.project_code, posted: r.approved, date: r.date }))
     kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.target_code,
       name: k.target_name, projectCode: k.project_code, posted: k.status === 'closed', date: k.date }))
     transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.number,
@@ -244,7 +244,7 @@ export default function App() {
       kind: 'Проект', open: () => openProject(p.id) }))
     items.forEach(i => e.push({ key: `i${i.id}`, code: i.code, name: i.name,
       kind: 'Изделие', open: () => openItem(i.id) }))
-    receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.number, name: r.supplier_name,
+    receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.number, name: r.contractor_name,
       kind: 'Поставка', open: () => openReceipt(r.id) }))
     transfers.forEach(t => e.push({ key: `t${t.id}`, code: t.number, name: t.project_code,
       kind: 'Передача', open: () => openTransfer(t.id) }))
@@ -799,15 +799,31 @@ function NewTransfer({ projects, onCreated }: {
 }) {
   const externalProjects = projects.filter(p => p.kind === 'external')
   const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
+  const [customers, setCustomers] = useState<CounterpartyRow[]>([])
+  const [customerId, setCustomerId] = useState<number | ''>('')
+  const [newCustomer, setNewCustomer] = useState('')
   const [number, setNumber] = useState('')
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => { api.counterparties('customer').then(setCustomers) }, [])
+
+  const addCustomer = () => {
+    const name = newCustomer.trim()
+    if (!name) return
+    setBusy(true); setErr(null)
+    api.createCounterparty({ name, role: 'customer' })
+      .then(c => { setCustomers(cs => [...cs, c]); setCustomerId(c.id); setNewCustomer('') })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   const create = () => {
     if (!projectId || !number.trim()) { setErr('Заполните проект и № накладной'); return }
     setBusy(true); setErr(null)
-    api.createTransfer({ project_id: projectId, number: number.trim(), date })
+    api.createTransfer({ project_id: projectId, number: number.trim(), date,
+      contractor_id: customerId || undefined })
       .then(c => onCreated(c.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -823,6 +839,21 @@ function NewTransfer({ projects, onCreated }: {
           onChange={e => setProjectId(Number(e.target.value))}>
           {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
         </select></dd>
+        <dt>Заказчик</dt>
+        <dd>
+          <select className="lot-sel" value={customerId} disabled={busy}
+            onChange={e => setCustomerId(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">— не указан —</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {' '}
+          <input className="qty-in" style={{ width: 160 }} value={newCustomer}
+            placeholder="новый заказчик…" disabled={busy}
+            onChange={e => setNewCustomer(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') addCustomer() }} />
+          <button className="btn sm" disabled={busy || !newCustomer.trim()}
+            onClick={addCustomer}>＋</button>
+        </dd>
         <dt>№ накладной</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={number}
           onChange={e => setNumber(e.target.value)} /></dd>
@@ -990,7 +1021,7 @@ function NewInventory({ projects, onCreated }: {
 function NewReceipt({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
-  const [suppliers, setSuppliers] = useState<SupplierRow[]>([])
+  const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
   const [supplierId, setSupplierId] = useState<number | ''>('')
   const [newSupplier, setNewSupplier] = useState('')
   const [projectId, setProjectId] = useState<number | ''>(
@@ -1001,7 +1032,7 @@ function NewReceipt({ projects, onCreated }: {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    api.suppliers().then(ss => {
+    api.counterparties('supplier').then(ss => {
       setSuppliers(ss)
       setSupplierId(s => s || (ss[0]?.id ?? ''))
     })
@@ -1011,7 +1042,7 @@ function NewReceipt({ projects, onCreated }: {
     const name = newSupplier.trim()
     if (!name) return
     setBusy(true); setErr(null)
-    api.createSupplier({ name })
+    api.createCounterparty({ name, role: 'supplier' })
       .then(s => { setSuppliers(ss => [...ss, s]); setSupplierId(s.id); setNewSupplier('') })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -1022,7 +1053,7 @@ function NewReceipt({ projects, onCreated }: {
       setErr('Заполните поставщика, № УПД и проект'); return
     }
     setBusy(true); setErr(null)
-    api.createReceipt({ supplier_id: supplierId, project_id: projectId,
+    api.createReceipt({ contractor_id: supplierId, project_id: projectId,
       number: number.trim(), date })
       .then(c => onCreated(c.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))

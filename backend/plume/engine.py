@@ -807,7 +807,8 @@ def receipt_cockpit(receipt):
         })
     return {
         'id': receipt.id, 'number': receipt.number, 'date': receipt.date,
-        'supplier_id': receipt.supplier_id, 'supplier_name': receipt.supplier.name,
+        'contractor_id': receipt.contractor_id,
+        'contractor_name': receipt.contractor.name,
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
         'project_name': receipt.project.name,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
@@ -964,8 +965,8 @@ def purchase_cockpit(purchase):
         })
     receipts = [
         {'id': r.id, 'number': r.number, 'date': r.date,
-         'supplier_name': r.supplier.name, 'lines': r.lots.count()}
-        for r in purchase.receipts.select_related('supplier').order_by('id')
+         'contractor_name': r.contractor.name, 'lines': r.lots.count()}
+        for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
     return {
         'id': purchase.id, 'status': purchase.status,
@@ -1122,6 +1123,8 @@ def transfer_cockpit(transfer):
         })
     return {
         'id': transfer.id, 'number': transfer.number, 'date': transfer.date,
+        'contractor_id': transfer.contractor_id,
+        'contractor_name': transfer.contractor.name if transfer.contractor_id else '',
         'project_id': transfer.project_id, 'project_code': transfer.project.code,
         'project_name': transfer.project.name, 'posted': transfer.is_posted,
         'total_qty': total_qty, 'lines': lines,
@@ -1151,16 +1154,17 @@ def item_shipments(item):
     return rows
 
 
-def create_transfer(project, user, number, date=None):
+def create_transfer(project, user, number, date=None, contractor=None):
     """Создать передачу (накладную) проекта. Строки добавляются в кокпите.
 
-    `Transfer.date` не nullable — пустую дату замыкаем на сегодня.
+    `Transfer.date` не nullable — пустую дату замыкаем на сегодня. `contractor` —
+    контрагент-заказчик (опционален: получатель может быть проставлен позже в кокпите).
     """
     if not (number or '').strip():
         raise ValidationError('Нужен № накладной.')
     return models.Transfer.objects.create(
         project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate())
+        date=date or timezone.localdate(), contractor=contractor)
 
 
 def add_transfer_line(transfer, lot, qty, display_name=''):
@@ -1805,11 +1809,21 @@ def update_purchase(purchase, date=None, note=None):
     return purchase
 
 
-def update_transfer(transfer, number=None, date=None):
-    """Правка шапки передачи (№ накладной / дата). Только до замка «отгружено»."""
+_UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
+
+
+def update_transfer(transfer, number=None, date=None, contractor=_UNSET):
+    """Правка шапки передачи (№ накладной / дата / заказчик). До замка «отгружено».
+
+    `contractor` — часовой: не передан → не трогаем; `Counterparty` → выставить;
+    `None` → снять получателя (nullable).
+    """
     _require_draft(transfer)
     _require_number(number)
     _require_date(date)
+    if contractor is not _UNSET:
+        transfer.contractor = contractor
+        transfer.save(update_fields=['contractor'])
     return _apply(transfer, {'number': number and number.strip(), 'date': date})
 
 

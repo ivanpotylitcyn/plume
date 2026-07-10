@@ -100,10 +100,15 @@ export interface Cockpit {
   rows: CockpitRow[]; born_lots: BornLot[]
 }
 
+// ── Контрагенты (волна 13, Ф2f+ — единая сущность с ролями) ──
+export interface CounterpartyRow {
+  id: number; name: string; inn: string
+  is_supplier: boolean; is_customer: boolean
+}
+
 // ── Приход / УПД (волна 3 — записываемое ядро) ──
-export interface SupplierRow { id: number; name: string; inn: string }
 export interface ReceiptRow {
-  id: number; number: string; date: string; supplier_name: string
+  id: number; number: string; date: string; contractor_name: string
   project_code: string; approved: boolean; lines: number
 }
 export interface ReceiptLot {
@@ -112,7 +117,8 @@ export interface ReceiptLot {
   part_number: string; consumed: boolean
 }
 export interface ReceiptCockpit {
-  id: number; number: string; date: string; supplier_id: number; supplier_name: string
+  id: number; number: string; date: string
+  contractor_id: number; contractor_name: string
   project_id: number; project_code: string; project_name: string
   purchase_id: number | null
   approved: boolean; total_cost: number; lots: ReceiptLot[]
@@ -128,7 +134,7 @@ export interface PurchaseCockpitLine {
   qty: number; received: number; remaining: number; status: Status
 }
 export interface PurchaseReceiptRow {
-  id: number; number: string; date: string; supplier_name: string; lines: number
+  id: number; number: string; date: string; contractor_name: string; lines: number
 }
 export interface PurchaseCockpit {
   id: number; status: string; project_id: number; project_code: string
@@ -155,8 +161,9 @@ export interface TransferCockpitLine {
   lot_live_qty: number; lot_name: string
 }
 export interface TransferCockpit {
-  id: number; number: string; date: string; project_id: number
-  project_code: string; project_name: string; posted: boolean
+  id: number; number: string; date: string
+  contractor_id: number | null; contractor_name: string
+  project_id: number; project_code: string; project_name: string; posted: boolean
   total_qty: number; lines: TransferCockpitLine[]
 }
 
@@ -402,14 +409,15 @@ export const api = {
   reopenKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/reopen/`),
   deleteKitting: (id: number) => send<void>('DELETE', `/api/kittings/${id}/`),
 
-  suppliers: () => get<SupplierRow[]>('/api/suppliers/'),
-  createSupplier: (b: { name: string; inn?: string }) =>
-    send<SupplierRow>('POST', '/api/suppliers/', b),
+  counterparties: (role?: 'supplier' | 'customer') =>
+    get<CounterpartyRow[]>(`/api/counterparties/${role ? `?role=${role}` : ''}`),
+  createCounterparty: (b: { name: string; inn?: string; role?: 'supplier' | 'customer' }) =>
+    send<CounterpartyRow>('POST', '/api/counterparties/', b),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptCockpit>(`/api/receipts/${id}/`),
   updateReceipt: (id: number, b: Partial<{ number: string; date: string }>) =>
     send<ReceiptCockpit>('PATCH', `/api/receipts/${id}/`, b),
-  createReceipt: (b: { supplier_id: number; project_id: number; number: string; date: string }) =>
+  createReceipt: (b: { contractor_id: number; project_id: number; number: string; date: string }) =>
     send<ReceiptCockpit>('POST', '/api/receipts/', b),
   addReceiptLot: (id: number, b: {
     item_id: number; qty: number; unit_cost?: number
@@ -447,9 +455,9 @@ export const api = {
 
   transfers: () => get<TransferRow[]>('/api/transfers/'),
   transfer: (id: number) => get<TransferCockpit>(`/api/transfers/${id}/`),
-  updateTransfer: (id: number, b: Partial<{ number: string; date: string }>) =>
+  updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null }>) =>
     send<TransferCockpit>('PATCH', `/api/transfers/${id}/`, b),
-  createTransfer: (b: { project_id: number; number: string; date?: string }) =>
+  createTransfer: (b: { project_id: number; number: string; date?: string; contractor_id?: number }) =>
     send<TransferCockpit>('POST', '/api/transfers/', b),
   addTransferLine: (id: number, b: { lot_id: number; qty: number; display_name?: string }) =>
     send<TransferCockpit>('POST', `/api/transfers/${id}/lines/`, b),

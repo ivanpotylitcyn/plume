@@ -54,10 +54,10 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 | `ProjectDemand` | Потребность проекта | Сколько изделий нужно выпустить. Вход разузлования состава. |
 | `Procurement` | Закупка | **Планирование**: что и сколько решили купить у контрагента (экспертная оценка). Один поток общения = один `order.xlsx`, может охватывать несколько проектов. Нарезается в Заказы. |
 | `Purchase` | Заказ | **Исполнение**: документально зафиксированное обязательство в рамках одного проекта; имеет статус (черновик → отправлен → получен). Разрешается в приходы. |
-| `Receipt` | Приход (УПД) | Приёмка по универсальному передаточному документу; рождает партии. Несёт поставщика и дату. |
-| `Supplier` | Поставщик | Контрагент прихода. |
+| `Receipt` | Приход (УПД) | Приёмка по универсальному передаточному документу; рождает партии. Несёт контрагента-поставщика (`contractor`) и дату. |
+| `Counterparty` | Контрагент | Единая внешняя сторона документооборота с ролями (`is_supplier`/`is_customer`): поставщик прихода и/или заказчик передачи. Свернул прежний `Supplier` (волна 13, Ф2f+). |
 | `Kitting` | Комплектация | Сборка изделия: списание компонентов (по факту пайки) и рождение партии-прибора при закрытии. Главная работа системы. |
-| `Transfer` | Передача | Отгрузка готового железа заказчику по накладной (по партиям). |
+| `Transfer` | Передача | Отгрузка готового железа заказчику по накладной (по партиям). Несёт структурного контрагента-заказчика (`contractor`, nullable; волна 13, Ф2f+). |
 | `Inventory` | Инвентаризация | Рождает «найденные» партии (излишки, возврат в учёт). |
 | `Writeoff` | Списание | Вывод партии из учёта с указанием причины. |
 | `Requisition` | Требование | **Отпочкование**: отделение партии из одного проекта (обычно «Собственного склада») в другой. |
@@ -135,7 +135,8 @@ erDiagram
   ITEM ||--o{ PROJECTDEMAND : "target"
   ITEM ||--o{ KITTING : "target"
 
-  SUPPLIER ||--o{ RECEIPT : ""
+  COUNTERPARTY ||--o{ RECEIPT : "поставщик"
+  COUNTERPARTY ||--o{ TRANSFER : "заказчик (nullable)"
 
   STOCKDOCUMENT ||--|| RECEIPT : "MTI-наследник"
   STOCKDOCUMENT ||--|| KITTING : "MTI-наследник"
@@ -199,10 +200,12 @@ erDiagram
     decimal qty
     string position "опц."
   }
-  SUPPLIER {
+  COUNTERPARTY {
     int id PK
     string name
     string inn
+    bool is_supplier "роль: сторона прихода"
+    bool is_customer "роль: сторона передачи"
   }
   USER {
     int id PK
@@ -293,7 +296,7 @@ erDiagram
   }
   RECEIPT {
     int id PK "= StockDocument.id (MTI parent_link)"
-    int supplier_id FK
+    int contractor_id FK "поставщик → Counterparty (Ф2f+)"
     int purchase_id FK "nullable"
   }
   KITTING {
@@ -311,7 +314,8 @@ erDiagram
     string display_name "имя для накладной (nullable, передача)"
   }
   TRANSFER {
-    int id PK "= StockDocument.id (MTI parent_link); вся шапка — на StockDocument (Ф2c)"
+    int id PK "= StockDocument.id (MTI parent_link); шапка — на StockDocument (Ф2c)"
+    int contractor_id FK "заказчик → Counterparty (nullable; Ф2f+)"
   }
   INVENTORY {
     int id PK "= StockDocument.id (MTI parent_link); вся шапка — на StockDocument (Ф2c)"
@@ -354,8 +358,8 @@ erDiagram
   единого родителя `StockDocument` («Ордер»)**:
   общая шапка (`kind`-дискриминатор + `status` + `project`/`user`/`date`/`number`/`note`,
   поднятые с детей в Ф2c) и единое id-пространство (волна 13, Ф2a); специфика
-  (`supplier`/`purchase`, `target_item`/`qty`, `reason`) — на детях. Отвечает на «что
-  физически есть и куда движется».
+  (`contractor`/`purchase`, `target_item`/`qty`, `reason`, `Transfer.contractor`) — на
+  детях. Отвечает на «что физически есть и куда движется».
 - **Вложение (`Attachment`) рядом с `User` — оффлайн-факты.** Сканы документов и datasheet'ы
   плюс авторство (`user` на всех документах). Отвечает на «чем подтверждено и кто
   отвечает».

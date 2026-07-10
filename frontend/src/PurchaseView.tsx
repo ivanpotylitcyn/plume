@@ -111,7 +111,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
               <tr key={r.id} className="row s-available">
                 <td><a className="link" onClick={() => openReceipt(r.id)}>{r.number}</a></td>
                 <td style={{ color: 'var(--fg-dim)' }}>{r.date}</td>
-                <td>{r.supplier_name}</td>
+                <td>{r.contractor_name}</td>
                 <td className="num">{r.lines}</td>
               </tr>
             ))}

@@ -82,7 +82,8 @@ class StockDocument(models.Model):
     Item ИЛИ ордер).
     **Ф2c:** общие поля `project`/`user`/`date`/`number`/`note` подняты сюда с 6 детей
     (дедуп; реверс — `project.documents`/`user.documents`). Специфика осталась на детях:
-    `Receipt.supplier`/`purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`.
+    `Receipt.contractor`/`purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`,
+    `Transfer.contractor` (контрагент-заказчик, Ф2f+).
     """
 
     class Kind(models.TextChoices):
@@ -122,7 +123,7 @@ class StockDocument(models.Model):
     status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
                               default=DocStatus.DRAFT)
 
-    # Ф2c — общие поля подняты с 6 детей в родителя (дедуп). Специфика (supplier/
+    # Ф2c — общие поля подняты с 6 детей в родителя (дедуп). Специфика (contractor/
     # purchase/target_item/qty/reason) осталась на детях. `project` строкой ('Project'
     # определён ниже), `user` — settings-строкой. `date` nullable (Kitting-черновик
     # мог быть без даты; строгий per-kind NOT NULL — условная валидация, Ф2c #2).
@@ -217,13 +218,26 @@ class BomLine(models.Model):
         return f'{self.parent.code} ⊃ {self.component.code} ×{self.qty}'
 
 
-class Supplier(models.Model):
+class Counterparty(models.Model):
+    """Контрагент — единая внешняя сторона документооборота (волна 13, Ф2f+).
+
+    Свернул `Supplier` (был только поставщиком) в одну сущность, играющую роли:
+    `is_supplier` — сторона прихода (`Receipt.contractor`, поставщик), `is_customer`
+    — сторона передачи (`Transfer.contractor`, заказчик). Одно юрлицо может быть и
+    тем, и другим (обе роли на одной записи). Пикеры фильтруют по роли; быстрое
+    создание проставляет роль по контексту. Закрывает отложенную симметрию «передача
+    = перемещение к внешней точке» — у передачи теперь структурный получатель, а не
+    только текст в строке накладной.
+    """
+
     name = models.CharField('наименование', max_length=255)
     inn = models.CharField('ИНН', max_length=16, blank=True, default='')
+    is_supplier = models.BooleanField('поставщик', default=True)
+    is_customer = models.BooleanField('заказчик', default=False)
 
     class Meta:
-        verbose_name = 'поставщик'
-        verbose_name_plural = 'поставщики'
+        verbose_name = 'контрагент'
+        verbose_name_plural = 'контрагенты'
         ordering = ['name']
 
     def __str__(self):
@@ -409,8 +423,8 @@ class Receipt(StockDocument):
 
     KIND = StockDocument.Kind.RECEIPT
 
-    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT,
-                                 related_name='receipts')
+    contractor = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
+                                   related_name='receipts', verbose_name='поставщик')
     purchase = models.ForeignKey(Purchase, on_delete=models.SET_NULL, null=True,
                                  blank=True, related_name='receipts')
 
@@ -597,7 +611,12 @@ class Transfer(StockDocument):
 
     KIND = StockDocument.Kind.TRANSFER
 
-    # Все поля (project/user/date/number) подняты в StockDocument (Ф2c).
+    # Все поля (project/user/date/number) подняты в StockDocument (Ф2c). Специфика —
+    # структурный получатель (Ф2f+): контрагент-заказчик. Nullable — исторические
+    # передачи получателя-сущности не имели (текст жил в `StockLine.display_name`).
+    contractor = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
+                                   null=True, blank=True, related_name='transfers',
+                                   verbose_name='заказчик')
 
     class Meta:
         verbose_name = 'передача'

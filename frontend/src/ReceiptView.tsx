@@ -51,7 +51,7 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={c.supplier_name}
+        name={c.contractor_name}
         meta={<>
           <span className={`glyph ${fixed ? 'g-lock' : 'g-on_order'}`}>{fixed ? '🔒' : '●'}</span>
           УПД {c.number} · {c.date} · {c.project_code} · сумма {num(c.total_cost)} ₽
