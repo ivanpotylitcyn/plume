@@ -2966,3 +2966,46 @@ class Wave13Fase2gTests(EngineTestBase):
                          content_type='application/json').json()
         self.assertTrue(created['is_customer'])
         self.assertFalse(created['is_supplier'])
+
+
+class Wave13Fase2hTests(EngineTestBase):
+    """Волна 13 Ф2h: admin-гибрид. Родитель `StockDocument` — read-only обзор «все
+    ордера» (смешанный список видов, некликабельный, без add/change/delete); правка —
+    в дочерних админках."""
+
+    def test_stockdocument_admin_read_only(self):
+        from django.contrib import admin as dj_admin
+        ma = dj_admin.site._registry[models.StockDocument]
+        self.assertFalse(ma.has_add_permission(None))
+        self.assertFalse(ma.has_change_permission(None))
+        self.assertFalse(ma.has_delete_permission(None))
+        self.assertIsNone(ma.list_display_links)   # строки некликабельны
+
+    def test_overview_lists_all_kinds_mixed(self):
+        # два разных вида ордера рождаются детьми — оба видны в родительском обзоре
+        models.Receipt.objects.create(
+            number='ПР-h', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        models.Writeoff.objects.create(
+            number='СП-h', date='2026-05-02', reason='порча',
+            project=self.prj, user=self.user)
+        qs = models.StockDocument.objects.all()
+        kinds = {d.kind for d in qs}
+        self.assertEqual(kinds, {models.StockDocument.Kind.RECEIPT,
+                                 models.StockDocument.Kind.WRITEOFF})
+        numbers = {d.number for d in qs}
+        self.assertEqual(numbers, {'ПР-h', 'СП-h'})
+
+    def test_overview_changelist_http(self):
+        models.Receipt.objects.create(
+            number='ПР-http', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        su = get_user_model().objects.create_superuser(
+            username='root', email='r@e.x', password='x')
+        c = Client()
+        c.force_login(su)
+        resp = c.get('/admin/plume/stockdocument/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'ПР-http')            # ордер виден в обзоре
+        # добавления быть не должно — кнопки «Добавить» нет
+        self.assertNotContains(resp, 'stockdocument/add/')

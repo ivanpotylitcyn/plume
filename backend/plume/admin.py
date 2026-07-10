@@ -115,6 +115,31 @@ class PurchaseAdmin(admin.ModelAdmin):
     inlines = [PurchaseLineInline]
 
 
+# --- ордера: гибрид «обзор + правка по типу» (волна 13, Ф2h) --------------- #
+# Родитель `StockDocument` — **read-only обзор «все ордера»** (зеркало режима «Ордер»
+# во фронте): смешанный список 7 видов с фильтром по `kind`/`status`/проекту,
+# новейшие сверху, строки некликабельны. Правка — в дочерних админках ниже (по типу,
+# с инлайнами строк). Bare-родитель не создаём (вид штампуют дети через `save()`),
+# менять/удалять через эту витрину нельзя — только смотреть.
+@admin.register(models.StockDocument)
+class StockDocumentAdmin(admin.ModelAdmin):
+    list_display = ('id', 'kind', 'number', 'date', 'project', 'status', 'user')
+    list_filter = ('kind', 'status', 'project')
+    search_fields = ('number',)
+    ordering = ('-id',)              # новейшие сверху — зеркалит OrderList
+    list_display_links = None        # строки некликабельны: правка — в дочерних админках
+    list_select_related = ('project', 'user')
+
+    def has_add_permission(self, request):
+        return False                 # вид штампует ребёнок; bare-родителя не создаём
+
+    def has_change_permission(self, request, obj=None):
+        return False                 # витрина только для просмотра (view-perm держит список)
+
+    def has_delete_permission(self, request, obj=None):
+        return False                 # удаление — из дочерней админки (guard'ы движка)
+
+
 # --- документы-origin ----------------------------------------------------- #
 @admin.register(models.Receipt)
 class ReceiptAdmin(admin.ModelAdmin):
