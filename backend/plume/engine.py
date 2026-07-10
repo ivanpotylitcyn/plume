@@ -972,6 +972,7 @@ def purchase_cockpit(purchase):
         'id': purchase.id, **_author(purchase), 'status': purchase.status,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
         'project_name': purchase.project.name,
+        'procurement_id': purchase.procurement_id,   # якорь #A: закупка-план (Ф2k)
         'date': purchase.date, 'note': purchase.note,
         'editable': is_draft,                       # строки правятся только в черновике
         'cockpit_status': _worst_of(statuses),      # worst-of закрытости строк
@@ -1808,24 +1809,86 @@ def _set_author(doc, user):
     doc.save(update_fields=['user'])
 
 
-def update_receipt(receipt, number=None, date=None, user=_UNSET):
-    """Правка шапки прихода (№ УПД / дата / автор). Только до замка «сверено»."""
+def _set_project(doc, project):
+    """Сменить проект-якорь ордера (Ф2k) — вторая связка «Свода расхождений #A».
+
+    Проект — **якорь**: `Lot.project` выводится из ордера-origin, а строки движения
+    (`StockLine`) ссылаются на лоты того же проекта (движок гейтит эту чистоту при
+    добавлении). Поэтому менять якорь можно только у **пустого** ордера — без
+    born-лотов (`lots`) и строк (`lines`); иначе дружелюбный отказ: сперва удалить
+    зависимые. `_UNSET` → не трогаем; `None` → отказ (FK NOT NULL); тот же проект →
+    ноль-оп. Замок проверяет вызывающий (`update_*` уже гейтит `_require_draft`)."""
+    if project is _UNSET:
+        return
+    if project is None:
+        raise ValidationError('Проект ордера обязателен.')
+    if project.pk == doc.project_id:
+        return
+    if doc.lots.exists() or doc.lines.exists():
+        raise ValidationError(
+            'Проект — якорь ордера: лоты и строки следуют за ним. Сначала удалите '
+            'строки/лоты ордера, затем меняйте проект.')
+    doc.project = project
+    doc.save(update_fields=['project'])
+
+
+def _set_target_item(kitting, item):
+    """Сменить целевое изделие комплектации (Ф2k) — якорь #A, специфичный для kitting.
+
+    Целевое изделие определяет состав (призрачные строки BOM-потребности) и рождаемый
+    прибор, поэтому менять его можно только пока у комплектации нет строк пайки
+    (`lines`) и рождённого прибора (`lots`). Иначе дружелюбный отказ."""
+    if item is _UNSET:
+        return
+    if item is None:
+        raise ValidationError('Целевое изделие комплектации обязательно.')
+    if item.pk == kitting.target_item_id:
+        return
+    if kitting.lines.exists() or kitting.lots.exists():
+        raise ValidationError(
+            'Целевое изделие определяет состав — сначала удалите строки пайки '
+            'и рождённый прибор.')
+    kitting.target_item = item
+    kitting.save(update_fields=['target_item'])
+
+
+def update_receipt(receipt, number=None, date=None, user=_UNSET, project=_UNSET):
+    """Правка шапки прихода (№ УПД / дата / автор / проект-якорь). До замка «сверено»."""
     _require_draft(receipt)
     _require_number(number)
     _require_date(date)
     _set_author(receipt, user)
+    _set_project(receipt, project)
     return _apply(receipt, {'number': number and number.strip(), 'date': date})
 
 
-def update_purchase(purchase, date=None, note=None, user=_UNSET):
-    """Правка шапки заказа (дата / примечание / автор). Только в черновике.
+def update_purchase(purchase, date=None, note=None, user=_UNSET, project=_UNSET,
+                    procurement=_UNSET):
+    """Правка шапки заказа (дата / примечание / автор / проект / закупка). Только в черновике.
 
     Дата заказа nullable — пустая строка очищает её в NULL (в отличие от
-    документов с обязательной датой).
+    документов с обязательной датой). `project`/`procurement` — якоря #A (Ф2k):
+    заказ — проектное исполнение закупки-плана. Смена проекта у заказа со связанными
+    приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный отказ (сперва
+    отвязать приходы). Оба поля NOT NULL → `None` отклоняем.
     """
     _require_purchase_draft(purchase)
     _set_author(purchase, user)
     fields = []
+    if project is not _UNSET:
+        if project is None:
+            raise ValidationError('Проект заказа обязателен.')
+        if project.pk != purchase.project_id and purchase.receipts.exists():
+            raise ValidationError(
+                'К заказу привязаны приходы (УПД ↔ проект) — сначала отвяжите их, '
+                'затем меняйте проект.')
+        purchase.project = project
+        fields.append('project')
+    if procurement is not _UNSET:
+        if procurement is None:
+            raise ValidationError('Закупка-план заказа обязательна.')
+        purchase.procurement = procurement
+        fields.append('procurement')
     if date is not None:
         purchase.date = date or None
         fields.append('date')
@@ -1837,8 +1900,9 @@ def update_purchase(purchase, date=None, note=None, user=_UNSET):
     return purchase
 
 
-def update_transfer(transfer, number=None, date=None, contractor=_UNSET, user=_UNSET):
-    """Правка шапки передачи (№ накладной / дата / заказчик / автор). До «отгружено».
+def update_transfer(transfer, number=None, date=None, contractor=_UNSET, user=_UNSET,
+                    project=_UNSET):
+    """Правка шапки передачи (№ накладной / дата / заказчик / автор / проект). До «отгружено».
 
     `contractor` — часовой: не передан → не трогаем; `Counterparty` → выставить;
     `None` → снять получателя (nullable).
@@ -1847,38 +1911,46 @@ def update_transfer(transfer, number=None, date=None, contractor=_UNSET, user=_U
     _require_number(number)
     _require_date(date)
     _set_author(transfer, user)
+    _set_project(transfer, project)
     if contractor is not _UNSET:
         transfer.contractor = contractor
         transfer.save(update_fields=['contractor'])
     return _apply(transfer, {'number': number and number.strip(), 'date': date})
 
 
-def update_writeoff(writeoff, number=None, date=None, reason=None, user=_UNSET):
-    """Правка шапки списания (№ акта / дата / причина / автор). Только черновик."""
+def update_writeoff(writeoff, number=None, date=None, reason=None, user=_UNSET,
+                    project=_UNSET):
+    """Правка шапки списания (№ акта / дата / причина / автор / проект). Только черновик."""
     _require_draft(writeoff)
     _require_number(number)
     _require_date(date)
     _set_author(writeoff, user)
+    _set_project(writeoff, project)
     return _apply(writeoff, {'number': number and number.strip(), 'date': date,
                              'reason': None if reason is None else reason.strip()})
 
 
-def update_requisition(requisition, number=None, date=None, user=_UNSET):
-    """Правка шапки требования (№ / дата / автор). Только черновик (замок)."""
+def update_requisition(requisition, number=None, date=None, user=_UNSET, project=_UNSET):
+    """Правка шапки требования (№ / дата / автор / проект-получатель). Только черновик (замок)."""
     _require_draft(requisition)
     _require_number(number)
     _require_date(date)
     _set_author(requisition, user)
+    _set_project(requisition, project)
     return _apply(requisition, {'number': number and number.strip(), 'date': date})
 
 
-def update_kitting(kitting, qty=None, date=None, user=_UNSET):
-    """Правка шапки комплектации (кол-во образцов / дата / автор). Только «в работе».
+def update_kitting(kitting, qty=None, date=None, user=_UNSET, project=_UNSET,
+                   target_item=_UNSET):
+    """Правка шапки комплектации (кол-во образцов / дата / автор / проект / цель). Только «в работе».
 
-    Кол-во образцов пересчитывает потребности BOM — правится, пока `wip`.
+    Кол-во образцов пересчитывает потребности BOM — правится, пока `wip`. `project`/
+    `target_item` — якоря #A (Ф2k): меняются только у пустой комплектации.
     """
     _require_draft(kitting)
     _set_author(kitting, user)
+    _set_project(kitting, project)
+    _set_target_item(kitting, target_item)
     if qty is not None and qty <= 0:
         raise ValidationError('Количество образцов должно быть положительным.')
     fields = []
@@ -2427,12 +2499,14 @@ def unpost_inventory(inventory):
     return unpost_document(inventory)
 
 
-def update_inventory(inventory, number=None, date=None, note=None, user=_UNSET):
-    """Правка шапки инвентаризации (№ акта / дата / примечание / автор). Только черновик."""
+def update_inventory(inventory, number=None, date=None, note=None, user=_UNSET,
+                     project=_UNSET):
+    """Правка шапки инвентаризации (№ акта / дата / примечание / автор / проект). Только черновик."""
     _require_draft(inventory)
     _require_number(number)
     _require_date(date)
     _set_author(inventory, user)
+    _set_project(inventory, project)
     return _apply(inventory, {'number': number and number.strip(), 'date': date,
                               'note': None if note is None else note.strip()})
 

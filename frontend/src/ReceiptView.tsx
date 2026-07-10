@@ -7,7 +7,7 @@ import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
   type ReceiptLot } from './api'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
-import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 
 export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged, onDeleted }: {
   receiptId: number; items: ItemRow[]
@@ -52,6 +52,8 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
           validate={v => v.trim().length > 0} /></label>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateReceipt(c.id, { user_id: id }))} />
+        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
+          onChange={id => run(api.updateReceipt(c.id, { project_id: id }))} />
       </div>
 
       <div className="kit-actions">

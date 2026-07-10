@@ -3097,3 +3097,140 @@ class Wave13Fase2jTests(EngineTestBase):
         bad = c.patch(f'/api/receipts/{r.id}/', {'user_id': 99999},
                       content_type='application/json')
         self.assertEqual(bad.status_code, 400)
+
+
+class Wave13Fase2kTests(EngineTestBase):
+    """Волна 13 Ф2k: структурные якоря шапки под замком (вторая связка «Свода
+    расхождений #A»). `project` — на всех ордерах/заказе; `target_item` —
+    комплектация; `procurement` — заказ. Проект — якорь: лоты/строки следуют за
+    ним, поэтому менять можно только у «пустого» ордера, иначе дружелюбный отказ.
+    Часовой `_UNSET`, `None`-отказ (FK NOT NULL), gate замком `_require_draft`."""
+
+    def setUp(self):
+        super().setUp()
+        self.prj2 = models.Project.objects.create(
+            code='P9', name='Проект 9', kind=models.Project.Kind.EXTERNAL)
+
+    # ── project-якорь ──────────────────────────────────────────────────────
+    def test_project_changes_on_empty_order(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-k', date='2026-05-01')
+        engine.update_writeoff(w, project=self.prj2)
+        w.refresh_from_db()
+        self.assertEqual(w.project_id, self.prj2.id)
+
+    def test_project_refused_when_lines_exist(self):
+        lot = self.receipt_lot(self.make_item('Rk'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'СП-k2', date='2026-05-01')
+        engine.add_writeoff_line(w, lot, D(2))
+        with self.assertRaises(ValidationError):
+            engine.update_writeoff(w, project=self.prj2)
+        w.refresh_from_db()
+        self.assertEqual(w.project_id, self.prj.id)      # якорь не сдвинулся
+
+    def test_project_refused_when_born_lots_exist(self):
+        r = models.Receipt.objects.create(
+            number='U-k', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        engine.add_receipt_lot(r, self.make_item('Rk3'), D(5))   # рождает born-лот
+        with self.assertRaises(ValidationError):
+            engine.update_receipt(r, project=self.prj2)
+
+    def test_project_sentinel_keeps_current(self):
+        """Часовой `_UNSET`: правка номера не сбрасывает проект-якорь."""
+        r = models.Receipt.objects.create(
+            number='U-k2', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        engine.update_receipt(r, number='U-k2-ред')       # project не передан
+        r.refresh_from_db()
+        self.assertEqual(r.project_id, self.prj.id)
+        self.assertEqual(r.number, 'U-k2-ред')
+
+    def test_project_none_rejected(self):
+        r = models.Receipt.objects.create(
+            number='U-k3', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        with self.assertRaises(ValidationError):
+            engine.update_receipt(r, project=None)        # FK NOT NULL
+
+    def test_project_edit_gated_by_lock(self):
+        """Проведённый ордер (edit-freeze) не отдаёт проект на правку."""
+        lot = self.receipt_lot(self.make_item('Rk4'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'СП-k4', date='2026-05-01')
+        engine.add_writeoff_line(w, lot, D(2))
+        engine.post_writeoff(w)
+        with self.assertRaises(ValidationError):
+            engine.update_writeoff(w, project=self.prj2)
+
+    # ── target_item-якорь (комплектация) ───────────────────────────────────
+    def test_target_item_changes_on_empty_kitting(self):
+        dev = self.make_item('DEV-k', manufactured=True)
+        dev2 = self.make_item('DEV-k2', manufactured=True)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1))
+        engine.update_kitting(k, target_item=dev2)
+        k.refresh_from_db()
+        self.assertEqual(k.target_item_id, dev2.id)
+
+    def test_target_item_refused_when_lines_exist(self):
+        comp = self.make_item('Rk5')
+        lot = self.receipt_lot(comp, self.prj, 10)
+        dev = self.make_item('DEV-k3', manufactured=True)
+        dev2 = self.make_item('DEV-k4', manufactured=True)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1))
+        engine.add_kitting_line(k, comp, lot, D(3))
+        with self.assertRaises(ValidationError):
+            engine.update_kitting(k, target_item=dev2)
+        k.refresh_from_db()
+        self.assertEqual(k.target_item_id, dev.id)
+
+    # ── Purchase: project + procurement ────────────────────────────────────
+    def test_purchase_project_changes_without_receipts(self):
+        p = engine.create_purchase(self.prj, self.user)
+        engine.update_purchase(p, project=self.prj2)
+        p.refresh_from_db()
+        self.assertEqual(p.project_id, self.prj2.id)
+
+    def test_purchase_project_refused_with_receipts(self):
+        p = engine.create_purchase(self.prj, self.user)
+        models.Receipt.objects.create(                    # приход, привязан к заказу
+            number='U-k6', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user, purchase=p)
+        with self.assertRaises(ValidationError):
+            engine.update_purchase(p, project=self.prj2)
+        p.refresh_from_db()
+        self.assertEqual(p.project_id, self.prj.id)
+
+    def test_purchase_procurement_changes(self):
+        p = engine.create_purchase(self.prj, self.user)
+        proc2 = engine.create_procurement(self.user)
+        engine.update_purchase(p, procurement=proc2)
+        p.refresh_from_db()
+        self.assertEqual(p.procurement_id, proc2.id)
+        self.assertEqual(engine.purchase_cockpit(p)['procurement_id'], proc2.id)
+
+    # ── HTTP-срез ──────────────────────────────────────────────────────────
+    def test_patch_project_id_http(self):
+        w = engine.create_writeoff(self.prj, self.user, 'СП-k7', date='2026-05-01')
+        c = Client()
+        c.force_login(self.user)
+        resp = c.patch(f'/api/writeoffs/{w.id}/', {'project_id': self.prj2.id},
+                       content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['project_id'], self.prj2.id)
+        # несуществующий проект → дружелюбный 400 (не 500)
+        bad = c.patch(f'/api/writeoffs/{w.id}/', {'project_id': 99999},
+                      content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+
+    def test_patch_kitting_target_http(self):
+        dev = self.make_item('DEV-k5', manufactured=True)
+        dev2 = self.make_item('DEV-k6', manufactured=True)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1))
+        c = Client()
+        c.force_login(self.user)
+        resp = c.patch(f'/api/kittings/{k.id}/', {'target_id': dev2.id},
+                       content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['target_id'], dev2.id)

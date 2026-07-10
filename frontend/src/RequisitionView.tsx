@@ -8,7 +8,7 @@ import { useState } from 'react'
 import { api, type AllAvailableLot, type RequisitionCockpit,
   type RequisitionCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -58,6 +58,8 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
           validate={v => v.trim().length > 0} /></label>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateRequisition(c.id, { user_id: id }))} />
+        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
+          onChange={id => run(api.updateRequisition(c.id, { project_id: id }))} />
       </div>
 
       {!fixed &&

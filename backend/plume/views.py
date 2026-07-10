@@ -54,6 +54,29 @@ def _resolve_author(d):
     return User.objects.get(pk=d['user_id'])
 
 
+def _resolve_project(d):
+    """Проект-якорь из PATCH-тела (Ф2k #A): `project_id` прислан → этот `Project`;
+    ключа нет → `_UNSET`. `Project.DoesNotExist` ловит вызывающий (→ 400)."""
+    if 'project_id' not in d:
+        return engine._UNSET
+    return models.Project.objects.get(pk=d['project_id'])
+
+
+def _resolve_item(d, key='target_id'):
+    """Изделие-якорь из PATCH-тела (Ф2k #A): ключ прислан → `Item`; нет → `_UNSET`."""
+    if key not in d:
+        return engine._UNSET
+    return models.Item.objects.get(pk=d[key])
+
+
+def _resolve_procurement(d):
+    """Закупка-план якорь из PATCH-тела (Ф2k #A, заказ): `procurement_id` прислан →
+    `Procurement`; нет → `_UNSET`. `DoesNotExist` ловит вызывающий (→ 400)."""
+    if 'procurement_id' not in d:
+        return engine._UNSET
+    return models.Procurement.objects.get(pk=d['procurement_id'])
+
+
 def _bad(exc):
     return Response({'detail': str(exc)}, status=http.HTTP_400_BAD_REQUEST)
 
@@ -367,7 +390,12 @@ def kitting_detail(request, pk):
         try:
             engine.update_kitting(
                 k, qty=_dec(d['qty']) if 'qty' in d else None,
-                date=d['date'] if 'date' in d else None, user=_resolve_author(d))
+                date=d['date'] if 'date' in d else None, user=_resolve_author(d),
+                project=_resolve_project(d), target_item=_resolve_item(d, 'target_id'))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
+        except models.Item.DoesNotExist:
+            return _bad('Изделие не найдено.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -510,7 +538,10 @@ def receipt_detail(request, pk):
         try:
             engine.update_receipt(
                 r, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None, user=_resolve_author(d))
+                date=d['date'] if 'date' in d else None, user=_resolve_author(d),
+                project=_resolve_project(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -635,7 +666,12 @@ def purchase_detail(request, pk):
         try:
             engine.update_purchase(
                 p, date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None, user=_resolve_author(d))
+                note=d['note'] if 'note' in d else None, user=_resolve_author(d),
+                project=_resolve_project(d), procurement=_resolve_procurement(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
+        except models.Procurement.DoesNotExist:
+            return _bad('Закупка-план не найдена.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -795,7 +831,9 @@ def transfer_detail(request, pk):
             engine.update_transfer(
                 t, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None, contractor=contractor,
-                user=_resolve_author(d))
+                user=_resolve_author(d), project=_resolve_project(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
         except User.DoesNotExist:
@@ -921,7 +959,10 @@ def writeoff_detail(request, pk):
             engine.update_writeoff(
                 w, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
-                reason=d['reason'] if 'reason' in d else None, user=_resolve_author(d))
+                reason=d['reason'] if 'reason' in d else None, user=_resolve_author(d),
+                project=_resolve_project(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -1022,7 +1063,10 @@ def requisition_detail(request, pk):
         try:
             engine.update_requisition(
                 r, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None, user=_resolve_author(d))
+                date=d['date'] if 'date' in d else None, user=_resolve_author(d),
+                project=_resolve_project(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -1125,7 +1169,10 @@ def inventory_detail(request, pk):
             engine.update_inventory(
                 i, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None, user=_resolve_author(d))
+                note=d['note'] if 'note' in d else None, user=_resolve_author(d),
+                project=_resolve_project(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:

@@ -3,9 +3,9 @@
 // автосейв qty; остаток → призрачная строка, покрашенная по доступности, с
 // пикером лота. Пайка = промоушн призрака в реальную KittingLine (+ ISSUE).
 import { useEffect, useState } from 'react'
-import { api, type Cockpit, type CockpitRow } from './api'
+import { api, type Cockpit, type CockpitRow, type ItemRow } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
+import { AnchorSelect, AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { Glyph, Segment, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -16,6 +16,9 @@ const KIT_STATUS: Record<string, string> = {
 export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
   { kittingId: number; openItem: (id: number) => void; onChanged: () => void
     onDeleted: () => void }) {
+  // Справочник изделий — для якоря «целевое изделие» (Ф2k). Загружаем один раз.
+  const [items, setItems] = useState<ItemRow[]>([])
+  useEffect(() => { api.items().then(setItems) }, [])
   const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
     kittingId, api.kitting, {
       onChanged, onDeleted,
@@ -54,6 +57,12 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
           onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></label>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { user_id: id }))} />
+        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
+          onChange={id => run(api.updateKitting(c.id, { project_id: id }))} />
+        <AnchorSelect label="изделие" id={c.target_id} currentLabel={c.target_code}
+          options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.name}` }))}
+          disabled={locked || busy}
+          onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
       </div>
 
       <div className="kit-actions">

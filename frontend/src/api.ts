@@ -145,8 +145,9 @@ export interface PurchaseReceiptRow {
 }
 export interface PurchaseCockpit extends Authored {
   id: number; status: string; project_id: number; project_code: string
-  project_name: string; date: string | null; note: string; editable: boolean
-  cockpit_status: Status; total_ordered: number; total_received: number
+  project_name: string; procurement_id: number; date: string | null; note: string
+  editable: boolean; cockpit_status: Status
+  total_ordered: number; total_received: number
   rows: PurchaseCockpitLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
@@ -405,7 +406,8 @@ export const api = {
 
   kittings: () => get<KittingRow[]>('/api/kittings/'),
   kitting: (id: number) => get<Cockpit>(`/api/kittings/${id}/`),
-  updateKitting: (id: number, b: Partial<{ qty: number; date: string; user_id: number }>) =>
+  updateKitting: (id: number, b: Partial<{ qty: number; date: string; user_id: number
+      project_id: number; target_id: number }>) =>
     send<Cockpit>('PATCH', `/api/kittings/${id}/`, b),
   createKitting: (b: { project_id: number; target_item_id: number; qty: number }) =>
     send<Cockpit>('POST', '/api/kittings/', b),
@@ -424,7 +426,7 @@ export const api = {
     send<CounterpartyRow>('POST', '/api/counterparties/', b),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptCockpit>(`/api/receipts/${id}/`),
-  updateReceipt: (id: number, b: Partial<{ number: string; date: string; user_id: number }>) =>
+  updateReceipt: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number }>) =>
     send<ReceiptCockpit>('PATCH', `/api/receipts/${id}/`, b),
   createReceipt: (b: { contractor_id: number; project_id: number; number: string; date: string }) =>
     send<ReceiptCockpit>('POST', '/api/receipts/', b),
@@ -444,7 +446,8 @@ export const api = {
 
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseCockpit>(`/api/purchases/${id}/`),
-  updatePurchase: (id: number, b: Partial<{ date: string; note: string; user_id: number }>) =>
+  updatePurchase: (id: number, b: Partial<{ date: string; note: string; user_id: number
+      project_id: number; procurement_id: number }>) =>
     send<PurchaseCockpit>('PATCH', `/api/purchases/${id}/`, b),
   createPurchase: (b: { project_id: number; date?: string; note?: string }) =>
     send<PurchaseCockpit>('POST', '/api/purchases/', b),
@@ -464,7 +467,7 @@ export const api = {
 
   transfers: () => get<TransferRow[]>('/api/transfers/'),
   transfer: (id: number) => get<TransferCockpit>(`/api/transfers/${id}/`),
-  updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number }>) =>
+  updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number }>) =>
     send<TransferCockpit>('PATCH', `/api/transfers/${id}/`, b),
   createTransfer: (b: { project_id: number; number: string; date?: string; contractor_id?: number }) =>
     send<TransferCockpit>('POST', '/api/transfers/', b),
@@ -482,7 +485,7 @@ export const api = {
 
   writeoffs: () => get<WriteoffRow[]>('/api/writeoffs/'),
   writeoff: (id: number) => get<WriteoffCockpit>(`/api/writeoffs/${id}/`),
-  updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string; user_id: number }>) =>
+  updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string; user_id: number; project_id: number }>) =>
     send<WriteoffCockpit>('PATCH', `/api/writeoffs/${id}/`, b),
   createWriteoff: (b: { project_id: number; number: string; date?: string; reason?: string }) =>
     send<WriteoffCockpit>('POST', '/api/writeoffs/', b),
@@ -498,7 +501,7 @@ export const api = {
 
   requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
   requisition: (id: number) => get<RequisitionCockpit>(`/api/requisitions/${id}/`),
-  updateRequisition: (id: number, b: Partial<{ number: string; date: string; user_id: number }>) =>
+  updateRequisition: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number }>) =>
     send<RequisitionCockpit>('PATCH', `/api/requisitions/${id}/`, b),
   createRequisition: (b: { project_id: number; number: string; date?: string }) =>
     send<RequisitionCockpit>('POST', '/api/requisitions/', b),
@@ -515,7 +518,7 @@ export const api = {
 
   inventories: () => get<InventoryRow[]>('/api/inventories/'),
   inventory: (id: number) => get<InventoryCockpit>(`/api/inventories/${id}/`),
-  updateInventory: (id: number, b: Partial<{ number: string; date: string; note: string; user_id: number }>) =>
+  updateInventory: (id: number, b: Partial<{ number: string; date: string; note: string; user_id: number; project_id: number }>) =>
     send<InventoryCockpit>('PATCH', `/api/inventories/${id}/`, b),
   createInventory: (b: { project_id: number; number: string; date?: string; note?: string }) =>
     send<InventoryCockpit>('POST', '/api/inventories/', b),

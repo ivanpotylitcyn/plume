@@ -4,9 +4,10 @@
 // ✓/●/▲. Мягкий замок = отправка (draft→sent): строки read-only, заказ считается в
 // члене «заказано» дашборда дефицита. cancel/restore — выход из счёта и возврат.
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type PurchaseCockpit, type PurchaseCockpitLine } from './api'
+import { api, type ItemRow, type ProcurementRow, type PurchaseCockpit,
+  type PurchaseCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, useFormLock } from './FormHeader'
+import { AnchorSelect, AuthorField, FormHeader, ProjectField, useFormLock } from './FormHeader'
 import { Glyph, num } from './status'
 
 // Статус заказа → значок/цвет: draft ▲ (твой ход), sent ● (ждём), cancelled ○.
@@ -24,12 +25,14 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
   const [c, setC] = useState<PurchaseCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
   const { unlocked, toggle } = useFormLock(true)
 
   useEffect(() => {
     setC(null); setErr(null)
     api.purchase(purchaseId).then(setC).catch(e => setErr(String(e)))
   }, [purchaseId])
+  useEffect(() => { api.procurements().then(setProcs) }, [])
 
   const run = (p: Promise<PurchaseCockpit>) => {
     setBusy(true); setErr(null)
@@ -68,6 +71,12 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
           onCommit={v => run(api.updatePurchase(c.id, { note: v }))} /></label>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updatePurchase(c.id, { user_id: id }))} />
+        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={!editable || busy}
+          onChange={id => run(api.updatePurchase(c.id, { project_id: id }))} />
+        <AnchorSelect label="закупка" id={c.procurement_id} currentLabel={`#${c.procurement_id}`}
+          options={procs.map(p => ({ id: p.id, label: `Закупка #${p.id} · ${p.status}` }))}
+          disabled={!editable || busy}
+          onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))} />
       </div>
 
       <div className="kit-actions">

@@ -2,7 +2,7 @@
 // «Название первое»: литературное имя (Inter 500) сверху, мета-строка (mono, dim)
 // снизу; справа — индикатор сохранения + замок формы, ИЛИ чип фиксации.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { api, type UserRow } from './api'
+import { api, type UserRow, type ProjectRow } from './api'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Черновики открыты сразу; существующие объекты закрыты по умолчанию.
@@ -82,6 +82,45 @@ export function AuthorField({ userId, userName, disabled, onChange }: {
         {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
       </select>
     </label>
+  )
+}
+
+// Единый якорный <select> для шапки формы (Ф2k #A): подписанный выпадающий список,
+// который держит текущее значение видимым, даже если его нет в опциях (подпись не
+// пропадёт под замком). Опции — {id,label}; `onChange` срабатывает только на реальном
+// изменённом выборе. Движок сам откажет в смене якоря у непустого ордера — форма
+// ловит отказ строкой ошибки (как у автора).
+export function AnchorSelect({ label, id, currentLabel, options, disabled, onChange }: {
+  label: string; id: number; currentLabel: string
+  options: { id: number; label: string }[]
+  disabled: boolean; onChange: (id: number) => void
+}) {
+  const known = options.some(o => o.id === id)
+  return (
+    <label>{label}{' '}
+      <select className="lot-sel" value={id || ''} disabled={disabled}
+        onChange={e => { const v = Number(e.target.value); if (v && v !== id) onChange(v) }}>
+        {!known && id ? <option value={id}>{currentLabel}</option> : null}
+        {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+    </label>
+  )
+}
+
+// Проект-якорь шапки (Ф2k #A): единый пикер проекта на всех ордерах/заказе. Список
+// проектов кэшируем один раз на приложение (как справочник авторов) — редко меняется.
+let _projectsCache: Promise<ProjectRow[]> | null = null
+function loadProjects() { return (_projectsCache ??= api.projects()) }
+
+export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
+  projectId: number; projectLabel: string; disabled: boolean; onChange: (id: number) => void
+}) {
+  const [projects, setProjects] = useState<ProjectRow[]>([])
+  useEffect(() => { loadProjects().then(setProjects) }, [])
+  return (
+    <AnchorSelect label="проект" id={projectId} currentLabel={projectLabel}
+      options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.name}` }))}
+      disabled={disabled} onChange={onChange} />
   )
 }
 

@@ -380,12 +380,32 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       build` чисты; `seed_demo` ок + живой shell. См. JOURNAL 2026-07-10 (Ф2j). **Остаток
       #A** — структурные якоря ⚓ на форме (`project`/`contractor`/`target_item`/`purchase`).
 
+**Ф2k — структурные якоря ⚓ на форме (вторая связка #A) ✅ 2026-07-10**
+- [x] `project` редактируем под замком на **всех ордерах** + Purchase; `target_item` —
+      Kitting; `procurement` — Purchase (`contractor` уже с Ф2g; Procurement — вне,
+      проект-less). Движок: часовые `_set_project`/`_set_target_item` рядом с
+      `_set_author` — **якорь ≠ поле**: `Lot.project` выводится из ордера-origin, строки
+      `StockLine` ссылаются на лоты того же проекта, поэтому смена якоря разрешена только
+      у **пустого** ордера (нет `doc.lots`/`doc.lines`), иначе дружелюбный отказ «сперва
+      удалите строки/лоты». Purchase — своя семантика (не StockDocument): смена `project`
+      при связанных приходах ломает «УПД ↔ проект» → отказ; `procurement` — свободная
+      перепривязка в черновике. `purchase_cockpit` несёт `procurement_id`.
+- [x] Views: резолверы `_resolve_project`/`_resolve_item`/`_resolve_procurement`
+      (`DoesNotExist`→400); 7 PATCH прокинули якоря. Фронт: общий `<AnchorSelect>` +
+      `<ProjectField>` (кэш `api.projects()`) в `FormHeader`, вставлены в `hdr-edit`
+      7 форм рядом с `AuthorField` (Kitting доп. грузит `items`, Purchase — `procurements`).
+- [x] **Схема не тронута** (миграции нет — только проекции/хелперы/резолверы).
+- [x] **Проверка:** 248 тестов (было 235; +13 `Wave13Fase2kTests`) зелёные на боевом
+      MySQL 8.0.25 **и** SQLite; `makemigrations --check` чист; `check` 0 issues; `tsc -b`+
+      `vite build` чисты; `seed_demo` ок. См. JOURNAL 2026-07-10 (Ф2k). **«Свод расхождений
+      #A» закрыт целиком** (авторство Ф2j + якоря Ф2k).
+
 **Ф2g+ — оставшееся Ф2 (следующими укусами):**
 - [ ] Миграция данных на живой прод-базе (развёрнут 2026-07-01).
 - [x] ~~Свернуть матрицу полей: B1–B4 + C1–C2 → один row-set с видимостью по `kind`.~~ ✅ Ф2i.
 - [x] ~~Авторство `user` на форме (сквозная связка #A).~~ ✅ Ф2j.
-- [ ] Структурные якоря ⚓ на форме (вторая связка #A): `project` (все) + `contractor`
-      (Приход/Передача) + `target_item` (Комплектация) + `procurement`/`project` (Purchase).
+- [x] ~~Структурные якоря ⚓ на форме (вторая связка #A): `project` (все) + `target_item`
+      (Комплектация) + `procurement` (Purchase); `contractor` уже с Ф2g.~~ ✅ Ф2k.
 - [ ] Вьюхи Ф2e: HTTP + React-форма перемещения (комплектовщик собирает ход из целых
       лотов) + справочник `Location`.
 

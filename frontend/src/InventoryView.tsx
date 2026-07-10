@@ -9,7 +9,7 @@ import { api, type ItemRow, type InventoryCockpit, type InventoryCockpitLot,
   type WrittenOffLot } from './api'
 import { num } from './status'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 
 export function InventoryView({ inventoryId, items, openItem, onChanged, onDeleted }: {
@@ -54,6 +54,8 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
           onCommit={v => run(api.updateInventory(c.id, { note: v }))} /></label>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateInventory(c.id, { user_id: id }))} />
+        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
+          onChange={id => run(api.updateInventory(c.id, { project_id: id }))} />
       </div>
 
       {!fixed &&

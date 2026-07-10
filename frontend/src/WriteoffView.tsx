@@ -7,7 +7,7 @@ import { useState } from 'react'
 import { api, type AvailableLot, type WriteoffCockpit,
   type WriteoffCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -58,6 +58,8 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
           onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></label>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateWriteoff(c.id, { user_id: id }))} />
+        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
+          onChange={id => run(api.updateWriteoff(c.id, { project_id: id }))} />
       </div>
 
       {!fixed &&
