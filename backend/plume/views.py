@@ -9,7 +9,7 @@
 """
 from decimal import Decimal, InvalidOperation
 
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.core.exceptions import ValidationError
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
@@ -21,6 +21,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from . import engine, models
+
+User = get_user_model()
 
 
 def _dec(value):
@@ -41,6 +43,15 @@ def _actor(request):
     до логин-экрана, убран). Авторство остаётся «на документах».
     """
     return request.user
+
+
+def _resolve_author(d):
+    """Автор из PATCH-тела (Ф2j): ключ `user_id` прислан → этот `User` (авторство
+    правится на форме под замком); ключа нет → часовой `_UNSET` (не трогаем).
+    `User.DoesNotExist` пробрасывается — ловит вызывающий (→ 400)."""
+    if 'user_id' not in d:
+        return engine._UNSET
+    return User.objects.get(pk=d['user_id'])
 
 
 def _bad(exc):
@@ -71,6 +82,15 @@ def _user_payload(u):
     return {'id': u.id, 'username': u.username,
             'full_name': u.get_full_name() or u.username,
             'is_superuser': u.is_superuser}
+
+
+@api_view(['GET'])
+def users(request):
+    """Список пользователей — пикер авторства шапки ордера (Ф2j). Активные,
+    по человеческому имени; авторство правится на форме под замком."""
+    rows = [_user_payload(u) for u in
+            User.objects.filter(is_active=True).order_by('first_name', 'username')]
+    return Response(rows)
 
 
 @ensure_csrf_cookie
@@ -347,7 +367,9 @@ def kitting_detail(request, pk):
         try:
             engine.update_kitting(
                 k, qty=_dec(d['qty']) if 'qty' in d else None,
-                date=d['date'] if 'date' in d else None)
+                date=d['date'] if 'date' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.kitting_cockpit(k))
@@ -488,7 +510,9 @@ def receipt_detail(request, pk):
         try:
             engine.update_receipt(
                 r, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None)
+                date=d['date'] if 'date' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.receipt_cockpit(r))
@@ -611,7 +635,9 @@ def purchase_detail(request, pk):
         try:
             engine.update_purchase(
                 p, date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None)
+                note=d['note'] if 'note' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.purchase_cockpit(p))
@@ -768,9 +794,12 @@ def transfer_detail(request, pk):
                               if cid else None)
             engine.update_transfer(
                 t, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None, contractor=contractor)
+                date=d['date'] if 'date' in d else None, contractor=contractor,
+                user=_resolve_author(d))
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.transfer_cockpit(t))
@@ -892,7 +921,9 @@ def writeoff_detail(request, pk):
             engine.update_writeoff(
                 w, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
-                reason=d['reason'] if 'reason' in d else None)
+                reason=d['reason'] if 'reason' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.writeoff_cockpit(w))
@@ -991,7 +1022,9 @@ def requisition_detail(request, pk):
         try:
             engine.update_requisition(
                 r, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None)
+                date=d['date'] if 'date' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.requisition_cockpit(r))
@@ -1092,7 +1125,9 @@ def inventory_detail(request, pk):
             engine.update_inventory(
                 i, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None)
+                note=d['note'] if 'note' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.inventory_cockpit(i))
@@ -1302,7 +1337,9 @@ def procurement_detail(request, pk):
         try:
             engine.update_procurement(
                 p, date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None)
+                note=d['note'] if 'note' in d else None, user=_resolve_author(d))
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.procurement_cockpit(p))

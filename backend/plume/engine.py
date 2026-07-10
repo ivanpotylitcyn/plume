@@ -681,7 +681,7 @@ def kitting_cockpit(kitting):
         for lot in kitting.lots.all()
     ]
     return {
-        'id': kitting.id, 'status': _kitting_status_out(kitting),
+        'id': kitting.id, **_author(kitting), 'status': _kitting_status_out(kitting),
         'project_id': project.id, 'project_code': project.code,
         'target_id': target.id, 'target_code': target.code,
         'target_name': target.name, 'uom': target.uom,
@@ -806,7 +806,7 @@ def receipt_cockpit(receipt):
             'consumed': _lot_consumed_downstream(lot),
         })
     return {
-        'id': receipt.id, 'number': receipt.number, 'date': receipt.date,
+        'id': receipt.id, **_author(receipt), 'number': receipt.number, 'date': receipt.date,
         'contractor_id': receipt.contractor_id,
         'contractor_name': receipt.contractor.name,
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
@@ -969,7 +969,7 @@ def purchase_cockpit(purchase):
         for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
     return {
-        'id': purchase.id, 'status': purchase.status,
+        'id': purchase.id, **_author(purchase), 'status': purchase.status,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
         'project_name': purchase.project.name,
         'date': purchase.date, 'note': purchase.note,
@@ -1100,6 +1100,15 @@ def _lot_label(lot):
     return f'#{lot.id} {tail}'
 
 
+def _author(doc):
+    """Автор документа для проекции кокпита (Ф2j): id + человеческое имя (для
+    пикера авторства в шапке формы). `user` NOT NULL на всех ордерах/закупках."""
+    u = doc.user
+    if u is None:                        # страховка на легаси-строки
+        return {'user_id': None, 'user_name': ''}
+    return {'user_id': u.id, 'user_name': u.get_full_name() or u.get_username()}
+
+
 def transfer_cockpit(transfer):
     """Проекция кокпита передачи: шапка накладной + строки-лоты + итог.
 
@@ -1122,7 +1131,7 @@ def transfer_cockpit(transfer):
             'lot_name': lot.lot_name,
         })
     return {
-        'id': transfer.id, 'number': transfer.number, 'date': transfer.date,
+        'id': transfer.id, **_author(transfer), 'number': transfer.number, 'date': transfer.date,
         'contractor_id': transfer.contractor_id,
         'contractor_name': transfer.contractor.name if transfer.contractor_id else '',
         'project_id': transfer.project_id, 'project_code': transfer.project.code,
@@ -1302,7 +1311,7 @@ def writeoff_cockpit(writeoff):
             'lot_name': lot.lot_name,
         })
     return {
-        'id': writeoff.id, 'number': writeoff.number, 'date': writeoff.date,
+        'id': writeoff.id, **_author(writeoff), 'number': writeoff.number, 'date': writeoff.date,
         'reason': writeoff.reason,
         'project_id': writeoff.project_id, 'project_code': writeoff.project.code,
         'project_name': writeoff.project.name, 'posted': writeoff.is_posted,
@@ -1404,7 +1413,7 @@ def requisition_cockpit(requisition):
             'lot_name': src.lot_name,
         })
     return {
-        'id': requisition.id, 'number': requisition.number, 'date': requisition.date,
+        'id': requisition.id, **_author(requisition), 'number': requisition.number, 'date': requisition.date,
         'project_id': requisition.project_id, 'project_code': requisition.project.code,
         'project_name': requisition.project.name, 'posted': requisition.is_posted,
         'total_qty': total_qty, 'lines': lines,
@@ -1533,7 +1542,7 @@ def relocation_cockpit(relocation):
             'to_live_qty': lot_live_qty(lot, dst.location) if dst else ZERO,
         })
     return {
-        'id': relocation.id, 'number': relocation.number, 'date': relocation.date,
+        'id': relocation.id, **_author(relocation), 'number': relocation.number, 'date': relocation.date,
         'project_id': relocation.project_id, 'project_code': relocation.project.code,
         'project_name': relocation.project.name, 'posted': relocation.is_posted,
         'total_qty': total_qty, 'moves': moves,
@@ -1782,21 +1791,40 @@ def _require_date(date):
         raise ValidationError('Дата не может быть пустой.')
 
 
-def update_receipt(receipt, number=None, date=None):
-    """Правка шапки прихода (№ УПД / дата). Только до замка «сверено»."""
+_UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
+
+
+def _set_author(doc, user):
+    """Сменить автора документа (Ф2j) — сквозная правка шапки под замком.
+
+    `user` — часовой: `_UNSET` → не трогаем; `User` → выставить. Автор обязателен
+    (FK `StockDocument.user` NOT NULL), поэтому `None` отклоняем. Замок проверяет
+    вызывающий (`update_*` уже гейтит `_require_draft`/черновик заказа)."""
+    if user is _UNSET:
+        return
+    if user is None:
+        raise ValidationError('Автор документа обязателен.')
+    doc.user = user
+    doc.save(update_fields=['user'])
+
+
+def update_receipt(receipt, number=None, date=None, user=_UNSET):
+    """Правка шапки прихода (№ УПД / дата / автор). Только до замка «сверено»."""
     _require_draft(receipt)
     _require_number(number)
     _require_date(date)
+    _set_author(receipt, user)
     return _apply(receipt, {'number': number and number.strip(), 'date': date})
 
 
-def update_purchase(purchase, date=None, note=None):
-    """Правка шапки заказа (дата / примечание). Только в черновике.
+def update_purchase(purchase, date=None, note=None, user=_UNSET):
+    """Правка шапки заказа (дата / примечание / автор). Только в черновике.
 
     Дата заказа nullable — пустая строка очищает её в NULL (в отличие от
     документов с обязательной датой).
     """
     _require_purchase_draft(purchase)
+    _set_author(purchase, user)
     fields = []
     if date is not None:
         purchase.date = date or None
@@ -1809,11 +1837,8 @@ def update_purchase(purchase, date=None, note=None):
     return purchase
 
 
-_UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
-
-
-def update_transfer(transfer, number=None, date=None, contractor=_UNSET):
-    """Правка шапки передачи (№ накладной / дата / заказчик). До замка «отгружено».
+def update_transfer(transfer, number=None, date=None, contractor=_UNSET, user=_UNSET):
+    """Правка шапки передачи (№ накладной / дата / заказчик / автор). До «отгружено».
 
     `contractor` — часовой: не передан → не трогаем; `Counterparty` → выставить;
     `None` → снять получателя (nullable).
@@ -1821,35 +1846,39 @@ def update_transfer(transfer, number=None, date=None, contractor=_UNSET):
     _require_draft(transfer)
     _require_number(number)
     _require_date(date)
+    _set_author(transfer, user)
     if contractor is not _UNSET:
         transfer.contractor = contractor
         transfer.save(update_fields=['contractor'])
     return _apply(transfer, {'number': number and number.strip(), 'date': date})
 
 
-def update_writeoff(writeoff, number=None, date=None, reason=None):
-    """Правка шапки списания (№ акта / дата / причина). Только черновик (замок)."""
+def update_writeoff(writeoff, number=None, date=None, reason=None, user=_UNSET):
+    """Правка шапки списания (№ акта / дата / причина / автор). Только черновик."""
     _require_draft(writeoff)
     _require_number(number)
     _require_date(date)
+    _set_author(writeoff, user)
     return _apply(writeoff, {'number': number and number.strip(), 'date': date,
                              'reason': None if reason is None else reason.strip()})
 
 
-def update_requisition(requisition, number=None, date=None):
-    """Правка шапки требования (№ / дата). Только черновик (замок)."""
+def update_requisition(requisition, number=None, date=None, user=_UNSET):
+    """Правка шапки требования (№ / дата / автор). Только черновик (замок)."""
     _require_draft(requisition)
     _require_number(number)
     _require_date(date)
+    _set_author(requisition, user)
     return _apply(requisition, {'number': number and number.strip(), 'date': date})
 
 
-def update_kitting(kitting, qty=None, date=None):
-    """Правка шапки комплектации (кол-во образцов / дата). Только «в работе».
+def update_kitting(kitting, qty=None, date=None, user=_UNSET):
+    """Правка шапки комплектации (кол-во образцов / дата / автор). Только «в работе».
 
     Кол-во образцов пересчитывает потребности BOM — правится, пока `wip`.
     """
     _require_draft(kitting)
+    _set_author(kitting, user)
     if qty is not None and qty <= 0:
         raise ValidationError('Количество образцов должно быть положительным.')
     fields = []
@@ -1943,7 +1972,7 @@ def procurement_cockpit(procurement):
             'item_name': line.item.name, 'uom': line.item.uom, 'qty': line.qty,
         })
     return {
-        'id': procurement.id, 'status': procurement.status,
+        'id': procurement.id, **_author(procurement), 'status': procurement.status,
         'date': procurement.date, 'note': procurement.note,
         'editable': is_draft,                       # строки правятся только в черновике
         'total_qty': total_qty, 'lines': rows,
@@ -2023,12 +2052,13 @@ def restore_procurement(procurement):
     return procurement
 
 
-def update_procurement(procurement, date=None, note=None):
-    """Правка шапки закупки-плана (дата / примечание). Только в черновике.
+def update_procurement(procurement, date=None, note=None, user=_UNSET):
+    """Правка шапки закупки-плана (дата / примечание / автор). Только в черновике.
 
     Дата закупки nullable — пустая строка очищает её в NULL (как заказ).
     """
     _require_procurement_draft(procurement)
+    _set_author(procurement, user)
     fields = []
     if date is not None:
         procurement.date = date or None
@@ -2311,7 +2341,7 @@ def inventory_cockpit(inventory):
             'consumed': _lot_consumed_downstream(lot),
         })
     return {
-        'id': inventory.id, 'number': inventory.number, 'date': inventory.date,
+        'id': inventory.id, **_author(inventory), 'number': inventory.number, 'date': inventory.date,
         'note': inventory.note,
         'project_id': inventory.project_id, 'project_code': inventory.project.code,
         'project_name': inventory.project.name, 'posted': inventory.is_posted,
@@ -2397,11 +2427,12 @@ def unpost_inventory(inventory):
     return unpost_document(inventory)
 
 
-def update_inventory(inventory, number=None, date=None, note=None):
-    """Правка шапки инвентаризации (№ акта / дата / примечание). Только черновик."""
+def update_inventory(inventory, number=None, date=None, note=None, user=_UNSET):
+    """Правка шапки инвентаризации (№ акта / дата / примечание / автор). Только черновик."""
     _require_draft(inventory)
     _require_number(number)
     _require_date(date)
+    _set_author(inventory, user)
     return _apply(inventory, {'number': number and number.strip(), 'date': date,
                               'note': None if note is None else note.strip()})
 

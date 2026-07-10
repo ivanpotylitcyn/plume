@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Cockpit, type CockpitRow } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
 import { Glyph, Segment, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -52,6 +52,8 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
           validate={v => Number(v) > 0} /></label>
         <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></label>
+        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
+          onChange={id => run(api.updateKitting(c.id, { user_id: id }))} />
       </div>
 
       <div className="kit-actions">

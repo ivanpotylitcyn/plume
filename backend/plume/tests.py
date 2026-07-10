@@ -3009,3 +3009,91 @@ class Wave13Fase2hTests(EngineTestBase):
         self.assertContains(resp, 'ПР-http')            # ордер виден в обзоре
         # добавления быть не должно — кнопки «Добавить» нет
         self.assertNotContains(resp, 'stockdocument/add/')
+
+
+class Wave13Fase2jTests(EngineTestBase):
+    """Волна 13 Ф2j: авторство `user` редактируемо под замком на всех ордерах
+    (+ Purchase/Procurement). Кокпиты несут `user_id`/`user_name`; `update_*`
+    принимают `user=_UNSET` (часовой), гейтятся замком; `/api/users/` — пикер."""
+
+    def setUp(self):
+        super().setUp()
+        # второй автор с человеческим именем — цель переназначения авторства
+        self.author2 = get_user_model().objects.create(
+            username='ivan', first_name='Иван', last_name='Пэ')
+
+    def test_cockpit_emits_author(self):
+        r = models.Receipt.objects.create(
+            number='U-j', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.author2)
+        cp = engine.receipt_cockpit(r)
+        self.assertEqual(cp['user_id'], self.author2.id)
+        self.assertEqual(cp['user_name'], 'Иван Пэ')       # get_full_name()
+
+    def test_purchase_and_procurement_carry_author(self):
+        p = engine.create_purchase(self.prj, self.author2)
+        self.assertEqual(engine.purchase_cockpit(p)['user_id'], self.author2.id)
+        proc = engine.create_procurement(self.author2)
+        self.assertEqual(engine.procurement_cockpit(proc)['user_id'], self.author2.id)
+
+    def test_update_changes_author(self):
+        r = models.Receipt.objects.create(
+            number='U-j2', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        engine.update_receipt(r, user=self.author2)
+        r.refresh_from_db()
+        self.assertEqual(r.user_id, self.author2.id)
+
+    def test_author_sentinel_keeps_current(self):
+        """Часовой `_UNSET`: правка номера/даты не сбрасывает автора."""
+        r = models.Receipt.objects.create(
+            number='U-j3', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.author2)
+        engine.update_receipt(r, number='U-j3-ред')        # user не передан
+        r.refresh_from_db()
+        self.assertEqual(r.user_id, self.author2.id)
+        self.assertEqual(r.number, 'U-j3-ред')
+
+    def test_author_none_rejected(self):
+        """Автор обязателен (FK NOT NULL) — явный `None` отклоняется."""
+        r = models.Receipt.objects.create(
+            number='U-j4', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        with self.assertRaises(ValidationError):
+            engine.update_receipt(r, user=None)
+
+    def test_author_edit_gated_by_lock(self):
+        """Проведённый ордер (edit-freeze) не отдаёт авторство на правку."""
+        lot = self.receipt_lot(self.make_item('Rj'), self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'СП-j', date='2026-05-01')
+        engine.add_writeoff_line(w, lot, D(2))
+        engine.post_writeoff(w)
+        with self.assertRaises(ValidationError):
+            engine.update_writeoff(w, user=self.author2)
+        w.refresh_from_db()
+        self.assertEqual(w.user_id, self.user.id)          # автор не сдвинулся
+
+    def test_users_endpoint_lists_active(self):
+        inactive = get_user_model().objects.create(username='ghost', is_active=False)
+        c = Client()
+        c.force_login(self.user)
+        ids = {u['id'] for u in c.get('/api/users/').json()}
+        self.assertIn(self.author2.id, ids)
+        self.assertNotIn(inactive.id, ids)                 # неактивные скрыты
+
+    def test_patch_user_id_changes_author_http(self):
+        r = models.Receipt.objects.create(
+            number='U-j5', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        c = Client()
+        c.force_login(self.user)
+        resp = c.patch(f'/api/receipts/{r.id}/', {'user_id': self.author2.id},
+                       content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['user_id'], self.author2.id)
+        r.refresh_from_db()
+        self.assertEqual(r.user_id, self.author2.id)
+        # несуществующий пользователь → дружелюбный 400 (не 500)
+        bad = c.patch(f'/api/receipts/{r.id}/', {'user_id': 99999},
+                      content_type='application/json')
+        self.assertEqual(bad.status_code, 400)

@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { api, type AvailableLot, type CounterpartyRow, type TransferCockpit,
   type TransferCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, useOrderCockpit } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -65,6 +65,8 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
             {customers.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
           </select>
         </label>
+        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
+          onChange={id => run(api.updateTransfer(c.id, { user_id: id }))} />
       </div>
 
       <div className="kit-actions">

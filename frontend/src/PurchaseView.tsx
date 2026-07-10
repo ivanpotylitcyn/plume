@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type PurchaseCockpit, type PurchaseCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { Glyph, num } from './status'
 
 // Статус заказа → значок/цвет: draft ▲ (твой ход), sent ● (ждём), cancelled ○.
@@ -66,6 +66,8 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
           onCommit={v => run(api.updatePurchase(c.id, { date: v }))} /></label>
         <label>примечание <CommitInput value={c.note} width={240} disabled={!editable || busy}
           onCommit={v => run(api.updatePurchase(c.id, { note: v }))} /></label>
+        <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
+          onChange={id => run(api.updatePurchase(c.id, { user_id: id }))} />
       </div>
 
       <div className="kit-actions">

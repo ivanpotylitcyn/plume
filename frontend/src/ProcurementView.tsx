@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { PURCH_ST } from './PurchaseView'
 import { PeggingPanel } from './PeggingPanel'
 import { num } from './status'
@@ -62,6 +62,8 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
           onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></label>
         <label>примечание <CommitInput value={c.note} width={240} disabled={!editable || busy}
           onCommit={v => run(api.updateProcurement(c.id, { note: v }))} /></label>
+        <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
+          onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
       </div>
 
       <div className="kit-actions">

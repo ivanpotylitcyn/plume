@@ -2,6 +2,7 @@
 // «Название первое»: литературное имя (Inter 500) сверху, мета-строка (mono, dim)
 // снизу; справа — индикатор сохранения + замок формы, ИЛИ чип фиксации.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { api, type UserRow } from './api'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Черновики открыты сразу; существующие объекты закрыты по умолчанию.
@@ -57,6 +58,31 @@ export function useOrderCockpit<C extends { id: number }>(
   }
 
   return { c, err, busy, unlocked, toggle, run, del }
+}
+
+// Пикер авторства шапки (Ф2j): единое поле «автор» для всех ордеров/закупок.
+// Справочник пользователей грузим один раз на всё приложение (модульный кэш —
+// список редко меняется, дёргать его в каждой из 8 вьюх незачем). Если текущий
+// автор не активен (нет в списке) — держим его первой опцией по `userName`, чтобы
+// подпись не пропала под замком.
+let _usersCache: Promise<UserRow[]> | null = null
+function loadUsers() { return (_usersCache ??= api.users()) }
+
+export function AuthorField({ userId, userName, disabled, onChange }: {
+  userId: number; userName: string; disabled: boolean; onChange: (id: number) => void
+}) {
+  const [users, setUsers] = useState<UserRow[]>([])
+  useEffect(() => { loadUsers().then(setUsers) }, [])
+  const known = users.some(u => u.id === userId)
+  return (
+    <label>автор{' '}
+      <select className="lot-sel" value={userId || ''} disabled={disabled}
+        onChange={e => { const v = Number(e.target.value); if (v) onChange(v) }}>
+        {!known && userId ? <option value={userId}>{userName}</option> : null}
+        {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+      </select>
+    </label>
+  )
 }
 
 export function FormHeader({

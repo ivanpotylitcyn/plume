@@ -1,6 +1,13 @@
 // API-клиент витрин волны 1. Все эндпоинты — read-only проекции движка.
 export type Status = 'available' | 'on_order' | 'to_order'
 
+// ── Авторство шапки (волна 13, Ф2j) — единый пикер автора, редактируемо под
+//    замком на всех ордерах/закупках. `UserRow` — справочник пикера. ──
+export interface UserRow {
+  id: number; username: string; full_name: string; is_superuser: boolean
+}
+export interface Authored { user_id: number; user_name: string }
+
 export interface ProjectRow {
   id: number; code: string; name: string; kind: string; status: string
 }
@@ -93,7 +100,7 @@ export interface CockpitRow {
 export interface BornLot {
   id: number; qty: number; unit_cost: number; lot_name: string; part_number: string
 }
-export interface Cockpit {
+export interface Cockpit extends Authored {
   id: number; status: string; project_id: number; project_code: string
   target_id: number; target_code: string; target_name: string; uom: string
   qty: number; date: string | null; cockpit_status: Status
@@ -116,7 +123,7 @@ export interface ReceiptLot {
   qty: number; live_qty: number; unit_cost: number; lot_name: string
   part_number: string; consumed: boolean
 }
-export interface ReceiptCockpit {
+export interface ReceiptCockpit extends Authored {
   id: number; number: string; date: string
   contractor_id: number; contractor_name: string
   project_id: number; project_code: string; project_name: string
@@ -136,7 +143,7 @@ export interface PurchaseCockpitLine {
 export interface PurchaseReceiptRow {
   id: number; number: string; date: string; contractor_name: string; lines: number
 }
-export interface PurchaseCockpit {
+export interface PurchaseCockpit extends Authored {
   id: number; status: string; project_id: number; project_code: string
   project_name: string; date: string | null; note: string; editable: boolean
   cockpit_status: Status; total_ordered: number; total_received: number
@@ -160,7 +167,7 @@ export interface TransferCockpitLine {
   item_name: string; uom: string; qty: number; display_name: string
   lot_live_qty: number; lot_name: string
 }
-export interface TransferCockpit {
+export interface TransferCockpit extends Authored {
   id: number; number: string; date: string
   contractor_id: number | null; contractor_name: string
   project_id: number; project_code: string; project_name: string; posted: boolean
@@ -177,7 +184,7 @@ export interface WriteoffCockpitLine {
   item_name: string; uom: string; qty: number; lot_live_qty: number
   lot_name: string
 }
-export interface WriteoffCockpit {
+export interface WriteoffCockpit extends Authored {
   id: number; number: string; date: string; reason: string
   project_id: number; project_code: string; project_name: string
   posted: boolean; total_qty: number; lines: WriteoffCockpitLine[]
@@ -199,7 +206,7 @@ export interface RequisitionCockpitLine {
   qty: number; source_live_qty: number; born_lot_id: number | null
   lot_name: string
 }
-export interface RequisitionCockpit {
+export interface RequisitionCockpit extends Authored {
   id: number; number: string; date: string
   project_id: number; project_code: string; project_name: string
   posted: boolean; total_qty: number; lines: RequisitionCockpitLine[]
@@ -216,7 +223,7 @@ export interface InventoryCockpitLot {
   part_number: string; predecessor_id: number | null; predecessor_label: string
   consumed: boolean
 }
-export interface InventoryCockpit {
+export interface InventoryCockpit extends Authored {
   id: number; number: string; date: string; note: string
   project_id: number; project_code: string; project_name: string
   posted: boolean; total_cost: number; lots: InventoryCockpitLot[]
@@ -259,7 +266,7 @@ export interface ProcurementCockpitLine {
   id: number; item_id: number; item_code: string; item_name: string
   uom: string; qty: number
 }
-export interface ProcurementCockpit {
+export interface ProcurementCockpit extends Authored {
   id: number; status: string; date: string | null; note: string; editable: boolean
   total_qty: number; lines: ProcurementCockpitLine[]
 }
@@ -364,6 +371,8 @@ export const api = {
   login: (username: string, password: string) =>
     send<User>('POST', '/api/auth/login/', { username, password }),
   logout: () => send<void>('POST', '/api/auth/logout/'),
+  // Справочник пользователей — пикер авторства шапки ордера (Ф2j).
+  users: () => get<UserRow[]>('/api/users/'),
 
   projects: () => get<ProjectRow[]>('/api/projects/'),
   createProject: (b: { code: string; name: string; budget?: number; started_at?: string }) =>
@@ -396,7 +405,7 @@ export const api = {
 
   kittings: () => get<KittingRow[]>('/api/kittings/'),
   kitting: (id: number) => get<Cockpit>(`/api/kittings/${id}/`),
-  updateKitting: (id: number, b: Partial<{ qty: number; date: string }>) =>
+  updateKitting: (id: number, b: Partial<{ qty: number; date: string; user_id: number }>) =>
     send<Cockpit>('PATCH', `/api/kittings/${id}/`, b),
   createKitting: (b: { project_id: number; target_item_id: number; qty: number }) =>
     send<Cockpit>('POST', '/api/kittings/', b),
@@ -415,7 +424,7 @@ export const api = {
     send<CounterpartyRow>('POST', '/api/counterparties/', b),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptCockpit>(`/api/receipts/${id}/`),
-  updateReceipt: (id: number, b: Partial<{ number: string; date: string }>) =>
+  updateReceipt: (id: number, b: Partial<{ number: string; date: string; user_id: number }>) =>
     send<ReceiptCockpit>('PATCH', `/api/receipts/${id}/`, b),
   createReceipt: (b: { contractor_id: number; project_id: number; number: string; date: string }) =>
     send<ReceiptCockpit>('POST', '/api/receipts/', b),
@@ -435,7 +444,7 @@ export const api = {
 
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseCockpit>(`/api/purchases/${id}/`),
-  updatePurchase: (id: number, b: Partial<{ date: string; note: string }>) =>
+  updatePurchase: (id: number, b: Partial<{ date: string; note: string; user_id: number }>) =>
     send<PurchaseCockpit>('PATCH', `/api/purchases/${id}/`, b),
   createPurchase: (b: { project_id: number; date?: string; note?: string }) =>
     send<PurchaseCockpit>('POST', '/api/purchases/', b),
@@ -455,7 +464,7 @@ export const api = {
 
   transfers: () => get<TransferRow[]>('/api/transfers/'),
   transfer: (id: number) => get<TransferCockpit>(`/api/transfers/${id}/`),
-  updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null }>) =>
+  updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number }>) =>
     send<TransferCockpit>('PATCH', `/api/transfers/${id}/`, b),
   createTransfer: (b: { project_id: number; number: string; date?: string; contractor_id?: number }) =>
     send<TransferCockpit>('POST', '/api/transfers/', b),
@@ -473,7 +482,7 @@ export const api = {
 
   writeoffs: () => get<WriteoffRow[]>('/api/writeoffs/'),
   writeoff: (id: number) => get<WriteoffCockpit>(`/api/writeoffs/${id}/`),
-  updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string }>) =>
+  updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string; user_id: number }>) =>
     send<WriteoffCockpit>('PATCH', `/api/writeoffs/${id}/`, b),
   createWriteoff: (b: { project_id: number; number: string; date?: string; reason?: string }) =>
     send<WriteoffCockpit>('POST', '/api/writeoffs/', b),
@@ -489,7 +498,7 @@ export const api = {
 
   requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
   requisition: (id: number) => get<RequisitionCockpit>(`/api/requisitions/${id}/`),
-  updateRequisition: (id: number, b: Partial<{ number: string; date: string }>) =>
+  updateRequisition: (id: number, b: Partial<{ number: string; date: string; user_id: number }>) =>
     send<RequisitionCockpit>('PATCH', `/api/requisitions/${id}/`, b),
   createRequisition: (b: { project_id: number; number: string; date?: string }) =>
     send<RequisitionCockpit>('POST', '/api/requisitions/', b),
@@ -506,7 +515,7 @@ export const api = {
 
   inventories: () => get<InventoryRow[]>('/api/inventories/'),
   inventory: (id: number) => get<InventoryCockpit>(`/api/inventories/${id}/`),
-  updateInventory: (id: number, b: Partial<{ number: string; date: string; note: string }>) =>
+  updateInventory: (id: number, b: Partial<{ number: string; date: string; note: string; user_id: number }>) =>
     send<InventoryCockpit>('PATCH', `/api/inventories/${id}/`, b),
   createInventory: (b: { project_id: number; number: string; date?: string; note?: string }) =>
     send<InventoryCockpit>('POST', '/api/inventories/', b),
@@ -530,7 +539,7 @@ export const api = {
     send<{ procurement_id: number }>('POST', '/api/command-deficit/add-to-procurement/', b),
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementCockpit>(`/api/procurements/${id}/`),
-  updateProcurement: (id: number, b: Partial<{ date: string; note: string }>) =>
+  updateProcurement: (id: number, b: Partial<{ date: string; note: string; user_id: number }>) =>
     send<ProcurementCockpit>('PATCH', `/api/procurements/${id}/`, b),
   createProcurement: (b: { note?: string; date?: string }) =>
     send<ProcurementCockpit>('POST', '/api/procurements/', b),
