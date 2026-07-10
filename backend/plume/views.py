@@ -235,7 +235,8 @@ def _item_detail_payload(item):
     lots = [
         {'id': lot.id, 'project_code': lot.project.code, 'origin': lot.origin_kind,
          'qty_born': lot.qty, 'live_qty': engine.lot_live_qty(lot),
-         'unit_cost': lot.unit_cost, 'serial_number': lot.serial_number}
+         'unit_cost': lot.unit_cost, 'part_number': lot.part_number,
+         'lot_name': lot.lot_name}
         for lot in item.lots.select_related('project', 'origin')
     ]
     return {
@@ -488,8 +489,8 @@ def receipt_lots(request, pk):
         engine.add_receipt_lot(
             r, item, _dec(d.get('qty')),
             unit_cost=_dec(d.get('unit_cost')) or engine.ZERO,
-            received_name=d.get('received_name') or '',
-            serial_number=d.get('serial_number') or '')
+            lot_name=d.get('lot_name') or '',
+            part_number=d.get('part_number') or '')
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
@@ -514,8 +515,8 @@ def receipt_lot_detail(request, pk):
                 lot,
                 qty=_dec(d['qty']) if 'qty' in d else None,
                 unit_cost=_dec(d['unit_cost']) if 'unit_cost' in d else None,
-                received_name=d['received_name'] if 'received_name' in d else None,
-                serial_number=d['serial_number'] if 'serial_number' in d else None)
+                lot_name=d['lot_name'] if 'lot_name' in d else None,
+                part_number=d['part_number'] if 'part_number' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.receipt_cockpit(receipt))
@@ -1088,16 +1089,16 @@ def inventory_lots(request, pk):
             item = pred.item
             unit_cost = _dec(d.get('unit_cost'))
             unit_cost = pred.unit_cost if unit_cost is None else unit_cost
-            received_name = d['received_name'] if 'received_name' in d else pred.received_name
-            serial_number = d['serial_number'] if 'serial_number' in d else pred.serial_number
+            lot_name = d['lot_name'] if 'lot_name' in d else pred.lot_name
+            part_number = d['part_number'] if 'part_number' in d else pred.part_number
         else:
             item = models.Item.objects.get(pk=d['item_id'])
             unit_cost = _dec(d.get('unit_cost')) or engine.ZERO
-            received_name = d.get('received_name') or ''
-            serial_number = d.get('serial_number') or ''
+            lot_name = d.get('lot_name') or ''
+            part_number = d.get('part_number') or ''
         engine.add_inventory_lot(
             i, item, _dec(d.get('qty')), unit_cost=unit_cost,
-            received_name=received_name, serial_number=serial_number,
+            lot_name=lot_name, part_number=part_number,
             predecessor=pred)
     except (KeyError, models.Item.DoesNotExist, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны item_id (или predecessor_id), qty ({e}).')
@@ -1123,8 +1124,8 @@ def inventory_lot_detail(request, pk):
                 lot,
                 qty=_dec(d['qty']) if 'qty' in d else None,
                 unit_cost=_dec(d['unit_cost']) if 'unit_cost' in d else None,
-                received_name=d['received_name'] if 'received_name' in d else None,
-                serial_number=d['serial_number'] if 'serial_number' in d else None)
+                lot_name=d['lot_name'] if 'lot_name' in d else None,
+                part_number=d['part_number'] if 'part_number' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.inventory_cockpit(inventory))

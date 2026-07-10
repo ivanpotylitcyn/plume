@@ -67,7 +67,8 @@ class Command(BaseCommand):
             user=user, status=models.DocStatus.POSTED)
         case_lot = models.Lot.objects.create(item=case, project=prj, origin=receipt,
                                              qty=12, unit_cost=800,
-                                             received_name='Корпус Al')
+                                             lot_name='Корпус Al',
+                                             part_number='AL-CASE-100')
 
         # --- ВИНТ-М3: открытый заказ 25 (●), склада нет ---------------- #
         proc = models.Procurement.objects.create(
@@ -83,7 +84,8 @@ class Command(BaseCommand):
         r_res = models.Receipt.objects.create(
             number='УПД-2', date=D(2026, 5, 21), supplier=supplier, project=prj, user=user)
         res_lot = models.Lot.objects.create(item=res, project=prj, origin=r_res,
-                                            qty=100, unit_cost=1, received_name='Резистор')
+                                            qty=100, unit_cost=1, lot_name='Резистор',
+                                            part_number='RES-10K-0805')
 
         closed_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=3, date=D(2026, 5, 25),
@@ -91,7 +93,7 @@ class Command(BaseCommand):
         models.StockLine.objects.create(document=closed_k, lot=res_lot,
                                         location=main, qty=-6, date=D(2026, 5, 25))
         models.Lot.objects.create(item=board, project=prj, origin=closed_k, qty=3,
-                                  unit_cost=1506, serial_number='ПЛ-001..003')
+                                  unit_cost=1506, lot_name='ПЛ-001..003')
 
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
@@ -104,7 +106,7 @@ class Command(BaseCommand):
             project=white, user=user, number='ИНВ-1', date=D(2026, 6, 3),
             note='Остаток с прошлого НИР')
         models.Lot.objects.create(item=case, project=white, origin=inv, qty=5,
-                                  unit_cost=800, received_name='Корпус Al (остаток)')
+                                  unit_cost=800, lot_name='Корпус Al (остаток)')
 
         # --- мультисклад: перемещение 4 КОРПУС-1 на место пайки (105) --- #
         # Волна 13, Ф2e: тотал лота (12) сохранён, распределение — 8@103 + 4@105.

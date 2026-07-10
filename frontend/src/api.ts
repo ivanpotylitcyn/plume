@@ -56,7 +56,7 @@ export interface StockMap {
 export interface ItemShipment {
   transfer_id: number; number: string; date: string; project_code: string
   posted: boolean; lot_id: number; qty: number; display_name: string
-  serial_number: string
+  lot_name: string
 }
 export interface ItemDetail {
   id: number; code: string; name: string; kind: string; uom: string
@@ -65,7 +65,7 @@ export interface ItemDetail {
          component_name: string; component_uom: string; qty: number; position: string }[]
   where_used: { parent_id: number; parent_code: string; parent_name: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
-          live_qty: number; unit_cost: number; serial_number: string }[]
+          live_qty: number; unit_cost: number; part_number: string; lot_name: string }[]
   shipments: ItemShipment[]
 }
 
@@ -75,8 +75,8 @@ export interface KittingRow {
   qty: number; status: string; date: string | null
 }
 export interface CandidateLot {
-  lot_id: number; live_qty: number; unit_cost: number; serial_number: string
-  origin: string; received_name: string
+  lot_id: number; live_qty: number; unit_cost: number; part_number: string
+  origin: string; lot_name: string
 }
 export interface RealLine {
   id: number; lot_id: number; lot_label: string; qty: number; date: string | null
@@ -91,7 +91,7 @@ export interface CockpitRow {
   real_lines: RealLine[]; ghost: Ghost | null
 }
 export interface BornLot {
-  id: number; qty: number; unit_cost: number; serial_number: string
+  id: number; qty: number; unit_cost: number; lot_name: string; part_number: string
 }
 export interface Cockpit {
   id: number; status: string; project_id: number; project_code: string
@@ -108,8 +108,8 @@ export interface ReceiptRow {
 }
 export interface ReceiptLot {
   id: number; item_id: number; item_code: string; item_name: string; uom: string
-  qty: number; live_qty: number; unit_cost: number; received_name: string
-  serial_number: string; consumed: boolean
+  qty: number; live_qty: number; unit_cost: number; lot_name: string
+  part_number: string; consumed: boolean
 }
 export interface ReceiptCockpit {
   id: number; number: string; date: string; supplier_id: number; supplier_name: string
@@ -147,12 +147,12 @@ export interface TransferRow {
 }
 export interface AvailableLot {
   lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
-  live_qty: number; origin: string; serial_number: string; received_name: string
+  live_qty: number; origin: string; part_number: string; lot_name: string
 }
 export interface TransferCockpitLine {
   id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
   item_name: string; uom: string; qty: number; display_name: string
-  lot_live_qty: number; serial_number: string
+  lot_live_qty: number; lot_name: string
 }
 export interface TransferCockpit {
   id: number; number: string; date: string; project_id: number
@@ -168,7 +168,7 @@ export interface WriteoffRow {
 export interface WriteoffCockpitLine {
   id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
   item_name: string; uom: string; qty: number; lot_live_qty: number
-  serial_number: string
+  lot_name: string
 }
 export interface WriteoffCockpit {
   id: number; number: string; date: string; reason: string
@@ -184,13 +184,13 @@ export interface RequisitionRow {
 export interface AllAvailableLot {
   lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
   live_qty: number; origin: string; project_id: number; project_code: string
-  serial_number: string; received_name: string
+  part_number: string; lot_name: string
 }
 export interface RequisitionCockpitLine {
   id: number; source_lot_id: number; lot_label: string; source_project_code: string
   item_id: number; item_code: string; item_name: string; uom: string
   qty: number; source_live_qty: number; born_lot_id: number | null
-  serial_number: string
+  lot_name: string
 }
 export interface RequisitionCockpit {
   id: number; number: string; date: string
@@ -205,8 +205,8 @@ export interface InventoryRow {
 }
 export interface InventoryCockpitLot {
   id: number; item_id: number; item_code: string; item_name: string; uom: string
-  qty: number; live_qty: number; unit_cost: number; received_name: string
-  serial_number: string; predecessor_id: number | null; predecessor_label: string
+  qty: number; live_qty: number; unit_cost: number; lot_name: string
+  part_number: string; predecessor_id: number | null; predecessor_label: string
   consumed: boolean
 }
 export interface InventoryCockpit {
@@ -217,7 +217,7 @@ export interface InventoryCockpit {
 export interface WrittenOffLot {
   lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
   written_qty: number; project_code: string; unit_cost: number
-  received_name: string; serial_number: string
+  lot_name: string; part_number: string
 }
 
 // ── Панель закрытия проекта (волна 6) ──
@@ -413,10 +413,10 @@ export const api = {
     send<ReceiptCockpit>('POST', '/api/receipts/', b),
   addReceiptLot: (id: number, b: {
     item_id: number; qty: number; unit_cost?: number
-    received_name?: string; serial_number?: string
+    lot_name?: string; part_number?: string
   }) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/lots/`, b),
   updateReceiptLot: (id: number, b: Partial<{
-    qty: number; unit_cost: number; received_name: string; serial_number: string
+    qty: number; unit_cost: number; lot_name: string; part_number: string
   }>) => send<ReceiptCockpit>('PATCH', `/api/lots/${id}/`, b),
   deleteReceiptLot: (id: number) => send<ReceiptCockpit>('DELETE', `/api/lots/${id}/`),
   approveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/approve/`),
@@ -504,10 +504,10 @@ export const api = {
     send<InventoryCockpit>('POST', '/api/inventories/', b),
   addInventoryLot: (id: number, b: {
     item_id?: number; predecessor_id?: number; qty: number
-    unit_cost?: number; received_name?: string; serial_number?: string
+    unit_cost?: number; lot_name?: string; part_number?: string
   }) => send<InventoryCockpit>('POST', `/api/inventories/${id}/lots/`, b),
   updateInventoryLot: (id: number, b: Partial<{
-    qty: number; unit_cost: number; received_name: string; serial_number: string
+    qty: number; unit_cost: number; lot_name: string; part_number: string
   }>) => send<InventoryCockpit>('PATCH', `/api/inventory-lots/${id}/`, b),
   deleteInventoryLot: (id: number) =>
     send<InventoryCockpit>('DELETE', `/api/inventory-lots/${id}/`),

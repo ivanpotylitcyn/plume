@@ -174,7 +174,7 @@ function GhostRow({ row, ghost, cockpit, busy, run }: {
               onChange={e => setLotId(Number(e.target.value))} disabled={busy}>
               {lots.map(l => (
                 <option key={l.lot_id} value={l.lot_id}>
-                  #{l.lot_id} · остаток {num(l.live_qty)}{l.received_name ? ` · ${l.received_name}` : ''}
+                  #{l.lot_id} · остаток {num(l.live_qty)}{l.lot_name ? ` · ${l.lot_name}` : ''}
                 </option>
               ))}
             </select>}

@@ -490,10 +490,15 @@ class Lot(models.Model):
                                     blank=True, related_name='successors')
     qty = qty(verbose_name='рождённое кол-во')
     unit_cost = money(verbose_name='цена / себестоимость', default=0)
-    received_name = models.CharField('название из УПД', max_length=255,
-                                     blank=True, default='')
-    serial_number = models.CharField('заводской №', max_length=128,
-                                     blank=True, default='')
+    # Два идентификатора партии (Волна 13, Ф2f): человеческий и машинный.
+    # `lot_name` — человеческий (имена из УПД + заводские №); `part_number` —
+    # строгий машинный (MPN с datasheet / децимальный номер; для станка
+    # автомонтажа). PN живёт на `Lot`, а не на `Item`: упаковка/исполнение
+    # варьируются от поставки; `Item.code` — абстрактный артикул.
+    lot_name = models.CharField('название партии', max_length=255,
+                                blank=True, default='')
+    part_number = models.CharField('part number', max_length=128,
+                                   blank=True, default='')
 
     class Meta:
         verbose_name = 'партия'

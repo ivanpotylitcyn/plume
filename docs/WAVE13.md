@@ -275,9 +275,34 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
       0 issues; `seed_demo`+живой shell. Обе диаграммы README + JOURNAL 2026-07-09 (Ф2e).
       **Отложено (вьюхи потом):** HTTP-эндпойнты + React-форма перемещения.
 
+**Ф2f — переименования `Lot`: `part_number` + `lot_name` ✅ 2026-07-10**
+- [x] `Lot`: пара `serial_number`/`received_name` → **два идентификатора** —
+      `part_number` (строгий машинный: MPN/децимальный; для станка автомонтажа) и
+      `lot_name` (человеческий: имена из УПД + заводские №). Миграция
+      `0009_lot_identifiers` (реверсивна): `AddField part_number` (пусто) →
+      `RenameField received_name→lot_name` → `RunPython` слияние
+      `lot_name ← COALESCE(received_name, serial_number)` → `RemoveField serial_number`.
+      Реверс структурно-полный, значение сохранно (`lot_name → received_name`, serial → ''),
+      лоссов лишь по «в каком поле лежал зав.№» → round-trip остаток инвариантен.
+- [x] Движок/сериализаторы: писатели (`add/update_receipt_lot`, `add/update_inventory_lot`,
+      `add_requisition_line`-наследование) разводят `lot_name`+`part_number` независимо;
+      каждый лот-содержащий кокпит несёт оба (rows с одним id-полем отдают человеческий
+      `lot_name` — историческ. зав.№ живёт там после слияния); `_lot_label` = `lot_name or
+      part_number or code`. `admin.py`/`seed_demo` обновлены (демо-PN у покупных лотов).
+- [x] Фронт: `api.ts` — типы/параметры (`lot_name`/`part_number`); born-lot формы
+      (Приход/Инвентаризация) получили **редактируемый `part_number`** рядом с названием
+      (иначе поле мёртвое); справочник изделия — колонки «Part number» + «Название»;
+      пикеры/дисплеи (Передача/Списание/Требование/КомплектацияProjectStock/ре-материализация)
+      показывают `lot_name`.
+- [x] **Проверка:** 218 тестов (было 214; +4 `Wave13Fase2fTests` — оба идентификатора на
+      born-лоте, независимая правка, приоритет метки, наследование требованием) зелёные на
+      SQLite **и** боевом MySQL 8.0.25; `makemigrations --check` чист; `tsc -b`+`vite build`
+      чисты; `seed_demo` ок (кокпит отдаёт PN). Круговой прогон на dev-MySQL: 0009 → reverse
+      @0008 → forward@0009 — значение стабильно (lot 53 `ПЛ-001..003` цел), live-qty инвариантен.
+      Прод не трогали (Ф2 на прод — отдельной экскурсией).
+
 **Ф2f+ — оставшееся Ф2 (следующими укусами):**
-- [ ] Переименования `Lot` (`part_number`, `lot_name`) + `Supplier → Counterparty`
-      (+ контрагент на передаче); обновить `api.ts` и вьюхи.
+- [ ] `Supplier → Counterparty` (роль/вид) + контрагент на передаче; `api.ts` и вьюхи.
 - [ ] **Admin — гибрид:** родитель `StockDocument` = read-only обзор «все ордера»
       (зеркало режима); дочерние админки = правка по типу с инлайнами.
 - [ ] Миграция данных на живой прод-базе (развёрнут 2026-07-01).

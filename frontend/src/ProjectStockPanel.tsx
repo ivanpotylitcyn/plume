@@ -51,7 +51,7 @@ export function ProjectStockPanel({ projectId, projectName, openItem }: {
                 <tr key={l.lot_id} className="row s-available">
                   <td>
                     <span className="glyph g-available">✓</span>{' '}
-                    <span className="pn">#{l.lot_id}{l.serial_number ? ` ${l.serial_number}` : ''}</span>
+                    <span className="pn">#{l.lot_id}{l.lot_name ? ` ${l.lot_name}` : ''}</span>
                   </td>
                   <td>
                     <a className="link" onClick={() => openItem(l.item_id)}>{l.item_code}</a>{' '}

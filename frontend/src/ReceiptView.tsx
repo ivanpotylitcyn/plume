@@ -95,7 +95,8 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         <thead>
           <tr>
             <th>изделие</th><th style={{ textAlign: 'right' }}>кол-во</th>
-            <th style={{ textAlign: 'right' }}>цена, ₽</th><th>название из УПД</th><th />
+            <th style={{ textAlign: 'right' }}>цена, ₽</th>
+            <th>part number</th><th>название из УПД</th><th />
           </tr>
         </thead>
         <tbody>
@@ -139,8 +140,12 @@ function LotRow({ lot, locked, busy, openItem, run }: {
           validate={v => Number(v) >= 0} />
       </td>
       <td>
-        <CommitInput value={lot.received_name} width={160} disabled={locked || busy}
-          onCommit={v => run(api.updateReceiptLot(lot.id, { received_name: v }))} />
+        <CommitInput value={lot.part_number} width={140} disabled={locked || busy}
+          onCommit={v => run(api.updateReceiptLot(lot.id, { part_number: v }))} />
+      </td>
+      <td>
+        <CommitInput value={lot.lot_name} width={160} disabled={locked || busy}
+          onCommit={v => run(api.updateReceiptLot(lot.id, { lot_name: v }))} />
       </td>
       <td style={{ textAlign: 'right' }}>
         {!locked && !lot.consumed &&
@@ -160,6 +165,7 @@ function GhostRow({ receiptId, items, busy, run }: {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
   const [cost, setCost] = useState('')
+  const [pn, setPn] = useState('')
   const [name, setName] = useState('')
 
   const add = () => {
@@ -168,9 +174,10 @@ function GhostRow({ receiptId, items, busy, run }: {
     run(api.addReceiptLot(receiptId, {
       item_id: itemId, qty: q,
       unit_cost: cost === '' ? undefined : Number(cost),
-      received_name: name || undefined,
+      part_number: pn || undefined,
+      lot_name: name || undefined,
     }))
-    setItemId(''); setQty(''); setCost(''); setName('')
+    setItemId(''); setQty(''); setCost(''); setPn(''); setName('')
   }
 
   return (
@@ -190,6 +197,11 @@ function GhostRow({ receiptId, items, busy, run }: {
       <td className="num">
         <input className="qty-in" value={cost} disabled={busy} placeholder="0"
           onChange={e => setCost(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      </td>
+      <td>
+        <input className="qty-in" style={{ width: 140 }} value={pn} disabled={busy}
+          placeholder="part number" onChange={e => setPn(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td>

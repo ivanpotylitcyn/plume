@@ -624,8 +624,8 @@ def available_lots(item, project, location=None):
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'live_qty': live, 'unit_cost': lot.unit_cost,
-                'serial_number': lot.serial_number,
-                'origin': lot.origin_kind, 'received_name': lot.received_name,
+                'part_number': lot.part_number,
+                'origin': lot.origin_kind, 'lot_name': lot.lot_name,
             })
     return result
 
@@ -655,7 +655,7 @@ def kitting_cockpit(kitting):
             pierced += mag
             real_lines.append({
                 'id': kl.id, 'lot_id': kl.lot_id,
-                'lot_label': f'#{kl.lot_id} {kl.lot.received_name or component.code}',
+                'lot_label': f'#{kl.lot_id} {kl.lot.lot_name or component.code}',
                 'qty': mag, 'date': kl.date,
             })
         remaining = max(ZERO, need - pierced)
@@ -677,7 +677,7 @@ def kitting_cockpit(kitting):
         })
     born_lots = [
         {'id': lot.id, 'qty': lot.qty, 'unit_cost': lot.unit_cost,
-         'serial_number': lot.serial_number}
+         'lot_name': lot.lot_name, 'part_number': lot.part_number}
         for lot in kitting.lots.all()
     ]
     return {
@@ -801,8 +801,8 @@ def receipt_cockpit(receipt):
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_name': lot.item.name, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
-            'unit_cost': lot.unit_cost, 'received_name': lot.received_name,
-            'serial_number': lot.serial_number,
+            'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
+            'part_number': lot.part_number,
             'consumed': _lot_consumed_downstream(lot),
         })
     return {
@@ -816,8 +816,8 @@ def receipt_cockpit(receipt):
     }
 
 
-def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, received_name='',
-                    serial_number=''):
+def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, lot_name='',
+                    part_number=''):
     """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода."""
     _require_draft(receipt)
     if qty is None or qty <= 0:
@@ -826,16 +826,16 @@ def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, received_name='',
         raise ValidationError('Цена не может быть отрицательной.')
     lot = models.Lot.objects.create(
         item=item, project=receipt.project, origin=receipt, qty=qty,
-        unit_cost=unit_cost or ZERO, received_name=received_name or '',
-        serial_number=serial_number or '',
+        unit_cost=unit_cost or ZERO, lot_name=lot_name or '',
+        part_number=part_number or '',
     )
     rebuild_movements(lot)
     return lot
 
 
-def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
-                       serial_number=None):
-    """Автосейв строки УПД (кол-во/цена/название/зав.№). Правка до замка.
+def update_receipt_lot(lot, qty=None, unit_cost=None, lot_name=None,
+                       part_number=None):
+    """Автосейв строки УПД (кол-во/цена/название/PN). Правка до замка.
 
     Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
     уйдёт в минус (недостача информативнее, в духе мутабельной ДНК).
@@ -852,12 +852,12 @@ def update_receipt_lot(lot, qty=None, unit_cost=None, received_name=None,
             raise ValidationError('Цена не может быть отрицательной.')
         lot.unit_cost = unit_cost
         fields.append('unit_cost')
-    if received_name is not None:
-        lot.received_name = received_name
-        fields.append('received_name')
-    if serial_number is not None:
-        lot.serial_number = serial_number
-        fields.append('serial_number')
+    if lot_name is not None:
+        lot.lot_name = lot_name
+        fields.append('lot_name')
+    if part_number is not None:
+        lot.part_number = part_number
+        fields.append('part_number')
     if fields:
         lot.save(update_fields=fields)
         rebuild_movements(lot)
@@ -1087,15 +1087,15 @@ def project_available_lots(project):
                 'lot_id': lot.id, 'item_id': lot.item_id,
                 'item_code': lot.item.code, 'item_name': lot.item.name,
                 'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
-                'serial_number': lot.serial_number,
-                'received_name': lot.received_name,
+                'part_number': lot.part_number,
+                'lot_name': lot.lot_name,
             })
     return result
 
 
 def _lot_label(lot):
-    """Человекочитаемая метка лота для накладной/строки (зав.№ / название / артикул)."""
-    tail = lot.serial_number or lot.received_name or lot.item.code
+    """Человекочитаемая метка лота для накладной/строки (название / PN / артикул)."""
+    tail = lot.lot_name or lot.part_number or lot.item.code
     return f'#{lot.id} {tail}'
 
 
@@ -1118,7 +1118,7 @@ def transfer_cockpit(transfer):
             'item_name': lot.item.name, 'uom': lot.item.uom,
             'qty': mag, 'display_name': line.display_name,
             'lot_live_qty': lot_live_qty(lot),   # остаток источника после отгрузки
-            'serial_number': lot.serial_number,
+            'lot_name': lot.lot_name,
         })
     return {
         'id': transfer.id, 'number': transfer.number, 'date': transfer.date,
@@ -1146,7 +1146,7 @@ def item_shipments(item):
             'project_code': t.project.code, 'posted': t.is_posted,
             'lot_id': line.lot_id, 'qty': -line.qty,     # знаковый → магнитуда
             'display_name': line.display_name,
-            'serial_number': line.lot.serial_number,
+            'lot_name': line.lot.lot_name,
         })
     return rows
 
@@ -1270,8 +1270,8 @@ def all_available_lots():
                 'item_code': lot.item.code, 'item_name': lot.item.name,
                 'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
                 'project_id': lot.project_id, 'project_code': lot.project.code,
-                'serial_number': lot.serial_number,
-                'received_name': lot.received_name,
+                'part_number': lot.part_number,
+                'lot_name': lot.lot_name,
             })
     return result
 
@@ -1295,7 +1295,7 @@ def writeoff_cockpit(writeoff):
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_name': lot.item.name, 'uom': lot.item.uom,
             'qty': mag, 'lot_live_qty': lot_live_qty(lot),
-            'serial_number': lot.serial_number,
+            'lot_name': lot.lot_name,
         })
     return {
         'id': writeoff.id, 'number': writeoff.number, 'date': writeoff.date,
@@ -1397,7 +1397,7 @@ def requisition_cockpit(requisition):
             'item_name': src.item.name, 'uom': src.item.uom,
             'qty': mag, 'source_live_qty': lot_live_qty(src),
             'born_lot_id': born.id if born else None,
-            'serial_number': src.serial_number,
+            'lot_name': src.lot_name,
         })
     return {
         'id': requisition.id, 'number': requisition.number, 'date': requisition.date,
@@ -1420,7 +1420,7 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
     """Отпочкование: `−ISSUE` от источника + рождение лота-потомка у получателя.
 
     Источник — из любого проекта (постановка своего на баланс → белый, заём у
-    соседнего активного B→A). Потомок наследует item/цену/название/зав.№ источника,
+    соседнего активного B→A). Потомок наследует item/цену/название/PN источника,
     `predecessor` → источник (генеалогия/провенанс для kitting из остатков). Один
     источник = одна строка (пара строки↔потомок однозначна). Кол-во не клампим.
     """
@@ -1437,7 +1437,7 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
     born = models.Lot.objects.create(
         item=source_lot.item, project=requisition.project, origin=requisition,
         predecessor=source_lot, qty=qty, unit_cost=source_lot.unit_cost,
-        received_name=source_lot.received_name, serial_number=source_lot.serial_number)
+        lot_name=source_lot.lot_name, part_number=source_lot.part_number)
     rebuild_movements(source_lot)   # −ISSUE у источника
     rebuild_movements(born)         # +RECEIPT у потомка
     return line
@@ -1627,8 +1627,8 @@ def relocation_source_lots(project):
                 'lot_id': lot.id, 'item_id': lot.item_id,
                 'item_code': lot.item.code, 'item_name': lot.item.name,
                 'uom': lot.item.uom, 'live_qty': live,
-                'serial_number': lot.serial_number,
-                'received_name': lot.received_name,
+                'part_number': lot.part_number,
+                'lot_name': lot.lot_name,
                 'by_location': lot_locations(lot),
             })
     return result
@@ -2290,8 +2290,8 @@ def inventory_cockpit(inventory):
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_name': lot.item.name, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
-            'unit_cost': lot.unit_cost, 'received_name': lot.received_name,
-            'serial_number': lot.serial_number,
+            'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
+            'part_number': lot.part_number,
             'predecessor_id': lot.predecessor_id,
             'predecessor_label': _lot_label(pred) if pred else '',
             'consumed': _lot_consumed_downstream(lot),
@@ -2314,8 +2314,8 @@ def create_inventory(project, user, number, date=None, note=''):
         date=date or timezone.localdate(), note=(note or '').strip())
 
 
-def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, received_name='',
-                      serial_number='', predecessor=None):
+def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, lot_name='',
+                      part_number='', predecessor=None):
     """Добавить строку акта: рождается «найденная» партия (`+RECEIPT`) в его проекте.
 
     `predecessor` (опц.) связывает найденный лот со списанным-источником
@@ -2328,15 +2328,15 @@ def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, received_name='',
         raise ValidationError('Цена не может быть отрицательной.')
     lot = models.Lot.objects.create(
         item=item, project=inventory.project, origin=inventory, qty=qty,
-        unit_cost=unit_cost or ZERO, received_name=received_name or '',
-        serial_number=serial_number or '', predecessor=predecessor)
+        unit_cost=unit_cost or ZERO, lot_name=lot_name or '',
+        part_number=part_number or '', predecessor=predecessor)
     rebuild_movements(lot)
     return lot
 
 
-def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
-                         serial_number=None):
-    """Автосейв строки акта (кол-во/цена/название/зав.№). Кол-во не клампим по расходу.
+def update_inventory_lot(lot, qty=None, unit_cost=None, lot_name=None,
+                         part_number=None):
+    """Автосейв строки акта (кол-во/цена/название/PN). Кол-во не клампим по расходу.
     Только черновик (замок)."""
     _require_draft(lot.origin)
     fields = []
@@ -2350,12 +2350,12 @@ def update_inventory_lot(lot, qty=None, unit_cost=None, received_name=None,
             raise ValidationError('Цена не может быть отрицательной.')
         lot.unit_cost = unit_cost
         fields.append('unit_cost')
-    if received_name is not None:
-        lot.received_name = received_name
-        fields.append('received_name')
-    if serial_number is not None:
-        lot.serial_number = serial_number
-        fields.append('serial_number')
+    if lot_name is not None:
+        lot.lot_name = lot_name
+        fields.append('lot_name')
+    if part_number is not None:
+        lot.part_number = part_number
+        fields.append('part_number')
     if fields:
         lot.save(update_fields=fields)
         rebuild_movements(lot)
@@ -2413,7 +2413,7 @@ def written_off_lots():
             'item_code': lot.item.code, 'item_name': lot.item.name,
             'uom': lot.item.uom, 'written_qty': written,
             'project_code': lot.project.code, 'unit_cost': lot.unit_cost,
-            'received_name': lot.received_name, 'serial_number': lot.serial_number,
+            'lot_name': lot.lot_name, 'part_number': lot.part_number,
         })
     return result
 

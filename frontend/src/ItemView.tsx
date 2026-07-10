@@ -152,13 +152,14 @@ export function ItemView({ itemId, items, openItem, onChanged }:
             <thead><tr><th>Lot</th><th>Проект</th><th>Origin</th>
               <th style={{ textAlign: 'right' }}>Рожд.</th>
               <th style={{ textAlign: 'right' }}>Остаток</th>
-              <th>Зав. №</th></tr></thead>
+              <th>Part number</th><th>Название</th></tr></thead>
             <tbody>{d.lots.map(l => (
               <tr key={l.id} className={'row' + (l.live_qty > 0 ? ' s-available' : '')}>
                 <td>#{l.id}</td><td>{l.project_code}</td><td className="kind-chip">{l.origin}</td>
                 <td className="num">{num(l.qty_born)}</td>
                 <td className="num">{num(l.live_qty)}</td>
-                <td style={{ color: 'var(--fg-dim)' }}>{l.serial_number || '—'}</td>
+                <td style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
+                <td style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>
               </tr>))}</tbody>
           </table>}
 

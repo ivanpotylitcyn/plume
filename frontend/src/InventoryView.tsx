@@ -84,7 +84,8 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
         <thead>
           <tr>
             <th>изделие</th><th style={{ textAlign: 'right' }}>кол-во</th>
-            <th style={{ textAlign: 'right' }}>цена, ₽</th><th>название</th>
+            <th style={{ textAlign: 'right' }}>цена, ₽</th>
+            <th>part number</th><th>название</th>
             <th>провенанс</th><th />
           </tr>
         </thead>
@@ -129,8 +130,12 @@ function LotRow({ lot, locked, busy, openItem, run }: {
           validate={v => Number(v) >= 0} />
       </td>
       <td>
-        <CommitInput value={lot.received_name} width={160} disabled={locked || busy}
-          onCommit={v => run(api.updateInventoryLot(lot.id, { received_name: v }))} />
+        <CommitInput value={lot.part_number} width={140} disabled={locked || busy}
+          onCommit={v => run(api.updateInventoryLot(lot.id, { part_number: v }))} />
+      </td>
+      <td>
+        <CommitInput value={lot.lot_name} width={160} disabled={locked || busy}
+          onCommit={v => run(api.updateInventoryLot(lot.id, { lot_name: v }))} />
       </td>
       <td>
         {lot.predecessor_id
@@ -156,6 +161,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
   const [cost, setCost] = useState('')
+  const [pn, setPn] = useState('')
   const [name, setName] = useState('')
 
   const add = () => {
@@ -164,9 +170,10 @@ function GhostRow({ inventoryId, items, busy, run }: {
     run(api.addInventoryLot(inventoryId, {
       item_id: itemId, qty: q,
       unit_cost: cost === '' ? undefined : Number(cost),
-      received_name: name || undefined,
+      part_number: pn || undefined,
+      lot_name: name || undefined,
     }))
-    setItemId(''); setQty(''); setCost(''); setName('')
+    setItemId(''); setQty(''); setCost(''); setPn(''); setName('')
   }
 
   return (
@@ -186,6 +193,11 @@ function GhostRow({ inventoryId, items, busy, run }: {
       <td className="num">
         <input className="qty-in" value={cost} disabled={busy} placeholder="0"
           onChange={e => setCost(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      </td>
+      <td>
+        <input className="qty-in" style={{ width: 140 }} value={pn} disabled={busy}
+          placeholder="part number" onChange={e => setPn(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td>
@@ -230,7 +242,7 @@ function RematerializePanel({ inventoryId, busy, run }: {
               <tr>
                 <th>изделие</th><th>проект-источник</th>
                 <th style={{ textAlign: 'right' }}>списано</th>
-                <th>зав.№</th><th />
+                <th>название</th><th />
               </tr>
             </thead>
             <tbody>
@@ -239,7 +251,7 @@ function RematerializePanel({ inventoryId, busy, run }: {
                   <td>{l.item_code} <span style={{ color: 'var(--fg-dim)' }}>{l.item_name}</span></td>
                   <td>{l.project_code}</td>
                   <td className="num">{num(l.written_qty)} {l.uom}</td>
-                  <td>{l.serial_number || '—'}</td>
+                  <td>{l.lot_name || '—'}</td>
                   <td style={{ textAlign: 'right' }}>
                     <button className="btn sm" disabled={busy}
                       onClick={() => rematerialize(l)}>вернуть на баланс</button>

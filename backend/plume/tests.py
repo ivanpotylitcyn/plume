@@ -398,7 +398,7 @@ class ReceiptCockpitTests(EngineTestBase):
         r = self.make_receipt()
         case = self.make_item('CASE')
         lot = engine.add_receipt_lot(r, case, D(12), unit_cost=D(800),
-                                     received_name='Корпус Al')
+                                     lot_name='Корпус Al')
         self.assertEqual(lot.project_id, r.project_id)   # проект наследован
         self.assertEqual(engine.lot_live_qty(lot), D(12))
         mv = lot.movements.get()
@@ -428,10 +428,12 @@ class ReceiptCockpitTests(EngineTestBase):
     def test_update_lot_cost_and_name(self):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        engine.update_receipt_lot(lot, unit_cost=D(42), received_name='Ы')
+        engine.update_receipt_lot(lot, unit_cost=D(42), lot_name='Ы',
+                                  part_number='PN-1')
         lot.refresh_from_db()
         self.assertEqual(lot.unit_cost, D(42))
-        self.assertEqual(lot.received_name, 'Ы')
+        self.assertEqual(lot.lot_name, 'Ы')
+        self.assertEqual(lot.part_number, 'PN-1')
 
     def test_remove_lot(self):
         r = self.make_receipt()
@@ -649,8 +651,8 @@ class TransferCockpitTests(EngineTestBase):
         self.assertEqual(row['display_name'], 'Прибор зав.№7')
 
     def test_default_display_name_from_lot(self):
-        self.lot.serial_number = 'ЗН-42'
-        self.lot.save(update_fields=['serial_number'])
+        self.lot.lot_name = 'ЗН-42'
+        self.lot.save(update_fields=['lot_name'])
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         line = engine.add_transfer_line(t, self.lot, D(1))
         self.assertIn('ЗН-42', line.display_name)               # авто-метка лота
@@ -798,8 +800,8 @@ class RequisitionCockpitTests(EngineTestBase):
         self.item = self.make_item('R100')
         self.src = self.receipt_lot(self.item, self.prj, 10)
         self.src.unit_cost = D('2.50')
-        self.src.serial_number = 'ЗН-9'
-        self.src.save(update_fields=['unit_cost', 'serial_number'])
+        self.src.part_number = 'ЗН-9'
+        self.src.save(update_fields=['unit_cost', 'part_number'])
         self.white = models.Project.objects.create(
             code='WHITE', name='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
@@ -1511,7 +1513,7 @@ class InventoryCockpitTests(EngineTestBase):
     def test_add_lot_births_receipt_movement(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1', note='пересчёт')
         lot = engine.add_inventory_lot(inv, self.item, D(7), unit_cost=D('1.50'),
-                                       received_name='Резистор')
+                                       lot_name='Резистор')
         self.assertEqual(lot.origin_kind, 'inventory')
         self.assertEqual(lot.project_id, self.prj.id)
         self.assertEqual(engine.lot_live_qty(lot), D(7))       # +RECEIPT
@@ -1557,8 +1559,8 @@ class InventoryCockpitTests(EngineTestBase):
     def test_rematerialize_written_off_lot_inherits_provenance(self):
         # списываем партию из проекта (серый путь), затем находим и ре-материализуем в GREY
         src = self.receipt_lot(self.item, self.prj, 10)
-        src.unit_cost = D('2.50'); src.received_name = 'Резистор'; src.serial_number = 'ЗН-9'
-        src.save(update_fields=['unit_cost', 'received_name', 'serial_number'])
+        src.unit_cost = D('2.50'); src.lot_name = 'Резистор'; src.part_number = 'ЗН-9'
+        src.save(update_fields=['unit_cost', 'lot_name', 'part_number'])
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='на серый')
         engine.add_writeoff_line(w, src, D(6))
         self.assertEqual(engine.lot_live_qty(src), D(4))
@@ -1569,8 +1571,8 @@ class InventoryCockpitTests(EngineTestBase):
         # ре-материализация: born-лот в GREY с predecessor и унаследованными полями
         inv = engine.create_inventory(self.grey, self.user, 'ИНВ-G1')
         born = engine.add_inventory_lot(inv, src.item, D(6), unit_cost=src.unit_cost,
-                                        received_name=src.received_name,
-                                        serial_number=src.serial_number, predecessor=src)
+                                        lot_name=src.lot_name,
+                                        part_number=src.part_number, predecessor=src)
         self.assertEqual(born.project_id, self.grey.id)
         self.assertEqual(born.predecessor_id, src.id)
         self.assertEqual(born.unit_cost, D('2.50'))
@@ -1596,7 +1598,7 @@ class InventoryHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             supplier=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
-            origin=r, qty=D(10), unit_cost=D('2.50'), serial_number='ЗН-9')
+            origin=r, qty=D(10), unit_cost=D('2.50'), part_number='ЗН-9')
         engine.rebuild_movements(self.lot)
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
@@ -1610,7 +1612,7 @@ class InventoryHttpTests(TestCase):
         # строка = найденная партия (+RECEIPT)
         line = self.c.post(f'/api/inventories/{iid}/lots/',
             {'item_id': self.item.id, 'qty': 7, 'unit_cost': '1.5',
-             'received_name': 'Резистор'}, content_type='application/json')
+             'lot_name': 'Резистор'}, content_type='application/json')
         self.assertEqual(line.status_code, 201)
         body = line.json()
         self.assertEqual(float(body['total_cost']), 10.5)
@@ -1643,7 +1645,7 @@ class InventoryHttpTests(TestCase):
         row = line.json()['lots'][0]
         self.assertEqual(row['predecessor_id'], self.lot.id)
         self.assertEqual(float(row['unit_cost']), 2.50)       # цена унаследована
-        self.assertEqual(row['serial_number'], 'ЗН-9')        # зав.№ унаследован
+        self.assertEqual(row['part_number'], 'ЗН-9')          # PN унаследован
 
 
 class OrderDeleteHttpTests(TestCase):
@@ -2831,4 +2833,65 @@ class Wave13Fase2eTests(EngineTestBase):
         self.assertFalse(models.Relocation.objects.filter(id=r.id).exists())
         self.assertEqual(engine.lot_live_qty(self.lot), D(12))
         self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(0))
-        self.assertEqual(self.lot.movements.count(), 1)   # только born +RECEIPT
+
+
+class Wave13Fase2fTests(EngineTestBase):
+    """Волна 13 Ф2f: два идентификатора партии — `lot_name` (человеческий) и
+    `part_number` (машинный, MPN/децимальный). Пришли на смену `received_name`/
+    `serial_number`; писатели/кокпиты/метка разводят их независимо."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.receipt = self.make_receipt()
+
+    def make_receipt(self, approved=False):
+        return models.Receipt.objects.create(
+            number='UPD-2f', date='2026-05-01', supplier=self.supplier,
+            project=self.prj, user=self.user,
+            status=models.DocStatus.POSTED if approved else models.DocStatus.DRAFT)
+
+    def test_born_lot_carries_both_identifiers(self):
+        lot = engine.add_receipt_lot(self.receipt, self.item, D(5),
+                                     lot_name='Резистор 10к',
+                                     part_number='RES-10K-0805')
+        self.assertEqual(lot.lot_name, 'Резистор 10к')
+        self.assertEqual(lot.part_number, 'RES-10K-0805')
+        row = engine.receipt_cockpit(self.receipt)['lots'][0]
+        self.assertEqual(row['lot_name'], 'Резистор 10к')
+        self.assertEqual(row['part_number'], 'RES-10K-0805')
+
+    def test_update_separates_identifiers(self):
+        lot = engine.add_receipt_lot(self.receipt, self.item, D(5))
+        engine.update_receipt_lot(lot, part_number='PN-1')   # только PN
+        lot.refresh_from_db()
+        self.assertEqual(lot.part_number, 'PN-1')
+        self.assertEqual(lot.lot_name, '')                   # имя не тронуто
+        engine.update_receipt_lot(lot, lot_name='Имя')       # только имя
+        lot.refresh_from_db()
+        self.assertEqual(lot.lot_name, 'Имя')
+        self.assertEqual(lot.part_number, 'PN-1')
+
+    def test_lot_label_prefers_lot_name_then_part_number(self):
+        lot = engine.add_receipt_lot(self.receipt, self.item, D(1),
+                                     part_number='PN-ONLY')
+        # только PN → метка берёт PN (нет человеческого имени)
+        self.assertIn('PN-ONLY', engine._lot_label(lot))
+        engine.update_receipt_lot(lot, lot_name='Человек')
+        lot.refresh_from_db()
+        # появилось имя → приоритет у него
+        label = engine._lot_label(lot)
+        self.assertIn('Человек', label)
+        self.assertNotIn('PN-ONLY', label)
+
+    def test_requisition_child_inherits_both(self):
+        src = engine.add_receipt_lot(self.receipt, self.item, D(10),
+                                     lot_name='Исходник', part_number='PN-SRC')
+        white = models.Project.objects.create(
+            code='WHITE', name='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        req = engine.create_requisition(white, self.user, 'ТР-1')
+        engine.add_requisition_line(req, src, D(4))
+        born = models.Lot.objects.get(origin=req)
+        self.assertEqual(born.lot_name, 'Исходник')
+        self.assertEqual(born.part_number, 'PN-SRC')

@@ -168,7 +168,7 @@ function GhostRow({ requisitionId, lots, busy, run }: {
           <option value="">＋ лот-источник…</option>
           {lots.map(l => (
             <option key={l.lot_id} value={l.lot_id}>
-              {l.project_code} · #{l.lot_id} {l.item_code}{l.serial_number ? ` (${l.serial_number})` : ''} · {num(l.live_qty)} {l.uom}
+              {l.project_code} · #{l.lot_id} {l.item_code}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
             </option>
           ))}
         </select>

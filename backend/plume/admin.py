@@ -148,9 +148,9 @@ class RequisitionAdmin(admin.ModelAdmin):
 @admin.register(models.Lot)
 class LotAdmin(admin.ModelAdmin):
     list_display = ('id', 'item', 'project', 'origin_kind', 'unit_cost',
-                    'serial_number')
+                    'part_number', 'lot_name')
     list_filter = ('project',)
-    search_fields = ('item__code', 'serial_number', 'received_name')
+    search_fields = ('item__code', 'part_number', 'lot_name')
 
 
 @admin.register(models.StockMovement)
