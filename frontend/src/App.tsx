@@ -380,11 +380,11 @@ export default function App() {
             return <ProjectStockPanel key={sel.id} projectId={sel.id}
               projectName={p.name} openItem={openItem} />
           return <>
-            <DeficitView key={sel.id} projectId={sel.id} items={items}
+            <DeficitView key={`deficit-${sel.id}`} projectId={sel.id} items={items}
               closed={p?.status === 'closed'} openItem={openItem}
               openPurchase={id => { reloadPurchases(); openPurchase(id) }}
               onChanged={reloadProjects} />
-            <ClosurePanel key={sel.id} projectId={sel.id} openItem={openItem}
+            <ClosurePanel key={`closure-${sel.id}`} projectId={sel.id} openItem={openItem}
               onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }} />
           </>
         })()}
