@@ -9,37 +9,19 @@ import { api, type ItemRow, type InventoryCockpit, type InventoryCockpitLot,
   type WrittenOffLot } from './api'
 import { num } from './status'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { FormHeader, useOrderCockpit } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 
 export function InventoryView({ inventoryId, items, openItem, onChanged, onDeleted }: {
   inventoryId: number; items: ItemRow[]
   openItem: (id: number) => void; onChanged: () => void; onDeleted: () => void
 }) {
-  const [c, setC] = useState<InventoryCockpit | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
-
-  useEffect(() => {
-    setC(null); setErr(null)
-    api.inventory(inventoryId).then(setC).catch(e => setErr(String(e)))
-  }, [inventoryId])
-
-  const run = (p: Promise<InventoryCockpit>) => {
-    setBusy(true); setErr(null)
-    p.then(next => { setC(next); onChanged() })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
-  const del = () => {
-    if (!c || !confirm('Удалить инвентаризацию? Действие необратимо.')) return
-    setBusy(true); setErr(null)
-    api.deleteInventory(c.id).then(() => onDeleted())
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+    inventoryId, api.inventory, {
+      onChanged, onDeleted,
+      remove: api.deleteInventory,
+      confirmDelete: 'Удалить инвентаризацию? Действие необратимо.',
+    })
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>

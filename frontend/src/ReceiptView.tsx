@@ -7,41 +7,21 @@ import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
   type ReceiptLot } from './api'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
-import { FormHeader, useFormLock } from './FormHeader'
+import { FormHeader, useOrderCockpit } from './FormHeader'
 
 export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged, onDeleted }: {
   receiptId: number; items: ItemRow[]
   openItem: (id: number) => void; openPurchase: (id: number) => void
   onChanged: () => void; onDeleted: () => void
 }) {
-  const [c, setC] = useState<ReceiptCockpit | null>(null)
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
-
-  useEffect(() => {
-    setC(null); setErr(null)
-    api.receipt(receiptId).then(c => {
-      setC(c)
-      api.projectPurchases(c.project_id).then(setPurchases)
-    }).catch(e => setErr(String(e)))
-  }, [receiptId])
-
-  const run = (p: Promise<ReceiptCockpit>) => {
-    setBusy(true); setErr(null)
-    p.then(next => { setC(next); onChanged() })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
-  const del = () => {
-    if (!c || !confirm('Удалить поставку (УПД)? Рождённые партии будут сняты. Действие необратимо.')) return
-    setBusy(true); setErr(null)
-    api.deleteReceipt(c.id).then(() => onDeleted())
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+    receiptId, api.receipt, {
+      onChanged, onDeleted,
+      onLoad: c => { api.projectPurchases(c.project_id).then(setPurchases) },
+      remove: api.deleteReceipt,
+      confirmDelete: 'Удалить поставку (УПД)? Рождённые партии будут сняты. Действие необратимо.',
+    })
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>

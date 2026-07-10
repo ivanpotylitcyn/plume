@@ -3,11 +3,11 @@
 // нет, лот покидает учёт. Строка = списываем свою партию; добавление/правка/
 // удаление автосейвом. Замка нет (у Writeoff нет поля статуса) — правимо всегда;
 // корректность — «списываем только своё» + пересписание в минус информативно (▲).
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, type AvailableLot, type WriteoffCockpit,
   type WriteoffCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { FormHeader, useOrderCockpit } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -17,37 +17,14 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
   onChanged: () => void
   onDeleted: () => void
 }) {
-  const [c, setC] = useState<WriteoffCockpit | null>(null)
   const [lots, setLots] = useState<AvailableLot[]>([])
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
-
-  const reloadLots = (projectId: number) =>
-    api.projectAvailableLots(projectId).then(setLots)
-
-  useEffect(() => {
-    setC(null); setErr(null)
-    api.writeoff(writeoffId).then(c => {
-      setC(c)
-      reloadLots(c.project_id)
-    }).catch(e => setErr(String(e)))
-  }, [writeoffId])
-
-  const run = (p: Promise<WriteoffCockpit>) => {
-    setBusy(true); setErr(null)
-    p.then(next => { setC(next); reloadLots(next.project_id); onChanged() })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
-  const del = () => {
-    if (!c || !confirm('Удалить списание? Действие необратимо.')) return
-    setBusy(true); setErr(null)
-    api.deleteWriteoff(c.id).then(() => onDeleted())
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+    writeoffId, api.writeoff, {
+      onChanged, onDeleted,
+      onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
+      remove: api.deleteWriteoff,
+      confirmDelete: 'Удалить списание? Действие необратимо.',
+    })
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>

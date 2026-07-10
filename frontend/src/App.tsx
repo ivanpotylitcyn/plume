@@ -12,15 +12,10 @@ import { DeficitView } from './DeficitView'
 import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
 import { ItemView } from './ItemView'
-import { KittingView } from './KittingView'
-import { ReceiptView } from './ReceiptView'
 import { PurchaseView, PURCH_ST } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
-import { TransferView } from './TransferView'
-import { WriteoffView } from './WriteoffView'
-import { RequisitionView } from './RequisitionView'
-import { InventoryView } from './InventoryView'
+import { OrderForm, type OrderKind } from './OrderForm'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
@@ -47,7 +42,7 @@ type Sel =
 
 // Виды ордера (единый режим). Порядок = поток жизненного цикла
 // (приёмка → сборка → выбытие → сверка); label — подпись типа в списке и форме.
-type OrderKind = 'receipt' | 'kitting' | 'transfer' | 'requisition' | 'writeoff' | 'inventory'
+// Тип `OrderKind` — из ./OrderForm (там же диспетчер detail-формы).
 const ORDER_KINDS: { kind: OrderKind; label: string }[] = [
   { kind: 'receipt',     label: 'Поставка' },
   { kind: 'kitting',     label: 'Комплектация' },
@@ -222,6 +217,11 @@ export default function App() {
     ({ receipt: openReceipt, kitting: openKitting, transfer: openTransfer,
       requisition: openRequisition, writeoff: openWriteoff, inventory: openInventory }[e.kind])(e.id)
   }
+  // Ф2i: перезагрузить фид нужного вида ордера — единый колбэк для <OrderForm>.
+  const reloadOrderKind = (k: OrderKind) => ({
+    receipt: reloadReceipts, kitting: reloadKittings, transfer: reloadTransfers,
+    requisition: reloadRequisitions, writeoff: reloadWriteoffs, inventory: reloadInventories,
+  }[k])()
   // После создания в единой форме: перезагрузить нужный фид и открыть detail.
   const afterCreate: Record<OrderKind, (id: number) => void> = {
     receipt: id => { reloadReceipts(); openReceipt(id) },
@@ -362,28 +362,20 @@ export default function App() {
           openItem={openItem} onChanged={reloadItems} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
-        {sel?.kind === 'kitting' &&
-          <KittingView kittingId={sel.id} openItem={openItem} onChanged={reloadKittings}
-            onDeleted={() => { reloadKittings(); setSel(null) }} />}
-        {sel?.kind === 'receipt' &&
-          <ReceiptView receiptId={sel.id} items={items} openItem={openItem}
-            openPurchase={openPurchase} onChanged={reloadReceipts}
-            onDeleted={() => { reloadReceipts(); setSel(null) }} />}
+        {/* Ф2i: единый вход detail-формы «Ордера» вместо шести условных веток. */}
+        {sel && ORDER_SEL_KINDS.has(sel.kind) && (() => {
+          const o = sel as { kind: OrderKind; id: number }
+          return <OrderForm kind={o.kind} id={o.id} items={items}
+            openItem={openItem} openPurchase={openPurchase}
+            onChanged={() => reloadOrderKind(o.kind)}
+            onDeleted={() => { reloadOrderKind(o.kind); setSel(null) }} />
+        })()}
         {sel?.kind === 'purchase' &&
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
             openReceipt={openReceipt} onChanged={reloadPurchases} />}
         {sel?.kind === 'new-purchase' &&
           <NewPurchase projects={projects}
             onCreated={id => { reloadPurchases(); openPurchase(id) }} />}
-        {sel?.kind === 'transfer' &&
-          <TransferView transferId={sel.id} openItem={openItem} onChanged={reloadTransfers}
-            onDeleted={() => { reloadTransfers(); setSel(null) }} />}
-        {sel?.kind === 'writeoff' &&
-          <WriteoffView writeoffId={sel.id} openItem={openItem} onChanged={reloadWriteoffs}
-            onDeleted={() => { reloadWriteoffs(); setSel(null) }} />}
-        {sel?.kind === 'requisition' &&
-          <RequisitionView requisitionId={sel.id} openItem={openItem} onChanged={reloadRequisitions}
-            onDeleted={() => { reloadRequisitions(); setSel(null) }} />}
         {sel?.kind === 'command' &&
           <CommandDeficitView openItem={openItem}
             openProcurement={id => { reloadProcurements(); openProcurement(id) }} />}
@@ -393,10 +385,6 @@ export default function App() {
             onChanged={reloadProcurements} />}
         {sel?.kind === 'new-procurement' &&
           <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
-        {sel?.kind === 'inventory' &&
-          <InventoryView inventoryId={sel.id} items={items} openItem={openItem}
-            onChanged={reloadInventories}
-            onDeleted={() => { reloadInventories(); setSel(null) }} />}
         {sel?.kind === 'new-order' &&
           <NewOrder projects={projects} items={items} afterCreate={afterCreate} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}

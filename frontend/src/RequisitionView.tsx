@@ -4,11 +4,11 @@
 // любого проекта (постановка своего на баланс → белый, заём у соседнего B→A).
 // Замка нет — правимо всегда; корректность — источник ≠ получатель, один лот = одна
 // строка, потомок не потреблён ниже (guard на бэке).
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, type AllAvailableLot, type RequisitionCockpit,
   type RequisitionCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { FormHeader, useOrderCockpit } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -18,34 +18,14 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
   onChanged: () => void
   onDeleted: () => void
 }) {
-  const [c, setC] = useState<RequisitionCockpit | null>(null)
   const [lots, setLots] = useState<AllAvailableLot[]>([])
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
-
-  const reloadLots = () => api.allAvailableLots().then(setLots)
-
-  useEffect(() => {
-    setC(null); setErr(null)
-    api.requisition(requisitionId).then(c => { setC(c); reloadLots() })
-      .catch(e => setErr(String(e)))
-  }, [requisitionId])
-
-  const run = (p: Promise<RequisitionCockpit>) => {
-    setBusy(true); setErr(null)
-    p.then(next => { setC(next); reloadLots(); onChanged() })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
-  const del = () => {
-    if (!c || !confirm('Удалить требование? Действие необратимо.')) return
-    setBusy(true); setErr(null)
-    api.deleteRequisition(c.id).then(() => onDeleted())
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+    requisitionId, api.requisition, {
+      onChanged, onDeleted,
+      onLoad: () => { api.allAvailableLots().then(setLots) },
+      remove: api.deleteRequisition,
+      confirmDelete: 'Удалить требование? Действие необратимо.',
+    })
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>

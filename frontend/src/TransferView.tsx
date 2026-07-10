@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { api, type AvailableLot, type CounterpartyRow, type TransferCockpit,
   type TransferCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { FormHeader, useOrderCockpit } from './FormHeader'
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -17,40 +17,17 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
   onChanged: () => void
   onDeleted: () => void
 }) {
-  const [c, setC] = useState<TransferCockpit | null>(null)
   const [lots, setLots] = useState<AvailableLot[]>([])
   const [customers, setCustomers] = useState<CounterpartyRow[]>([])
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
-
   useEffect(() => { api.counterparties('customer').then(setCustomers) }, [])
 
-  const reloadLots = (projectId: number) =>
-    api.projectAvailableLots(projectId).then(setLots)
-
-  useEffect(() => {
-    setC(null); setErr(null)
-    api.transfer(transferId).then(c => {
-      setC(c)
-      reloadLots(c.project_id)
-    }).catch(e => setErr(String(e)))
-  }, [transferId])
-
-  const run = (p: Promise<TransferCockpit>) => {
-    setBusy(true); setErr(null)
-    p.then(next => { setC(next); reloadLots(next.project_id); onChanged() })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
-  const del = () => {
-    if (!c || !confirm('Удалить передачу (накладную)? Действие необратимо.')) return
-    setBusy(true); setErr(null)
-    api.deleteTransfer(c.id).then(() => onDeleted())
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+    transferId, api.transfer, {
+      onChanged, onDeleted,
+      onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
+      remove: api.deleteTransfer,
+      confirmDelete: 'Удалить передачу (накладную)? Действие необратимо.',
+    })
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>

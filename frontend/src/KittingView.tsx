@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Cockpit, type CockpitRow } from './api'
 import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+import { FormHeader, useOrderCockpit } from './FormHeader'
 import { Glyph, Segment, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -16,31 +16,12 @@ const KIT_STATUS: Record<string, string> = {
 export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
   { kittingId: number; openItem: (id: number) => void; onChanged: () => void
     onDeleted: () => void }) {
-  const [c, setC] = useState<Cockpit | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
-
-  useEffect(() => {
-    setC(null); setErr(null)
-    api.kitting(kittingId).then(setC).catch(e => setErr(String(e)))
-  }, [kittingId])
-
-  // Обёртка мутации: заменяет кокпит ответом сервера, дёргает обновление дерева.
-  const run = (p: Promise<Cockpit>) => {
-    setBusy(true); setErr(null)
-    p.then(next => { setC(next); onChanged() })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
-  const del = () => {
-    if (!c || !confirm('Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.')) return
-    setBusy(true); setErr(null)
-    api.deleteKitting(c.id).then(() => onDeleted())
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+    kittingId, api.kitting, {
+      onChanged, onDeleted,
+      remove: api.deleteKitting,
+      confirmDelete: 'Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.',
+    })
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
