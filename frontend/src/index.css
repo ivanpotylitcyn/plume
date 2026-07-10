@@ -102,6 +102,7 @@ body { overflow: hidden; }
 .ci-search::before       { content: '\ea6d'; }
 .ci-sign-out::before     { content: '\ea6e'; }
 .ci-package::before      { content: '\eb29'; }
+.ci-database::before     { content: '\eb2c'; }  /* склад (место хранения) */
 .ci-rocket::before       { content: '\eb44'; }  /* изделие (device) */
 .ci-chip::before         { content: '\ec19'; }  /* компонент (component) */
 .ci-beaker::before       { content: '\ea79'; }  /* материал (material) */

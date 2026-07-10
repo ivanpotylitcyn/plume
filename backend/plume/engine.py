@@ -273,6 +273,80 @@ def lot_locations(lot):
     return rows
 
 
+# ── Место хранения как сущность (волна 13 Ф4): что лежит на складе + правка ДНК ──
+def location_stock(location):
+    """Лоты с живым остатком > 0 на данном месте хранения (В13 Ф4).
+
+    Инверсия `lot_locations` («где лежит лот») → «что лежит на этом складе», с
+    проектом-владельцем каждого лота (проект — свойство лота, живёт всю жизнь).
+    Агрегат движений `(лот)` на этой локации; отрицательные/нулевые прячем —
+    показываем физически присутствующее.
+    """
+    agg = (models.StockMovement.objects.filter(location=location)
+           .values('lot').annotate(q=Sum('qty')).order_by('lot'))
+    lot_ids = [r['lot'] for r in agg if r['q'] and r['q'] > 0]
+    lots = {lot.id: lot for lot in models.Lot.objects
+            .filter(id__in=lot_ids).select_related('item', 'project')}
+    rows = []
+    for r in agg:
+        if not r['q'] or r['q'] <= 0:
+            continue
+        lot = lots.get(r['lot'])
+        if lot is None:
+            continue
+        rows.append({
+            'lot_id': lot.id, 'lot_label': _lot_label(lot),
+            'part_number': lot.part_number, 'lot_name': lot.lot_name,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_name': lot.item.name, 'uom': lot.item.uom, 'qty': r['q'],
+            'project_id': lot.project_id, 'project_code': lot.project.code,
+            'project_name': lot.project.name,
+        })
+    return rows
+
+
+def location_cockpit(location):
+    """Проекция экрана склада: ДНК (код/название/вид) + что на нём лежит."""
+    return {
+        'id': location.id, 'code': location.code, 'name': location.name,
+        'kind': location.kind, 'stock': location_stock(location),
+    }
+
+
+def create_location(code, name, kind=''):
+    """Завести место хранения (В13 Ф4). Код уникален (дружелюбная проверка до IntegrityError)."""
+    code = (code or '').strip()
+    name = (name or '').strip()
+    if not code:
+        raise ValidationError('Нужен код места хранения.')
+    if not name:
+        raise ValidationError('Нужно название места хранения.')
+    if models.Location.objects.filter(code=code).exists():
+        raise ValidationError('Место с таким кодом уже есть.')
+    return models.Location.objects.create(code=code, name=name, kind=(kind or '').strip())
+
+
+def update_location(location, code=None, name=None, kind=None):
+    """Правка ДНК места хранения (В13 Ф4) — мутабельная, под интерфейсным замком.
+    Часовые `None` (поле не передано); пустой код/название отклоняем."""
+    if code is not None:
+        code = code.strip()
+        if not code:
+            raise ValidationError('Код места хранения обязателен.')
+        if models.Location.objects.filter(code=code).exclude(pk=location.pk).exists():
+            raise ValidationError('Место с таким кодом уже есть.')
+        location.code = code
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValidationError('Название места хранения обязательно.')
+        location.name = name
+    if kind is not None:
+        location.kind = kind.strip()
+    location.save()
+    return location
+
+
 def item_available(item, project, location=None):
     """Доступный остаток Item в проекте — Σ живых остатков своих лотов.
 
@@ -1940,6 +2014,19 @@ def update_requisition(requisition, number=None, date=None, user=_UNSET, project
     return _apply(requisition, {'number': number and number.strip(), 'date': date})
 
 
+def update_relocation(relocation, number=None, date=None, user=_UNSET, project=_UNSET):
+    """Правка шапки перемещения (№ / дата / автор / проект-якорь). Только черновик (замок).
+
+    Проект — якорь (`_set_project`): у перемещения строки-ходы ссылаются на лоты этого
+    же проекта, поэтому сменить его можно лишь у пустого ордера."""
+    _require_draft(relocation)
+    _require_number(number)
+    _require_date(date)
+    _set_author(relocation, user)
+    _set_project(relocation, project)
+    return _apply(relocation, {'number': number and number.strip(), 'date': date})
+
+
 def update_kitting(kitting, qty=None, date=None, user=_UNSET, project=_UNSET,
                    target_item=_UNSET):
     """Правка шапки комплектации (кол-во образцов / дата / автор / проект / цель). Только «в работе».
@@ -2744,6 +2831,7 @@ ATTACHMENT_OWNER_MODELS = {
     'item': models.Item, 'receipt': models.Receipt, 'transfer': models.Transfer,
     'kitting': models.Kitting, 'inventory': models.Inventory,
     'writeoff': models.Writeoff, 'requisition': models.Requisition,
+    'relocation': models.Relocation,
 }
 
 

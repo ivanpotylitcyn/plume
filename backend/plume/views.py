@@ -193,6 +193,43 @@ def projects(request):
     return Response([_project_row(p) for p in models.Project.objects.all()])
 
 
+def _location_row(loc):
+    return {'id': loc.id, 'code': loc.code, 'name': loc.name, 'kind': loc.kind}
+
+
+@api_view(['GET', 'POST'])
+def locations(request):
+    """Справочник мест хранения: список / создание (В13 Ф3 — пикер перемещения;
+    Ф4 — сущность «Склады»). POST заводит новое место (код уникален)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            loc = engine.create_location(d.get('code'), d.get('name'),
+                                         kind=d.get('kind') or '')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(_location_row(loc), status=http.HTTP_201_CREATED)
+    return Response([_location_row(loc) for loc in models.Location.objects.all()])
+
+
+@api_view(['GET', 'PATCH'])
+def location_detail(request, pk):
+    """Экран склада (В13 Ф4): ДНК + что на нём лежит. PATCH — правка кода/названия/вида
+    под интерфейсным замком (мутабельная ДНК). Удаления нет — склад с движениями бережём."""
+    loc = get_object_or_404(models.Location, pk=pk)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_location(
+                loc,
+                code=d['code'] if 'code' in d else None,
+                name=d['name'] if 'name' in d else None,
+                kind=d['kind'] if 'kind' in d else None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.location_cockpit(loc))
+
+
 def _item_row(i):
     return {'id': i.id, 'code': i.code, 'name': i.name, 'kind': i.kind,
             'uom': i.uom, 'is_manufactured': i.is_manufactured}
@@ -904,6 +941,131 @@ def project_available_lots(request, pk):
     """Лоты проекта с остатком > 0 — пикер строки передачи/списания."""
     project = get_object_or_404(models.Project, pk=pk)
     return Response(engine.project_available_lots(project))
+
+
+# --------------------------------------------------------------------------- #
+#  Перемещение / Relocation (В13 Ф3): ход лота между местами хранения.
+#  Ход = пара знаковых строк (−q@источник, +q@приёмник), ключ хода — лот.
+# --------------------------------------------------------------------------- #
+def _relocation_row(r):
+    """Строка списка перемещений для смешанного дерева ордеров."""
+    return {
+        'id': r.id, 'number': r.number, 'date': r.date,
+        'project_code': r.project.code, 'posted': r.is_posted,
+        'lines': r.lines.count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def relocations(request):
+    """Список перемещений (дерево) / создание нового (внутри проекта)."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            project = models.Project.objects.get(pk=d['project_id'])
+            r = engine.create_relocation(
+                project, _actor(request), d.get('number') or '',
+                date=d.get('date') or timezone.localdate())
+        except (KeyError, models.Project.DoesNotExist) as e:
+            return _bad(f'Нужны project_id, number ({e}).')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.relocation_cockpit(r), status=http.HTTP_201_CREATED)
+
+    rows = [_relocation_row(r) for r in models.Relocation.objects
+            .select_related('project').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def relocation_detail(request, pk):
+    """Кокпит перемещения: ходы (лот, откуда→куда, кол-во) + остатки по местам.
+    PATCH — правка шапки (№ / дата / автор / проект-якорь). DELETE — удаление."""
+    r = get_object_or_404(models.Relocation, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(r)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_relocation(
+                r, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None,
+                user=_resolve_author(d), project=_resolve_project(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.relocation_cockpit(r))
+
+
+@api_view(['POST'])
+def relocation_lines(request, pk):
+    """Добавить ход перемещения — лот из места-источника в место-приёмник."""
+    r = get_object_or_404(models.Relocation, pk=pk)
+    d = request.data
+    try:
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        frm = models.Location.objects.get(pk=d['from_location_id'])
+        to = models.Location.objects.get(pk=d['to_location_id'])
+        engine.add_relocation_line(r, lot, _dec(d.get('qty')), frm, to)
+    except (KeyError, models.Lot.DoesNotExist,
+            models.Location.DoesNotExist) as e:
+        return _bad(f'Нужны lot_id, qty, from_location_id, to_location_id ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.relocation_cockpit(r), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def relocation_line_detail(request, pk, lot_pk):
+    """Автосейв хода (кол-во/места) (PATCH) / удаление хода (DELETE). Ключ хода — лот."""
+    r = get_object_or_404(models.Relocation, pk=pk)
+    lot = get_object_or_404(models.Lot, pk=lot_pk)
+    try:
+        if request.method == 'DELETE':
+            engine.remove_relocation_line(r, lot)
+        else:
+            d = request.data
+            frm = (models.Location.objects.get(pk=d['from_location_id'])
+                   if d.get('from_location_id') else None)
+            to = (models.Location.objects.get(pk=d['to_location_id'])
+                  if d.get('to_location_id') else None)
+            engine.update_relocation_line(
+                r, lot, qty=_dec(d['qty']) if 'qty' in d else None,
+                from_location=frm, to_location=to)
+    except models.Location.DoesNotExist:
+        return _bad('Место хранения не найдено.')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.relocation_cockpit(r))
+
+
+@api_view(['POST'])
+def relocation_post(request, pk):
+    """Провести перемещение — форма read-only (мягкий замок)."""
+    r = get_object_or_404(models.Relocation, pk=pk)
+    try:
+        engine.post_relocation(r)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.relocation_cockpit(r))
+
+
+@api_view(['POST'])
+def relocation_unpost(request, pk):
+    """Снять замок перемещения — снова разрешить правку."""
+    r = get_object_or_404(models.Relocation, pk=pk)
+    engine.unpost_relocation(r)
+    return Response(engine.relocation_cockpit(r))
+
+
+@api_view(['GET'])
+def relocation_source_lots(request, pk):
+    """Лоты проекта перемещения с остатком > 0 (с разбивкой по местам) — пикер хода."""
+    r = get_object_or_404(models.Relocation, pk=pk)
+    return Response(engine.relocation_source_lots(r.project))
 
 
 # --------------------------------------------------------------------------- #

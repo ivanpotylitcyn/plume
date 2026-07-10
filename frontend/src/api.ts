@@ -213,6 +213,44 @@ export interface RequisitionCockpit extends Authored {
   posted: boolean; total_qty: number; lines: RequisitionCockpitLine[]
 }
 
+// ── Место хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
+export interface LocationRow { id: number; code: string; name: string; kind: string }
+export interface LocationStockLot {
+  lot_id: number; lot_label: string; part_number: string; lot_name: string
+  item_id: number; item_code: string; item_name: string; uom: string; qty: number
+  project_id: number; project_code: string; project_name: string
+}
+export interface LocationCockpit {
+  id: number; code: string; name: string; kind: string
+  stock: LocationStockLot[]
+}
+
+// ── Перемещение / Relocation (волна 13 Ф3 — записываемое ядро) ──
+export interface RelocationRow {
+  id: number; number: string; date: string; project_code: string
+  posted: boolean; lines: number
+}
+export interface RelocationMove {
+  lot_id: number; lot_label: string; item_id: number; item_code: string
+  item_name: string; uom: string; qty: number
+  from_location_id: number | null; from_location: string
+  to_location_id: number | null; to_location: string
+  from_live_qty: number; to_live_qty: number
+}
+export interface RelocationCockpit extends Authored {
+  id: number; number: string; date: string
+  project_id: number; project_code: string; project_name: string
+  posted: boolean; total_qty: number; moves: RelocationMove[]
+}
+export interface LotLocation {
+  location_id: number; code: string; name: string; qty: number
+}
+export interface RelocationSourceLot {
+  lot_id: number; item_id: number; item_code: string; item_name: string; uom: string
+  live_qty: number; part_number: string; lot_name: string
+  by_location: LotLocation[]
+}
+
 // ── Инвентаризация / Inventory (волна 9 — записываемое ядро) ──
 export interface InventoryRow {
   id: number; number: string; date: string; project_code: string
@@ -535,6 +573,35 @@ export const api = {
   unpostInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/unpost/`),
   deleteInventory: (id: number) => send<void>('DELETE', `/api/inventories/${id}/`),
   writtenOffLots: () => get<WrittenOffLot[]>('/api/written-off-lots/'),
+
+  // ── Места хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
+  locations: () => get<LocationRow[]>('/api/locations/'),
+  location: (id: number) => get<LocationCockpit>(`/api/locations/${id}/`),
+  createLocation: (b: { code: string; name: string; kind?: string }) =>
+    send<LocationRow>('POST', '/api/locations/', b),
+  updateLocation: (id: number, b: Partial<{ code: string; name: string; kind: string }>) =>
+    send<LocationCockpit>('PATCH', `/api/locations/${id}/`, b),
+
+  // ── Перемещение / Relocation (волна 13 Ф3) ──
+  relocations: () => get<RelocationRow[]>('/api/relocations/'),
+  relocation: (id: number) => get<RelocationCockpit>(`/api/relocations/${id}/`),
+  updateRelocation: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number }>) =>
+    send<RelocationCockpit>('PATCH', `/api/relocations/${id}/`, b),
+  createRelocation: (b: { project_id: number; number: string; date?: string }) =>
+    send<RelocationCockpit>('POST', '/api/relocations/', b),
+  addRelocationLine: (id: number, b: {
+    lot_id: number; qty: number; from_location_id: number; to_location_id: number
+  }) => send<RelocationCockpit>('POST', `/api/relocations/${id}/lines/`, b),
+  updateRelocationLine: (id: number, lotId: number, b: Partial<{
+    qty: number; from_location_id: number; to_location_id: number
+  }>) => send<RelocationCockpit>('PATCH', `/api/relocations/${id}/lines/${lotId}/`, b),
+  deleteRelocationLine: (id: number, lotId: number) =>
+    send<RelocationCockpit>('DELETE', `/api/relocations/${id}/lines/${lotId}/`),
+  postRelocation: (id: number) => send<RelocationCockpit>('POST', `/api/relocations/${id}/post/`),
+  unpostRelocation: (id: number) => send<RelocationCockpit>('POST', `/api/relocations/${id}/unpost/`),
+  deleteRelocation: (id: number) => send<void>('DELETE', `/api/relocations/${id}/`),
+  relocationSourceLots: (id: number) =>
+    get<RelocationSourceLot[]>(`/api/relocations/${id}/source-lots/`),
 
   // ── Планирование закупок (волна 7) ──
   commandDeficit: () => get<CommandDeficit>('/api/command-deficit/'),

@@ -9,10 +9,12 @@ import { TransferView } from './TransferView'
 import { WriteoffView } from './WriteoffView'
 import { RequisitionView } from './RequisitionView'
 import { InventoryView } from './InventoryView'
+import { RelocationView } from './RelocationView'
 
 // Виды ордера, у которых есть detail-форма (единый режим «Ордера»).
 export type OrderKind =
   | 'receipt' | 'kitting' | 'transfer' | 'requisition' | 'writeoff' | 'inventory'
+  | 'relocation'
 
 export function OrderForm({ kind, id, items, openItem, openPurchase, onChanged, onDeleted }: {
   kind: OrderKind
@@ -41,6 +43,9 @@ export function OrderForm({ kind, id, items, openItem, openPurchase, onChanged, 
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'inventory':
       return <InventoryView inventoryId={id} items={items} openItem={openItem}
+        onChanged={onChanged} onDeleted={onDeleted} />
+    case 'relocation':
+      return <RelocationView relocationId={id} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
   }
 }

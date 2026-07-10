@@ -406,8 +406,47 @@ Attachment.owner → FK(StockDocument) + Item ← 7-путная дуга схл
 - [x] ~~Авторство `user` на форме (сквозная связка #A).~~ ✅ Ф2j.
 - [x] ~~Структурные якоря ⚓ на форме (вторая связка #A): `project` (все) + `target_item`
       (Комплектация) + `procurement` (Purchase); `contractor` уже с Ф2g.~~ ✅ Ф2k.
-- [ ] Вьюхи Ф2e: HTTP + React-форма перемещения (комплектовщик собирает ход из целых
-      лотов) + справочник `Location`.
+- [x] ~~Вьюхи Ф2e: HTTP + React-форма перемещения + справочник `Location`.~~ →
+      **разбито на Ф3 (перемещение ✅) + Ф4 (склад-сущность ✅), 2026-07-10.**
+
+### Ф3 — вьюхи перемещения (`relocation`): HTTP + React ✅ 2026-07-10
+Истинный остаток Ф2e — движок/модель готовы с Ф2e, не хватало только HTTP+React слоя.
+- [x] **Бэкенд-HTTP:** эндпойнты жизненного цикла relocation по образцу Transfer —
+      `relocations/` (list+create), `relocations/<pk>/` (detail+PATCH-шапка+DELETE),
+      `.../lines/` (add), `.../post/`, `.../unpost/`, `relocations/<pk>/lines/<lot_pk>/`
+      (update+delete хода — **ключ хода = лот**, ход это пара `−q`/`+q`),
+      `relocations/<pk>/source-lots/` (пикер лотов проекта с разбивкой по местам).
+      Плюс `locations/` read-эндпойнт (пикеры источник/приёмник). PATCH-шапка несёт
+      `user`/`project`-якорь (`update_relocation`, как прочие ордера Ф2j/k); `relocation`
+      добавлен в `ATTACHMENT_OWNER_MODELS` (панель вложений на форме).
+- [x] **Фронт-React:** `RelocationView`/`NewRelocation` (ход = целый лот + qty + место-
+      источник → место-приёмник, дефолт-источник = место с макс. остатком лота) на общем
+      `useOrderCockpit`; мягкий замок/удаление как у прочих. Проводка `'relocation'` в
+      `OrderKind`/`OrderForm`/`OrderList`/`NewOrder`/`App` (7-я строка смешанного списка,
+      палитра ⌘K). `api.ts` — типы + вызовы.
+- [x] **Проверка:** 257 тестов (было 248; +9 `Wave13Fase3HttpTests` — locations-список,
+      пикер, split-инвариант тотала, отказ одинаковых мест/чужого лота, правка/удаление
+      хода по лоту, post/unpost/delete, пустой-guard, PATCH шапки+якорь) зелёные на боевом
+      MySQL 8.0.25 **и** SQLite; `tsc -b`+`vite build` чисты; `makemigrations --check` чист
+      (схема не тронута); `seed_demo` ок (демо-ПЕР-1).
+
+### Ф4 — склад как сущность (`Location`-справочник) ✅ 2026-07-10
+Location — полноценная сущность как `Item`/`Project`: мягкий замок + мутабельная ДНК,
+своя форма, в специфичной части — «что лежит на этом складе». Секция «Склады» в сайдбаре
+рядом с Ордерами; `kind` (вид места) — свободный текст.
+- [x] **Движок:** `location_stock(location)` — лоты с остатком>0 на месте (агрегат
+      `StockMovement.filter(location=X)`, `qty>0`, инверсия `lot_locations`), с проектом-
+      владельцем/меткой/PN/остатком; `location_cockpit` (ДНК + этот список);
+      `create_location`/`update_location` (код уникален — дружелюбный guard до IntegrityError).
+- [x] **Бэкенд-HTTP:** `locations/` → GET/POST (create); `locations/<pk>/` → GET (кокпит) +
+      PATCH (правка ДНК). Удаления нет — склад с движениями бережём.
+- [x] **Фронт-React:** секция «Склады» (`ci-database`, режим рядом с Ордерами; список +
+      `NewLocation`); `LocationView` (мягкий замок §5 как `Item`, правка `code`/`name`/`kind`
+      под замком) + панель «На складе» (лоты с проектом/остатком). Палитра ⌘K.
+- [x] **Проверка:** 263 теста (было 257; +6 `Wave13Fase4Tests` — `location_stock` с проектом,
+      отражение relocation-split, create+дубль кода, update ДНК+guard, HTTP кокпит/PATCH/create)
+      зелёные на MySQL 8.0.25 **и** SQLite; `tsc`/`vite` чисты; `--check` чист (схема не тронута);
+      `seed_demo`+shell-смоук ок.
 
 ### Дисциплина
 **Модель + движок — сейчас; вьюхи — потом.** Форму комплектовщика/пайки (собрать

@@ -87,6 +87,16 @@ urlpatterns = [
     path('inventories/<int:pk>/unpost/', views.inventory_unpost, name='inventory-unpost'),
     path('inventory-lots/<int:pk>/', views.inventory_lot_detail, name='inventory-lot'),
     path('written-off-lots/', views.written_off_lots, name='written-off-lots'),
+    # перемещение / Relocation (записываемое ядро, волна 13 Ф3) + справочник мест
+    path('locations/', views.locations, name='locations'),
+    path('locations/<int:pk>/', views.location_detail, name='location-detail'),
+    path('relocations/', views.relocations, name='relocations'),
+    path('relocations/<int:pk>/', views.relocation_detail, name='relocation-detail'),
+    path('relocations/<int:pk>/lines/', views.relocation_lines, name='relocation-lines'),
+    path('relocations/<int:pk>/post/', views.relocation_post, name='relocation-post'),
+    path('relocations/<int:pk>/unpost/', views.relocation_unpost, name='relocation-unpost'),
+    path('relocations/<int:pk>/source-lots/', views.relocation_source_lots, name='relocation-source-lots'),
+    path('relocations/<int:pk>/lines/<int:lot_pk>/', views.relocation_line_detail, name='relocation-line'),
     # планирование закупок (волна 7): командный свод + записываемый Procurement + order.xlsx
     path('command-deficit/', views.command_deficit, name='command-deficit'),
     path('command-deficit/add-to-procurement/', views.command_deficit_add, name='command-deficit-add'),

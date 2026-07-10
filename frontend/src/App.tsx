@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type KittingRow, type ReceiptRow, type PurchaseRow, type CounterpartyRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
-  type InventoryRow } from './api'
+  type InventoryRow, type RelocationRow, type LocationRow } from './api'
 import { Login } from './Login'
 import { CommandPalette, type PaletteEntry } from './CommandPalette'
 import { DeficitView } from './DeficitView'
@@ -16,11 +16,12 @@ import { PurchaseView, PURCH_ST } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm, type OrderKind } from './OrderForm'
+import { LocationView } from './LocationView'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
 // создания — единые. Procurement/Purchase — вне (лотов не трогают).
-type Mode = 'projects' | 'items' | 'orders' | 'procurements' | 'purchases'
+type Mode = 'projects' | 'items' | 'orders' | 'locations' | 'procurements' | 'purchases'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'new-project' }
@@ -37,7 +38,10 @@ type Sel =
   | { kind: 'procurement'; id: number }
   | { kind: 'new-procurement' }
   | { kind: 'inventory'; id: number }
+  | { kind: 'relocation'; id: number }
   | { kind: 'new-order' }
+  | { kind: 'location'; id: number }
+  | { kind: 'new-location' }
   | null
 
 // Виды ордера (единый режим). Порядок = поток жизненного цикла
@@ -50,6 +54,7 @@ const ORDER_KINDS: { kind: OrderKind; label: string }[] = [
   { kind: 'requisition', label: 'Требование' },
   { kind: 'writeoff',    label: 'Списание' },
   { kind: 'inventory',   label: 'Инвентаризация' },
+  { kind: 'relocation',  label: 'Перемещение' },
 ]
 const ORDER_LABEL = Object.fromEntries(ORDER_KINDS.map(k => [k.kind, k.label])) as Record<OrderKind, string>
 // Ключи detail-выбора, относящиеся к ордеру (для подсветки строки в едином списке).
@@ -75,6 +80,8 @@ export default function App() {
   const [requisitions, setRequisitions] = useState<RequisitionRow[]>([])
   const [procurements, setProcurements] = useState<ProcurementRow[]>([])
   const [inventories, setInventories] = useState<InventoryRow[]>([])
+  const [relocations, setRelocations] = useState<RelocationRow[]>([])
+  const [locationRows, setLocationRows] = useState<LocationRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
@@ -94,6 +101,8 @@ export default function App() {
   const reloadRequisitions = useCallback(() => api.requisitions().then(setRequisitions), [])
   const reloadProcurements = useCallback(() => api.procurements().then(setProcurements), [])
   const reloadInventories = useCallback(() => api.inventories().then(setInventories), [])
+  const reloadRelocations = useCallback(() => api.relocations().then(setRelocations), [])
+  const reloadLocations = useCallback(() => api.locations().then(setLocationRows), [])
   const reloadProjects = useCallback(() => api.projects().then(setProjects), [])
   const reloadItems = useCallback(() => api.items().then(setItems), [])
 
@@ -125,8 +134,11 @@ export default function App() {
     reloadRequisitions()
     reloadProcurements()
     reloadInventories()
+    reloadRelocations()
+    reloadLocations()
   }, [user, reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
-      reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories])
+      reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories,
+      reloadRelocations, reloadLocations])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
   // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
@@ -191,6 +203,8 @@ export default function App() {
   const openWriteoff = (id: number) => { setMode('orders'); setSel({ kind: 'writeoff', id }) }
   const openRequisition = (id: number) => { setMode('orders'); setSel({ kind: 'requisition', id }) }
   const openInventory = (id: number) => { setMode('orders'); setSel({ kind: 'inventory', id }) }
+  const openRelocation = (id: number) => { setMode('orders'); setSel({ kind: 'relocation', id }) }
+  const openLocation = (id: number) => { setMode('locations'); setSel({ kind: 'location', id }) }
   const openPurchase = (id: number) => { setMode('purchases'); setSel({ kind: 'purchase', id }) }
   const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
 
@@ -210,17 +224,21 @@ export default function App() {
       name: w.reason, projectCode: w.project_code, posted: w.posted, date: w.date }))
     inventories.forEach(i => es.push({ kind: 'inventory', id: i.id, code: i.number,
       name: i.note, projectCode: i.project_code, posted: i.posted, date: i.date }))
+    relocations.forEach(r => es.push({ kind: 'relocation', id: r.id, code: r.number,
+      name: r.project_code, projectCode: r.project_code, posted: r.posted, date: r.date }))
     return es.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id)
-  }, [receipts, kittings, transfers, requisitions, writeoffs, inventories])
+  }, [receipts, kittings, transfers, requisitions, writeoffs, inventories, relocations])
 
   const openOrder = (e: OrderEntry) => {
     ({ receipt: openReceipt, kitting: openKitting, transfer: openTransfer,
-      requisition: openRequisition, writeoff: openWriteoff, inventory: openInventory }[e.kind])(e.id)
+      requisition: openRequisition, writeoff: openWriteoff, inventory: openInventory,
+      relocation: openRelocation }[e.kind])(e.id)
   }
   // Ф2i: перезагрузить фид нужного вида ордера — единый колбэк для <OrderForm>.
   const reloadOrderKind = (k: OrderKind) => ({
     receipt: reloadReceipts, kitting: reloadKittings, transfer: reloadTransfers,
     requisition: reloadRequisitions, writeoff: reloadWriteoffs, inventory: reloadInventories,
+    relocation: reloadRelocations,
   }[k])()
   // После создания в единой форме: перезагрузить нужный фид и открыть detail.
   const afterCreate: Record<OrderKind, (id: number) => void> = {
@@ -230,6 +248,7 @@ export default function App() {
     requisition: id => { reloadRequisitions(); openRequisition(id) },
     writeoff: id => { reloadWriteoffs(); openWriteoff(id) },
     inventory: id => { reloadInventories(); openInventory(id) },
+    relocation: id => { reloadRelocations(); openRelocation(id) },
   }
   // Ключ выбранного ордера для подсветки строки (id пересекаются между таблицами).
   const orderSelKey = sel && ORDER_SEL_KINDS.has(sel.kind) && 'id' in sel
@@ -258,9 +277,14 @@ export default function App() {
       kind: 'Заказ', open: () => openPurchase(p.id) }))
     kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.target_code, name: k.target_name,
       kind: 'Комплектация', open: () => openKitting(k.id) }))
+    relocations.forEach(r => e.push({ key: `l${r.id}`, code: r.number, name: r.project_code,
+      kind: 'Перемещение', open: () => openRelocation(r.id) }))
+    locationRows.forEach(l => e.push({ key: `loc${l.id}`, code: l.code, name: l.name,
+      kind: 'Склад', open: () => openLocation(l.id) }))
     return e
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, items, receipts, transfers, writeoffs, requisitions, inventories, purchases, kittings])
+  }, [projects, items, receipts, transfers, writeoffs, requisitions, inventories,
+      purchases, kittings, relocations, locationRows])
 
   // Гейт аутентификации: загрузка → логин → приложение.
   if (user === undefined)
@@ -305,6 +329,14 @@ export default function App() {
           <OrderList entries={orderEntries} selKey={orderSelKey}
             newSel={sel?.kind === 'new-order'} onNew={() => setSel({ kind: 'new-order' })}
             onSelect={openOrder} />}
+
+        {mode === 'locations' &&
+          <ModeList heading="Склады" newLabel="＋ Новый склад"
+            newSel={sel?.kind === 'new-location'} onNew={() => setSel({ kind: 'new-location' })}
+            selId={sel?.kind === 'location' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'location', id })}
+            rows={[...locationRows].map(l => ({ id: l.id, code: l.code, name: l.name,
+              glyph: <span className="ci ci-database" /> }))} />}
 
         {mode === 'purchases' &&
           <ModeList heading="Заказы" newLabel="＋ Новый заказ" projectFilter
@@ -387,6 +419,10 @@ export default function App() {
           <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
         {sel?.kind === 'new-order' &&
           <NewOrder projects={projects} items={items} afterCreate={afterCreate} />}
+        {sel?.kind === 'location' &&
+          <LocationView locationId={sel.id} openItem={openItem} onChanged={reloadLocations} />}
+        {sel?.kind === 'new-location' &&
+          <NewLocation onCreated={id => { reloadLocations(); openLocation(id) }} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}
       </div>
 
@@ -403,7 +439,8 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'items',        icon: 'circuit-board', title: 'Изделия — справочник, остатки, состав' },
   { mode: 'procurements', icon: 'table',         title: 'Закупки — командный свод, order.xlsx' },
   { mode: 'purchases',    icon: 'checklist',     title: 'Заказы — обязательства поставщику' },
-  { mode: 'orders',       icon: 'package',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации' },
+  { mode: 'orders',       icon: 'package',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
+  { mode: 'locations',    icon: 'database',      title: 'Склады — места хранения, что на них лежит' },
 ]
 
 // Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
@@ -557,6 +594,7 @@ function NewOrder({ projects, items, afterCreate }: {
       {kind === 'requisition' && <NewRequisition projects={projects} onCreated={afterCreate.requisition} />}
       {kind === 'writeoff' && <NewWriteoff projects={projects} onCreated={afterCreate.writeoff} />}
       {kind === 'inventory' && <NewInventory projects={projects} onCreated={afterCreate.inventory} />}
+      {kind === 'relocation' && <NewRelocation projects={projects} onCreated={afterCreate.relocation} />}
     </div>
   )
 }
@@ -996,6 +1034,93 @@ function NewInventory({ projects, onCreated }: {
         <dt>Примечание</dt>
         <dd><input className="qty-in" style={{ width: 260 }} value={note}
           placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание нового перемещения (волна 13 Ф3): проект + № + дата. Ходы (лот · откуда
+// → куда) собираются в кокпите. Перемещение двигает лоты внутри проекта по местам.
+function NewRelocation({ projects, onCreated }: {
+  projects: ProjectRow[]; onCreated: (id: number) => void
+}) {
+  const [projectId, setProjectId] = useState<number | ''>(
+    projects.find(p => p.kind === 'external')?.id ?? projects[0]?.id ?? '')
+  const [number, setNumber] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!projectId || !number.trim()) { setErr('Заполните проект и №'); return }
+    setBusy(true); setErr(null)
+    api.createRelocation({ project_id: projectId, number: number.trim(), date })
+      .then(c => onCreated(c.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новое перемещение</h1>
+      <div className="subtitle">Ход лота между местами хранения · проект + № · ходы в кокпите</div>
+      <dl className="props">
+        <dt>Проект</dt>
+        <dd><select className="lot-sel" value={projectId}
+          onChange={e => setProjectId(Number(e.target.value))}>
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+        </select></dd>
+        <dt>№ перемещения</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} value={number}
+          onChange={e => setNumber(e.target.value)} /></dd>
+        <dt>Дата</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} type="date" value={date}
+          onChange={e => setDate(e.target.value)} /></dd>
+      </dl>
+      <div className="kit-actions">
+        <button className="btn" disabled={busy} onClick={create}>Создать</button>
+        {err && <span className="anomaly">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Создание нового склада (волна 13 Ф4): код + название + вид (свободный текст).
+// Что на складе лежит — заполняется движениями (приход/перемещение), не здесь.
+function NewLocation({ onCreated }: { onCreated: (id: number) => void }) {
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const create = () => {
+    if (!code.trim() || !name.trim()) { setErr('Заполните код и название'); return }
+    setBusy(true); setErr(null)
+    api.createLocation({ code: code.trim(), name: name.trim(), kind: kind.trim() || undefined })
+      .then(l => onCreated(l.id))
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div>
+      <h1 className="title">Новый склад</h1>
+      <div className="subtitle">Место хранения · код + название · вид свободным текстом</div>
+      <dl className="props">
+        <dt>Код</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} value={code}
+          placeholder="напр. 103" onChange={e => setCode(e.target.value)} /></dd>
+        <dt>Название</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={name}
+          onChange={e => setName(e.target.value)} /></dd>
+        <dt>Вид</dt>
+        <dd><input className="qty-in" style={{ width: 200 }} value={kind}
+          placeholder="необязательно" onChange={e => setKind(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>

@@ -3234,3 +3234,212 @@ class Wave13Fase2kTests(EngineTestBase):
                        content_type='application/json')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()['target_id'], dev2.id)
+
+
+class Wave13Fase3HttpTests(EngineTestBase):
+    """Волна 13 Ф3: HTTP-слой перемещения (relocation) + справочник мест.
+
+    Движок/модель готовы с Ф2e — здесь проверяем эндпойнты жизненного цикла:
+    создание → пикер лотов/мест → добавление хода → правка → провести/расфиксировать
+    → удалить. Инвариант: тотал лота сохранён (перемещение двигает распределение
+    по (лот,локация), не остаток)."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.sold = models.Location.objects.create(code='105', name='Место пайки')
+        self.item = self.make_item('R100')
+        self.lot = self.receipt_lot(self.item, self.prj, 12)  # born @ MAIN
+        self.c = Client()
+        self.c.force_login(self.user)
+
+    def _create(self):
+        r = self.c.post('/api/relocations/',
+                        {'project_id': self.prj.id, 'number': 'ПЕР-1'},
+                        content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        return r.json()['id']
+
+    def test_locations_endpoint_lists_places(self):
+        rows = self.c.get('/api/locations/').json()
+        codes = {row['code'] for row in rows}
+        self.assertEqual(codes, {'MAIN', '105'})
+
+    def test_source_lots_picker_shows_live_lot_with_breakdown(self):
+        rid = self._create()
+        rows = self.c.get(f'/api/relocations/{rid}/source-lots/').json()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['lot_id'], self.lot.id)
+        self.assertEqual(D(str(rows[0]['live_qty'])), D(12))
+        # разбивка по местам: весь остаток на MAIN
+        self.assertEqual(rows[0]['by_location'][0]['code'], 'MAIN')
+
+    def test_add_move_splits_distribution_total_preserved(self):
+        rid = self._create()
+        resp = self.c.post(f'/api/relocations/{rid}/lines/',
+                           {'lot_id': self.lot.id, 'qty': 5,
+                            'from_location_id': self.main.id,
+                            'to_location_id': self.sold.id},
+                           content_type='application/json')
+        self.assertEqual(resp.status_code, 201)
+        ck = resp.json()
+        self.assertEqual(len(ck['moves']), 1)
+        # 7 @ MAIN, 5 @ 105, тотал 12
+        self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(7))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(5))
+        self.assertEqual(engine.lot_live_qty(self.lot), D(12))
+
+    def test_same_source_and_dest_rejected(self):
+        rid = self._create()
+        resp = self.c.post(f'/api/relocations/{rid}/lines/',
+                           {'lot_id': self.lot.id, 'qty': 5,
+                            'from_location_id': self.main.id,
+                            'to_location_id': self.main.id},
+                           content_type='application/json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_foreign_project_lot_rejected(self):
+        other = models.Project.objects.create(code='P2', name='Проект 2',
+            kind=models.Project.Kind.EXTERNAL)
+        foreign = self.receipt_lot(self.item, other, 3)
+        rid = self._create()
+        resp = self.c.post(f'/api/relocations/{rid}/lines/',
+                           {'lot_id': foreign.id, 'qty': 1,
+                            'from_location_id': self.main.id,
+                            'to_location_id': self.sold.id},
+                           content_type='application/json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_update_and_delete_move_keyed_by_lot(self):
+        rid = self._create()
+        self.c.post(f'/api/relocations/{rid}/lines/',
+                    {'lot_id': self.lot.id, 'qty': 5,
+                     'from_location_id': self.main.id,
+                     'to_location_id': self.sold.id},
+                    content_type='application/json')
+        # правка кол-ва хода (ключ хода — лот)
+        upd = self.c.patch(f'/api/relocations/{rid}/lines/{self.lot.id}/',
+                          {'qty': 8}, content_type='application/json')
+        self.assertEqual(upd.status_code, 200)
+        self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(8))
+        # удаление хода → распределение вернулось (всё на MAIN)
+        rm = self.c.delete(f'/api/relocations/{rid}/lines/{self.lot.id}/')
+        self.assertEqual(rm.status_code, 200)
+        self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(12))
+
+    def test_post_unpost_delete_flow(self):
+        rid = self._create()
+        self.c.post(f'/api/relocations/{rid}/lines/',
+                    {'lot_id': self.lot.id, 'qty': 5,
+                     'from_location_id': self.main.id,
+                     'to_location_id': self.sold.id},
+                    content_type='application/json')
+        posted = self.c.post(f'/api/relocations/{rid}/post/')
+        self.assertEqual(posted.status_code, 200)
+        self.assertTrue(posted.json()['posted'])
+        # posted — удаление отклонено (сперва расфиксировать)
+        self.assertEqual(self.c.delete(f'/api/relocations/{rid}/').status_code, 400)
+        # добавление хода под замком отклонено
+        blocked = self.c.post(f'/api/relocations/{rid}/lines/',
+                              {'lot_id': self.lot.id, 'qty': 1,
+                               'from_location_id': self.main.id,
+                               'to_location_id': self.sold.id},
+                              content_type='application/json')
+        self.assertEqual(blocked.status_code, 400)
+        # расфиксировать → удалить; тотал лота цел
+        self.assertEqual(self.c.post(f'/api/relocations/{rid}/unpost/').status_code, 200)
+        self.assertEqual(self.c.delete(f'/api/relocations/{rid}/').status_code, 204)
+        self.assertFalse(models.Relocation.objects.filter(pk=rid).exists())
+        self.assertEqual(engine.lot_live_qty(self.lot), D(12))
+        self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(12))
+
+    def test_empty_relocation_cannot_be_posted(self):
+        rid = self._create()
+        resp = self.c.post(f'/api/relocations/{rid}/post/')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_header_number_and_project_anchor(self):
+        rid = self._create()
+        # № правится свободно
+        upd = self.c.patch(f'/api/relocations/{rid}/', {'number': 'ПЕР-9'},
+                          content_type='application/json')
+        self.assertEqual(upd.status_code, 200)
+        self.assertEqual(upd.json()['number'], 'ПЕР-9')
+        # проект-якорь: у пустого ордера сменить можно
+        other = models.Project.objects.create(code='P3', name='Проект 3',
+            kind=models.Project.Kind.EXTERNAL)
+        moved = self.c.patch(f'/api/relocations/{rid}/', {'project_id': other.id},
+                            content_type='application/json')
+        self.assertEqual(moved.status_code, 200)
+        self.assertEqual(moved.json()['project_id'], other.id)
+
+
+class Wave13Fase4Tests(EngineTestBase):
+    """Волна 13 Ф4: место хранения как сущность «Склады» — что на нём лежит + ДНК."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.sold = models.Location.objects.create(code='105', name='Место пайки')
+        self.item = self.make_item('R100')
+        self.lot = self.receipt_lot(self.item, self.prj, 12)  # born @ MAIN
+        self.c = Client()
+        self.c.force_login(self.user)
+
+    def test_location_stock_lists_live_lots_with_project(self):
+        rows = engine.location_stock(self.main)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['lot_id'], self.lot.id)
+        self.assertEqual(rows[0]['qty'], D(12))
+        self.assertEqual(rows[0]['project_code'], self.prj.code)
+        # второе место пусто
+        self.assertEqual(engine.location_stock(self.sold), [])
+
+    def test_location_stock_reflects_relocation_split(self):
+        rel = engine.create_relocation(self.prj, self.user, 'ПЕР-1')
+        engine.add_relocation_line(rel, self.lot, D(5), self.main, self.sold)
+        main_rows = engine.location_stock(self.main)
+        sold_rows = engine.location_stock(self.sold)
+        self.assertEqual(main_rows[0]['qty'], D(7))
+        self.assertEqual(sold_rows[0]['qty'], D(5))
+
+    def test_create_location_and_duplicate_code_rejected(self):
+        loc = engine.create_location('201', 'Архив', kind='хранилище')
+        self.assertEqual(loc.kind, 'хранилище')
+        with self.assertRaises(ValidationError):
+            engine.create_location('201', 'Дубль')
+
+    def test_update_location_dna_and_duplicate_guard(self):
+        engine.update_location(self.sold, name='Пайка-2', kind='цех')
+        self.sold.refresh_from_db()
+        self.assertEqual(self.sold.name, 'Пайка-2')
+        self.assertEqual(self.sold.kind, 'цех')
+        # код на занятый — дружелюбный отказ
+        with self.assertRaises(ValidationError):
+            engine.update_location(self.sold, code='MAIN')
+
+    def test_http_location_cockpit_and_patch(self):
+        resp = self.c.get(f'/api/locations/{self.main.id}/')
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body['code'], 'MAIN')
+        self.assertEqual(len(body['stock']), 1)
+        # PATCH вида (свободный текст)
+        patched = self.c.patch(f'/api/locations/{self.main.id}/',
+                              {'kind': 'основной'}, content_type='application/json')
+        self.assertEqual(patched.status_code, 200)
+        self.assertEqual(patched.json()['kind'], 'основной')
+
+    def test_http_create_location(self):
+        resp = self.c.post('/api/locations/',
+                          {'code': '301', 'name': 'Резерв'},
+                          content_type='application/json')
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(models.Location.objects.filter(code='301').exists())
+        # дубль кода → 400
+        dup = self.c.post('/api/locations/',
+                        {'code': '301', 'name': 'Дубль'},
+                        content_type='application/json')
+        self.assertEqual(dup.status_code, 400)
