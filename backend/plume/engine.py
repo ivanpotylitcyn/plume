@@ -84,6 +84,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Sum
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
 from . import models
@@ -345,6 +346,19 @@ def update_location(location, code=None, name=None, kind=None):
         location.kind = kind.strip()
     location.save()
     return location
+
+
+def delete_location(location):
+    """Удалить склад (WAVE14 Ф2). Домен: склад с движениями бережём — friendly-guard.
+    Ссылки — движения (`StockMovement`) и строки движения (`StockLine`), обе PROTECT;
+    пустой справочный склад сносим свободно."""
+    if (models.StockMovement.objects.filter(location=location).exists()
+            or models.StockLine.objects.filter(location=location).exists()):
+        raise ValidationError('На складе есть движения — удаление заблокировано.')
+    try:
+        location.delete()
+    except ProtectedError:
+        raise ValidationError('Склад связан с движениями — удаление заблокировано.')
 
 
 def item_available(item, project, location=None):
@@ -1121,6 +1135,23 @@ def restore_purchase(purchase):
     purchase.status = models.Purchase.Status.DRAFT
     purchase.save(update_fields=['status'])
     return purchase
+
+
+def delete_purchase(purchase):
+    """Удалить заказ (WAVE14 Ф2). Мягкий замок как у ордеров: отправленный/полученный
+    сперва вернуть в черновик (снять отправку); привязанный приход (`Receipt.purchase`,
+    SET_NULL) держит — иначе удаление молча обнулило бы ссылку у поставок. Строки
+    заказа (`PurchaseLine`) — каскад."""
+    if purchase.status not in (models.Purchase.Status.DRAFT,
+                               models.Purchase.Status.CANCELLED):
+        raise ValidationError(
+            'Заказ отправлен — сперва верните его в черновик (снимите отправку), затем удаляйте.')
+    if purchase.receipts.exists():
+        raise ValidationError('К заказу привязаны поставки (приход) — удаление заблокировано.')
+    try:
+        purchase.delete()                          # каскад: строки заказа
+    except ProtectedError:
+        raise ValidationError('Заказ связан с другими записями — удаление заблокировано.')
 
 
 def add_to_project_order(project, item, qty, user):
@@ -2230,6 +2261,22 @@ def update_procurement(procurement, date=None, note=None, user=_UNSET):
     return procurement
 
 
+def delete_procurement(procurement):
+    """Удалить закупку-план (WAVE14 Ф2). Мягкий замок: отправленную сперва вернуть в
+    черновик (снять отправку); привязанные заказы (`Purchase.procurement`, PROTECT)
+    держат — их сперва открепить/удалить. Строки плана (`ProcurementLine`) — каскад."""
+    if procurement.status not in (models.Procurement.Status.DRAFT,
+                                  models.Procurement.Status.CANCELLED):
+        raise ValidationError(
+            'Закупка отправлена — сперва верните её в черновик (снимите отправку), затем удаляйте.')
+    if procurement.purchases.exists():
+        raise ValidationError('К закупке привязаны заказы — удаление заблокировано.')
+    try:
+        procurement.delete()                       # каскад: строки закупки
+    except ProtectedError:
+        raise ValidationError('Закупка связана с другими записями — удаление заблокировано.')
+
+
 def _plan_procurements():
     """Закупки-планы = `Procurement`, записанные на командной высоте (волна 7+).
 
@@ -2686,6 +2733,32 @@ def update_item(item, changes):
     return item
 
 
+def delete_item(item):
+    """Удалить изделие из справочника (WAVE14 Ф2). Friendly-guard переводит `PROTECT`
+    в человеческий отказ вместо 500: изделие держат партии, вхождение в чужой BOM,
+    потребность проекта, строки заказа/закупки, цель комплектации. Свой состав (строки
+    BOM, где изделие — parent) и вложения — каскад; файлы вложений сносим явно, иначе
+    каскад БД осиротит их на диске (как в `delete_stock_document`)."""
+    if item.lots.exists():
+        raise ValidationError('У изделия есть партии на складе — удаление заблокировано.')
+    if item.used_in.exists():
+        raise ValidationError('Изделие входит в состав других изделий — удаление заблокировано.')
+    if item.demanded_in.exists():
+        raise ValidationError('На изделие есть потребность проекта — удаление заблокировано.')
+    if item.purchase_lines.exists():
+        raise ValidationError('Изделие есть в заказах — удаление заблокировано.')
+    if item.kittings.exists():
+        raise ValidationError('Изделие — цель комплектации — удаление заблокировано.')
+    if models.ProcurementLine.objects.filter(item=item).exists():
+        raise ValidationError('Изделие есть в закупках-планах — удаление заблокировано.')
+    for att in item.attachments.all():             # физические файлы (каскад их сиротит)
+        delete_attachment(att)
+    try:
+        item.delete()                              # каскад: свои строки BOM (parent)
+    except ProtectedError:
+        raise ValidationError('Изделие связано с другими записями — удаление заблокировано.')
+
+
 def create_project(code, name, budget=None, started_at=None):
     """Создать внешний проект (НИР/контракт) из мини-формы «＋ Новый». Код уникален.
 
@@ -2734,6 +2807,26 @@ def update_project(project, changes):
     if fields:
         project.save(update_fields=fields)
     return project
+
+
+def delete_project(project):
+    """Удалить проект (WAVE14 Ф2) — только пустой (решение Ивана): внутренние склады
+    неудаляемы (системные синглтоны); непустой проект уходит из жизни закрытием, не
+    удалением. Держат: лоты, заказы, потребности; ссылку из ордеров (StockDocument.
+    project PROTECT) ловит catch-all — переводим в человеческий отказ вместо 500."""
+    if project.kind in models.Project.INTERNAL_KINDS:
+        raise ValidationError('Внутренний склад удалять нельзя — это системный проект.')
+    if project.lots.exists():
+        raise ValidationError(
+            'В проекте есть партии — удаление заблокировано; закройте проект закрывающими документами.')
+    if project.purchases.exists():
+        raise ValidationError('К проекту привязаны заказы — удаление заблокировано.')
+    if project.demands.exists():
+        raise ValidationError('В проекте есть потребности (приборы) — сперва уберите их.')
+    try:
+        project.delete()
+    except ProtectedError:
+        raise ValidationError('Проект связан с документами — удаление заблокировано; закройте проект.')
 
 
 # --------------------------------------------------------------------------- #

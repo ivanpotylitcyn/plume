@@ -383,7 +383,8 @@ export default function App() {
             <DeficitView key={`deficit-${sel.id}`} projectId={sel.id} items={items}
               closed={p?.status === 'closed'} openItem={openItem}
               openPurchase={id => { reloadPurchases(); openPurchase(id) }}
-              onChanged={reloadProjects} />
+              onChanged={reloadProjects}
+              onDeleted={() => { reloadProjects(); setSel(null) }} />
             <ClosurePanel key={`closure-${sel.id}`} projectId={sel.id} openItem={openItem}
               onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }} />
           </>
@@ -391,7 +392,8 @@ export default function App() {
         {sel?.kind === 'new-project' &&
           <NewProject onCreated={id => { reloadProjects(); openProject(id) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
-          openItem={openItem} onChanged={reloadItems} />}
+          openItem={openItem} onChanged={reloadItems}
+          onDeleted={() => setSel(null)} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
         {/* Ф2i: единый вход detail-формы «Ордера» вместо шести условных веток. */}
@@ -404,7 +406,8 @@ export default function App() {
         })()}
         {sel?.kind === 'purchase' &&
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
-            openReceipt={openReceipt} onChanged={reloadPurchases} />}
+            openReceipt={openReceipt} onChanged={reloadPurchases}
+            onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'new-purchase' &&
           <NewPurchase projects={projects}
             onCreated={id => { reloadPurchases(); openPurchase(id) }} />}
@@ -414,13 +417,15 @@ export default function App() {
         {sel?.kind === 'procurement' &&
           <ProcurementView procurementId={sel.id} items={items} openItem={openItem}
             openPurchase={id => { reloadPurchases(); openPurchase(id) }}
-            onChanged={reloadProcurements} />}
+            onChanged={reloadProcurements}
+            onDeleted={() => { reloadProcurements(); setSel(null) }} />}
         {sel?.kind === 'new-procurement' &&
           <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
         {sel?.kind === 'new-order' &&
           <NewOrder projects={projects} items={items} afterCreate={afterCreate} />}
         {sel?.kind === 'location' &&
-          <LocationView locationId={sel.id} openItem={openItem} onChanged={reloadLocations} />}
+          <LocationView locationId={sel.id} openItem={openItem} onChanged={reloadLocations}
+            onDeleted={() => { reloadLocations(); setSel(null) }} />}
         {sel?.kind === 'new-location' &&
           <NewLocation onCreated={id => { reloadLocations(); openLocation(id) }} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}

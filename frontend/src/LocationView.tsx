@@ -9,10 +9,11 @@ import { num } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { CommitInput } from './ReceiptView'
 
-export function LocationView({ locationId, openItem, onChanged }: {
+export function LocationView({ locationId, openItem, onChanged, onDeleted }: {
   locationId: number
   openItem: (id: number) => void
   onChanged?: () => void
+  onDeleted?: () => void
 }) {
   const [d, setD] = useState<LocationCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -31,6 +32,15 @@ export function LocationView({ locationId, openItem, onChanged }: {
       .finally(() => setBusy(false))
   }
 
+  // Удаление склада (WAVE14 Ф2) под замком: confirm + friendly-guard (склад с движениями).
+  const del = () => {
+    if (!d || !confirm('Удалить склад? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteLocation(d.id).then(() => { onChanged?.(); onDeleted?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !d) return <div className="empty">Ошибка: {err}</div>
   if (!d) return <div className="empty">Загрузка…</div>
 
@@ -44,6 +54,7 @@ export function LocationView({ locationId, openItem, onChanged }: {
           {d.code}{d.kind ? ` · ${d.kind}` : ''} · партий {d.stock.length}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
+        onDelete={unlocked ? del : undefined}
       />
       <dl className="props">
         <dt>Код</dt>

@@ -423,6 +423,7 @@ export const api = {
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
   updateProject: (id: number, b: Partial<{ code: string; name: string; budget: number | null; started_at: string | null }>) =>
     send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),
+  deleteProject: (id: number) => send<void>('DELETE', `/api/projects/${id}/`),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
   addDemand: (projectId: number, b: { target_item_id: number; qty: number }) =>
     send<Deficit>('POST', `/api/projects/${projectId}/demands/`, b),
@@ -435,6 +436,7 @@ export const api = {
   updateItem: (id: number, b: Partial<{ code: string; name: string; kind: string;
     uom: string; is_manufactured: boolean; estimated_cost: number | null }>) =>
     send<ItemDetail>('PATCH', `/api/items/${id}/`, b),
+  deleteItem: (id: number) => send<void>('DELETE', `/api/items/${id}/`),
   addBomLine: (itemId: number, b: { component_id: number; qty: number; position?: string }) =>
     send<ItemDetail>('POST', `/api/items/${itemId}/bom/`, b),
   updateBomLine: (lineId: number, b: Partial<{ qty: number; position: string }>) =>
@@ -487,6 +489,7 @@ export const api = {
   updatePurchase: (id: number, b: Partial<{ date: string; note: string; user_id: number
       project_id: number; procurement_id: number }>) =>
     send<PurchaseCockpit>('PATCH', `/api/purchases/${id}/`, b),
+  deletePurchase: (id: number) => send<void>('DELETE', `/api/purchases/${id}/`),
   createPurchase: (b: { project_id: number; date?: string; note?: string }) =>
     send<PurchaseCockpit>('POST', '/api/purchases/', b),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
@@ -581,6 +584,7 @@ export const api = {
     send<LocationRow>('POST', '/api/locations/', b),
   updateLocation: (id: number, b: Partial<{ code: string; name: string; kind: string }>) =>
     send<LocationCockpit>('PATCH', `/api/locations/${id}/`, b),
+  deleteLocation: (id: number) => send<void>('DELETE', `/api/locations/${id}/`),
 
   // ── Перемещение / Relocation (волна 13 Ф3) ──
   relocations: () => get<RelocationRow[]>('/api/relocations/'),
@@ -609,6 +613,7 @@ export const api = {
     send<{ procurement_id: number }>('POST', '/api/command-deficit/add-to-procurement/', b),
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementCockpit>(`/api/procurements/${id}/`),
+  deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
   updateProcurement: (id: number, b: Partial<{ date: string; note: string; user_id: number }>) =>
     send<ProcurementCockpit>('PATCH', `/api/procurements/${id}/`, b),
   createProcurement: (b: { note?: string; date?: string }) =>

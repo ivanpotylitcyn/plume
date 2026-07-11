@@ -17,10 +17,10 @@ export const PURCH_ST: Record<string, { label: string; cls: string; g: string }>
   cancelled: { label: 'отменён', cls: 'g-info', g: '○' },
 }
 
-export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChanged }: {
+export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChanged, onDeleted }: {
   purchaseId: number; items: ItemRow[]
   openItem: (id: number) => void; openReceipt: (id: number) => void
-  onChanged: () => void
+  onChanged: () => void; onDeleted?: () => void
 }) {
   const [c, setC] = useState<PurchaseCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -41,6 +41,16 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
       .finally(() => setBusy(false))
   }
 
+  // Удаление заказа (WAVE14 Ф2) под замком: только черновик (posted → fix-chip, без 🗑);
+  // friendly-guard бэка держит привязанный приход.
+  const del = () => {
+    if (!c || !confirm('Удалить заказ? Строки заказа будут сняты. Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deletePurchase(c.id).then(() => { onChanged(); onDeleted?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
@@ -56,6 +66,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
           {c.date && <> · {c.date}</>} · заказано {num(c.total_ordered)} · поступило {num(c.total_received)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
+        onDelete={unlocked ? del : undefined}
         fixed={fixed} fixedLabel={st.label}
         onUnfix={() => {
           if (c.status === 'sent' && confirm('Вернуть заказ в черновик?')) run(api.unsendPurchase(c.id))

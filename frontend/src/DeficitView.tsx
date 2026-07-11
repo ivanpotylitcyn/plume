@@ -9,10 +9,10 @@ import { Segment, money, num } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 
-export function DeficitView({ projectId, items, closed, openItem, openPurchase, onChanged }:
+export function DeficitView({ projectId, items, closed, openItem, openPurchase, onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; closed: boolean
     openItem: (id: number) => void; openPurchase: (id: number) => void
-    onChanged?: () => void }) {
+    onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
   const [phead, setPhead] = useState<ProjectDetail | null>(null)  // реквизиты шапки
   const [err, setErr] = useState<string | null>(null)
@@ -42,6 +42,15 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
       .finally(() => setBusy(false))
   }
 
+  // Удаление проекта (WAVE14 Ф2) под замком: только пустой (guard бэка), иначе — закрытие.
+  const del = () => {
+    if (!confirm('Удалить проект? Возможно только для пустого проекта. Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteProject(projectId).then(() => { onChanged?.(); onDeleted?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   // Мост «дефицит → заказ»: положить ▲-позицию в черновик-заказ проекта и открыть его.
   const order = (itemId: number, qty: number) => {
     setBusy(true)
@@ -64,6 +73,7 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
         name={name}
         meta={<>{code} · проект</>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
+        onDelete={unlocked ? del : undefined}
       />
       {unlocked && phead &&
         <dl className="props">

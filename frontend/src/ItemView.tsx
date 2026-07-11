@@ -21,9 +21,9 @@ function itemIcon(d: ItemDetail): string {
   return ITEM_ICON[d.kind] ?? 'chip'
 }
 
-export function ItemView({ itemId, items, openItem, onChanged }:
+export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; openItem: (id: number) => void
-    onChanged?: () => void }) {
+    onChanged?: () => void; onDeleted?: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -38,6 +38,15 @@ export function ItemView({ itemId, items, openItem, onChanged }:
   const run = (p: Promise<ItemDetail>) => {
     setBusy(true); setErr(null)
     p.then(next => { setD(next); onChanged?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  // Удаление изделия (WAVE14 Ф2) под замком: confirm + friendly-guard бэка → сброс выбора.
+  const del = () => {
+    if (!d || !confirm('Удалить изделие из справочника? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteItem(d.id).then(() => { onChanged?.(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -58,6 +67,7 @@ export function ItemView({ itemId, items, openItem, onChanged }:
           {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
+        onDelete={unlocked ? del : undefined}
       />
       <dl className="props">
         <dt>Артикул</dt>

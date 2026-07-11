@@ -92,6 +92,17 @@ def _delete_order(doc):
     return Response(status=http.HTTP_204_NO_CONTENT)
 
 
+def _friendly_delete(fn, obj):
+    """DELETE справочной сущности (WAVE14 Ф2): единый friendly-guard движка (переводит
+    `PROTECT`/домен в текст, а не 500) → 204 при успехе, 400 с текстом при отказе.
+    Сестра `_delete_order` для не-ордеров (Изделие/Склад/Заказ/Закупка/Проект)."""
+    try:
+        fn(obj)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(status=http.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def ping(request):
@@ -160,11 +171,14 @@ def _project_detail_row(p):
     return {**_project_row(p), 'budget': p.budget, 'started_at': p.started_at}
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def project_detail(request, pk):
     """Реквизиты проекта для шапки формы (GET) / правка под замком §6 (PATCH):
-    код, название, бюджет, дата начала — частичный, только присланные поля."""
+    код, название, бюджет, дата начала — частичный, только присланные поля.
+    DELETE — удаление пустого проекта (WAVE14 Ф2): непустой уходит закрытием."""
     project = get_object_or_404(models.Project, pk=pk)
+    if request.method == 'DELETE':
+        return _friendly_delete(engine.delete_project, project)
     if request.method == 'PATCH':
         d = request.data
         changes = {k: d[k] for k in ('code', 'name', 'started_at') if k in d}
@@ -212,11 +226,14 @@ def locations(request):
     return Response([_location_row(loc) for loc in models.Location.objects.all()])
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def location_detail(request, pk):
     """Экран склада (В13 Ф4): ДНК + что на нём лежит. PATCH — правка кода/названия/вида
-    под интерфейсным замком (мутабельная ДНК). Удаления нет — склад с движениями бережём."""
+    под интерфейсным замком (мутабельная ДНК). DELETE — удаление пустого склада (WAVE14
+    Ф2): склад с движениями бережём friendly-guard'ом."""
     loc = get_object_or_404(models.Location, pk=pk)
+    if request.method == 'DELETE':
+        return _friendly_delete(engine.delete_location, loc)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -331,11 +348,14 @@ def _item_detail_payload(item):
 _ITEM_TEXT_FIELDS = ('code', 'name', 'kind', 'uom', 'is_manufactured')
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def item_detail(request, pk):
     """Экран изделия: свойства + окружение из связей (where-used, лоты) + карта.
-    PATCH — правка свойств под замком формы (§6): частичный, только присланные поля."""
+    PATCH — правка свойств под замком формы (§6): частичный, только присланные поля.
+    DELETE — удаление изделия из UI (WAVE14 Ф2) под тем же замком, friendly-guard."""
     item = get_object_or_404(models.Item, pk=pk)
+    if request.method == 'DELETE':
+        return _friendly_delete(engine.delete_item, item)
     if request.method == 'PATCH':
         d = request.data
         changes = {k: d[k] for k in _ITEM_TEXT_FIELDS if k in d}
@@ -693,11 +713,14 @@ def purchases(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def purchase_detail(request, pk):
     """Кокпит заказа: строки (заказано/поступило/остаток) + связанные приходы.
-    PATCH — правка шапки (дата / примечание) прямо в кокпите."""
+    PATCH — правка шапки (дата / примечание) прямо в кокпите.
+    DELETE — удаление заказа (WAVE14 Ф2) под замком; friendly-guard (приход/отправка)."""
     p = get_object_or_404(models.Purchase, pk=pk)
+    if request.method == 'DELETE':
+        return _friendly_delete(engine.delete_purchase, p)
     if request.method == 'PATCH':
         d = request.data
         try:
@@ -1536,11 +1559,14 @@ def procurements(request):
     return Response(rows)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def procurement_detail(request, pk):
     """Кокпит закупки-плана: строки (item, qty) + итог.
-    PATCH — правка шапки (дата / примечание) прямо в кокпите."""
+    PATCH — правка шапки (дата / примечание) прямо в кокпите.
+    DELETE — удаление закупки (WAVE14 Ф2) под замком; friendly-guard (заказы/отправка)."""
     p = get_object_or_404(models.Procurement, pk=pk)
+    if request.method == 'DELETE':
+        return _friendly_delete(engine.delete_procurement, p)
     if request.method == 'PATCH':
         d = request.data
         try:

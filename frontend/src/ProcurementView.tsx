@@ -11,9 +11,10 @@ import { PURCH_ST } from './PurchaseView'
 import { PeggingPanel } from './PeggingPanel'
 import { num } from './status'
 
-export function ProcurementView({ procurementId, items, openItem, openPurchase, onChanged }: {
+export function ProcurementView({ procurementId, items, openItem, openPurchase, onChanged, onDeleted }: {
   procurementId: number; items: ItemRow[]
   openItem: (id: number) => void; openPurchase: (id: number) => void; onChanged: () => void
+  onDeleted?: () => void
 }) {
   const [c, setC] = useState<ProcurementCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -29,6 +30,16 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
   const run = (p: Promise<ProcurementCockpit>) => {
     setBusy(true); setErr(null)
     p.then(next => { setC(next); setRev(n => n + 1); onChanged() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  // Удаление закупки-плана (WAVE14 Ф2) под замком: только черновик (posted → fix-chip);
+  // friendly-guard бэка держит привязанные заказы.
+  const del = () => {
+    if (!c || !confirm('Удалить закупку-план? Строки будут сняты. Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteProcurement(c.id).then(() => { onChanged(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -49,6 +60,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
           {c.note && <> · {c.note}</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
+        onDelete={unlocked ? del : undefined}
         fixed={fixed} fixedLabel={st.label}
         onUnfix={() => {
           if (c.status === 'sent' && confirm('Вернуть закупку в черновик?')) run(api.unsendProcurement(c.id))

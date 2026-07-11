@@ -3471,3 +3471,171 @@ class Wave13Fase4Tests(EngineTestBase):
                         {'code': '301', 'name': 'Дубль'},
                         content_type='application/json')
         self.assertEqual(dup.status_code, 400)
+
+
+class EntityDeleteTests(EngineTestBase):
+    """WAVE14 Ф2: консистентное удаление справочных сущностей из UI (Изделие/Склад/
+    Заказ/Закупка/Проект) — единый friendly-guard движка, как у ордеров."""
+
+    # ── Изделие ──
+    def test_delete_item_free_when_unlinked(self):
+        it = self.make_item('FREE')
+        engine.delete_item(it)
+        self.assertFalse(models.Item.objects.filter(pk=it.pk).exists())
+
+    def test_delete_item_blocked_by_lot(self):
+        it = self.make_item('WITHLOT')
+        self.receipt_lot(it, self.prj, 5)
+        with self.assertRaises(ValidationError):
+            engine.delete_item(it)
+        self.assertTrue(models.Item.objects.filter(pk=it.pk).exists())
+
+    def test_delete_item_blocked_when_used_in_bom(self):
+        parent = self.make_item('P', manufactured=True)
+        comp = self.make_item('C')
+        engine.add_bom_line(parent, comp, D(2))
+        with self.assertRaises(ValidationError):
+            engine.delete_item(comp)                 # входит в чужой BOM
+        # родителя (свой BOM — каскад) сносим свободно
+        parent_id = parent.pk
+        engine.delete_item(parent)
+        self.assertFalse(models.Item.objects.filter(pk=parent_id).exists())
+        self.assertFalse(models.BomLine.objects.filter(parent_id=parent_id).exists())
+
+    def test_delete_item_blocked_by_demand(self):
+        dev = self.make_item('DEV', manufactured=True)
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        with self.assertRaises(ValidationError):
+            engine.delete_item(dev)
+
+    # ── Склад ──
+    def test_delete_location_free_when_empty(self):
+        loc = models.Location.objects.create(code='EMPTY', name='Пустой склад')
+        engine.delete_location(loc)
+        self.assertFalse(models.Location.objects.filter(pk=loc.pk).exists())
+
+    def test_delete_location_blocked_by_movements(self):
+        self.receipt_lot(self.make_item('X'), self.prj, 3)   # рождает движение на MAIN
+        with self.assertRaises(ValidationError):
+            engine.delete_location(self.main)
+        self.assertTrue(models.Location.objects.filter(pk=self.main.pk).exists())
+
+    # ── Заказ ──
+    def test_delete_purchase_draft_cascades_lines(self):
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, self.make_item('A'), D(4))
+        pid = p.pk
+        engine.delete_purchase(p)
+        self.assertFalse(models.Purchase.objects.filter(pk=pid).exists())
+        self.assertFalse(models.PurchaseLine.objects.filter(purchase_id=pid).exists())
+
+    def test_delete_purchase_blocked_when_sent(self):
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, self.make_item('A'), D(4))
+        engine.send_purchase(p)
+        with self.assertRaises(ValidationError):
+            engine.delete_purchase(p)                # отправлен — сперва в черновик
+
+    def test_delete_purchase_blocked_by_receipt(self):
+        p = engine.create_purchase(self.prj, self.user)
+        self.receipt_lot(self.make_item('A'), self.prj, 5, purchase=p)
+        with self.assertRaises(ValidationError):
+            engine.delete_purchase(p)                # привязан приход
+
+    # ── Закупка (план) ──
+    def test_delete_procurement_draft_free(self):
+        proc = engine.create_procurement(self.user)
+        engine.add_procurement_line(proc, self.make_item('A'), D(3))
+        pid = proc.pk
+        engine.delete_procurement(proc)
+        self.assertFalse(models.Procurement.objects.filter(pk=pid).exists())
+        self.assertFalse(models.ProcurementLine.objects.filter(procurement_id=pid).exists())
+
+    def test_delete_procurement_blocked_by_purchase(self):
+        p = engine.create_purchase(self.prj, self.user)   # авто-создаёт procurement-родителя
+        proc = p.procurement
+        with self.assertRaises(ValidationError):
+            engine.delete_procurement(proc)          # привязан заказ
+
+    # ── Проект ──
+    def test_delete_project_free_when_empty(self):
+        prj = models.Project.objects.create(
+            code='EMPTY-PRJ', name='Пустой', kind=models.Project.Kind.EXTERNAL)
+        engine.delete_project(prj)
+        self.assertFalse(models.Project.objects.filter(pk=prj.pk).exists())
+
+    def test_delete_project_blocked_by_lot(self):
+        self.receipt_lot(self.make_item('X'), self.prj, 3)
+        with self.assertRaises(ValidationError):
+            engine.delete_project(self.prj)
+
+    def test_delete_project_blocked_by_demand(self):
+        dev = self.make_item('DEV', manufactured=True)
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        with self.assertRaises(ValidationError):
+            engine.delete_project(self.prj)
+
+    def test_delete_project_internal_forbidden(self):
+        stock = models.Project.objects.create(
+            code='WHITE', name='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        with self.assertRaises(ValidationError):
+            engine.delete_project(stock)
+
+
+class EntityDeleteHttpTests(TestCase):
+    """WAVE14 Ф2: HTTP-путь DELETE справочных сущностей (204 успех / 400 friendly-guard)."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create(username='admin', is_superuser=True)
+        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.prj = models.Project.objects.create(
+            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.sup = models.Counterparty.objects.create(name='П')
+        self.c = Client()
+        self.c.force_login(self.user)
+
+    def test_item_delete_204_and_guard_400(self):
+        it = models.Item.objects.create(code='FREE', name='FREE')
+        self.assertEqual(self.c.delete(f'/api/items/{it.id}/').status_code, 204)
+        self.assertFalse(models.Item.objects.filter(pk=it.pk).exists())
+        # с лотом → 400
+        it2 = models.Item.objects.create(code='WL', name='WL')
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+            contractor=self.sup, project=self.prj, user=self.user)
+        lot = models.Lot.objects.create(item=it2, project=self.prj, origin=r, qty=D(1))
+        engine.rebuild_movements(lot)
+        self.assertEqual(self.c.delete(f'/api/items/{it2.id}/').status_code, 400)
+
+    def test_location_delete_204_and_guard_400(self):
+        loc = models.Location.objects.create(code='EMPTY', name='Пустой')
+        self.assertEqual(self.c.delete(f'/api/locations/{loc.id}/').status_code, 204)
+        r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
+            contractor=self.sup, project=self.prj, user=self.user)
+        lot = models.Lot.objects.create(
+            item=models.Item.objects.create(code='M', name='M'),
+            project=self.prj, origin=r, qty=D(1))
+        engine.rebuild_movements(lot)               # движение на MAIN
+        self.assertEqual(self.c.delete(f'/api/locations/{self.main.id}/').status_code, 400)
+
+    def test_project_delete_204_and_guard_400(self):
+        empty = models.Project.objects.create(
+            code='E', name='E', kind=models.Project.Kind.EXTERNAL)
+        self.assertEqual(self.c.delete(f'/api/projects/{empty.id}/').status_code, 204)
+        r = models.Receipt.objects.create(number='U-3', date='2026-05-01',
+            contractor=self.sup, project=self.prj, user=self.user)
+        lot = models.Lot.objects.create(
+            item=models.Item.objects.create(code='Q', name='Q'),
+            project=self.prj, origin=r, qty=D(1))
+        engine.rebuild_movements(lot)
+        self.assertEqual(self.c.delete(f'/api/projects/{self.prj.id}/').status_code, 400)
+
+    def test_purchase_delete_204(self):
+        p = engine.create_purchase(self.prj, self.user)
+        self.assertEqual(self.c.delete(f'/api/purchases/{p.id}/').status_code, 204)
+        self.assertFalse(models.Purchase.objects.filter(pk=p.pk).exists())
+
+    def test_procurement_delete_204(self):
+        proc = engine.create_procurement(self.user)
+        self.assertEqual(self.c.delete(f'/api/procurements/{proc.id}/').status_code, 204)
+        self.assertFalse(models.Procurement.objects.filter(pk=proc.pk).exists())
