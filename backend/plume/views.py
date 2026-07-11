@@ -163,11 +163,11 @@ def _project_detail_row(p):
 @api_view(['GET', 'PATCH'])
 def project_detail(request, pk):
     """Реквизиты проекта для шапки формы (GET) / правка под замком §6 (PATCH):
-    название, бюджет, дата начала — частичный, только присланные поля."""
+    код, название, бюджет, дата начала — частичный, только присланные поля."""
     project = get_object_or_404(models.Project, pk=pk)
     if request.method == 'PATCH':
         d = request.data
-        changes = {k: d[k] for k in ('name', 'started_at') if k in d}
+        changes = {k: d[k] for k in ('code', 'name', 'started_at') if k in d}
         if 'budget' in d:
             changes['budget'] = _dec(d['budget'])
         try:

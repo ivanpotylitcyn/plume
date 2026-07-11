@@ -57,15 +57,20 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
   const deviceTotal = data.demands.reduce((s, d) => s + d.qty, 0)
   const unitsTotal = data.components.reduce((s, c) => s + c.need, 0)
   const name = phead?.name ?? data.project_name
+  const code = phead?.code ?? data.project_code   // после правки кода — из phead (живо)
   return (
     <div>
       <FormHeader
         name={name}
-        meta={<>{data.project_code} · проект</>}
+        meta={<>{code} · проект</>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
       />
       {unlocked && phead &&
         <dl className="props">
+          <dt>Код</dt>
+          <dd><CommitInput value={phead.code} disabled={busy}
+            onCommit={v => runP(api.updateProject(projectId, { code: v }))}
+            validate={v => v.trim() !== ''} /></dd>
           <dt>Название</dt>
           <dd><CommitInput value={phead.name} disabled={busy}
             onCommit={v => runP(api.updateProject(projectId, { name: v }))}

@@ -2153,6 +2153,26 @@ class ItemProjectUpdateTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.update_project(self.prj, {'name': '  '})
 
+    def test_update_project_code_rename_and_guards(self):
+        # WAVE14 Ф1: код правится в форме, guard как у изделия (не PK — безопасно).
+        engine.update_project(self.prj, {'code': 'НОВ-КОД'})
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.code, 'НОВ-КОД')
+        with self.assertRaises(ValidationError):               # пустой код
+            engine.update_project(self.prj, {'code': '  '})
+        models.Project.objects.create(code='ЗАНЯТО', name='Другой')
+        with self.assertRaises(ValidationError):               # коллизия кода
+            engine.update_project(self.prj, {'code': 'ЗАНЯТО'})
+
+    def test_project_detail_patch_code(self):
+        self.c = Client()
+        self.c.force_login(self.user)
+        r = self.c.patch(f'/api/projects/{self.prj.id}/',
+                         {'code': 'ЧЕРЕЗ-API'}, content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.code, 'ЧЕРЕЗ-API')
+
     def test_project_detail_patch_endpoint(self):
         self.c = Client()
         self.c.force_login(self.user)
@@ -2970,16 +2990,24 @@ class Wave13Fase2gTests(EngineTestBase):
 
 class Wave13Fase2hTests(EngineTestBase):
     """Волна 13 Ф2h: admin-гибрид. Родитель `StockDocument` — read-only обзор «все
-    ордера» (смешанный список видов, некликабельный, без add/change/delete); правка —
-    в дочерних админках."""
+    ордера» (смешанный список видов, некликабельный, без add/change); правка —
+    в дочерних админках. Удаление РОДИТЕЛЯ делегирует правам (WAVE14 Ф0.2: нужно для
+    MTI-каскада из детей), но массовое «удалить выбранные» с витрины снято."""
 
-    def test_stockdocument_admin_read_only(self):
+    def test_stockdocument_admin_view_only_delete_delegates(self):
         from django.contrib import admin as dj_admin
+        from django.test import RequestFactory
         ma = dj_admin.site._registry[models.StockDocument]
-        self.assertFalse(ma.has_add_permission(None))
-        self.assertFalse(ma.has_change_permission(None))
-        self.assertFalse(ma.has_delete_permission(None))
-        self.assertIsNone(ma.list_display_links)   # строки некликабельны
+        su = get_user_model().objects.create_superuser('su_del', 'a@a.tld', 'x')
+        req = RequestFactory().get('/admin/'); req.user = su
+        # витрина смотровая: без add/change, строки некликабельны
+        self.assertFalse(ma.has_add_permission(req))
+        self.assertFalse(ma.has_change_permission(req))
+        self.assertIsNone(ma.list_display_links)
+        # НО удаление делегирует правам (MTI-каскад из детей): суперюзеру можно
+        self.assertTrue(ma.has_delete_permission(req))
+        # массовое «удалить выбранные» с витрины снято
+        self.assertNotIn('delete_selected', ma.get_actions(req))
 
     def test_overview_lists_all_kinds_mixed(self):
         # два разных вида ордера рождаются детьми — оба видны в родительском обзоре

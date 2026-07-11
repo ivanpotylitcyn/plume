@@ -2707,9 +2707,18 @@ def create_project(code, name, budget=None, started_at=None):
 
 
 def update_project(project, changes):
-    """Правка реквизитов проекта под замком формы (§6): название, бюджет, дата начала.
-    Код и статус (закрытие/переоткрытие) — отдельными путями, здесь не трогаем."""
+    """Правка реквизитов проекта под замком формы (§6): код, название, бюджет, дата начала.
+    Статус (закрытие/переоткрытие) — отдельным путём, здесь не трогаем. Код правим всем
+    проектам (WAVE14 Ф1): он не PK, переименование безопасно; guard как в update_item."""
     fields = []
+    if 'code' in changes:
+        code = (changes['code'] or '').strip()
+        if not code:
+            raise ValidationError('Нужен код проекта.')
+        if models.Project.objects.filter(code=code).exclude(pk=project.pk).exists():
+            raise ValidationError(f'Проект с кодом {code} уже есть.')
+        project.code = code
+        fields.append('code')
     if 'name' in changes:
         name = (changes['name'] or '').strip()
         if not name:

@@ -421,7 +421,7 @@ export const api = {
     is_manufactured?: boolean; estimated_cost?: number }) =>
     send<ItemRow>('POST', '/api/items/', b),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
-  updateProject: (id: number, b: Partial<{ name: string; budget: number | null; started_at: string | null }>) =>
+  updateProject: (id: number, b: Partial<{ code: string; name: string; budget: number | null; started_at: string | null }>) =>
     send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
   addDemand: (projectId: number, b: { target_item_id: number; qty: number }) =>
