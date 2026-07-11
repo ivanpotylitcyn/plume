@@ -209,16 +209,17 @@ body { overflow: hidden; }
 .fix-chip:hover { border-color: var(--fg-dim); color: var(--fg); }
 
 /* ---- панель свойств (узкая, пары label:value) ---- */
-.props { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px;
+.props { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;
   align-items: baseline; margin-bottom: 18px; max-width: 560px; }
-.props dt { color: var(--fg-dim); }
+.props dt { color: var(--fg-dim); text-align: right; }   /* метки по правому краю — к инпутам */
 .props dd { margin: 0; color: var(--fg); }
+/* Единая ширина полей ввода шапки: гасим пиксельные width у CommitInput/select,
+   чтобы инпуты стояли по сетке и не «плясали». Чекбоксы — исключение. */
+.props dd :is(input, select):not([type="checkbox"]) {
+  width: 260px !important; box-sizing: border-box; }
 
 /* legacy-заголовок (постепенно вытесняется .form-head) */
 h1.title { font-size: 16px; font-weight: 500; margin: 0 0 2px; color: var(--fg-bright); }
-/* шапка формы проекта: заголовок слева, замок §5 справа (реквизиты под замком) */
-.proj-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.proj-head .fh-right { padding-top: 1px; }
 h1.title .pn { font-family: var(--font-mono); }
 h1.title .lit { font-family: var(--font-base); font-weight: 400; }
 .subtitle { color: var(--fg-dim); margin-bottom: 16px; font-size: 12px; }

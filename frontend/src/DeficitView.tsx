@@ -7,7 +7,7 @@ import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDema
   type ItemRow, type ProjectDetail } from './api'
 import { Segment, money, num } from './status'
 import { CommitInput } from './ReceiptView'
-import { useFormLock } from './FormHeader'
+import { FormHeader, useFormLock } from './FormHeader'
 
 export function DeficitView({ projectId, items, closed, openItem, openPurchase, onChanged }:
   { projectId: number; items: ItemRow[]; closed: boolean
@@ -59,33 +59,25 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
   const name = phead?.name ?? data.project_name
   return (
     <div>
-      <div className="proj-head">
-        <h1 className="title"><span className="pn">{data.project_code}</span> <span className="lit">— {name}</span></h1>
-        <div className="fh-right">
-          {err
-            ? <span className="save-ind error">ошибка: {err}</span>
-            : unlocked
-              ? <span className="save-ind editing">● редактируется</span>
-              : <span className="save-ind saved">✓ сохранено</span>}
-          <button className={'lock-btn' + (unlocked ? ' open' : '')}
-            title={unlocked ? 'Форма открыта — правятся реквизиты. Закрыть'
-                            : 'Открыть правку реквизитов проекта (название, бюджет, старт)'}
-            onClick={toggle}>{unlocked ? '🔓' : '🔒'}</button>
-        </div>
-      </div>
+      <FormHeader
+        name={name}
+        meta={<>{data.project_code} · проект</>}
+        unlocked={unlocked} onToggleLock={toggle} error={err}
+      />
       {unlocked && phead &&
-        <div className="hdr-edit">
-          <label>название <CommitInput value={phead.name} width={260} disabled={busy}
+        <dl className="props">
+          <dt>Название</dt>
+          <dd><CommitInput value={phead.name} disabled={busy}
             onCommit={v => runP(api.updateProject(projectId, { name: v }))}
-            validate={v => v.trim() !== ''} /></label>
-          <label>бюджет на материалы <CommitInput
-            value={phead.budget != null ? String(phead.budget) : ''} width={120} disabled={busy}
+            validate={v => v.trim() !== ''} /></dd>
+          <dt>Бюджет на материалы</dt>
+          <dd><CommitInput value={phead.budget != null ? String(phead.budget) : ''} disabled={busy}
             onCommit={v => runP(api.updateProject(projectId, { budget: v.trim() === '' ? null : Number(v) }))}
-            validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</label>
-          <label>начат <CommitInput value={phead.started_at ?? ''} width={140} type="date"
-            disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { started_at: v || null }))} /></label>
-        </div>}
+            validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</dd>
+          <dt>Начат</dt>
+          <dd><CommitInput value={phead.started_at ?? ''} type="date" disabled={busy}
+            onCommit={v => runP(api.updateProject(projectId, { started_at: v || null }))} /></dd>
+        </dl>}
       <div className="subtitle">Проект · приборы, потребность, склад · дефицит = надо − склад − заказано (1 уровень BOM)</div>
       <BudgetPanel projectId={projectId} rev={rev} />
 

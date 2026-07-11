@@ -255,8 +255,8 @@ class Location(models.Model):
     kind = models.CharField('вид', max_length=32, blank=True, default='')
 
     class Meta:
-        verbose_name = 'место хранения'
-        verbose_name_plural = 'места хранения'
+        verbose_name = 'склад'
+        verbose_name_plural = 'склады'
         ordering = ['code']
 
     def __str__(self):
@@ -429,8 +429,8 @@ class Receipt(StockDocument):
                                  blank=True, related_name='receipts')
 
     class Meta:
-        verbose_name = 'приход (УПД)'
-        verbose_name_plural = 'приходы (УПД)'
+        verbose_name = 'поставка'
+        verbose_name_plural = 'поставки'
 
     def __str__(self):
         return f'УПД {self.number} от {self.date}'

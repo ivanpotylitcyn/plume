@@ -4,6 +4,8 @@
 формами. Витрины движка (React) — read-only поверх этого.
 """
 from django.contrib import admin
+from django.urls import reverse
+from django.utils.html import format_html
 
 from . import models
 
@@ -123,12 +125,19 @@ class PurchaseAdmin(admin.ModelAdmin):
 # менять/удалять через эту витрину нельзя — только смотреть.
 @admin.register(models.StockDocument)
 class StockDocumentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'kind', 'number', 'date', 'project', 'status', 'user')
+    list_display = ('id', 'kind', 'number', 'open_child', 'date', 'project', 'status', 'user')
     list_filter = ('kind', 'status', 'project')
     search_fields = ('number',)
     ordering = ('-id',)              # новейшие сверху — зеркалит OrderList
     list_display_links = None        # строки некликабельны: правка — в дочерних админках
     list_select_related = ('project', 'user')
+
+    @admin.display(description='форма')
+    def open_child(self, obj):
+        # Ссылка на дочернюю форму (правка/удаление). `kind` дословно = имя дочерней
+        # модели, а в MTI pk ребёнка == pk родителя → URL собираем без запроса к БД.
+        url = reverse(f'admin:plume_{obj.kind}_change', args=[obj.pk])
+        return format_html('<a href="{}">✎ открыть</a>', url)
 
     def has_add_permission(self, request):
         return False                 # вид штампует ребёнок; bare-родителя не создаём
@@ -137,7 +146,20 @@ class StockDocumentAdmin(admin.ModelAdmin):
         return False                 # витрина только для просмотра (view-perm держит список)
 
     def has_delete_permission(self, request, obj=None):
-        return False                 # удаление — из дочерней админки (guard'ы движка)
+        # ВАЖНО: разрешаем удаление РОДИТЕЛЯ. Иначе MTI-каскад из дочерней админки
+        # (удаление Перемещения/Прихода/…) блокируется: Django при сборе связанных
+        # объектов проверяет право на StockDocument, и жёсткий `False` рубит даже
+        # суперюзера («нет прав на удаление ордер»). Прямое удаление из витрины при
+        # этом закрыто иначе: строки некликабельны (list_display_links=None),
+        # change-страницы нет (has_change_permission=False), а bulk-action снят ниже.
+        return super().has_delete_permission(request, obj)
+
+    def get_actions(self, request):
+        # Витрина — «только смотреть»: убираем массовое «удалить выбранные», чтобы
+        # родителя нельзя было снести оптом в обход дочерних guard'ов движка.
+        actions = super().get_actions(request)
+        actions.pop('delete_selected', None)
+        return actions
 
 
 # --- документы-origin ----------------------------------------------------- #
