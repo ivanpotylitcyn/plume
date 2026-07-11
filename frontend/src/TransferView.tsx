@@ -50,26 +50,29 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
         error={err}
       />
 
-      <div className="hdr-edit">
-        <label>№ накладной <CommitInput value={c.number} width={140} disabled={locked || busy}
+      <dl className="props">
+        <dt>№ накладной</dt>
+        <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateTransfer(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></label>
-        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
+          validate={v => v.trim().length > 0} /></dd>
+        <dt>Дата</dt>
+        <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateTransfer(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></label>
-        <label>заказчик{' '}
+          validate={v => v.trim().length > 0} /></dd>
+        <dt>Заказчик</dt>
+        <dd>
           <select className="lot-sel" value={c.contractor_id ?? ''} disabled={locked || busy}
             onChange={e => run(api.updateTransfer(c.id, {
               contractor_id: e.target.value ? Number(e.target.value) : null }))}>
             <option value="">— не указан —</option>
             {customers.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
           </select>
-        </label>
+        </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateTransfer(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateTransfer(c.id, { project_id: id }))} />
-      </div>
+      </dl>
 
       <div className="kit-actions">
         {!fixed &&

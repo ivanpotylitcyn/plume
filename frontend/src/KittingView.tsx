@@ -49,21 +49,23 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
         error={err}
       />
 
-      <div className="hdr-edit">
-        <label>образцов <CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
+      <dl className="props">
+        <dt>Образцов</dt>
+        <dd><CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
           onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
-          validate={v => Number(v) > 0} /></label>
-        <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={locked || busy}
-          onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></label>
+          validate={v => Number(v) > 0} /></dd>
+        <dt>Дата</dt>
+        <dd><CommitInput value={c.date ?? ''} width={140} type="date" disabled={locked || busy}
+          onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { project_id: id }))} />
-        <AnchorSelect label="изделие" id={c.target_id} currentLabel={c.target_code}
+        <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
           options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.name}` }))}
           disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
-      </div>
+      </dl>
 
       <div className="kit-actions">
         {wip &&

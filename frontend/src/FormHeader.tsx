@@ -74,14 +74,18 @@ export function AuthorField({ userId, userName, disabled, onChange }: {
   const [users, setUsers] = useState<UserRow[]>([])
   useEffect(() => { loadUsers().then(setUsers) }, [])
   const known = users.some(u => u.id === userId)
+  // dt/dd-пара для сетки `.props` шапки (Ф3): подпись отдельно от контрола.
   return (
-    <label>автор{' '}
-      <select className="lot-sel" value={userId || ''} disabled={disabled}
-        onChange={e => { const v = Number(e.target.value); if (v) onChange(v) }}>
-        {!known && userId ? <option value={userId}>{userName}</option> : null}
-        {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-      </select>
-    </label>
+    <>
+      <dt>Автор</dt>
+      <dd>
+        <select className="lot-sel" value={userId || ''} disabled={disabled}
+          onChange={e => { const v = Number(e.target.value); if (v) onChange(v) }}>
+          {!known && userId ? <option value={userId}>{userName}</option> : null}
+          {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+        </select>
+      </dd>
+    </>
   )
 }
 
@@ -96,14 +100,18 @@ export function AnchorSelect({ label, id, currentLabel, options, disabled, onCha
   disabled: boolean; onChange: (id: number) => void
 }) {
   const known = options.some(o => o.id === id)
+  // dt/dd-пара для сетки `.props` шапки (Ф3): подпись-якорь отдельно от контрола.
   return (
-    <label>{label}{' '}
-      <select className="lot-sel" value={id || ''} disabled={disabled}
-        onChange={e => { const v = Number(e.target.value); if (v && v !== id) onChange(v) }}>
-        {!known && id ? <option value={id}>{currentLabel}</option> : null}
-        {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-      </select>
-    </label>
+    <>
+      <dt>{label}</dt>
+      <dd>
+        <select className="lot-sel" value={id || ''} disabled={disabled}
+          onChange={e => { const v = Number(e.target.value); if (v && v !== id) onChange(v) }}>
+          {!known && id ? <option value={id}>{currentLabel}</option> : null}
+          {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+        </select>
+      </dd>
+    </>
   )
 }
 
@@ -118,7 +126,7 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
   const [projects, setProjects] = useState<ProjectRow[]>([])
   useEffect(() => { loadProjects().then(setProjects) }, [])
   return (
-    <AnchorSelect label="проект" id={projectId} currentLabel={projectLabel}
+    <AnchorSelect label="Проект" id={projectId} currentLabel={projectLabel}
       options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.name}` }))}
       disabled={disabled} onChange={onChange} />
   )

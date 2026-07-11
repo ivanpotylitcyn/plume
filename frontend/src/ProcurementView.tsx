@@ -69,14 +69,16 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
         error={err}
       />
 
-      <div className="hdr-edit">
-        <label>дата <CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
-          onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></label>
-        <label>примечание <CommitInput value={c.note} width={240} disabled={!editable || busy}
-          onCommit={v => run(api.updateProcurement(c.id, { note: v }))} /></label>
+      <dl className="props">
+        <dt>Дата</dt>
+        <dd><CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
+          onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></dd>
+        <dt>Примечание</dt>
+        <dd><CommitInput value={c.note} width={240} disabled={!editable || busy}
+          onCommit={v => run(api.updateProcurement(c.id, { note: v }))} /></dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
-      </div>
+      </dl>
 
       <div className="kit-actions">
         {c.status === 'draft' && <>

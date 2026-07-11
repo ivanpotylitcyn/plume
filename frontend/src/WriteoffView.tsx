@@ -47,20 +47,23 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
         error={err}
       />
 
-      <div className="hdr-edit">
-        <label>№ акта <CommitInput value={c.number} width={140} disabled={locked || busy}
+      <dl className="props">
+        <dt>№ акта</dt>
+        <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></label>
-        <label>дата <CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
+          validate={v => v.trim().length > 0} /></dd>
+        <dt>Дата</dt>
+        <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></label>
-        <label>причина <CommitInput value={c.reason} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></label>
+          validate={v => v.trim().length > 0} /></dd>
+        <dt>Причина</dt>
+        <dd><CommitInput value={c.reason} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateWriteoff(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateWriteoff(c.id, { project_id: id }))} />
-      </div>
+      </dl>
 
       {!fixed &&
         <div className="kit-actions">
