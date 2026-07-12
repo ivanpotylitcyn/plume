@@ -35,7 +35,7 @@
 
 | Колонка | Смысл | → Plume |
 |---------|-------|---------|
-| `Design Item Id` | уникальный ключ Altium = **заказной** Part Number (с суффиксом упаковки) | `Item.item_id` (ключ сопоставления) |
+| `Design Item Id` | уникальный ключ Altium = **заказной** Part Number (с суффиксом упаковки) | `Item.design_item_id` (ключ сопоставления) |
 | `Comment` | PN без суффикса, печать на схеме | — (не тащим) |
 | `Description` | рус. описание | `Item.description` |
 | `Footprint/Library Path/Ref` | CAD-ссылки (часто пустые) | — (не тащим) |
@@ -51,9 +51,14 @@
 - **Синк = полная сверка**, каждая ветка под ручной галочкой; scoping «пропавших»
   **по категории** (мульти-файл = вся библиотека за раз).
 - **Переименования `Item`** (охват полный, без alias-слоя):
-  `code→item_id` («Изделие»), `name→description` («Описание»),
-  `kind→category` (FK → `Category`, «Категория»). `Item.item_id` живёт рядом с PK
-  `id` — осознанно (в API оба).
+  `code→design_item_id` («Изделие»), `name→description` («Описание»),
+  `kind→category` (FK → `Category`, «Категория»). Имя `design_item_id` выбрано
+  осознанно вместо `item_id`: `item_id` в рукописном JSON-API уже занят как Django
+  FK-PK аксессор (`lot.item_id`) и ключ payload'ов мутаций — коллизия имён.
+  `design_item_id` — дословный канон библиотеки (`Design Item Id`), конфликта нет.
+  См. JOURNAL 2026-07-12 «Грабли имени `item_id`». verbose_name поля — «Изделие».
+  **PK-ссылки (`item_id`/`target_item_id`/`component_id`) при этом НЕ трогаем** —
+  они остаются PK и в сериализации, и в payload'ах мутаций.
 - **`is_manufactured→produced`** (boolean, «Производимое»; ось ⟂ `category`).
 - **`active` — убрано, вычисляемое** («используется/спящий» через `Exists` по
   живым ссылкам). Ветка «пропал»: не используется → удалить; используется →
@@ -85,9 +90,9 @@
 
 ### Ф0 — схема и миграция
 - [ ] Модель `Category` (`code` uniq, `label`, `icon`; `__str__`, `verbose_name`).
-- [ ] `Item`: `code→item_id`, `name→description`, `kind`(enum)→`category`(FK→
-  `Category`, `PROTECT`); новое `temperature` (`CharField`, blank); `is_manufactured
-  →produced`; **удалить `active`**.
+- [ ] `Item`: `code→design_item_id` (uniq, verbose_name «Изделие»), `name→description`,
+  `kind`(enum)→`category`(FK→`Category`, `PROTECT`); новое `temperature` (`CharField`,
+  blank); `is_manufactured→produced`; **удалить `active`**.
 - [ ] Пересобрать `0001_initial` (сквош, [migrations-squash-policy]).
 - [ ] Сид: `Category` из 5 библиотечных файлов (только они). Демо-`Item` — по
   необходимости для дебага, помечать/прибирать.
@@ -95,12 +100,12 @@
 
 ### Ф1 — парсер библиотеки (чистый Python + тесты)
 - [ ] Декод CP1251, split по `;`, проверка числа колонок (8), заголовок как эталон.
-- [ ] Категория из имени файла; сборка нормализованных строк `{item_id, description,
-  temperature, category}`.
+- [ ] Категория из имени файла; сборка нормализованных строк `{design_item_id,
+  description, temperature, category}`.
 - [ ] Мульти-файл: агрегировать по категориям, для scoping «пропавших».
 
 ### Ф2 — движок дифа и применения
-- [ ] Диф против БД по ключу `item_id`: статусы `новый`/`изменился`/`совпадает`;
+- [ ] Диф против БД по ключу `design_item_id`: статусы `новый`/`изменился`/`совпадает`;
   сравнение изменения по `description`/`category`/`temperature`.
 - [ ] «Пропал» (в БД, нет в загруженных категориях): используется → `сирота`,
   не используется → `на удаление`.
@@ -119,8 +124,13 @@
 - [ ] Эндпойнт + кнопка.
 
 ### Ф5 — фронт
-- [ ] **Полный rename** во всех вьюхах/`api.ts`: `.code→.item_id`, `.name→
-  .description`, `.kind→.category`; производные ключи (`*_code`/`*_name` изделия).
+- [ ] **Полный rename** во всех вьюхах/`api.ts`. Объект **самого** изделия
+  (`ItemRow`/`ItemDetail`): `.code→.design_item_id`, `.name→.description`,
+  `.kind→.category`. Ссылочные display-ключи (лоты/строки): `*_code→*_design_item_id`,
+  `*_name→*_description` (`item_code→item_design_item_id`, `component_code→
+  component_design_item_id`, `target_code→target_design_item_id`, `parent_code→
+  parent_design_item_id`). **PK-ключи (`item_id`/`target_id`/`component_id`/`parent_id`)
+  и payload'ы мутаций — НЕ трогать** (это PK-ссылки, коллизии больше нет).
 - [ ] `kind==='device'`→`produced` в [DeficitView.tsx:271](../frontend/src/DeficitView.tsx#L271)
   и [ItemView.tsx:58](../frontend/src/ItemView.tsx#L58).
 - [ ] Отображение категории через `Category.label`/`icon` (снять хардкод-карту
