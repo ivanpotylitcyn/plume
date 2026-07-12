@@ -13,6 +13,7 @@ import { DeficitView } from './DeficitView'
 import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
 import { ItemView } from './ItemView'
+import { LibraryImportView } from './LibraryImportView'
 import { PurchaseView, PURCH_ST } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
@@ -28,6 +29,7 @@ type Sel =
   | { kind: 'new-project' }
   | { kind: 'item'; id: number }
   | { kind: 'new-item' }
+  | { kind: 'library-sync' }
   | { kind: 'kitting'; id: number }
   | { kind: 'receipt'; id: number }
   | { kind: 'purchase'; id: number }
@@ -323,6 +325,12 @@ export default function App() {
             newSel={sel?.kind === 'new-item'} onNew={() => setSel({ kind: 'new-item' })}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
+            extraTop={
+              <div className={'tree-item' + (sel?.kind === 'library-sync' ? ' sel' : '')}
+                onClick={() => setSel({ kind: 'library-sync' })}>
+                <span className="ci ci-sync" />
+                <span className="code">Синхронизация с библиотекой</span>
+              </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
               id: i.id, code: i.design_item_id, name: i.description,
               glyph: <span className={`ci ci-${i.category.icon || 'chip'}`} /> }))} />}
@@ -398,6 +406,8 @@ export default function App() {
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
+        {sel?.kind === 'library-sync' &&
+          <LibraryImportView onApplied={reloadItems} openItem={openItem} />}
         {/* Ф2i: единый вход detail-формы «Ордера» вместо шести условных веток. */}
         {sel && ORDER_SEL_KINDS.has(sel.kind) && (() => {
           const o = sel as { kind: OrderKind; id: number }

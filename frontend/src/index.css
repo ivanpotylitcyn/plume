@@ -104,8 +104,16 @@ body { overflow: hidden; }
 .ci-package::before      { content: '\eb29'; }
 .ci-database::before     { content: '\eb2c'; }  /* склад (место хранения) */
 .ci-rocket::before       { content: '\eb44'; }  /* изделие (device) */
-.ci-chip::before         { content: '\ec19'; }  /* компонент (component) */
+.ci-chip::before         { content: '\ec19'; }  /* компонент (component) / mcu */
 .ci-beaker::before       { content: '\ea79'; }  /* материал (material) */
+/* волна 15 — синк библиотеки + иконки библиотечных категорий (LIBRARY_CATEGORIES) */
+.ci-sync::before            { content: '\ea77'; }  /* синхронизация с библиотекой */
+.ci-symbol-constant::before { content: '\eb5d'; }  /* конденсаторы */
+.ci-settings::before        { content: '\eb52'; }  /* стабилизаторы */
+.ci-settings-gear::before   { content: '\eb51'; }  /* крепёж (демо-класс) */
+.ci-broadcast::before       { content: '\eaad'; }  /* датчики */
+.ci-plug::before            { content: '\eb2d'; }  /* интерфейсы */
+.ci-vm::before              { content: '\ea7a'; }  /* приборы (демо-класс) */
 
 /* ---- каркас (строки состояния больше нет — §11) ---- */
 .app { display: grid; grid-template-columns: 48px 240px 1fr; height: 100vh; }

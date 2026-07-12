@@ -3,7 +3,7 @@
 // Волна 5: блок «Отгруженные партии» — куда и по какой накладной ушло заказчику.
 // Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
 import { useEffect, useState } from 'react'
-import { api, type ItemDetail, type ItemRow, type Category } from './api'
+import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
 import { num } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
@@ -16,10 +16,11 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   const [categories, setCategories] = useState<Category[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [rollup, setRollup] = useState<RollupResult | null>(null)
   const { unlocked, toggle } = useFormLock(false)   // замок §5: свойства правим открыв
 
   useEffect(() => {
-    setD(null); setErr(null)
+    setD(null); setErr(null); setRollup(null)
     api.item(itemId).then(setD).catch(e => setErr(String(e)))
   }, [itemId])
   useEffect(() => { api.categories().then(setCategories).catch(() => {}) }, [])
@@ -28,6 +29,16 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   const run = (p: Promise<ItemDetail>) => {
     setBusy(true); setErr(null)
     p.then(next => { setD(next); onChanged?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  // Пересчёт оценочной стоимости роллапом по BOM (волна 15). Ответ = свежий экран
+  // изделия + сводка `updated`/`incomplete` — показываем под кнопкой.
+  const recalc = () => {
+    setBusy(true); setErr(null); setRollup(null)
+    api.recalcCost(itemId)
+      .then(next => { const { rollup, ...det } = next; setD(det); setRollup(rollup); onChanged?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -107,6 +118,18 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
               validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</>
           : (d.estimated_cost != null ? `${d.estimated_cost} ₽` : '—')}</dd>
       </dl>
+
+      {d.produced && <div className="kit-actions" style={{ marginBottom: 4 }}>
+        <button className="btn sm" disabled={busy} onClick={recalc}
+          title="оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев">
+          Пересчитать стоимость</button>
+        {rollup && <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>
+          оценка {rollup.estimated_cost != null ? `${rollup.estimated_cost} ₽` : '—'} ·
+          переоценено узлов {rollup.updated.length}
+          {rollup.incomplete.length > 0 &&
+            <span className="anomaly"> · без цены: {rollup.incomplete.join(', ')}</span>}
+        </span>}
+      </div>}
 
       <div className="section-h">Где применяется
         <span className="hint">вхождений {d.where_used.length}</span></div>

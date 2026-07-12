@@ -82,6 +82,27 @@ export interface ItemDetail {
   shipments: ItemShipment[]
 }
 
+// ── Синхронизация справочника с библиотекой Altium (волна 15) ──
+// Диф-строка: `status` задаёт действие/флаг; `incoming` — из библиотеки (нет у
+// gone/orphan), `current` — из БД (нет у new), `changes` — что отличается (только changed).
+export type LibraryStatus = 'new' | 'changed' | 'gone' | 'orphan' | 'same'
+export interface LibrarySnapshot {
+  description: string; temperature: string; category: string; produced?: boolean
+}
+export interface LibraryChange { old: string; new: string }
+export interface LibraryDiffRow {
+  status: LibraryStatus; design_item_id: string; item_id: number | null
+  incoming?: LibrarySnapshot; current?: LibrarySnapshot
+  changes?: Partial<Record<'description' | 'temperature' | 'category', LibraryChange>>
+}
+export interface LibraryDiff { categories: string[]; rows: LibraryDiffRow[] }
+export interface LibraryApplySummary { created: number; updated: number; deleted: number }
+// Роллап стоимости: детальный экран изделия + сводка пересчёта.
+export interface RollupResult {
+  estimated_cost: number | null; updated: string[]; incomplete: string[]
+}
+export type ItemDetailWithRollup = ItemDetail & { rollup: RollupResult }
+
 // ── Кокпит комплектации (волна 2 — записываемое ядро) ──
 export interface KittingRow {
   id: number; project_code: string; target_design_item_id: string; target_description: string
@@ -402,6 +423,26 @@ async function upload<T>(url: string, file: File, label?: string): Promise<T> {
   return r.json()
 }
 
+// Мульти-файл загрузка (несколько `files` + произвольные текстовые поля): для
+// синхронизации с библиотекой (диф/применение). Content-Type НЕ ставим — браузер
+// сам добавит boundary; CSRF-токен как в send()/upload().
+async function uploadMulti<T>(url: string, files: File[], fields?: Record<string, string>): Promise<T> {
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f)
+  for (const [k, v] of Object.entries(fields || {})) fd.append(k, v)
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const csrf = getCookie('csrftoken')
+  if (csrf) headers['X-CSRFToken'] = csrf
+  const r = await fetch(url, { method: 'POST', headers, credentials: 'same-origin', body: fd })
+  if (r.status === 401 || r.status === 403) { onUnauthorized?.(); throw new Error('unauthorized') }
+  if (!r.ok) {
+    let msg = `${r.status} ${url}`
+    try { const j = await r.json(); if (j.detail) msg = j.detail } catch { /* no body */ }
+    throw new Error(msg)
+  }
+  return r.json()
+}
+
 export const api = {
   // ── Аутентификация (волна 12) ──
   // me() зовётся на старте: 401 = не залогинен (null, без хука), заодно ставит
@@ -451,6 +492,18 @@ export const api = {
     send<ItemDetail>('PATCH', `/api/bom-lines/${lineId}/`, b),
   deleteBomLine: (lineId: number) =>
     send<ItemDetail>('DELETE', `/api/bom-lines/${lineId}/`),
+  // Пересчёт оценочной стоимости роллапом по BOM (кнопка у производимого изделия).
+  recalcCost: (id: number) =>
+    send<ItemDetailWithRollup>('POST', `/api/items/${id}/recalc-cost/`),
+
+  // ── Синхронизация с библиотекой Altium (волна 15) ──
+  // diff — загрузить CSV, получить диф без записи; apply — те же файлы + список
+  // подтверждённых `design_item_id` (сервер пересчитывает диф заново).
+  libraryDiff: (files: File[]) =>
+    uploadMulti<LibraryDiff>('/api/library/diff/', files),
+  libraryApply: (files: File[], confirmed: string[]) =>
+    uploadMulti<LibraryApplySummary>('/api/library/apply/', files,
+      { confirmed: JSON.stringify(confirmed) }),
 
   kittings: () => get<KittingRow[]>('/api/kittings/'),
   kitting: (id: number) => get<Cockpit>(`/api/kittings/${id}/`),
