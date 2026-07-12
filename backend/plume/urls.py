@@ -33,6 +33,10 @@ urlpatterns = [
     path('items/', views.items, name='items'),
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),
+    path('items/<int:pk>/recalc-cost/', views.item_recalc_cost, name='item-recalc-cost'),
+    # синхронизация справочника с библиотекой компонентов (волна 15): диф → применение
+    path('library/diff/', views.library_diff, name='library-diff'),
+    path('library/apply/', views.library_apply, name='library-apply'),
     path('bom-lines/<int:pk>/', views.bom_line_detail, name='bom-line'),
     # кокпит комплектации (записываемое ядро)
     path('kittings/', views.kittings, name='kittings'),

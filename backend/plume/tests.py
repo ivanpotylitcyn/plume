@@ -2,6 +2,7 @@
 
 Каждый тест строит минимальный сценарий и проверяет одну формулу.
 """
+import json
 import os
 import shutil
 import tempfile
@@ -3660,3 +3661,301 @@ class EntityDeleteHttpTests(TestCase):
         proc = engine.create_procurement(self.user)
         self.assertEqual(self.c.delete(f'/api/procurements/{proc.id}/').status_code, 204)
         self.assertFalse(models.Procurement.objects.filter(pk=proc.pk).exists())
+
+
+# Полная 8-колоночная схема библиотеки (парсер ищет нужные колонки по имени, но
+# тесты кормят реальный заголовок — терпимость к лишним колонкам заодно проверена).
+_LIB_HEADER = ['Design Item Id', 'Comment', 'Description', 'Footprint Path',
+               'Footprint Ref', 'Library Path', 'Library Ref', 'Temperature']
+
+
+def _lib_csv(items):
+    """CP1251-байты CSV библиотеки из списка `(design_item_id, description, temperature)`.
+    Разделитель `;`, финальный LF (как в реальных выгрузках Altium)."""
+    lines = [';'.join(_LIB_HEADER)]
+    for did, desc, temp in items:
+        lines.append(';'.join([did, '', desc, '', '', '', '', temp]))
+    return ('\n'.join(lines) + '\n').encode('cp1251')
+
+
+class LibraryParseTests(TestCase):
+    """Волна 15 Ф1: парсер CSV библиотеки (CP1251, `;`, мульти-файл)."""
+
+    def test_parse_basic(self):
+        raw = _lib_csv([('CAP-1', 'Конденсатор 1', '-55-125°C'),
+                        ('CAP-2', 'Конденсатор 2', '-40-85°C')])
+        cat, rows = engine.parse_library_file('csv/capacitors.csv', raw)
+        self.assertEqual(cat, 'capacitors')
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0], {'design_item_id': 'CAP-1', 'description': 'Конденсатор 1',
+                                   'temperature': '-55-125°C', 'category': 'capacitors'})
+
+    def test_trailing_blank_line_skipped(self):
+        raw = _lib_csv([('X', 'Икс', '')]) + b'\n'      # лишний финальный перевод
+        _, rows = engine.parse_library_file('sensors.csv', raw)
+        self.assertEqual(len(rows), 1)
+
+    def test_missing_column(self):
+        bad = 'Design Item Id;Comment\nX;y\n'.encode('cp1251')
+        with self.assertRaises(ValidationError):
+            engine.parse_library_file('mcu.csv', bad)
+
+    def test_empty_key(self):
+        raw = _lib_csv([('', 'без ключа', '')])
+        with self.assertRaises(ValidationError):
+            engine.parse_library_file('mcu.csv', raw)
+
+    def test_duplicate_key_in_file(self):
+        raw = _lib_csv([('D', 'раз', ''), ('D', 'два', '')])
+        with self.assertRaises(ValidationError):
+            engine.parse_library_file('mcu.csv', raw)
+
+    def test_cp1251_decode(self):
+        # Кириллица в CP1251 читается верно (в отличие от наивного UTF-8-декода).
+        raw = _lib_csv([('X', 'Микросхема ЦАП', '-40-125°C')])
+        _, rows = engine.parse_library_file('mcu.csv', raw)
+        self.assertEqual(rows[0]['description'], 'Микросхема ЦАП')
+        self.assertEqual(rows[0]['temperature'], '-40-125°C')
+
+    def test_multi_file_aggregate(self):
+        files = [('capacitors.csv', _lib_csv([('C1', 'к', '')])),
+                 ('mcu.csv', _lib_csv([('M1', 'м', '')]))]
+        parsed = engine.parse_library(files)
+        self.assertEqual(set(parsed['categories']), {'capacitors', 'mcu'})
+        self.assertEqual(len(parsed['rows']), 2)
+
+    def test_duplicate_category(self):
+        files = [('capacitors.csv', _lib_csv([('C1', 'к', '')])),
+                 ('capacitors.csv', _lib_csv([('C2', 'к', '')]))]
+        with self.assertRaises(ValidationError):
+            engine.parse_library(files)
+
+    def test_duplicate_key_across_files(self):
+        files = [('capacitors.csv', _lib_csv([('DUP', 'к', '')])),
+                 ('mcu.csv', _lib_csv([('DUP', 'м', '')]))]
+        with self.assertRaises(ValidationError):
+            engine.parse_library(files)
+
+    def test_empty_upload(self):
+        with self.assertRaises(ValidationError):
+            engine.parse_library([])
+
+
+class LibraryDiffTests(TestCase):
+    """Волна 15 Ф2: диф загруженной библиотеки против справочника."""
+
+    def _cat(self, code):
+        return engine.ensure_category(code)
+
+    def _item(self, did, cat, desc='desc', temp='', produced=False):
+        return models.Item.objects.create(
+            design_item_id=did, description=desc, category=self._cat(cat),
+            temperature=temp, produced=produced)
+
+    def _diff(self, files):
+        return engine.library_diff(engine.parse_library(files))
+
+    def _by_key(self, rows):
+        return {r['design_item_id']: r for r in rows}
+
+    def test_new_changed_same(self):
+        self._item('CAP-1', 'capacitors', desc='старое', temp='-40-85°C')
+        self._item('CAP-2', 'capacitors', desc='совпадает', temp='-55-125°C')
+        files = [('capacitors.csv', _lib_csv([
+            ('CAP-1', 'новое', '-40-85°C'),     # description изменился
+            ('CAP-2', 'совпадает', '-55-125°C'), # без изменений
+            ('CAP-3', 'новый', '')])),           # нет в БД
+        ]
+        rows = self._by_key(self._diff(files))
+        self.assertEqual(rows['CAP-1']['status'], 'changed')
+        self.assertIn('description', rows['CAP-1']['changes'])
+        self.assertEqual(rows['CAP-2']['status'], 'same')
+        self.assertEqual(rows['CAP-3']['status'], 'new')
+
+    def test_gone_when_unused(self):
+        self._item('CAP-OLD', 'capacitors')      # в БД, не в загрузке, не используется
+        rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
+        self.assertEqual(rows['CAP-OLD']['status'], 'gone')
+
+    def test_orphan_when_used(self):
+        used = self._item('CAP-USED', 'capacitors')
+        parent = self._item('DEV', 'capacitors', produced=True)
+        models.BomLine.objects.create(parent=parent, component=used, qty=D(1))
+        # DEV тоже в капаситорах и не в загрузке → сам gone/orphan; CAP-USED — orphan.
+        rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
+        self.assertEqual(rows['CAP-USED']['status'], 'orphan')
+
+    def test_missing_scoped_by_category(self):
+        # Изделие класса mcu не считается пропавшим, если грузили только capacitors.
+        self._item('MCU-X', 'mcu')
+        rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
+        self.assertNotIn('MCU-X', rows)
+
+    def test_category_change_detected(self):
+        self._item('MULTI', 'capacitors')
+        rows = self._by_key(self._diff([('mcu.csv', _lib_csv([('MULTI', 'desc', '')]))]))
+        self.assertEqual(rows['MULTI']['status'], 'changed')
+        self.assertIn('category', rows['MULTI']['changes'])
+
+
+class LibraryApplyTests(TestCase):
+    """Волна 15 Ф2: применение подтверждённых строк дифа."""
+
+    def _item(self, did, cat, desc='desc', temp='', produced=False):
+        return models.Item.objects.create(
+            design_item_id=did, description=desc, category=engine.ensure_category(cat),
+            temperature=temp, produced=produced)
+
+    def test_apply_creates_new(self):
+        files = [('sensors.csv', _lib_csv([('S-1', 'Датчик', '-40-85°C')]))]
+        parsed = engine.parse_library(files)
+        summary = engine.apply_library_diff(parsed, ['S-1'])
+        self.assertEqual(summary['created'], 1)
+        item = models.Item.objects.get(design_item_id='S-1')
+        self.assertFalse(item.produced)                  # импорт → покупное
+        self.assertIsNone(item.estimated_cost)           # цена — за Plume
+        self.assertEqual(item.category.code, 'sensors')  # категория заведена на лету
+        self.assertEqual(item.category.label, 'Датчики') # канон LIBRARY_CATEGORIES
+
+    def test_apply_updates_changed(self):
+        self._item('S-1', 'sensors', desc='старое', temp='')
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
+        engine.apply_library_diff(parsed, ['S-1'])
+        item = models.Item.objects.get(design_item_id='S-1')
+        self.assertEqual(item.description, 'новое')
+        self.assertEqual(item.temperature, '-40-85°C')
+
+    def test_apply_deletes_gone(self):
+        self._item('S-OLD', 'sensors')
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
+        summary = engine.apply_library_diff(parsed, ['S-OLD'])
+        self.assertEqual(summary['deleted'], 1)
+        self.assertFalse(models.Item.objects.filter(design_item_id='S-OLD').exists())
+
+    def test_apply_only_confirmed(self):
+        self._item('S-OLD', 'sensors')                   # gone, НЕ подтверждаем
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([
+            ('S-1', 'новый A', ''), ('S-2', 'новый B', '')]))])
+        summary = engine.apply_library_diff(parsed, ['S-1'])   # только S-1
+        self.assertEqual(summary['created'], 1)
+        self.assertTrue(models.Item.objects.filter(design_item_id='S-1').exists())
+        self.assertFalse(models.Item.objects.filter(design_item_id='S-2').exists())
+        self.assertTrue(models.Item.objects.filter(design_item_id='S-OLD').exists())
+
+    def test_orphan_not_deleted_even_if_confirmed(self):
+        used = self._item('S-USED', 'sensors')
+        parent = self._item('DEV', 'sensors', produced=True)
+        models.BomLine.objects.create(parent=parent, component=used, qty=D(1))
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
+        summary = engine.apply_library_diff(parsed, ['S-USED'])   # подтверждаем сироту
+        self.assertEqual(summary['deleted'], 0)          # orphan — не действие
+        self.assertTrue(models.Item.objects.filter(design_item_id='S-USED').exists())
+
+
+class RollupCostTests(TestCase):
+    """Волна 15 Ф4: рекурсивный роллап оценочной стоимости по BOM."""
+
+    def _item(self, did, produced=False, cost=None):
+        return models.Item.objects.create(
+            design_item_id=did, description=did, category=_cat(),
+            produced=produced, estimated_cost=(D(cost) if cost is not None else None))
+
+    def _bom(self, parent, component, qty):
+        models.BomLine.objects.create(parent=parent, component=component, qty=D(qty))
+
+    def test_recursive_rollup_writes_all_produced(self):
+        l1 = self._item('L1', cost=10)
+        l2 = self._item('L2', cost=5)
+        board = self._item('BOARD', produced=True)
+        dev = self._item('DEV', produced=True)
+        self._bom(board, l1, 2)         # 2×10
+        self._bom(board, l2, 3)         # 3×5 → плата 35
+        self._bom(dev, board, 1)        # 1×35
+        self._bom(dev, l1, 1)           # 1×10 → прибор 45
+        res = engine.rollup_estimated_cost(dev)
+        self.assertEqual(res['estimated_cost'], D(45))
+        board.refresh_from_db(); dev.refresh_from_db()
+        self.assertEqual(board.estimated_cost, D(35))   # промежуточный узел тоже переоценён
+        self.assertEqual(dev.estimated_cost, D(45))
+        self.assertEqual(set(res['updated']), {'BOARD', 'DEV'})
+        self.assertEqual(res['incomplete'], [])
+
+    def test_incomplete_flags_unknown_leaf(self):
+        leaf = self._item('L-NOCOST')                   # покупной без цены
+        dev = self._item('DEV', produced=True)
+        self._bom(dev, leaf, 2)
+        res = engine.rollup_estimated_cost(dev)
+        self.assertEqual(res['estimated_cost'], D(0))   # неизвестное считаем 0
+        self.assertIn('L-NOCOST', res['incomplete'])
+
+    def test_produced_without_bom_is_incomplete(self):
+        dev = self._item('DEV', produced=True)
+        res = engine.rollup_estimated_cost(dev)
+        self.assertIn('DEV', res['incomplete'])
+        self.assertEqual(res['estimated_cost'], D(0))
+
+    def test_non_produced_rejected(self):
+        leaf = self._item('L', cost=10)
+        with self.assertRaises(ValidationError):
+            engine.rollup_estimated_cost(leaf)
+
+    def test_cycle_guarded(self):
+        a = self._item('A', produced=True)
+        b = self._item('B', produced=True)
+        self._bom(a, b, 1)
+        models.BomLine.objects.create(parent=b, component=a, qty=D(1))  # цикл в обход guard'а
+        with self.assertRaises(ValidationError):
+            engine.rollup_estimated_cost(a)
+
+
+class LibrarySyncHttpTests(TestCase):
+    """Волна 15 Ф6: HTTP-путь синка — диф (без записи) → применение → пересчёт цены."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.c = Client()
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
+
+    def _upload(self, name, items):
+        return SimpleUploadedFile(name, _lib_csv(items), content_type='text/csv')
+
+    def test_diff_then_apply(self):
+        models.Item.objects.create(design_item_id='CAP-OLD', description='старьё',
+                                   category=engine.ensure_category('capacitors'))
+        up = self._upload('capacitors.csv', [('CAP-1', 'Конденсатор', '-55-125°C')])
+        r = self.c.post('/api/library/diff/', {'files': up})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body['categories'], ['capacitors'])
+        by = {row['design_item_id']: row for row in body['rows']}
+        self.assertEqual(by['CAP-1']['status'], 'new')
+        self.assertEqual(by['CAP-OLD']['status'], 'gone')
+        # применяем: заводим новый, старый удаляем
+        up2 = self._upload('capacitors.csv', [('CAP-1', 'Конденсатор', '-55-125°C')])
+        a = self.c.post('/api/library/apply/',
+                        {'files': up2, 'confirmed': json.dumps(['CAP-1', 'CAP-OLD'])})
+        self.assertEqual(a.status_code, 200)
+        self.assertEqual(a.json(), {'created': 1, 'updated': 0, 'deleted': 1})
+        self.assertTrue(models.Item.objects.filter(design_item_id='CAP-1').exists())
+        self.assertFalse(models.Item.objects.filter(design_item_id='CAP-OLD').exists())
+
+    def test_recalc_cost_endpoint(self):
+        cat = _cat()
+        leaf = models.Item.objects.create(design_item_id='L', description='L', category=cat,
+                                          estimated_cost=D(7))
+        dev = models.Item.objects.create(design_item_id='D', description='D', category=cat,
+                                         produced=True)
+        models.BomLine.objects.create(parent=dev, component=leaf, qty=D(3))
+        r = self.c.post(f'/api/items/{dev.id}/recalc-cost/')
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(float(body['estimated_cost']), 21.0)
+        self.assertEqual(body['rollup']['updated'], ['D'])
+        dev.refresh_from_db()
+        self.assertEqual(dev.estimated_cost, D(21))
+
+    def test_recalc_cost_rejects_non_produced(self):
+        item = models.Item.objects.create(design_item_id='P', description='P',
+                                          category=_cat(), estimated_cost=D(5))
+        r = self.c.post(f'/api/items/{item.id}/recalc-cost/')
+        self.assertEqual(r.status_code, 400)

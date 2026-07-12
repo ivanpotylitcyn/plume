@@ -7,6 +7,7 @@
 Волна 3 — приход/УПД (рождение лотов, замок). Волна 4 — заказ (Purchase) +
 связь `Receipt↔Purchase` + мост «дефицит → заказ».
 """
+import json
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import authenticate, get_user_model, login, logout
@@ -1786,6 +1787,60 @@ _INLINE_CONTENT_TYPES = frozenset({
     'application/pdf',
     'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp',
 })
+
+
+# --------------------------------------------------------------------------- #
+#  Синхронизация справочника с библиотекой компонентов (волна 15)
+# --------------------------------------------------------------------------- #
+def _library_files(request):
+    """Мульти-файл загрузка библиотеки → список `(filename, bytes)` для движка.
+    Файлы в поле `files` (несколько); `.read()` тянет содержимое UploadedFile."""
+    return [(f.name, f.read()) for f in request.FILES.getlist('files')]
+
+
+@api_view(['POST'])
+def library_diff(request):
+    """Загрузить CSV библиотеки → диф против справочника (без записи). Форма грузит
+    таблицы, сервер декодит CP1251/парсит и возвращает строки со статусом
+    (новый/изменился/пропал→сирота|удалить/совпадает) для показа с чекбоксами."""
+    try:
+        parsed = engine.parse_library(_library_files(request))
+        rows = engine.library_diff(parsed)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response({'categories': parsed['categories'], 'rows': rows})
+
+
+@api_view(['POST'])
+def library_apply(request):
+    """Применить подтверждённые строки дифа. Форма шлёт те же файлы + `confirmed`
+    (JSON-список `design_item_id` с отмеченными галочками). Диф пересчитывается на
+    сервере (не доверяем значениям клиента), применяются только подтверждённые."""
+    raw = request.data.get('confirmed') or '[]'
+    try:
+        confirmed = json.loads(raw) if isinstance(raw, str) else list(raw)
+    except (ValueError, TypeError):
+        return _bad('Некорректный список подтверждённых строк.')
+    try:
+        parsed = engine.parse_library(_library_files(request))
+        summary = engine.apply_library_diff(parsed, confirmed)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(summary)
+
+
+@api_view(['POST'])
+def item_recalc_cost(request, pk):
+    """Пересчитать оценочную стоимость производимого изделия роллапом по BOM
+    (кнопка «Пересчитать стоимость»). Пишет оценку во все производимые узлы
+    поддерева; возвращает экран изделия + сводку роллапа (`updated`/`incomplete`)."""
+    item = get_object_or_404(models.Item, pk=pk)
+    try:
+        rollup = engine.rollup_estimated_cost(item)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    item.refresh_from_db()
+    return Response({**_item_detail_payload(item), 'rollup': rollup})
 
 
 @api_view(['GET'])

@@ -79,10 +79,13 @@
 
 Следующие волны: логин-экран, UI вложений (`Attachment`).
 """
+import csv
+import io
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Count, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -2807,6 +2810,250 @@ def delete_item(item):
         item.delete()                              # каскад: свои строки BOM (parent)
     except ProtectedError:
         raise ValidationError('Изделие связано с другими записями — удаление заблокировано.')
+
+
+# --------------------------------------------------------------------------- #
+#  Синхронизация справочника с библиотекой компонентов Altium (волна 15)
+# --------------------------------------------------------------------------- #
+# Внешняя библиотека — источник правды по покупным изделиям. Форма грузит её
+# CSV-таблицы (мульти-файл = вся библиотека за раз); движок парсит → диф против БД
+# по ключу `design_item_id` → применение подтверждённых строк. Цену библиотека не
+# хранит (`estimated_cost` — собственность Plume, синк её не трогает).
+LIBRARY_ENCODING = 'cp1251'      # CP1251, разделитель ';' без экранирования, LF
+LIBRARY_KEY_COL = 'Design Item Id'
+LIBRARY_DESC_COL = 'Description'
+LIBRARY_TEMP_COL = 'Temperature'
+
+
+def _category_code_from_filename(name):
+    """Класс компонента = стем имени файла (`csv/capacitors.csv` → `capacitors`)."""
+    base = (name or '').rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+    return base.rsplit('.', 1)[0].strip().lower()
+
+
+def parse_library_file(filename, raw):
+    """Разобрать один CSV библиотеки → (category_code, [row...]). `raw` — bytes
+    (CP1251). Заголовок = эталон: нужные колонки ищем по имени (терпимо к порядку),
+    отсутствие любой из трёх — ошибка. Строки нормализуем в
+    `{design_item_id, description, temperature, category}`; дубль ключа в файле,
+    пустой ключ или недобор колонок — человеческий отказ (не молчим)."""
+    category = _category_code_from_filename(filename)
+    if not category:
+        raise ValidationError(f'{filename}: не удалось определить категорию по имени файла.')
+    try:
+        text = bytes(raw).decode(LIBRARY_ENCODING)
+    except (UnicodeDecodeError, TypeError):
+        raise ValidationError(f'{filename}: ожидалась кодировка CP1251.')
+    reader = csv.reader(io.StringIO(text), delimiter=';')
+    try:
+        header = next(reader)
+    except StopIteration:
+        raise ValidationError(f'{filename}: пустой файл.')
+    cols = {h.strip(): i for i, h in enumerate(header)}
+    for col in (LIBRARY_KEY_COL, LIBRARY_DESC_COL, LIBRARY_TEMP_COL):
+        if col not in cols:
+            raise ValidationError(f'{filename}: нет колонки «{col}».')
+    ki, di, ti = cols[LIBRARY_KEY_COL], cols[LIBRARY_DESC_COL], cols[LIBRARY_TEMP_COL]
+    rows, seen = [], set()
+    for lineno, rec in enumerate(reader, start=2):
+        if not rec or all(not c.strip() for c in rec):
+            continue                       # пустая строка (в т.ч. финальный LF)
+        if len(rec) <= max(ki, di, ti):
+            raise ValidationError(f'{filename}, строка {lineno}: мало колонок.')
+        key = rec[ki].strip()
+        if not key:
+            raise ValidationError(f'{filename}, строка {lineno}: пустой Design Item Id.')
+        if key in seen:
+            raise ValidationError(f'{filename}: дубль Design Item Id «{key}».')
+        seen.add(key)
+        rows.append({'design_item_id': key, 'description': rec[di].strip(),
+                     'temperature': rec[ti].strip(), 'category': category})
+    return category, rows
+
+
+def parse_library(files):
+    """Разобрать мульти-файл загрузку. `files` — список `(filename, raw_bytes)`.
+    Возвращает `{'categories': [code...], 'rows': [row...]}`. Одна категория дважды
+    или один `design_item_id` в двух файлах — ошибка (в библиотеке ключ глобально
+    уникален). Категории нужны для scoping «пропавших» (сверяем только загруженные
+    классы)."""
+    if not files:
+        raise ValidationError('Не выбрано ни одного файла.')
+    categories, rows, owner = [], [], {}
+    for filename, raw in files:
+        cat, file_rows = parse_library_file(filename, raw)
+        if cat in categories:
+            raise ValidationError(f'Категория «{cat}» пришла дважды (файл {filename}).')
+        categories.append(cat)
+        for r in file_rows:
+            key = r['design_item_id']
+            if key in owner:
+                raise ValidationError(
+                    f'Design Item Id «{key}» есть в двух файлах ({owner[key]} и {cat}).')
+            owner[key] = cat
+        rows.extend(file_rows)
+    return {'categories': categories, 'rows': rows}
+
+
+# Порядок статусов в диф-вью: сперва требующие действия, потом флаги, потом «совпало».
+_DIFF_ORDER = {'new': 0, 'changed': 1, 'gone': 2, 'orphan': 3, 'same': 4}
+
+
+def _library_changes(item, row):
+    """Что изменилось у существующего изделия против библиотеки: сравниваем только
+    синкаемые поля (`description`/`category`/`temperature`). Категорию — по `code`
+    (стем файла). `estimated_cost`/`uom`/`produced` — собственность Plume, не сверяем."""
+    changes = {}
+    if item.description != row['description']:
+        changes['description'] = {'old': item.description, 'new': row['description']}
+    if item.category.code != row['category']:
+        changes['category'] = {'old': item.category.code, 'new': row['category']}
+    if item.temperature != row['temperature']:
+        changes['temperature'] = {'old': item.temperature, 'new': row['temperature']}
+    return changes
+
+
+def _diff_row(status, row, item, changes=None):
+    out = {'status': status,
+           'design_item_id': (row or {}).get('design_item_id') or item.design_item_id,
+           'item_id': item.id if item else None}
+    if row is not None:
+        out['incoming'] = {'description': row['description'],
+                           'temperature': row['temperature'], 'category': row['category']}
+    if item is not None:
+        out['current'] = {'description': item.description,
+                          'temperature': item.temperature, 'category': item.category.code,
+                          'produced': item.produced}
+    if changes:
+        out['changes'] = changes
+    return out
+
+
+def library_diff(parsed):
+    """Полная сверка загруженной библиотеки против БД по ключу `design_item_id`.
+    `parsed` — из `parse_library`. Возвращает список диф-строк со статусом:
+
+    - `new`     — ключа нет в БД → создать (`produced=false`);
+    - `changed` — есть, отличается description/category/temperature → обновить;
+    - `same`    — есть, совпадает → ничего;
+    - `gone`    — в БД (в одном из загруженных классов), нет в загрузке, не
+      используется → кандидат на удаление;
+    - `orphan`  — то же, но используется (живые ссылки) → флаг «сирота, нет в
+      библиотеке» (не действие: удалить нельзя, обновлять нечем).
+
+    Scoping «пропавших» — по категории: изделие из класса, которого нет среди
+    загруженных файлов, не считается пропавшим (его библиотеку просто не грузили)."""
+    by_key = {r['design_item_id']: r for r in parsed['rows']}
+    categories = set(parsed['categories'])
+    existing = {i.design_item_id: i
+                for i in models.Item.objects.select_related('category')}
+    result = []
+    for key, row in by_key.items():
+        item = existing.get(key)
+        if item is None:
+            result.append(_diff_row('new', row, None))
+            continue
+        changes = _library_changes(item, row)
+        result.append(_diff_row('changed' if changes else 'same', row, item, changes))
+    for key, item in existing.items():
+        if key in by_key or item.category.code not in categories:
+            continue
+        result.append(_diff_row('orphan' if item_is_used(item) else 'gone', None, item))
+    result.sort(key=lambda d: (_DIFF_ORDER[d['status']], d['design_item_id']))
+    return result
+
+
+def apply_library_diff(parsed, confirmed):
+    """Применить подтверждённые строки дифа. `confirmed` — множество
+    `design_item_id`, отмеченных галочкой. Диф пересчитываем здесь заново (не
+    доверяем присланным клиентом значениям): действие берётся из свежего статуса,
+    поля — из `parsed`. Всё в одной транзакции (bulk = всё-или-ничего).
+
+    - `new`     → создать `Item` (`produced=false`, категория `ensure_category`);
+    - `changed` → обновить description/category/temperature;
+    - `gone`    → удалить (`delete_item` — guard добьёт, если стало используемым);
+    - `orphan`/`same` → no-op даже если ключ подтверждён.
+
+    Возвращает сводку `{created, updated, deleted}`."""
+    confirmed = set(confirmed or [])
+    by_key = {r['design_item_id']: r for r in parsed['rows']}
+    summary = {'created': 0, 'updated': 0, 'deleted': 0}
+    with transaction.atomic():
+        for diff in library_diff(parsed):
+            key = diff['design_item_id']
+            if key not in confirmed:
+                continue
+            status = diff['status']
+            if status == 'new':
+                src = by_key[key]
+                models.Item.objects.create(
+                    design_item_id=key, description=src['description'],
+                    category=ensure_category(src['category']),
+                    temperature=src['temperature'], produced=False)
+                summary['created'] += 1
+            elif status == 'changed':
+                src = by_key[key]
+                item = models.Item.objects.get(design_item_id=key)
+                item.description = src['description']
+                item.category = ensure_category(src['category'])
+                item.temperature = src['temperature']
+                item.save(update_fields=['description', 'category', 'temperature'])
+                summary['updated'] += 1
+            elif status == 'gone':
+                delete_item(models.Item.objects.get(design_item_id=key))
+                summary['deleted'] += 1
+    return summary
+
+
+# --------------------------------------------------------------------------- #
+#  Роллап оценочной стоимости по BOM (волна 15)
+# --------------------------------------------------------------------------- #
+def _rollup_cost(item, cache, visiting, updated, incomplete):
+    """Пост-order обход BOM: стоимость узла. Покупной лист → его `estimated_cost`
+    (None → неполнота, вверх идёт как 0). Производимый узел → Σ(стоимость компонента
+    × qty); результат пишем в `estimated_cost` ВСЕХ производимых узлов поддерева.
+    `cache` мемоизирует общие поддеревья, `visiting` ловит циклы (страховка — их
+    гасит уже `add_bom_line`)."""
+    if item.id in cache:
+        return cache[item.id]
+    if not item.produced:
+        cost = item.estimated_cost
+        if cost is None:
+            incomplete.append(item.design_item_id)
+        cache[item.id] = cost
+        return cost
+    if item.id in visiting:
+        raise ValidationError(f'Цикл в составе: {item.design_item_id}.')
+    visiting.add(item.id)
+    lines = list(item.bom_lines.select_related('component'))
+    if not lines:
+        incomplete.append(item.design_item_id)   # производимый без состава — оценить нечем
+    total = ZERO
+    for bl in lines:
+        c = _rollup_cost(bl.component, cache, visiting, updated, incomplete)
+        total += (c if c is not None else ZERO) * bl.qty
+    visiting.discard(item.id)
+    if item.estimated_cost != total:
+        item.estimated_cost = total
+        item.save(update_fields=['estimated_cost'])
+        updated.append(item.design_item_id)
+    cache[item.id] = total
+    return total
+
+
+def rollup_estimated_cost(item):
+    """Пересчитать оценочную стоимость производимого изделия роллапом по BOM
+    (рекурсивно до листьев). Пишет оценку во все производимые узлы поддерева, не
+    только в вершину (сменили цену листа → обновились и промежуточные платы, и
+    прибор). Возвращает `{estimated_cost, updated, incomplete}`: `updated` — какие
+    узлы переоценены, `incomplete` — листья/узлы без известной стоимости (учтены
+    как 0, но помечены). Только для `produced` (у покупного оценка — ручная)."""
+    if not item.produced:
+        raise ValidationError('Пересчёт стоимости — только для производимого изделия.')
+    updated, incomplete = [], []
+    with transaction.atomic():
+        cost = _rollup_cost(item, {}, set(), updated, incomplete)
+    return {'estimated_cost': cost, 'updated': updated, 'incomplete': incomplete}
 
 
 def create_project(code, name, budget=None, started_at=None):
