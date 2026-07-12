@@ -20,6 +20,13 @@ def D(x):
     return Decimal(str(x))
 
 
+def _cat(code='test', label='Тест'):
+    """Категория-заглушка для тестов (волна 15: `Item.category` — обязательный FK).
+    Класс изделия в движке логику не ветвит, поэтому одной общей категории хватает."""
+    c, _ = models.Category.objects.get_or_create(code=code, defaults={'label': label})
+    return c
+
+
 # Изолированный MEDIA_ROOT для тестов вложений (волна 11): загрузки не пачкают
 # рабочий backend/media; чистим на выходе модуля.
 _TEST_MEDIA = tempfile.mkdtemp(prefix='plume-test-media-')
@@ -37,13 +44,16 @@ class EngineTestBase(TestCase):
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.supplier = models.Counterparty.objects.create(name='Поставщик')
 
-    def make_item(self, code, manufactured=False, kind=models.Item.Kind.COMPONENT):
-        return models.Item.objects.create(code=code, name=code, kind=kind,
-                                          is_manufactured=manufactured)
+    def make_item(self, code, manufactured=False, kind=None):
+        # `kind` — исторический хинт (движок по классу не ветвит); категория —
+        # общая заглушка `_cat()`. `manufactured` → ось `produced` (волна 15).
+        return models.Item.objects.create(
+            design_item_id=code, description=code, category=_cat(),
+            produced=manufactured)
 
     def receipt_lot(self, item, project, qty, purchase=None):
         r = models.Receipt.objects.create(
-            number=f'UPD-{item.code}-{qty}', date='2026-05-01', contractor=self.supplier,
+            number=f'UPD-{item.design_item_id}-{qty}', date='2026-05-01', contractor=self.supplier,
             project=project, user=self.user, purchase=purchase)
         lot = models.Lot.objects.create(item=item, project=project, origin=r, qty=D(qty))
         engine.rebuild_movements(lot)
@@ -171,7 +181,7 @@ class CoverageTests(EngineTestBase):
 
 class OnOrderTests(EngineTestBase):
     def test_purchased_open_order_minus_received(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         proc = models.Procurement.objects.create(user=self.user,
                                                  status=models.Procurement.Status.SENT)
         purchase = models.Purchase.objects.create(
@@ -183,7 +193,7 @@ class OnOrderTests(EngineTestBase):
         self.assertEqual(engine.item_on_order(item, self.prj), D(25))
 
     def test_draft_purchase_not_counted(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         proc = models.Procurement.objects.create(user=self.user)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
@@ -201,9 +211,9 @@ class OnOrderTests(EngineTestBase):
 
 class DeficitTests(EngineTestBase):
     def test_full_deficit_scenario(self):
-        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        device = self.make_item('DEV', manufactured=True, kind='device')
         case = self.make_item('CASE')
-        screw = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        screw = self.make_item('SCR', kind='material')
         models.BomLine.objects.create(parent=device, component=case, qty=D(1))
         models.BomLine.objects.create(parent=device, component=screw, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(10))
@@ -221,7 +231,7 @@ class DeficitTests(EngineTestBase):
         d = engine.project_deficit(self.prj)
         dm = d['demands'][0]
         self.assertEqual(dm['status'], 'to_order')   # worst-of (SCR ▲)
-        lines = {ln['component_code']: ln for ln in dm['lines']}
+        lines = {ln['component_design_item_id']: ln for ln in dm['lines']}
         self.assertEqual(lines['CASE']['status'], 'available')
         self.assertEqual(lines['CASE']['have'], D(10))
         self.assertEqual(lines['SCR']['need'], D(40))
@@ -261,7 +271,7 @@ class KittingCockpitTests(EngineTestBase):
     def setUp(self):
         super().setUp()
         self.device = self.make_item('DEV', manufactured=True,
-                                     kind=models.Item.Kind.DEVICE)
+                                     kind='device')
         self.case = self.make_item('CASE')
         self.res = self.make_item('RES')
         # прибор из 1 корпуса и 2 резисторов
@@ -277,7 +287,7 @@ class KittingCockpitTests(EngineTestBase):
         # склад пуст → обе призрачные строки красные (▲ to_order)
         k = self.make_kitting(qty=2)
         c = engine.kitting_cockpit(k)
-        rows = {r['component_code']: r for r in c['rows']}
+        rows = {r['component_design_item_id']: r for r in c['rows']}
         self.assertEqual(rows['CASE']['need'], D(2))     # 1×2
         self.assertEqual(rows['RES']['need'], D(4))      # 2×2
         self.assertEqual(rows['CASE']['pierced'], D(0))
@@ -289,7 +299,7 @@ class KittingCockpitTests(EngineTestBase):
         self.receipt_lot(self.case, self.prj, 10)
         k = self.make_kitting(qty=2)
         c = engine.kitting_cockpit(k)
-        row = {r['component_code']: r for r in c['rows']}['CASE']
+        row = {r['component_design_item_id']: r for r in c['rows']}['CASE']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
         self.assertEqual(row['ghost']['candidate_lots'][0]['live_qty'], D(10))
@@ -301,7 +311,7 @@ class KittingCockpitTests(EngineTestBase):
         # лот просел на 2 (ISSUE), строка BOM закрыта
         self.assertEqual(engine.lot_live_qty(lot), D(8))
         c = engine.kitting_cockpit(k)
-        row = {r['component_code']: r for r in c['rows']}['CASE']
+        row = {r['component_design_item_id']: r for r in c['rows']}['CASE']
         self.assertEqual(row['pierced'], D(2))
         self.assertEqual(row['remaining'], D(0))
         self.assertIsNone(row['ghost'])          # покрыто — призрака нет
@@ -490,7 +500,7 @@ class ReceiptCockpitTests(EngineTestBase):
                                           user=self.user, qty=D(1),
                                           status=models.DocStatus.DRAFT)
         c = engine.kitting_cockpit(k)
-        row = {r['component_code']: r for r in c['rows']}['R']
+        row = {r['component_design_item_id']: r for r in c['rows']}['R']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
 
@@ -538,7 +548,7 @@ class PurchaseCockpitTests(EngineTestBase):
         self.assertFalse(models.PurchaseLine.objects.filter(pk=line.pk).exists())
 
     def test_send_counts_in_on_order(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, item, D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))  # draft не в счёте
@@ -560,7 +570,7 @@ class PurchaseCockpitTests(EngineTestBase):
             engine.add_purchase_line(p, self.make_item('B'), D(1))
 
     def test_unsend_reenables_and_drops_from_on_order(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, item, D(40))
         engine.send_purchase(p)
@@ -570,7 +580,7 @@ class PurchaseCockpitTests(EngineTestBase):
         self.assertEqual(line.qty, D(30))
 
     def test_cancel_drops_from_on_order(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, item, D(40))
         engine.send_purchase(p)
@@ -582,7 +592,7 @@ class PurchaseCockpitTests(EngineTestBase):
         self.assertEqual(p.status, models.Purchase.Status.DRAFT)
 
     def test_linked_receipt_reduces_on_order_and_closes_line(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, item, D(40))
         engine.send_purchase(p)
@@ -612,7 +622,7 @@ class PurchaseCockpitTests(EngineTestBase):
             engine.set_receipt_purchase(r, p)           # заказ чужого проекта
 
     def test_deficit_bridge_creates_and_increments_line(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p1 = engine.add_to_project_order(self.prj, item, D(15), self.user)
         self.assertEqual(p1.lines.get(item=item).qty, D(15))
         # повтор той же позиции — инкремент в том же черновике
@@ -628,7 +638,7 @@ class TransferCockpitTests(EngineTestBase):
     def setUp(self):
         super().setUp()
         self.device = self.make_item('DEV', manufactured=True,
-                                      kind=models.Item.Kind.DEVICE)
+                                      kind='device')
         # готовое железо на складе проекта: лот 5 (как из комплектации/прихода)
         self.lot = self.receipt_lot(self.device, self.prj, 5)
 
@@ -927,7 +937,7 @@ class HeaderEditTests(EngineTestBase):
     read-only под замком, nullable-дата очищается."""
 
     def test_transfer_header_edit_and_lock(self):
-        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
         lot = self.receipt_lot(dev, self.prj, 5)
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.update_transfer(t, number='Н-99', date='2026-06-15')
@@ -990,20 +1000,20 @@ class CommandDeficitTests(EngineTestBase):
     """Волна 7: командный свод — Σ проектных дефицитов по Item, без перенеттинга."""
 
     def _device_with_screw(self, screw, qty_per, suffix=''):
-        dev = self.make_item(f'DEV{screw.code}{suffix}', manufactured=True,
-                             kind=models.Item.Kind.DEVICE)
+        dev = self.make_item(f'DEV{screw.design_item_id}{suffix}', manufactured=True,
+                             kind='device')
         models.BomLine.objects.create(parent=dev, component=screw, qty=D(qty_per))
         return dev
 
     def test_rolls_up_by_item_across_projects(self):
-        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 4)
         prj2 = models.Project.objects.create(code='P2', name='Проект 2',
                                              kind=models.Project.Kind.EXTERNAL)
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
 
-        rows = {r['item_code']: r for r in engine.command_deficit()['rows']}
+        rows = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}
         row = rows['SCR']
         self.assertEqual(row['need'], D(60))         # 40 + 20
         self.assertEqual(row['to_order'], D(60))     # склада/заказов нет
@@ -1011,7 +1021,7 @@ class CommandDeficitTests(EngineTestBase):
         self.assertEqual(len(row['by_project']), 2)
 
     def test_stock_and_order_no_cross_project_netting(self):
-        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 4)
         prj2 = models.Project.objects.create(code='P2', name='Проект 2',
                                              kind=models.Project.Kind.EXTERNAL)
@@ -1020,13 +1030,13 @@ class CommandDeficitTests(EngineTestBase):
         # склад лежит только в P1 (10 шт) — НЕ должен гасить нужду P2
         self.receipt_lot(scr, self.prj, 10)
 
-        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
+        row = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}['SCR']
         self.assertEqual(row['have'], D(10))          # только P1 покрыт
         self.assertEqual(row['to_order'], D(50))      # 30 (P1) + 20 (P2), не 40
         self.assertEqual(row['need'], D(60))
 
     def test_closed_and_internal_projects_excluded(self):
-        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 2)
         closed = models.Project.objects.create(code='PC', name='Закрытый',
             kind=models.Project.Kind.EXTERNAL, status=models.Project.Status.CLOSED)
@@ -1039,26 +1049,26 @@ class CommandDeficitTests(EngineTestBase):
     def test_intra_project_need_aggregated_across_demands(self):
         # два прибора в одном проекте делят компонент → потребность суммируется,
         # покрытие считается один раз (одна by_project-строка на проект)
-        scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        scr = self.make_item('SCR', kind='material')
         dev_a = self._device_with_screw(scr, 4, suffix='A')
         dev_b = self._device_with_screw(scr, 3, suffix='B')
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev_a, qty=D(2))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev_b, qty=D(2))
 
-        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
+        row = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}['SCR']
         self.assertEqual(row['need'], D(14))          # 2×4 + 2×3
         self.assertEqual(len(row['by_project']), 1)   # агрегат по проекту
 
     def test_sorted_worst_first(self):
-        red = self.make_item('RED', kind=models.Item.Kind.MATERIAL)
-        green = self.make_item('GRN', kind=models.Item.Kind.MATERIAL)
-        dev = self.make_item('DEVX', manufactured=True, kind=models.Item.Kind.DEVICE)
+        red = self.make_item('RED', kind='material')
+        green = self.make_item('GRN', kind='material')
+        dev = self.make_item('DEVX', manufactured=True, kind='device')
         models.BomLine.objects.create(parent=dev, component=red, qty=D(1))
         models.BomLine.objects.create(parent=dev, component=green, qty=D(1))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
         self.receipt_lot(green, self.prj, 100)        # GRN покрыт ✓, RED красный ▲
 
-        codes = [r['item_code'] for r in engine.command_deficit()['rows']]
+        codes = [r['item_design_item_id'] for r in engine.command_deficit()['rows']]
         self.assertEqual(codes, ['RED', 'GRN'])       # красное наверх
 
 
@@ -1121,7 +1131,7 @@ class ProcurementCockpitTests(EngineTestBase):
         self.assertEqual(p.status, models.Procurement.Status.DRAFT)
 
     def test_bridge_add_to_procurement_creates_and_increments(self):
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p1 = engine.add_to_procurement(item, D(15), self.user)
         self.assertEqual(p1.lines.get(item=item).qty, D(15))
         p2 = engine.add_to_procurement(item, D(10), self.user)
@@ -1131,7 +1141,7 @@ class ProcurementCockpitTests(EngineTestBase):
     def test_bridge_ignores_solo_purchase_stub(self):
         # заказ волны 4 плодит 1:1-заглушку Procurement — мост её не должен трогать
         engine.create_purchase(self.prj, self.user)      # заглушка (draft, с purchase)
-        item = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        item = self.make_item('SCR', kind='material')
         p = engine.add_to_procurement(item, D(5), self.user)
         self.assertFalse(p.purchases.exists())           # это чистый план, не заглушка
         self.assertEqual(list(engine._plan_procurements()), [p])  # заглушки нет в списке
@@ -1167,8 +1177,8 @@ class PeggingTests(EngineTestBase):
         super().setUp()
         self.prj2 = models.Project.objects.create(
             code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
-        self.scr = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
-        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        self.scr = self.make_item('SCR', kind='material')
+        dev = self.make_item('DEV', manufactured=True, kind='device')
         models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
@@ -1242,7 +1252,7 @@ class ClosureHttpTests(TestCase):
         self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
         self.prj = models.Project.objects.create(
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.item = models.Item.objects.create(code='R100', name='R100')
+        self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(name='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj,
@@ -1314,10 +1324,10 @@ class ProcurementHttpTests(TestCase):
         get_user_model().objects.create(username='admin', is_superuser=True)
         self.prj = models.Project.objects.create(
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.scr = models.Item.objects.create(code='SCR', name='Винт',
-            kind=models.Item.Kind.MATERIAL)
-        self.dev = models.Item.objects.create(code='DEV', name='Прибор',
-            kind=models.Item.Kind.DEVICE, is_manufactured=True)
+        self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
+            category=_cat())
+        self.dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
+            category=_cat(), produced=True)
         models.BomLine.objects.create(parent=self.dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev,
             qty=D(10))
@@ -1328,7 +1338,7 @@ class ProcurementHttpTests(TestCase):
     def test_command_deficit_and_bridge(self):
         svod = self.c.get('/api/command-deficit/')
         self.assertEqual(svod.status_code, 200)
-        rows = {r['item_code']: r for r in svod.json()['rows']}
+        rows = {r['item_design_item_id']: r for r in svod.json()['rows']}
         self.assertEqual(float(rows['SCR']['to_order']), 40.0)
         # мост «свод → закупка» создаёт черновик
         add = self.c.post('/api/command-deficit/add-to-procurement/',
@@ -1374,10 +1384,10 @@ class PeggingHttpTests(TestCase):
             kind=models.Project.Kind.EXTERNAL)
         self.prj2 = models.Project.objects.create(code='P2', name='Проект 2',
             kind=models.Project.Kind.EXTERNAL)
-        self.scr = models.Item.objects.create(code='SCR', name='Винт',
-            kind=models.Item.Kind.MATERIAL)
-        dev = models.Item.objects.create(code='DEV', name='Прибор',
-            kind=models.Item.Kind.DEVICE, is_manufactured=True)
+        self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
+            category=_cat())
+        dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
+            category=_cat(), produced=True)
         models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
@@ -1392,7 +1402,7 @@ class PeggingHttpTests(TestCase):
         peg = self.c.get(f'/api/procurements/{self.pid}/pegging/')
         self.assertEqual(peg.status_code, 200)
         row = peg.json()['rows'][0]
-        self.assertEqual(row['item_code'], 'SCR')
+        self.assertEqual(row['item_design_item_id'], 'SCR')
         self.assertEqual(float(row['pegged']), 0.0)
         self.assertEqual(len(row['by_project']), 2)             # наводка по двум проектам
         auto = self.c.post(f'/api/procurements/{self.pid}/autopeg/')
@@ -1409,7 +1419,7 @@ class PeggingHttpTests(TestCase):
         self.assertEqual(peg.status_code, 200)
         self.assertEqual(float(peg.json()['rows'][0]['pegged']), 25.0)
         # item не в плане → 400
-        x = models.Item.objects.create(code='X', name='X')
+        x = models.Item.objects.create(design_item_id='X', description='X', category=_cat())
         bad = self.c.post(f'/api/procurements/{self.pid}/peg/',
             {'item_id': x.id, 'project_id': self.prj.id, 'qty': 1},
             content_type='application/json')
@@ -1426,27 +1436,33 @@ class ReferenceCreateTests(EngineTestBase):
     """Канон «＋ Новая» (2026-07-03): создание изделий и проектов из справочников."""
 
     def test_create_item_defaults_and_fields(self):
-        i = engine.create_item('R100', 'Резистор', kind=models.Item.Kind.MATERIAL,
-                               uom='шт', is_manufactured=False, estimated_cost=D('1.50'))
-        self.assertEqual(i.code, 'R100')
-        self.assertEqual(i.kind, models.Item.Kind.MATERIAL)
+        cat = _cat('mcu', 'Микроконтроллеры')
+        i = engine.create_item('R100', 'Резистор', category_id=cat.id,
+                               uom='шт', produced=False, estimated_cost=D('1.50'),
+                               temperature='-40-125°C')
+        self.assertEqual(i.design_item_id, 'R100')
+        self.assertEqual(i.category_id, cat.id)
+        self.assertEqual(i.temperature, '-40-125°C')
         self.assertEqual(i.estimated_cost, D('1.50'))
-        # дефолты: kind=component, uom=шт
-        j = engine.create_item(' B1 ', ' Плата ')
-        self.assertEqual(j.code, 'B1')                 # обрезка пробелов
-        self.assertEqual(j.kind, models.Item.Kind.COMPONENT)
+        # обрезка пробелов; дефолты uom=шт, produced=False
+        j = engine.create_item(' B1 ', ' Плата ', category_id=cat.id)
+        self.assertEqual(j.design_item_id, 'B1')
         self.assertEqual(j.uom, 'шт')
+        self.assertFalse(j.produced)
 
-    def test_create_item_rejects_dup_empty_and_bad_kind(self):
-        engine.create_item('R100', 'Резистор')
+    def test_create_item_rejects_dup_empty_and_bad_category(self):
+        cat = _cat()
+        engine.create_item('R100', 'Резистор', category_id=cat.id)
         with self.assertRaises(ValidationError):
-            engine.create_item('R100', 'Дубль')        # дубль артикула
+            engine.create_item('R100', 'Дубль', category_id=cat.id)   # дубль ключа
         with self.assertRaises(ValidationError):
-            engine.create_item('', 'Без кода')
+            engine.create_item('', 'Без ключа', category_id=cat.id)
         with self.assertRaises(ValidationError):
-            engine.create_item('X1', '')               # без названия
+            engine.create_item('X1', '', category_id=cat.id)          # без описания
         with self.assertRaises(ValidationError):
-            engine.create_item('X2', 'Плохой вид', kind='gadget')
+            engine.create_item('X2', 'Без категории')                 # категория обязательна
+        with self.assertRaises(ValidationError):
+            engine.create_item('X3', 'Плохая', category_id=999999)    # неизвестная категория
 
     def test_create_project_is_external_active(self):
         p = engine.create_project('НИР-1', 'Тема', budget=D('100000'))
@@ -1474,17 +1490,18 @@ class ReferenceCreateHttpTests(TestCase):
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_create_item_http(self):
-        r = self.c.post('/api/items/', {'code': 'R100', 'name': 'Резистор',
-            'kind': 'material', 'is_manufactured': False},
+        cat = _cat()
+        r = self.c.post('/api/items/', {'design_item_id': 'R100', 'description': 'Резистор',
+            'category_id': cat.id, 'produced': False},
             content_type='application/json')
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.json()['code'], 'R100')
+        self.assertEqual(r.json()['design_item_id'], 'R100')
         # появляется в списке
         lst = self.c.get('/api/items/').json()
-        self.assertTrue(any(i['code'] == 'R100' for i in lst))
+        self.assertTrue(any(i['design_item_id'] == 'R100' for i in lst))
         # дубль → 400
-        dup = self.c.post('/api/items/', {'code': 'R100', 'name': 'Дубль'},
-            content_type='application/json')
+        dup = self.c.post('/api/items/', {'design_item_id': 'R100', 'description': 'Дубль',
+            'category_id': cat.id}, content_type='application/json')
         self.assertEqual(dup.status_code, 400)
 
     def test_create_project_http(self):
@@ -1593,7 +1610,7 @@ class InventoryHttpTests(TestCase):
         self.grey = models.Project.objects.create(
             code='GREY', name='Свободные неучтённые',
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
-        self.item = models.Item.objects.create(code='R100', name='R100')
+        self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(name='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
@@ -1656,7 +1673,7 @@ class OrderDeleteHttpTests(TestCase):
         self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
         self.prj = models.Project.objects.create(
             code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.item = models.Item.objects.create(code='R100', name='R100')
+        self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(name='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
@@ -1725,8 +1742,8 @@ class ProjectBudgetTests(EngineTestBase):
         self.assertEqual(b['spent'], D(2400))   # только 3×800; заём не в счёт
 
     def test_plan_estimate_then_replaced_by_fact(self):
-        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
-        screw = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)
+        device = self.make_item('DEV', manufactured=True, kind='device')
+        screw = self.make_item('SCR', kind='material')
         screw.estimated_cost = D(50)
         screw.save()
         models.BomLine.objects.create(parent=device, component=screw, qty=D(4))
@@ -1753,8 +1770,8 @@ class ProjectBudgetTests(EngineTestBase):
         self.assertEqual(b['compass'], D(1200))
 
     def test_unestimated_flagged_not_silently_zero(self):
-        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
-        screw = self.make_item('SCR', kind=models.Item.Kind.MATERIAL)  # без estimated_cost
+        device = self.make_item('DEV', manufactured=True, kind='device')
+        screw = self.make_item('SCR', kind='material')  # без estimated_cost
         models.BomLine.objects.create(parent=device, component=screw, qty=D(4))
         self.make_demand(device, 10)
 
@@ -1765,7 +1782,7 @@ class ProjectBudgetTests(EngineTestBase):
     def test_economy_equals_borrow_value(self):
         # прибор из купленного CASE (спот) + заёмного RES (бесплатно в бюджете,
         # но по реальной цене в себестоимости) → экономия = стоимость заёма
-        device = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        device = self.make_item('DEV', manufactured=True, kind='device')
         case = self.make_item('CASE')
         res = self.make_item('RES')
         models.BomLine.objects.create(parent=device, component=case, qty=D(1))
@@ -1821,10 +1838,10 @@ class ProjectBudgetHttpTests(TestCase):
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_budget_projection(self):
-        device = models.Item.objects.create(code='DEV', name='DEV',
-            kind=models.Item.Kind.DEVICE, is_manufactured=True)
-        scr = models.Item.objects.create(code='SCR', name='SCR',
-            kind=models.Item.Kind.MATERIAL, estimated_cost=D(50))
+        device = models.Item.objects.create(design_item_id='DEV', description='DEV',
+            category=_cat(), produced=True)
+        scr = models.Item.objects.create(design_item_id='SCR', description='SCR',
+            category=_cat(), estimated_cost=D(50))
         models.BomLine.objects.create(parent=device, component=scr, qty=D(2))
         models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(10))
         r = self.c.get(f'/api/projects/{self.prj.id}/budget/')
@@ -1995,7 +2012,8 @@ class AuthHttpTests(TestCase):
         self.assertEqual(me.status_code, 200)
         cr = self.c.post('/api/kittings/', {'project_id': self.prj.id,
             'target_item_id': models.Item.objects.create(
-                code='D1', name='Прибор', is_manufactured=True).id, 'qty': 1},
+                design_item_id='D1', description='Прибор', category=_cat(),
+                produced=True).id, 'qty': 1},
             content_type='application/json')
         self.assertEqual(cr.status_code, 201)
         k = models.Kitting.objects.get(pk=cr.json()['id'])
@@ -2049,7 +2067,7 @@ class ProjectDemandEditTests(EngineTestBase):
     """Редактор потребности проекта (секция «Приборы»)."""
 
     def test_add_update_remove_demand(self):
-        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
         d = engine.add_project_demand(self.prj, dev, D(4))
         self.assertEqual(d.qty, D(4))
         engine.update_project_demand(d, D(7))
@@ -2059,7 +2077,7 @@ class ProjectDemandEditTests(EngineTestBase):
         self.assertFalse(models.ProjectDemand.objects.filter(pk=d.pk).exists())
 
     def test_demand_rejects_duplicate_and_nonpositive(self):
-        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
         with self.assertRaises(ValidationError):
             engine.add_project_demand(self.prj, dev, D(0))
         engine.add_project_demand(self.prj, dev, D(1))
@@ -2067,7 +2085,7 @@ class ProjectDemandEditTests(EngineTestBase):
             engine.add_project_demand(self.prj, dev, D(2))
 
     def test_demand_blocked_on_closed_and_internal(self):
-        dev = self.make_item('DEV', manufactured=True, kind=models.Item.Kind.DEVICE)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
         closed = models.Project.objects.create(
             code='PC', name='Закрытый', kind=models.Project.Kind.EXTERNAL,
             status=models.Project.Status.CLOSED)
@@ -2082,19 +2100,19 @@ class ProjectDemandEditTests(EngineTestBase):
         # Два прибора делят компонент R → сводная потребность суммируется.
         r = self.make_item('R')
         c = self.make_item('C')
-        dev1 = self.make_item('DEV1', manufactured=True, kind=models.Item.Kind.DEVICE)
-        dev2 = self.make_item('DEV2', manufactured=True, kind=models.Item.Kind.DEVICE)
+        dev1 = self.make_item('DEV1', manufactured=True, kind='device')
+        dev2 = self.make_item('DEV2', manufactured=True, kind='device')
         engine.add_bom_line(dev1, r, D(2))
         engine.add_bom_line(dev1, c, D(1))
         engine.add_bom_line(dev2, r, D(3))
         engine.add_project_demand(self.prj, dev1, D(5))   # R: 10
         engine.add_project_demand(self.prj, dev2, D(4))   # R: 12 → всего 22
         out = engine.project_deficit(self.prj)
-        agg = {c['component_code']: c for c in out['components']}
+        agg = {c['component_design_item_id']: c for c in out['components']}
         self.assertEqual(agg['R']['need'], D(22))
         self.assertEqual(agg['C']['need'], D(5))
         # Сортировка «горит вперёд»: одинаковый статус (всё к заказу) → по коду.
-        codes = [c['component_code'] for c in out['components']]
+        codes = [c['component_design_item_id'] for c in out['components']]
         self.assertEqual(codes, ['C', 'R'])
 
 
@@ -2102,16 +2120,18 @@ class ItemProjectUpdateTests(EngineTestBase):
     """Правка свойств изделия и реквизитов проекта под замком формы (§6)."""
 
     def test_update_item_fields(self):
-        it = self.make_item('X', kind=models.Item.Kind.COMPONENT)
-        engine.update_item(it, {'name': 'Новое имя', 'kind': 'device',
+        it = self.make_item('X')
+        cat2 = _cat('mcu', 'Микроконтроллеры')
+        engine.update_item(it, {'description': 'Новое имя', 'category_id': cat2.id,
                                 'uom': 'кг', 'estimated_cost': D('12.50'),
-                                'is_manufactured': True})
+                                'temperature': '-40-85°C', 'produced': True})
         it.refresh_from_db()
-        self.assertEqual(it.name, 'Новое имя')
-        self.assertEqual(it.kind, 'device')
+        self.assertEqual(it.description, 'Новое имя')
+        self.assertEqual(it.category_id, cat2.id)
         self.assertEqual(it.uom, 'кг')
         self.assertEqual(it.estimated_cost, D('12.50'))
-        self.assertTrue(it.is_manufactured)
+        self.assertEqual(it.temperature, '-40-85°C')
+        self.assertTrue(it.produced)
 
     def test_update_item_estimated_cost_can_clear(self):
         it = self.make_item('X')
@@ -2120,23 +2140,24 @@ class ItemProjectUpdateTests(EngineTestBase):
         it.refresh_from_db()
         self.assertIsNone(it.estimated_cost)
 
-    def test_update_item_rejects_dup_code_empty_name_bad_kind(self):
+    def test_update_item_rejects_dup_key_empty_desc_bad_category(self):
         self.make_item('A')
         it = self.make_item('B')
         with self.assertRaises(ValidationError):
-            engine.update_item(it, {'code': 'A'})          # дубль артикула
+            engine.update_item(it, {'design_item_id': 'A'})  # дубль ключа
         with self.assertRaises(ValidationError):
-            engine.update_item(it, {'name': '   '})        # пустое название
+            engine.update_item(it, {'description': '   '})   # пустое описание
         with self.assertRaises(ValidationError):
-            engine.update_item(it, {'kind': 'gadget'})     # неизвестный вид
+            engine.update_item(it, {'category_id': 999999})  # неизвестная категория
 
     def test_update_item_partial_leaves_others(self):
-        it = self.make_item('X', kind=models.Item.Kind.COMPONENT)
+        it = self.make_item('X')
         it.uom = 'м'; it.save()
-        engine.update_item(it, {'name': 'Y'})              # прислали только name
+        cat0 = it.category_id
+        engine.update_item(it, {'description': 'Y'})       # прислали только описание
         it.refresh_from_db()
         self.assertEqual(it.uom, 'м')                      # uom не тронут
-        self.assertEqual(it.kind, 'component')
+        self.assertEqual(it.category_id, cat0)             # категория не тронута
 
     def test_update_project_fields_and_clear_budget(self):
         engine.update_project(self.prj, {'name': 'Переименован',
@@ -2188,12 +2209,12 @@ class ItemProjectUpdateTests(EngineTestBase):
         self.c = Client()
         self.c.force_login(self.user)
         r = self.c.patch(f'/api/items/{it.id}/',
-                         {'name': 'Обновлён', 'estimated_cost': '9.9'},
+                         {'description': 'Обновлён', 'estimated_cost': '9.9'},
                          content_type='application/json')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()['name'], 'Обновлён')
+        self.assertEqual(r.json()['description'], 'Обновлён')
         it.refresh_from_db()
-        self.assertEqual(it.name, 'Обновлён')
+        self.assertEqual(it.description, 'Обновлён')
         self.assertEqual(it.estimated_cost, D('9.9'))
 
 
@@ -3596,11 +3617,11 @@ class EntityDeleteHttpTests(TestCase):
         self.c.force_login(self.user)
 
     def test_item_delete_204_and_guard_400(self):
-        it = models.Item.objects.create(code='FREE', name='FREE')
+        it = models.Item.objects.create(design_item_id='FREE', description='FREE', category=_cat())
         self.assertEqual(self.c.delete(f'/api/items/{it.id}/').status_code, 204)
         self.assertFalse(models.Item.objects.filter(pk=it.pk).exists())
         # с лотом → 400
-        it2 = models.Item.objects.create(code='WL', name='WL')
+        it2 = models.Item.objects.create(design_item_id='WL', description='WL', category=_cat())
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=it2, project=self.prj, origin=r, qty=D(1))
@@ -3613,7 +3634,7 @@ class EntityDeleteHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(
-            item=models.Item.objects.create(code='M', name='M'),
+            item=models.Item.objects.create(design_item_id='M', description='M', category=_cat()),
             project=self.prj, origin=r, qty=D(1))
         engine.rebuild_movements(lot)               # движение на MAIN
         self.assertEqual(self.c.delete(f'/api/locations/{self.main.id}/').status_code, 400)
@@ -3625,7 +3646,7 @@ class EntityDeleteHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-3', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(
-            item=models.Item.objects.create(code='Q', name='Q'),
+            item=models.Item.objects.create(design_item_id='Q', description='Q', category=_cat()),
             project=self.prj, origin=r, qty=D(1))
         engine.rebuild_movements(lot)
         self.assertEqual(self.c.delete(f'/api/projects/{self.prj.id}/').status_code, 400)

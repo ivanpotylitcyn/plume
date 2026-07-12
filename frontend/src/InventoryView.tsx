@@ -104,8 +104,8 @@ function LotRow({ lot, locked, busy, openItem, run }: {
     <tr className="row s-available">
       <td>
         <span className="glyph g-available">✓</span>{' '}
-        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_name}</span>
+        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_design_item_id}</a>{' '}
+        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
@@ -171,7 +171,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
         <select className="lot-sel" value={itemId} disabled={busy}
           onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
           <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+          {items.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
         </select>
       </td>
       <td className="num">
@@ -237,7 +237,7 @@ function RematerializePanel({ inventoryId, busy, run }: {
             <tbody>
               {lots.map(l => (
                 <tr key={l.lot_id} className="row">
-                  <td>{l.item_code} <span style={{ color: 'var(--fg-dim)' }}>{l.item_name}</span></td>
+                  <td>{l.item_design_item_id} <span style={{ color: 'var(--fg-dim)' }}>{l.item_description}</span></td>
                   <td>{l.project_code}</td>
                   <td className="num">{num(l.written_qty)} {l.uom}</td>
                   <td>{l.lot_name || '—'}</td>

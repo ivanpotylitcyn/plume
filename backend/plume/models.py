@@ -169,31 +169,53 @@ class StockDocument(models.Model):
 # --------------------------------------------------------------------------- #
 #  Справочники
 # --------------------------------------------------------------------------- #
+class Category(models.Model):
+    """Категория изделия — физический класс (конденсатор/микросхема/стабилизатор/…).
+    Волна 15: справочник (FK вместо прежнего enum `Item.kind`), синхронизируемый с
+    библиотекой компонентов — `code` = стем имени CSV-файла (`capacitors`/`mcu`/…).
+    Классы редактируемы, рост библиотеки = 0 правок схемы; `label`/`icon` отдаются в
+    сериализации Item (снимают хардкод-карту на фронте). Синк делает `get_or_create`
+    по `code` на лету (новый класс всплывает с сырым label, юзер правит)."""
+
+    code = models.CharField('код', max_length=64, unique=True)
+    label = models.CharField('название', max_length=128)
+    icon = models.CharField('иконка (Codicon)', max_length=64, blank=True, default='')
+
+    class Meta:
+        verbose_name = 'категория'
+        verbose_name_plural = 'категории'
+        ordering = ['code']
+
+    def __str__(self):
+        return self.label or self.code
+
+
 class Item(models.Model):
     """Изделие — единица справочника (абстракция: КД/datasheet). Едина для
-    приборов, компонентов и материалов; вид — `kind`."""
+    приборов, компонентов и материалов. Класс — `category` (FK-справочник); ось
+    «производим/покупаем» — `produced` (⟂ category, волна 15).
 
-    class Kind(models.TextChoices):
-        DEVICE = 'device', 'Изделие'
-        COMPONENT = 'component', 'Компонент'
-        MATERIAL = 'material', 'Материал'
+    Ключ `design_item_id` — канон внешней библиотеки компонентов (колонка `Design
+    Item Id` = заказной PN); осознанно НЕ `item_id`, чтобы не столкнуться с Django
+    FK-PK аксессором `item_id` в рукописном JSON-API (JOURNAL 2026-07-12)."""
 
-    code = models.CharField('артикул', max_length=128, unique=True)
-    name = models.CharField('название', max_length=255)
-    kind = models.CharField('вид', max_length=16, choices=Kind.choices,
-                            default=Kind.COMPONENT)
+    design_item_id = models.CharField('изделие', max_length=128, unique=True)
+    description = models.CharField('описание', max_length=255)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT,
+                                 related_name='items', verbose_name='категория')
     uom = models.CharField('ед. изм.', max_length=32, default='шт')
+    temperature = models.CharField('температурный диапазон', max_length=64,
+                                   blank=True, default='')
     estimated_cost = money(verbose_name='оценочная стоимость', null=True, blank=True)
-    is_manufactured = models.BooleanField('производимое', default=False)
-    active = models.BooleanField('активно', default=True)
+    produced = models.BooleanField('производимое', default=False)
 
     class Meta:
         verbose_name = 'изделие'
         verbose_name_plural = 'изделия'
-        ordering = ['code']
+        ordering = ['design_item_id']
 
     def __str__(self):
-        return f'{self.code} — {self.name}'
+        return f'{self.design_item_id} — {self.description}'
 
 
 class BomLine(models.Model):
@@ -215,7 +237,7 @@ class BomLine(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.parent.code} ⊃ {self.component.code} ×{self.qty}'
+        return f'{self.parent.design_item_id} ⊃ {self.component.design_item_id} ×{self.qty}'
 
 
 class Counterparty(models.Model):
@@ -323,7 +345,7 @@ class ProjectDemand(models.Model):
         verbose_name_plural = 'потребности проектов'
 
     def __str__(self):
-        return f'{self.project.code}: {self.target_item.code} ×{self.qty}'
+        return f'{self.project.code}: {self.target_item.design_item_id} ×{self.qty}'
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +386,7 @@ class ProcurementLine(models.Model):
         verbose_name_plural = 'строки закупки'
 
     def __str__(self):
-        return f'{self.item.code} ×{self.qty}'
+        return f'{self.item.design_item_id} ×{self.qty}'
 
 
 class Purchase(models.Model):
@@ -412,7 +434,7 @@ class PurchaseLine(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.item.code} ×{self.qty}'
+        return f'{self.item.design_item_id} ×{self.qty}'
 
 
 # --------------------------------------------------------------------------- #
@@ -451,7 +473,7 @@ class Kitting(StockDocument):
         verbose_name_plural = 'комплектации'
 
     def __str__(self):
-        return (f'Комплектация #{self.pk} {self.target_item.code} '
+        return (f'Комплектация #{self.pk} {self.target_item.design_item_id} '
                 f'[{self.get_status_display()}]')
 
 
@@ -508,7 +530,7 @@ class Lot(models.Model):
     # `lot_name` — человеческий (имена из УПД + заводские №); `part_number` —
     # строгий машинный (MPN с datasheet / децимальный номер; для станка
     # автомонтажа). PN живёт на `Lot`, а не на `Item`: упаковка/исполнение
-    # варьируются от поставки; `Item.code` — абстрактный артикул.
+    # варьируются от поставки; `Item.design_item_id` — абстрактный артикул.
     lot_name = models.CharField('название партии', max_length=255,
                                 blank=True, default='')
     part_number = models.CharField('part number', max_length=128,
@@ -534,7 +556,7 @@ class Lot(models.Model):
             )
 
     def __str__(self):
-        return f'Lot#{self.pk} {self.item.code} ({self.project.code})'
+        return f'Lot#{self.pk} {self.item.design_item_id} ({self.project.code})'
 
 
 class StockMovement(models.Model):

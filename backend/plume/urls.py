@@ -29,6 +29,7 @@ urlpatterns = [
     path('projects/<int:pk>/close/', views.project_close, name='project-close'),
     path('projects/<int:pk>/reopen/', views.project_reopen, name='project-reopen'),
     path('available-lots/', views.available_lots, name='available-lots'),
+    path('categories/', views.categories, name='categories'),
     path('items/', views.items, name='items'),
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),

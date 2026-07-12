@@ -120,8 +120,8 @@ function LineRow({ ln, locked, busy, openItem, run }: {
         <span className="pn">{ln.lot_label}</span>
       </td>
       <td>
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{ln.item_name}</span>
+        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_design_item_id}</a>{' '}
+        <span style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</span>
       </td>
       <td className="num">
         <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
@@ -172,12 +172,12 @@ function GhostRow({ transferId, lots, busy, run }: {
           <option value="">＋ партия…</option>
           {lots.map(l => (
             <option key={l.lot_id} value={l.lot_id}>
-              #{l.lot_id} {l.item_code}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
+              #{l.lot_id} {l.item_design_item_id}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
             </option>
           ))}
         </select>
       </td>
-      <td style={{ color: 'var(--fg-dim)' }}>{picked?.item_name ?? ''}</td>
+      <td style={{ color: 'var(--fg-dim)' }}>{picked?.item_description ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
           onChange={e => setQty(e.target.value)}

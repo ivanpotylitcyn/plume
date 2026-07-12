@@ -3,6 +3,7 @@
 // Строки состояния нет (UI_GUIDE §11). Список режима — единый шаблон (§7).
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
+  type Category,
   type KittingRow, type ReceiptRow, type PurchaseRow, type CounterpartyRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
   type InventoryRow, type RelocationRow, type LocationRow } from './api'
@@ -214,8 +215,8 @@ export default function App() {
     const es: OrderEntry[] = []
     receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.number,
       name: r.contractor_name, projectCode: r.project_code, posted: r.approved, date: r.date }))
-    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.target_code,
-      name: k.target_name, projectCode: k.project_code, posted: k.status === 'closed', date: k.date }))
+    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.target_design_item_id,
+      name: k.target_description, projectCode: k.project_code, posted: k.status === 'closed', date: k.date }))
     transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.number,
       name: t.project_code, projectCode: t.project_code, posted: t.posted, date: t.date }))
     requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.number,
@@ -261,7 +262,7 @@ export default function App() {
     const e: PaletteEntry[] = []
     projects.forEach(p => e.push({ key: `p${p.id}`, code: p.code, name: p.name,
       kind: 'Проект', open: () => openProject(p.id) }))
-    items.forEach(i => e.push({ key: `i${i.id}`, code: i.code, name: i.name,
+    items.forEach(i => e.push({ key: `i${i.id}`, code: i.design_item_id, name: i.description,
       kind: 'Изделие', open: () => openItem(i.id) }))
     receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.number, name: r.contractor_name,
       kind: 'Поставка', open: () => openReceipt(r.id) }))
@@ -275,7 +276,7 @@ export default function App() {
       kind: 'Инвентаризация', open: () => openInventory(i.id) }))
     purchases.forEach(p => e.push({ key: `u${p.id}`, code: `Заказ #${p.id}`, name: p.project_code,
       kind: 'Заказ', open: () => openPurchase(p.id) }))
-    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.target_code, name: k.target_name,
+    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.target_design_item_id, name: k.target_description,
       kind: 'Комплектация', open: () => openKitting(k.id) }))
     relocations.forEach(r => e.push({ key: `l${r.id}`, code: r.number, name: r.project_code,
       kind: 'Перемещение', open: () => openRelocation(r.id) }))
@@ -322,8 +323,9 @@ export default function App() {
             newSel={sel?.kind === 'new-item'} onNew={() => setSel({ kind: 'new-item' })}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
-            rows={[...items].sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
-              id: i.id, code: i.code, name: i.name, glyph: <span className={`ci ci-${itemIcon(i.kind)}`} /> }))} />}
+            rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
+              id: i.id, code: i.design_item_id, name: i.description,
+              glyph: <span className={`ci ci-${i.category.icon || 'chip'}`} /> }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
@@ -450,14 +452,6 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
 
 // Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
 const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
-
-// Codicon вида изделия (§7) по kind: изделие — rocket, компонент — chip, материал — beaker.
-const ITEM_ICON: Record<string, string> = {
-  device: 'rocket', component: 'chip', material: 'beaker',
-}
-function itemIcon(kind: string): string {
-  return ITEM_ICON[kind] ?? 'chip'
-}
 
 // Единый список режима (§7): призрачный «＋ Новая…» первым, строка = глиф · моно-код
 // (подписи нет), фильтр-строка и — где есть проект — дропдаун по проекту.
@@ -609,7 +603,7 @@ function NewKitting({ projects, items, onCreated }: {
   projects: ProjectRow[]; items: ItemRow[]; onCreated: (id: number) => void
 }) {
   const externalProjects = projects.filter(p => p.kind === 'external')
-  const targets = items.filter(i => i.is_manufactured)
+  const targets = items.filter(i => i.produced)
   const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
   const [targetId, setTargetId] = useState<number | ''>(targets[0]?.id ?? '')
   const [qty, setQty] = useState('1')
@@ -639,7 +633,7 @@ function NewKitting({ projects, items, onCreated }: {
         <dt>Прибор</dt>
         <dd><select className="lot-sel" value={targetId}
           onChange={e => setTargetId(Number(e.target.value))}>
-          {targets.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+          {targets.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
         </select></dd>
         <dt>Образцов</dt>
         <dd><input className="qty-in" value={qty} onChange={e => setQty(e.target.value)} /></dd>
@@ -696,20 +690,29 @@ function NewPurchase({ projects, onCreated }: {
 // Создание нового изделия (справочник, канон «＋ Новое»): артикул + название + вид +
 // производимое + ед.изм. + оценочная стоимость (опц.). BOM правится отдельно.
 function NewItem({ onCreated }: { onCreated: (id: number) => void }) {
-  const [code, setCode] = useState('')
-  const [name, setName] = useState('')
-  const [kind, setKind] = useState('component')
-  const [manufactured, setManufactured] = useState(false)
+  const [designItemId, setDesignItemId] = useState('')
+  const [description, setDescription] = useState('')
+  const [categories, setCategories] = useState<Category[]>([])
+  const [categoryId, setCategoryId] = useState<number | ''>('')
+  const [temperature, setTemperature] = useState('')
+  const [produced, setProduced] = useState(false)
   const [uom, setUom] = useState('шт')
   const [cost, setCost] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    api.categories().then(cs => { setCategories(cs); setCategoryId(cs[0]?.id ?? '') })
+      .catch(() => { /* пусто — форма подскажет «выберите категорию» */ })
+  }, [])
+
   const create = () => {
-    if (!code.trim() || !name.trim()) { setErr('Заполните артикул и название'); return }
+    if (!designItemId.trim() || !description.trim()) { setErr('Заполните изделие и описание'); return }
+    if (!categoryId) { setErr('Выберите категорию'); return }
     setBusy(true); setErr(null)
-    api.createItem({ code: code.trim(), name: name.trim(), kind, uom: uom.trim() || 'шт',
-      is_manufactured: manufactured, estimated_cost: cost.trim() ? Number(cost) : undefined })
+    api.createItem({ design_item_id: designItemId.trim(), description: description.trim(),
+      category_id: categoryId, uom: uom.trim() || 'шт', temperature: temperature.trim(),
+      produced, estimated_cost: cost.trim() ? Number(cost) : undefined })
       .then(i => onCreated(i.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -718,23 +721,25 @@ function NewItem({ onCreated }: { onCreated: (id: number) => void }) {
   return (
     <div>
       <h1 className="title">Новое изделие</h1>
-      <div className="subtitle">Справочник · артикул + название + вид · состав (BOM) правится отдельно</div>
+      <div className="subtitle">Справочник · изделие (Design Item Id) + описание + категория · состав (BOM) правится отдельно</div>
       <dl className="props">
-        <dt>Артикул</dt>
-        <dd><input className="qty-in" style={{ width: 200 }} value={code}
-          onChange={e => setCode(e.target.value)} /></dd>
-        <dt>Название</dt>
-        <dd><input className="qty-in" style={{ width: 300 }} value={name}
-          onChange={e => setName(e.target.value)} /></dd>
-        <dt>Вид</dt>
-        <dd><select className="lot-sel" value={kind} onChange={e => setKind(e.target.value)}>
-          <option value="device">Изделие (прибор)</option>
-          <option value="component">Компонент</option>
-          <option value="material">Материал</option>
+        <dt>Изделие</dt>
+        <dd><input className="qty-in" style={{ width: 200 }} value={designItemId}
+          onChange={e => setDesignItemId(e.target.value)} /></dd>
+        <dt>Описание</dt>
+        <dd><input className="qty-in" style={{ width: 300 }} value={description}
+          onChange={e => setDescription(e.target.value)} /></dd>
+        <dt>Категория</dt>
+        <dd><select className="lot-sel" value={categoryId}
+          onChange={e => setCategoryId(Number(e.target.value))}>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
         </select></dd>
         <dt>Производимое</dt>
-        <dd><input type="checkbox" checked={manufactured}
-          onChange={e => setManufactured(e.target.checked)} /> <span className="sub">делаем сами (цель комплектации)</span></dd>
+        <dd><input type="checkbox" checked={produced}
+          onChange={e => setProduced(e.target.checked)} /> <span className="sub">делаем сами (цель комплектации)</span></dd>
+        <dt>Температурный диапазон</dt>
+        <dd><input className="qty-in" style={{ width: 160 }} value={temperature}
+          placeholder="напр. -40-125°C" onChange={e => setTemperature(e.target.value)} /></dd>
         <dt>Ед. изм.</dt>
         <dd><input className="qty-in" style={{ width: 80 }} value={uom}
           onChange={e => setUom(e.target.value)} /></dd>

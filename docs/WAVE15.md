@@ -88,15 +88,23 @@
 
 ## Этапы
 
-### Ф0 — схема и миграция
-- [ ] Модель `Category` (`code` uniq, `label`, `icon`; `__str__`, `verbose_name`).
-- [ ] `Item`: `code→design_item_id` (uniq, verbose_name «Изделие»), `name→description`,
+> **Статус реализации (сессия 2026-07-12): РАЗМОРОЗКА МОДЕЛИ ЗАКРЫТА.** Ф0 (схема/
+> миграция/сид/admin), Ф3 (вычисляемое used), Ф5-rename (полный фронт + `device→
+> produced` + отображение `Category`, сборка зелёная), Ф7 (диаграммы README +
+> FIELD_MATRIX) — **сделаны**. Backend 285 тестов зелёные, `0001_initial` пересобран,
+> dev-БД пересоздана и засеяна. **Осталось на следующие сессии:** сам импорт CSV
+> (Ф1 парсер, Ф2 диф/применение, Ф6 эндпойнты, Ф5-форма+диф-вью) и роллап стоимости
+> (Ф4 + кнопка). Задел под импорт: `engine.LIBRARY_CATEGORIES` + `ensure_category`,
+> `/api/categories/`.
+
+### Ф0 — схема и миграция ✅
+- [x] Модель `Category` (`code` uniq, `label`, `icon`; `__str__`, `verbose_name`).
+- [x] `Item`: `code→design_item_id` (uniq, verbose_name «Изделие»), `name→description`,
   `kind`(enum)→`category`(FK→`Category`, `PROTECT`); новое `temperature` (`CharField`,
-  blank); `is_manufactured→produced`; **удалить `active`**.
-- [ ] Пересобрать `0001_initial` (сквош, [migrations-squash-policy]).
-- [ ] Сид: `Category` из 5 библиотечных файлов (только они). Демо-`Item` — по
-  необходимости для дебага, помечать/прибирать.
-- [ ] `admin.py` — `verbose_name`, регистрация `Category`.
+  blank); `is_manufactured→produced`; **удалено `active`**.
+- [x] Пересобран `0001_initial` (сквош, [migrations-squash-policy]).
+- [x] Сид: `Category` из 5 библиотечных (`ensure_category`) + демо-классы под демо-BOM.
+- [x] `admin.py` — регистрация `Category`, ItemAdmin на новые поля.
 
 ### Ф1 — парсер библиотеки (чистый Python + тесты)
 - [ ] Декод CP1251, split по `;`, проверка числа колонок (8), заголовок как эталон.
@@ -112,9 +120,10 @@
 - [ ] Применение по подтверждённым строкам: create (`produced=false`), update,
   delete/flag; `Category.get_or_create` на лету; всё в транзакции.
 
-### Ф3 — вычисляемое «используется/спящий»
-- [ ] `Exists`-хелпер: ссылки `BomLine`(component)/`Lot`/`PurchaseLine`/
-  `ProjectDemand`/`Kitting`(target). Отдать в сериализации `Item` + в диф.
+### Ф3 — вычисляемое «используется/спящий» ✅
+- [x] `engine.item_is_used` (Exists: `BomLine`(component)/`Lot`/`PurchaseLine`/
+  `ProjectDemand`/`Kitting`(target)/`ProcurementLine`; зеркалит guard'ы `delete_item`).
+  Отдаётся ключом `used` в сериализации `Item` (список + деталь). В диф — при Ф2.
 
 ### Ф4 — роллап стоимости
 - [ ] Рекурсивная функция: для `produced` узла `estimated_cost = Σ(рекурс(component)
@@ -123,28 +132,30 @@
 - [ ] Пишет оценку во **все** производимые узлы поддерева (не только вершину).
 - [ ] Эндпойнт + кнопка.
 
-### Ф5 — фронт
-- [ ] **Полный rename** во всех вьюхах/`api.ts`. Объект **самого** изделия
+### Ф5 — фронт (rename ✅; форма импорта/кнопка стоимости — при Ф1/Ф2/Ф4)
+- [x] **Полный rename** во всех вьюхах/`api.ts`. Объект **самого** изделия
   (`ItemRow`/`ItemDetail`): `.code→.design_item_id`, `.name→.description`,
   `.kind→.category`. Ссылочные display-ключи (лоты/строки): `*_code→*_design_item_id`,
   `*_name→*_description` (`item_code→item_design_item_id`, `component_code→
   component_design_item_id`, `target_code→target_design_item_id`, `parent_code→
   parent_design_item_id`). **PK-ключи (`item_id`/`target_id`/`component_id`/`parent_id`)
   и payload'ы мутаций — НЕ трогать** (это PK-ссылки, коллизии больше нет).
-- [ ] `kind==='device'`→`produced` в [DeficitView.tsx:271](../frontend/src/DeficitView.tsx#L271)
-  и [ItemView.tsx:58](../frontend/src/ItemView.tsx#L58).
-- [ ] Отображение категории через `Category.label`/`icon` (снять хардкод-карту
-  `KIND_RU`/`ITEM_ICON`).
-- [ ] Форма загрузки CSV (мульти-файл) + диф-вью с чекбоксами (секции/колонка
-  статуса) в режиме «Изделия».
-- [ ] Кнопка «Пересчитать стоимость» (видна для `produced`).
-- [ ] Индикатор «используется/спящий» в форме/списке изделия.
+- [x] `kind==='device'`→`produced` в DeficitView (пикер цели) и ItemView (`composable`).
+- [x] Отображение категории через `Category.label`/`icon` (снята хардкод-карта
+  `KIND_RU`/`ITEM_ICON` в App.tsx и ItemView.tsx; форма изделия — пикер категории).
+- [x] Индикатор «используется/спящий» (`used`) в шапке формы изделия.
+- [ ] Форма загрузки CSV (мульти-файл) + диф-вью с чекбоксами — **при Ф1/Ф2/Ф6**.
+- [ ] Кнопка «Пересчитать стоимость» (видна для `produced`) — **при Ф4**.
 
 ### Ф6 — эндпойнты импорта
 - [ ] POST загрузки CSV → диф (без записи). POST применения → по подтверждённым.
 
-### Ф7 — доки и консистентность
-- [ ] Обе mermaid-диаграммы [README.md](../README.md) (новая `Category`,
-  `temperature`, rename, `produced`, снятое `active`).
-- [ ] Проверка [form-consistency-standard]: не бьёт ли rename по другим формам.
-- [ ] `verify` прогон end-to-end (загрузка → диф → применение → пересчёт).
+### Ф7 — доки и консистентность (rename-часть ✅)
+- [x] Обе mermaid-диаграммы [README.md](../README.md): новая `Category` + связь,
+  `temperature`, rename, `produced`, снятое `active`; продуктовый глоссарий.
+- [x] [FIELD_MATRIX.md](FIELD_MATRIX.md) A1 (форма изделия) — на новые поля.
+- [x] [form-consistency-standard]: rename Item-специфичен, паттерны форм переиспользованы,
+  по другим формам (Project/Location code/name) не бьёт.
+- [x] verify end-to-end rename: backend 285 тестов, фронт-сборка (tsc), живая
+  сериализация нового контракта, HTTP `/api/items/` + `/api/categories/`.
+- [ ] verify импорта (загрузка → диф → применение → пересчёт) — **при Ф1/Ф2/Ф4/Ф6**.

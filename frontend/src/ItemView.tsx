@@ -3,28 +3,17 @@
 // Волна 5: блок «Отгруженные партии» — куда и по какой накладной ушло заказчику.
 // Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
 import { useEffect, useState } from 'react'
-import { api, type ItemDetail, type ItemRow } from './api'
+import { api, type ItemDetail, type ItemRow, type Category } from './api'
 import { num } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
 
-const KIND_RU: Record<string, string> = {
-  device: 'изделие', component: 'компонент', material: 'материал',
-}
-const KINDS = ['device', 'component', 'material'] as const
-// Codicon вида изделия (§7) по kind: изделие — rocket, компонент — chip, материал — beaker.
-const ITEM_ICON: Record<string, string> = {
-  device: 'rocket', component: 'chip', material: 'beaker',
-}
-function itemIcon(d: ItemDetail): string {
-  return ITEM_ICON[d.kind] ?? 'chip'
-}
-
 export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; openItem: (id: number) => void
     onChanged?: () => void; onDeleted?: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
+  const [categories, setCategories] = useState<Category[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const { unlocked, toggle } = useFormLock(false)   // замок §5: свойства правим открыв
@@ -33,6 +22,7 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
     setD(null); setErr(null)
     api.item(itemId).then(setD).catch(e => setErr(String(e)))
   }, [itemId])
+  useEffect(() => { api.categories().then(setCategories).catch(() => {}) }, [])
 
   // Обёртка мутации состава: ответ = свежий экран изделия, + пинок дереву (where-used).
   const run = (p: Promise<ItemDetail>) => {
@@ -54,49 +44,56 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   if (err && !d) return <div className="empty">Ошибка: {err}</div>
   if (!d) return <div className="empty">Загрузка…</div>
 
-  // Состав правим у производимых/приборов (или если он уже задан) — у покупных BOM нет.
-  const composable = d.is_manufactured || d.kind === 'device' || d.bom.length > 0
+  // Состав правим у производимых (или если он уже задан) — у покупных BOM нет.
+  const composable = d.produced || d.bom.length > 0
 
   return (
     <div>
       <FormHeader
-        name={d.name}
+        name={d.description}
         meta={<>
-          <span className={`ci ci-${itemIcon(d)}`} style={{ fontSize: 12, marginRight: 5 }} />
-          {d.code} · {KIND_RU[d.kind] ?? d.kind}{d.is_manufactured ? ' · производимое' : ''} · {d.uom}
+          <span className={`ci ci-${d.category.icon || 'chip'}`} style={{ fontSize: 12, marginRight: 5 }} />
+          {d.design_item_id} · {d.category.label}{d.produced ? ' · производимое' : ''} · {d.uom}
+          {d.temperature && <> · {d.temperature}</>}
+          {' · '}<span className={d.used ? 's-available' : ''}>{d.used ? 'используется' : 'спящий'}</span>
           {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
         onDelete={unlocked ? del : undefined}
       />
       <dl className="props">
-        <dt>Артикул</dt>
+        <dt>Изделие</dt>
         <dd>{unlocked
-          ? <CommitInput value={d.code} width={160} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { code: v }))}
+          ? <CommitInput value={d.design_item_id} width={160} disabled={busy}
+              onCommit={v => run(api.updateItem(d.id, { design_item_id: v }))}
               validate={v => v.trim() !== ''} />
-          : d.code}</dd>
-        <dt>Название</dt>
+          : d.design_item_id}</dd>
+        <dt>Описание</dt>
         <dd>{unlocked
-          ? <CommitInput value={d.name} width={260} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { name: v }))}
+          ? <CommitInput value={d.description} width={260} disabled={busy}
+              onCommit={v => run(api.updateItem(d.id, { description: v }))}
               validate={v => v.trim() !== ''} />
-          : d.name}</dd>
-        <dt>Вид</dt>
+          : d.description}</dd>
+        <dt>Категория</dt>
         <dd>{unlocked
-          ? <select className="lot-sel" value={d.kind} disabled={busy}
-              onChange={e => run(api.updateItem(d.id, { kind: e.target.value }))}>
-              {KINDS.map(k => <option key={k} value={k}>{KIND_RU[k]}</option>)}
+          ? <select className="lot-sel" value={d.category.id} disabled={busy}
+              onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
-          : (KIND_RU[d.kind] ?? d.kind)}</dd>
+          : d.category.label}</dd>
         <dt>Производимое</dt>
         <dd>{unlocked
           ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={d.is_manufactured} disabled={busy}
-                onChange={e => run(api.updateItem(d.id, { is_manufactured: e.target.checked }))} />
-              {d.is_manufactured ? 'да' : 'нет'}
+              <input type="checkbox" checked={d.produced} disabled={busy}
+                onChange={e => run(api.updateItem(d.id, { produced: e.target.checked }))} />
+              {d.produced ? 'да' : 'нет'}
             </label>
-          : (d.is_manufactured ? 'да' : 'нет')}</dd>
+          : (d.produced ? 'да' : 'нет')}</dd>
+        <dt>Температурный диапазон</dt>
+        <dd>{unlocked
+          ? <CommitInput value={d.temperature} width={160} disabled={busy}
+              onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
+          : (d.temperature || '—')}</dd>
         <dt>Ед. изм.</dt>
         <dd>{unlocked
           ? <CommitInput value={d.uom} width={80} disabled={busy}
@@ -120,8 +117,8 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
               <th style={{ textAlign: 'right' }}>Кол-во</th></tr></thead>
             <tbody>{d.where_used.map(w => (
               <tr key={w.parent_id} className="row">
-                <td><a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
-                <td style={{ color: 'var(--fg-dim)' }}>{w.parent_name}</td>
+                <td><a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_design_item_id}</a></td>
+                <td style={{ color: 'var(--fg-dim)' }}>{w.parent_description}</td>
                 <td className="num">{num(w.qty)}</td>
               </tr>))}</tbody>
           </table>}
@@ -136,8 +133,8 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
               <th style={{ textAlign: 'right' }}>Кол-во</th><th /></tr></thead>
             <tbody>{d.bom.map(b => (
               <tr key={b.id} className="row">
-                <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
-                <td style={{ color: 'var(--fg-dim)' }}>{b.component_name}</td>
+                <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_design_item_id}</a></td>
+                <td style={{ color: 'var(--fg-dim)' }}>{b.component_description}</td>
                 <td className="num">
                   <CommitInput value={String(b.qty)} width={56} disabled={busy}
                     onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
@@ -226,7 +223,7 @@ function AddComponent({ items, parentId, bom, busy, add }: {
       <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ компонент</span>
       <select className="lot-sel" value={componentId} disabled={busy}
         onChange={e => setComponentId(Number(e.target.value))}>
-        {options.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+        {options.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
       </select>
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}

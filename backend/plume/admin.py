@@ -74,11 +74,19 @@ class RelocationLineInline(admin.TabularInline):
 
 
 # --- справочники ---------------------------------------------------------- #
+@admin.register(models.Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('code', 'label', 'icon')
+    search_fields = ('code', 'label')
+
+
 @admin.register(models.Item)
 class ItemAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'kind', 'uom', 'is_manufactured', 'active')
-    list_filter = ('kind', 'is_manufactured', 'active')
-    search_fields = ('code', 'name')
+    list_display = ('design_item_id', 'description', 'category', 'uom',
+                    'temperature', 'produced')
+    list_filter = ('category', 'produced')
+    search_fields = ('design_item_id', 'description')
+    list_select_related = ('category',)
     inlines = [BomLineInline]
 
 
@@ -198,7 +206,7 @@ class LotAdmin(admin.ModelAdmin):
     list_display = ('id', 'item', 'project', 'origin_kind', 'unit_cost',
                     'part_number', 'lot_name')
     list_filter = ('project',)
-    search_fields = ('item__code', 'part_number', 'lot_name')
+    search_fields = ('item__design_item_id', 'part_number', 'lot_name')
 
 
 @admin.register(models.StockMovement)

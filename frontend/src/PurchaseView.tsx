@@ -155,8 +155,8 @@ function LineRow({ ln, editable, busy, openItem, run }: {
     <tr className={`row s-${ln.status}`}>
       <td>
         <Glyph status={ln.status} />{' '}
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{ln.item_name}</span>
+        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_design_item_id}</a>{' '}
+        <span style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</span>
       </td>
       <td className="num">
         {editable
@@ -198,7 +198,7 @@ function GhostRow({ purchaseId, items, busy, run }: {
         <select className="lot-sel" value={itemId} disabled={busy}
           onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
           <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+          {items.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
         </select>
       </td>
       <td className="num">

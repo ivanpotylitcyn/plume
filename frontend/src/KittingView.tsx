@@ -35,9 +35,9 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={c.target_name}
+        name={c.target_description}
         meta={<>
-          <Glyph status={c.cockpit_status} /> {c.target_code} · {c.project_code} ·
+          <Glyph status={c.cockpit_status} /> {c.target_design_item_id} · {c.project_code} ·
           {' '}образцов {num(c.qty)} · {KIT_STATUS[c.status] ?? c.status}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
@@ -61,8 +61,8 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
           onChange={id => run(api.updateKitting(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { project_id: id }))} />
-        <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
-          options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.name}` }))}
+        <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_design_item_id}
+          options={items.map(i => ({ id: i.id, label: `${i.design_item_id} — ${i.description}` }))}
           disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
       </dl>
@@ -105,8 +105,8 @@ function Component({ row, cockpit, wip, busy, openItem, run }: {
       <div className="kit-comp-h">
         <Glyph status={status} />
         <span className="name">
-          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a>
-          {' '}<span style={{ color: 'var(--fg-dim)' }}>{row.component_name}</span>
+          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_design_item_id}</a>
+          {' '}<span style={{ color: 'var(--fg-dim)' }}>{row.component_description}</span>
         </span>
         <span className="triple">надо {num(row.need)} {row.uom} · пробито {num(row.pierced)}
           {row.remaining > 0 && <> · остаток <span className="g-to_order">{num(row.remaining)}</span></>}

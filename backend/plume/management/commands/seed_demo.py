@@ -37,21 +37,32 @@ class Command(BaseCommand):
             name='АО «Заказчик»', inn='7811111111',
             is_supplier=False, is_customer=True)
 
+        # --- категории: 5 канонических из библиотеки + демо-классы под демо-BOM --- #
+        # 5 библиотечных всплывают через ensure_category (канон label/icon); демо-классы
+        # (прибор/плата/механика/крепёж/резистор) — синтетические, только для дебага.
+        for code in engine.LIBRARY_CATEGORIES:
+            engine.ensure_category(code)
+        cat_device = models.Category.objects.create(code='device', label='Приборы', icon='vm')
+        cat_board = models.Category.objects.create(code='board', label='Платы', icon='circuit-board')
+        cat_mech = models.Category.objects.create(code='mechanical', label='Механика', icon='package')
+        cat_fastener = models.Category.objects.create(code='fasteners', label='Крепёж', icon='settings-gear')
+        cat_res = models.Category.objects.create(code='resistors', label='Резисторы', icon='symbol-constant')
+
         # --- справочник изделий + BOM ---------------------------------- #
         device = models.Item.objects.create(
-            code='ИЗДЕЛИЕ-А', name='Прибор А', kind=models.Item.Kind.DEVICE,
-            uom='шт', is_manufactured=True)
+            design_item_id='ИЗДЕЛИЕ-А', description='Прибор А', category=cat_device,
+            uom='шт', produced=True)
         board = models.Item.objects.create(
-            code='ПЛАТА-1', name='Плата управления', kind=models.Item.Kind.COMPONENT,
-            uom='шт', is_manufactured=True, estimated_cost=1500)
+            design_item_id='ПЛАТА-1', description='Плата управления', category=cat_board,
+            uom='шт', produced=True, estimated_cost=1500)
         case = models.Item.objects.create(
-            code='КОРПУС-1', name='Корпус алюминиевый', kind=models.Item.Kind.COMPONENT,
+            design_item_id='КОРПУС-1', description='Корпус алюминиевый', category=cat_mech,
             uom='шт', estimated_cost=800)
         screw = models.Item.objects.create(
-            code='ВИНТ-М3', name='Винт М3×8', kind=models.Item.Kind.MATERIAL,
+            design_item_id='ВИНТ-М3', description='Винт М3×8', category=cat_fastener,
             uom='шт', estimated_cost=2)
         res = models.Item.objects.create(
-            code='РЕЗ-10К', name='Резистор 10 кОм', kind=models.Item.Kind.COMPONENT,
+            design_item_id='РЕЗ-10К', description='Резистор 10 кОм', category=cat_res,
             uom='шт', estimated_cost=1)
 
         models.BomLine.objects.create(parent=device, component=board, qty=1)
@@ -135,8 +146,8 @@ class Command(BaseCommand):
                   models.Receipt, models.Kitting, models.Transfer, models.Writeoff,
                   models.Requisition, models.Inventory, models.Relocation,
                   models.Purchase,
-                  models.Procurement, models.Item, models.Counterparty,
-                  models.Project, models.Location):
+                  models.Procurement, models.Item, models.Category,
+                  models.Counterparty, models.Project, models.Location):
             m.objects.all().delete()
 
     def _superuser(self):

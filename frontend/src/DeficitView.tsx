@@ -203,8 +203,8 @@ function DeviceRow({ d, closed, busy, openItem, order, run }: {
       <div className={`prow prow--device s-${d.status}`}>
         <button className="chev" title={open ? 'свернуть' : 'раскрыть дефицит'}
           onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
-        <a className="link" onClick={() => openItem(d.target_id)}>{d.target_code}</a>
-        <span className="name">{d.target_name}</span>
+        <a className="link" onClick={() => openItem(d.target_id)}>{d.target_design_item_id}</a>
+        <span className="name">{d.target_description}</span>
         <span className="pnum">
           <CommitInput value={String(d.qty)} width={56} disabled={closed || busy}
             onCommit={v => run(api.updateDemand(d.demand_id, Number(v)))}
@@ -219,7 +219,7 @@ function DeviceRow({ d, closed, busy, openItem, order, run }: {
         <span className="act">
           {!closed &&
             <button className="x" title="убрать прибор из потребности" disabled={busy}
-              onClick={() => { if (confirm(`Убрать ${d.target_code} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
+              onClick={() => { if (confirm(`Убрать ${d.target_design_item_id} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
         </span>
       </div>
       {open && (d.lines.length === 0
@@ -240,8 +240,8 @@ function CompRow({ ln, busy, openItem, order }: {
   return (
     <div className={`prow prow--comp s-${ln.status}`}>
       <span />
-      <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_code}</a>
-      <span className="name">{ln.component_name}</span>
+      <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
+      <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)} {ln.uom}</span>
       <span>
         <Segment status="available" value={ln.have} />
@@ -268,7 +268,7 @@ function AddDevice({ items, demands, busy, add }: {
   add: (targetItemId: number, qty: number) => void
 }) {
   const taken = new Set(demands.map(d => d.target_id))
-  const options = items.filter(i => i.kind === 'device' && !taken.has(i.id))
+  const options = items.filter(i => i.produced && !taken.has(i.id))
   const [targetId, setTargetId] = useState<number | ''>('')
   const [qty, setQty] = useState('1')
   useEffect(() => { setTargetId(options[0]?.id ?? '') }, [options.map(o => o.id).join()])
@@ -287,7 +287,7 @@ function AddDevice({ items, demands, busy, add }: {
       <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ прибор</span>
       <select className="lot-sel" value={targetId} disabled={busy}
         onChange={e => setTargetId(Number(e.target.value))}>
-        {options.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+        {options.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
       </select>
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}

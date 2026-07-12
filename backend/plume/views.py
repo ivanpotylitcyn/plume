@@ -247,9 +247,25 @@ def location_detail(request, pk):
     return Response(engine.location_cockpit(loc))
 
 
+def _category_row(c):
+    return {'id': c.id, 'code': c.code, 'label': c.label, 'icon': c.icon}
+
+
 def _item_row(i):
-    return {'id': i.id, 'code': i.code, 'name': i.name, 'kind': i.kind,
-            'uom': i.uom, 'is_manufactured': i.is_manufactured}
+    # `id` — PK (для FK-ссылок/мутаций); `design_item_id` — бизнес-ключ (канон
+    # библиотеки, бывш. `code`). Категория — вложенным объектом (label/icon снимают
+    # хардкод-карту на фронте). `produced` — ось «производим/покупаем» (бывш.
+    # `is_manufactured`). Волна 15.
+    return {'id': i.id, 'design_item_id': i.design_item_id,
+            'description': i.description, 'category': _category_row(i.category),
+            'uom': i.uom, 'temperature': i.temperature, 'produced': i.produced,
+            'used': engine.item_is_used(i)}
+
+
+@api_view(['GET'])
+def categories(request):
+    """Справочник категорий — пикер класса изделия в форме «＋ Новое»/правке."""
+    return Response([_category_row(c) for c in models.Category.objects.all()])
 
 
 @api_view(['GET', 'POST'])
@@ -259,15 +275,18 @@ def items(request):
         d = request.data
         try:
             i = engine.create_item(
-                d.get('code'), d.get('name'), kind=d.get('kind') or None,
+                d.get('design_item_id'), d.get('description'),
+                category_id=d.get('category_id'),
                 uom=d.get('uom') or 'шт',
-                is_manufactured=bool(d.get('is_manufactured')),
+                temperature=d.get('temperature') or '',
+                produced=bool(d.get('produced')),
                 estimated_cost=_dec(d.get('estimated_cost')))
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(_item_row(i), status=http.HTTP_201_CREATED)
 
-    return Response([_item_row(i) for i in models.Item.objects.filter(active=True)])
+    items_qs = models.Item.objects.select_related('category').all()
+    return Response([_item_row(i) for i in items_qs])
 
 
 @api_view(['GET'])
@@ -318,14 +337,15 @@ def project_budget(request, pk):
 def _item_detail_payload(item):
     """Проекция экрана изделия: свойства + окружение из связей (where-used, лоты)."""
     where_used = [
-        {'parent_id': bl.parent_id, 'parent_code': bl.parent.code,
-         'parent_name': bl.parent.name, 'qty': bl.qty}
+        {'parent_id': bl.parent_id, 'parent_design_item_id': bl.parent.design_item_id,
+         'parent_description': bl.parent.description, 'qty': bl.qty}
         for bl in item.used_in.select_related('parent')
     ]
     bom = [
         {'id': bl.id, 'component_id': bl.component_id,
-         'component_code': bl.component.code,
-         'component_name': bl.component.name, 'component_uom': bl.component.uom,
+         'component_design_item_id': bl.component.design_item_id,
+         'component_description': bl.component.description,
+         'component_uom': bl.component.uom,
          'qty': bl.qty, 'position': bl.position}
         for bl in item.bom_lines.select_related('component')
     ]
@@ -337,15 +357,20 @@ def _item_detail_payload(item):
         for lot in item.lots.select_related('project', 'origin')
     ]
     return {
-        'id': item.id, 'code': item.code, 'name': item.name, 'kind': item.kind,
-        'uom': item.uom, 'is_manufactured': item.is_manufactured,
+        'id': item.id, 'design_item_id': item.design_item_id,
+        'description': item.description, 'category': _category_row(item.category),
+        'uom': item.uom, 'temperature': item.temperature, 'produced': item.produced,
+        'used': engine.item_is_used(item),
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'shipments': engine.item_shipments(item),
     }
 
 
-_ITEM_TEXT_FIELDS = ('code', 'name', 'kind', 'uom', 'is_manufactured')
+# Строковые/булев поля, проходящие в `update_item` как есть (частичный PATCH).
+# `category_id` → FK-справочник, `estimated_cost` — через `_dec` отдельно ниже.
+_ITEM_TEXT_FIELDS = ('design_item_id', 'description', 'uom', 'temperature',
+                     'produced', 'category_id')
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -410,7 +435,8 @@ def _kitting_row(k):
     """Строка списка комплектаций для дерева навигации."""
     return {
         'id': k.id, 'project_code': k.project.code,
-        'target_code': k.target_item.code, 'target_name': k.target_item.name,
+        'target_design_item_id': k.target_item.design_item_id,
+        'target_description': k.target_item.description,
         'qty': k.qty, 'status': engine._kitting_status_out(k), 'date': k.date,
     }
 

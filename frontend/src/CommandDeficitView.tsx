@@ -73,9 +73,9 @@ function Row({ r, busy, openItem, toProcurement }: {
       <tr className={`row s-${r.status}`}>
         <td>
           <span className={`glyph g-${r.status}`}>{GLYPH[r.status]}</span>{' '}
-          <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a>
+          <a className="link" onClick={() => openItem(r.item_id)}>{r.item_design_item_id}</a>
         </td>
-        <td style={{ color: 'var(--fg-dim)' }}>{r.item_name}</td>
+        <td style={{ color: 'var(--fg-dim)' }}>{r.item_description}</td>
         <td className="num">{num(r.need)} {r.uom}</td>
         <td>
           <Segment status="available" value={r.have} />

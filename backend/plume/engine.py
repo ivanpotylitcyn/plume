@@ -93,6 +93,32 @@ ZERO = Decimal('0')
 
 
 # --------------------------------------------------------------------------- #
+#  Категории изделий (волна 15) — канон внешней библиотеки компонентов
+# --------------------------------------------------------------------------- #
+# Стем имени CSV-файла → (рус. label, Codicon). Синк и сид зовут `ensure_category`;
+# неизвестный стем всплывает с label=code (сырой — юзер правит в аппе/админке).
+# Стартовый набор — только эти 5 (прочие классы прибор/крепёж/деталь юзер добавит сам).
+LIBRARY_CATEGORIES = {
+    'capacitors': ('Конденсаторы', 'symbol-constant'),
+    'mcu':        ('Микроконтроллеры', 'chip'),
+    'regulators': ('Стабилизаторы', 'settings'),
+    'sensors':    ('Датчики', 'broadcast'),
+    'interfaces': ('Интерфейсы', 'plug'),
+}
+
+
+def ensure_category(code):
+    """get_or_create категории по стему CSV-файла. Канон label/icon — из
+    `LIBRARY_CATEGORIES`; неизвестный код всплывает с сырым `label=code`. Существующую
+    (юзер уже правил label/icon) НЕ перезаписываем."""
+    code = (code or '').strip()
+    label, icon = LIBRARY_CATEGORIES.get(code, (code, ''))
+    cat, _ = models.Category.objects.get_or_create(
+        code=code, defaults={'label': label, 'icon': icon})
+    return cat
+
+
+# --------------------------------------------------------------------------- #
 #  Единый мягкий замок складского документа (волна 13, Ф1)
 # --------------------------------------------------------------------------- #
 def _require_draft(doc):
@@ -298,8 +324,8 @@ def location_stock(location):
         rows.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
             'part_number': lot.part_number, 'lot_name': lot.lot_name,
-            'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom, 'qty': r['q'],
+            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': r['q'],
             'project_id': lot.project_id, 'project_code': lot.project.code,
             'project_name': lot.project.name,
         })
@@ -417,7 +443,7 @@ def _manufactured_in_progress(item, project):
 
 def item_on_order(item, project):
     """Оранжевый член, обобщённый по типу Item (покупной/производимый)."""
-    if item.is_manufactured:
+    if item.produced:
         return _manufactured_in_progress(item, project)
     return _purchased_on_order(item, project)
 
@@ -485,8 +511,8 @@ def project_deficit(project):
             cov = _coverage(need, available, on_order)
             cov.update({
                 'component_id': component.id,
-                'component_code': component.code,
-                'component_name': component.name,
+                'component_design_item_id': component.design_item_id,
+                'component_description': component.description,
                 'uom': component.uom,
                 'available_raw': available,        # сырой остаток (может быть < 0)
                 'anomaly': item_has_negative_lot(component, project),
@@ -506,8 +532,8 @@ def project_deficit(project):
         demands.append({
             'demand_id': demand.id,
             'target_id': target.id,
-            'target_code': target.code,
-            'target_name': target.name,
+            'target_design_item_id': target.design_item_id,
+            'target_description': target.description,
             'qty': demand.qty,
             'device': {'done': done, 'wip': wip, 'not_started': not_started},
             # цвет прибора: worst-of строк (внимание) + бейдж лучшего прогресса
@@ -524,15 +550,15 @@ def project_deficit(project):
         cov = _coverage(need, available, on_order)
         cov.update({
             'component_id': component.id,
-            'component_code': component.code,
-            'component_name': component.name,
+            'component_design_item_id': component.design_item_id,
+            'component_description': component.description,
             'uom': component.uom,
             'available_raw': available,
             'anomaly': item_has_negative_lot(component, project),
         })
         components.append(cov)
     # «Горит вперёд»: сначала ▲ к заказу, затем ● в пути, затем ✓; внутри — по коду.
-    components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_code']))
+    components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_design_item_id']))
 
     return {
         'project_id': project.id,
@@ -580,7 +606,7 @@ def _project_estimate(project):
     estimate = ZERO
     unestimated = []
     for component, need in need_by_item.items():
-        if component.is_manufactured:
+        if component.produced:
             continue  # снимок себестоимости узла считаем отдельно, не в деньгах бюджета
         cov = _coverage(need, item_available(component, project),
                         item_on_order(component, project))
@@ -588,7 +614,7 @@ def _project_estimate(project):
         if remaining <= 0:
             continue
         if component.estimated_cost is None:
-            unestimated.append(component.code)
+            unestimated.append(component.design_item_id)
             continue
         estimate += remaining * component.estimated_cost
     return estimate, unestimated
@@ -689,8 +715,8 @@ def stock_map(item):
     rows.sort(key=lambda r: (kind_rank.get(r['project_kind'], 1), r['project_code']))
     return {
         'item_id': item.id,
-        'item_code': item.code,
-        'item_name': item.name,
+        'item_design_item_id': item.design_item_id,
+        'item_description': item.description,
         'uom': item.uom,
         'rows': rows,
     }
@@ -743,7 +769,7 @@ def kitting_cockpit(kitting):
             pierced += mag
             real_lines.append({
                 'id': kl.id, 'lot_id': kl.lot_id,
-                'lot_label': f'#{kl.lot_id} {kl.lot.lot_name or component.code}',
+                'lot_label': f'#{kl.lot_id} {kl.lot.lot_name or component.design_item_id}',
                 'qty': mag, 'date': kl.date,
             })
         remaining = max(ZERO, need - pierced)
@@ -758,8 +784,8 @@ def kitting_cockpit(kitting):
             }
             statuses.append(cov['status'])
         rows.append({
-            'component_id': component.id, 'component_code': component.code,
-            'component_name': component.name, 'uom': component.uom,
+            'component_id': component.id, 'component_design_item_id': component.design_item_id,
+            'component_description': component.description, 'uom': component.uom,
             'need': need, 'pierced': pierced, 'remaining': remaining,
             'real_lines': real_lines, 'ghost': ghost,
         })
@@ -771,8 +797,8 @@ def kitting_cockpit(kitting):
     return {
         'id': kitting.id, **_author(kitting), 'status': _kitting_status_out(kitting),
         'project_id': project.id, 'project_code': project.code,
-        'target_id': target.id, 'target_code': target.code,
-        'target_name': target.name, 'uom': target.uom,
+        'target_id': target.id, 'target_design_item_id': target.design_item_id,
+        'target_description': target.description, 'uom': target.uom,
         'qty': kitting.qty, 'date': kitting.date,
         'cockpit_status': _worst_of(statuses),   # worst-of призрачных строк
         'rows': rows,
@@ -886,8 +912,8 @@ def receipt_cockpit(receipt):
     for lot in receipt.lots.select_related('item').order_by('id'):
         total += lot.qty * lot.unit_cost
         lots.append({
-            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'id': lot.id, 'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
@@ -1046,8 +1072,8 @@ def purchase_cockpit(purchase):
             st = 'to_order'       # ▲ ждём поставки
         statuses.append(st)
         rows.append({
-            'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
-            'item_name': line.item.name, 'uom': line.item.uom,
+            'id': line.id, 'item_id': line.item_id, 'item_design_item_id': line.item.design_item_id,
+            'item_description': line.item.description, 'uom': line.item.uom,
             'qty': line.qty, 'received': received, 'remaining': remaining,
             'status': st,
         })
@@ -1082,7 +1108,7 @@ def add_purchase_line(purchase, item, qty):
         raise ValidationError('Количество заказа должно быть положительным.')
     if purchase.lines.filter(item=item).exists():
         raise ValidationError(
-            f'Изделие {item.code} уже в заказе — правьте существующую строку.')
+            f'Изделие {item.design_item_id} уже в заказе — правьте существующую строку.')
     return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
 
 
@@ -1187,12 +1213,12 @@ def project_available_lots(project):
     """
     result = []
     for lot in (models.Lot.objects.filter(project=project)
-                .select_related('item').order_by('item__code', 'id')):
+                .select_related('item').order_by('item__design_item_id', 'id')):
         live = lot_live_qty(lot)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_code': lot.item.code, 'item_name': lot.item.name,
+                'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
                 'part_number': lot.part_number,
                 'lot_name': lot.lot_name,
@@ -1202,7 +1228,7 @@ def project_available_lots(project):
 
 def _lot_label(lot):
     """Человекочитаемая метка лота для накладной/строки (название / PN / артикул)."""
-    tail = lot.lot_name or lot.part_number or lot.item.code
+    tail = lot.lot_name or lot.part_number or lot.item.design_item_id
     return f'#{lot.id} {tail}'
 
 
@@ -1230,8 +1256,8 @@ def transfer_cockpit(transfer):
         lines.append({
             'id': line.id, 'lot_id': lot.id,
             'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'display_name': line.display_name,
             'lot_live_qty': lot_live_qty(lot),   # остаток источника после отгрузки
             'lot_name': lot.lot_name,
@@ -1381,12 +1407,12 @@ def all_available_lots():
     """
     result = []
     for lot in (models.Lot.objects.select_related('item', 'project')
-                .order_by('project__code', 'item__code', 'id')):
+                .order_by('project__code', 'item__design_item_id', 'id')):
         live = lot_live_qty(lot)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_code': lot.item.code, 'item_name': lot.item.name,
+                'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
                 'project_id': lot.project_id, 'project_code': lot.project.code,
                 'part_number': lot.part_number,
@@ -1411,8 +1437,8 @@ def writeoff_cockpit(writeoff):
         total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'lot_live_qty': lot_live_qty(lot),
             'lot_name': lot.lot_name,
         })
@@ -1512,8 +1538,8 @@ def requisition_cockpit(requisition):
         lines.append({
             'id': line.id, 'source_lot_id': src.id, 'lot_label': _lot_label(src),
             'source_project_code': src.project.code,
-            'item_id': src.item_id, 'item_code': src.item.code,
-            'item_name': src.item.name, 'uom': src.item.uom,
+            'item_id': src.item_id, 'item_design_item_id': src.item.design_item_id,
+            'item_description': src.item.description, 'uom': src.item.uom,
             'qty': mag, 'source_live_qty': lot_live_qty(src),
             'born_lot_id': born.id if born else None,
             'lot_name': src.lot_name,
@@ -1638,8 +1664,8 @@ def relocation_cockpit(relocation):
         total_qty += mag
         moves.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom, 'qty': mag,
+            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': mag,
             'from_location_id': src.location_id if src else None,
             'from_location': src.location.code if src else '',
             'to_location_id': dst.location_id if dst else None,
@@ -1739,12 +1765,12 @@ def relocation_source_lots(project):
     местам хранения (`lot_locations`): пикер видит, где лот лежит и сколько."""
     result = []
     for lot in (models.Lot.objects.filter(project=project)
-                .select_related('item').order_by('item__code', 'id')):
+                .select_related('item').order_by('item__design_item_id', 'id')):
         live = lot_live_qty(lot)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_code': lot.item.code, 'item_name': lot.item.name,
+                'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live,
                 'part_number': lot.part_number,
                 'lot_name': lot.lot_name,
@@ -1765,14 +1791,14 @@ def project_closure(project):
     residuals = []
     positive = ZERO
     anomaly_count = 0
-    for lot in project.lots.select_related('item').order_by('item__code', 'id'):
+    for lot in project.lots.select_related('item').order_by('item__design_item_id', 'id'):
         live = lot_live_qty(lot)
         if live == 0:
             continue
         residuals.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom,
             'live_qty': live, 'anomaly': live < 0,
         })
         if live > 0:
@@ -2114,9 +2140,9 @@ def command_deficit():
             cov = _coverage(need, item_available(component, project),
                             item_on_order(component, project))
             row = acc.setdefault(component.id, {
-                'item_id': component.id, 'item_code': component.code,
-                'item_name': component.name, 'uom': component.uom,
-                'is_manufactured': component.is_manufactured,
+                'item_id': component.id, 'item_design_item_id': component.design_item_id,
+                'item_description': component.description, 'uom': component.uom,
+                'produced': component.produced,
                 'need': ZERO, 'have': ZERO, 'on_order': ZERO, 'to_order': ZERO,
                 'by_project': [],
             })
@@ -2141,7 +2167,7 @@ def command_deficit():
             row['status'] = 'available'
         rows.append(row)
     # худшее наверх (красное просит внимания), потом по артикулу
-    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['item_code']))
+    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['item_design_item_id']))
     return {'rows': rows}
 
 
@@ -2158,8 +2184,8 @@ def procurement_cockpit(procurement):
     for line in procurement.lines.select_related('item').order_by('id'):
         total_qty += line.qty
         rows.append({
-            'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
-            'item_name': line.item.name, 'uom': line.item.uom, 'qty': line.qty,
+            'id': line.id, 'item_id': line.item_id, 'item_design_item_id': line.item.design_item_id,
+            'item_description': line.item.description, 'uom': line.item.uom, 'qty': line.qty,
         })
     return {
         'id': procurement.id, **_author(procurement), 'status': procurement.status,
@@ -2189,7 +2215,7 @@ def add_procurement_line(procurement, item, qty):
         raise ValidationError('Количество закупки должно быть положительным.')
     if procurement.lines.filter(item=item).exists():
         raise ValidationError(
-            f'Изделие {item.code} уже в закупке — правьте существующую строку.')
+            f'Изделие {item.design_item_id} уже в закупке — правьте существующую строку.')
     return models.ProcurementLine.objects.create(
         procurement=procurement, item=item, qty=qty)
 
@@ -2337,7 +2363,7 @@ def procurement_xlsx(procurement):
     for cell in ws[1]:
         cell.font = Font(bold=True)
     for line in procurement.lines.select_related('item').order_by('id'):
-        ws.append([line.item.code, line.item.name, float(line.qty), line.item.uom])
+        ws.append([line.item.design_item_id, line.item.description, float(line.qty), line.item.uom])
     widths = [22, 48, 12, 8]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[chr(64 + i)].width = width
@@ -2406,7 +2432,7 @@ def procurement_pegging(procurement):
             st = 'on_order'
         rows.append({
             'line_id': line.id, 'item_id': line.item_id,
-            'item_code': line.item.code, 'item_name': line.item.name,
+            'item_design_item_id': line.item.design_item_id, 'item_description': line.item.description,
             'uom': line.item.uom, 'qty': line.qty,
             'pegged': pegged_total, 'remaining': line.qty - pegged_total, 'status': st,
             'by_project': sorted(by_project.values(), key=lambda s: s['project_code']),
@@ -2460,7 +2486,7 @@ def peg_procurement_line(procurement, item, project, qty, user):
         raise ValidationError('Количество должно быть положительным.')
     if not procurement.lines.filter(item=item).exists():
         raise ValidationError(
-            f'Изделие {item.code} не в плане закупки — сначала добавьте строку плана.')
+            f'Изделие {item.design_item_id} не в плане закупки — сначала добавьте строку плана.')
     if project.kind != models.Project.Kind.EXTERNAL:
         raise ValidationError('Пегать можно только на внешний проект (НИР/контракт).')
     if project.status != models.Project.Status.ACTIVE:
@@ -2537,8 +2563,8 @@ def inventory_cockpit(inventory):
         total += lot.qty * lot.unit_cost
         pred = lot.predecessor
         lots.append({
-            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
-            'item_name': lot.item.name, 'uom': lot.item.uom,
+            'id': lot.id, 'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
@@ -2657,13 +2683,13 @@ def written_off_lots():
     wo = models.StockDocument.Kind.WRITEOFF
     for lot in (models.Lot.objects.filter(stock_lines__document__kind=wo).distinct()
                 .select_related('item', 'project').order_by('project__code',
-                                                            'item__code', 'id')):
+                                                            'item__design_item_id', 'id')):
         # qty знаковый (− расход) → магнитуда списанного = −Σ
         written = -(lot.stock_lines.filter(document__kind=wo)
                     .aggregate(s=Sum('qty'))['s'] or ZERO)
         result.append({
             'lot_id': lot.id, 'item_id': lot.item_id,
-            'item_code': lot.item.code, 'item_name': lot.item.name,
+            'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
             'uom': lot.item.uom, 'written_qty': written,
             'project_code': lot.project.code, 'unit_cost': lot.unit_cost,
             'lot_name': lot.lot_name, 'part_number': lot.part_number,
@@ -2674,60 +2700,84 @@ def written_off_lots():
 # --------------------------------------------------------------------------- #
 #  Справочники: создание изделий и проектов (канон «＋ Новая», 2026-07-03)
 # --------------------------------------------------------------------------- #
-def create_item(code, name, kind=None, uom='шт', is_manufactured=False,
-                estimated_cost=None):
-    """Создать изделие справочника из мини-формы «＋ Новое». Артикул уникален."""
-    code = (code or '').strip()
-    name = (name or '').strip()
-    if not code:
-        raise ValidationError('Нужен артикул изделия.')
-    if not name:
-        raise ValidationError('Нужно название изделия.')
-    if models.Item.objects.filter(code=code).exists():
-        raise ValidationError(f'Изделие с артикулом {code} уже есть.')
-    kind = kind or models.Item.Kind.COMPONENT
-    if kind not in models.Item.Kind.values:
-        raise ValidationError(f'Неизвестный вид изделия: {kind}.')
+def _resolve_category(category_id):
+    """Категория изделия из справочника по PK (обязательна). Волна 15: `kind`-enum
+    сменён FK-справочником `Category`."""
+    if not category_id:
+        raise ValidationError('Нужно выбрать категорию изделия.')
+    try:
+        return models.Category.objects.get(pk=category_id)
+    except (models.Category.DoesNotExist, ValueError, TypeError):
+        raise ValidationError('Неизвестная категория изделия.')
+
+
+def item_is_used(item):
+    """Изделие «используется» = есть хотя бы одна живая ссылка на него. Волна 15:
+    заменяет снятое хранимое `active` вычисляемым признаком (спящий = 0 ссылок =
+    кандидат на удаление). Зеркалит guard'ы `delete_item` (used ⇔ неудаляемо):
+    вхождение в чужой BOM, лоты, строки заказа/закупки-плана, потребность проекта,
+    цель комплектации. Дёшево — набор `Exists` с коротким замыканием на `or`."""
+    return (item.used_in.exists() or item.lots.exists()
+            or item.purchase_lines.exists() or item.demanded_in.exists()
+            or item.kittings.exists()
+            or models.ProcurementLine.objects.filter(item=item).exists())
+
+
+def create_item(design_item_id, description, category_id=None, uom='шт',
+                produced=False, estimated_cost=None, temperature=''):
+    """Создать изделие справочника из мини-формы «＋ Новое». `design_item_id`
+    (заказной PN, канон библиотеки) уникален; категория обязательна (FK-справочник)."""
+    design_item_id = (design_item_id or '').strip()
+    description = (description or '').strip()
+    if not design_item_id:
+        raise ValidationError('Нужно изделие (Design Item Id).')
+    if not description:
+        raise ValidationError('Нужно описание изделия.')
+    if models.Item.objects.filter(design_item_id=design_item_id).exists():
+        raise ValidationError(f'Изделие {design_item_id} уже есть.')
+    category = _resolve_category(category_id)
     return models.Item.objects.create(
-        code=code, name=name, kind=kind,
+        design_item_id=design_item_id, description=description, category=category,
         uom=(uom or '').strip() or 'шт',
-        is_manufactured=bool(is_manufactured),
+        temperature=(temperature or '').strip(),
+        produced=bool(produced),
         estimated_cost=estimated_cost)
 
 
 def update_item(item, changes):
     """Правка свойств изделия под замком формы (§6). `changes` — только присланные
-    поля (частичный PATCH). Артикул уникален; вид из словаря; название непустое."""
+    поля (частичный PATCH). `design_item_id` уникален; категория из справочника
+    (ключ `category_id`); описание непустое."""
     fields = []
-    if 'code' in changes:
-        code = (changes['code'] or '').strip()
-        if not code:
-            raise ValidationError('Нужен артикул изделия.')
-        if models.Item.objects.filter(code=code).exclude(pk=item.pk).exists():
-            raise ValidationError(f'Изделие с артикулом {code} уже есть.')
-        item.code = code
-        fields.append('code')
-    if 'name' in changes:
-        name = (changes['name'] or '').strip()
-        if not name:
-            raise ValidationError('Нужно название изделия.')
-        item.name = name
-        fields.append('name')
-    if 'kind' in changes:
-        kind = changes['kind'] or ''
-        if kind not in models.Item.Kind.values:
-            raise ValidationError(f'Неизвестный вид изделия: {kind}.')
-        item.kind = kind
-        fields.append('kind')
+    if 'design_item_id' in changes:
+        v = (changes['design_item_id'] or '').strip()
+        if not v:
+            raise ValidationError('Нужно изделие (Design Item Id).')
+        if models.Item.objects.filter(design_item_id=v).exclude(pk=item.pk).exists():
+            raise ValidationError(f'Изделие {v} уже есть.')
+        item.design_item_id = v
+        fields.append('design_item_id')
+    if 'description' in changes:
+        v = (changes['description'] or '').strip()
+        if not v:
+            raise ValidationError('Нужно описание изделия.')
+        item.description = v
+        fields.append('description')
+    if 'category_id' in changes:
+        item.category = _resolve_category(changes['category_id'])
+        fields.append('category')
     if 'uom' in changes:
         item.uom = (changes['uom'] or '').strip() or 'шт'
         fields.append('uom')
+    if 'temperature' in changes:
+        item.temperature = (changes['temperature'] or '').strip()
+        fields.append('temperature')
     if 'estimated_cost' in changes:
         item.estimated_cost = changes['estimated_cost']    # Decimal или None (сброс)
         fields.append('estimated_cost')
-    if 'is_manufactured' in changes:
-        item.is_manufactured = bool(changes['is_manufactured'])
-        fields.append('is_manufactured')
+    if 'produced' in changes:
+        item.produced = bool(changes['produced'])
+        fields.append('produced')
     if fields:
         item.save(update_fields=fields)
     return item
@@ -2846,7 +2896,7 @@ def add_project_demand(project, item, qty):
     if qty is None or qty <= ZERO:
         raise ValidationError('Кол-во приборов должно быть больше нуля.')
     if models.ProjectDemand.objects.filter(project=project, target_item=item).exists():
-        raise ValidationError(f'Прибор {item.code} уже в потребности проекта.')
+        raise ValidationError(f'Прибор {item.design_item_id} уже в потребности проекта.')
     return models.ProjectDemand.objects.create(
         project=project, target_item=item, qty=qty)
 
@@ -2892,9 +2942,9 @@ def add_bom_line(parent, component, qty, position=''):
     if component.id == parent.id:
         raise ValidationError('Изделие не может входить само в себя.')
     if models.BomLine.objects.filter(parent=parent, component=component).exists():
-        raise ValidationError(f'Компонент {component.code} уже в составе.')
+        raise ValidationError(f'Компонент {component.design_item_id} уже в составе.')
     if _bom_would_cycle(parent, component):
-        raise ValidationError(f'Цикл в составе: {component.code} уже содержит {parent.code}.')
+        raise ValidationError(f'Цикл в составе: {component.design_item_id} уже содержит {parent.design_item_id}.')
     return models.BomLine.objects.create(
         parent=parent, component=component, qty=qty,
         position=(position or '').strip())

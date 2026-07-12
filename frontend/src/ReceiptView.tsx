@@ -111,8 +111,8 @@ function LotRow({ lot, locked, busy, openItem, run }: {
     <tr className="row s-available">
       <td>
         <span className="glyph g-available">✓</span>{' '}
-        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_name}</span>
+        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_design_item_id}</a>{' '}
+        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
@@ -172,7 +172,7 @@ function GhostRow({ receiptId, items, busy, run }: {
         <select className="lot-sel" value={itemId} disabled={busy}
           onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
           <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+          {items.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
         </select>
       </td>
       <td className="num">
