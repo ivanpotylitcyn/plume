@@ -146,42 +146,46 @@ export function FormHeader({
   error?: string | null
 }) {
   return (
-    <div className="form-head">
-      <div className="fh-main">
-        <div className="fh-name">{name}</div>
-        <div className="fh-meta">{meta}</div>
+    <>
+      <div className="form-head">
+        <div className="fh-main">
+          <div className="fh-name">{name}</div>
+          <div className="fh-meta">{meta}</div>
+        </div>
+        <div className="fh-right">
+          {fixed ? (
+            // Зафиксирован: чип с заливкой, яркого индикатора нет — документ стабилен.
+            <button className="fix-chip" title="Снять фиксацию…"
+              onClick={onUnfix} disabled={!onUnfix}>
+              🔒 {fixedLabel ?? 'зафиксирован'}
+            </button>
+          ) : (
+            <>
+              {/* Индикатор детерминирован по замку: открыт → жёлтый «редактируется»,
+                  закрыт (чистая форма) → зелёный «сохранено». Ошибка перебивает. */}
+              {error
+                ? <span className="save-ind error">ошибка: {error}</span>
+                : unlocked
+                  ? <span className="save-ind editing">● редактируется</span>
+                  : <span className="save-ind saved">✓ сохранено</span>}
+              {onToggleLock && (
+                <button className={'lock-btn' + (unlocked ? ' open' : '')}
+                  title={unlocked ? 'Форма открыта — редактируется. Закрыть (чистый текст)'
+                                  : 'Форма закрыта. Открыть для правки'}
+                  onClick={onToggleLock}>
+                  {unlocked ? '🔓' : '🔒'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
-      <div className="fh-right">
-        {fixed ? (
-          // Зафиксирован: чип с заливкой, яркого индикатора нет — документ стабилен.
-          <button className="fix-chip" title="Снять фиксацию…"
-            onClick={onUnfix} disabled={!onUnfix}>
-            🔒 {fixedLabel ?? 'зафиксирован'}
-          </button>
-        ) : (
-          <>
-            {/* Индикатор детерминирован по замку: открыт → жёлтый «редактируется»,
-                закрыт (чистая форма) → зелёный «сохранено». Ошибка перебивает. */}
-            {error
-              ? <span className="save-ind error">ошибка: {error}</span>
-              : unlocked
-                ? <span className="save-ind editing">● редактируется</span>
-                : <span className="save-ind saved">✓ сохранено</span>}
-            {onToggleLock && (
-              <button className={'lock-btn' + (unlocked ? ' open' : '')}
-                title={unlocked ? 'Форма открыта — редактируется. Закрыть (чистый текст)'
-                                : 'Форма закрыта. Открыть для правки'}
-                onClick={onToggleLock}>
-                {unlocked ? '🔓' : '🔒'}
-              </button>
-            )}
-            {onDelete && (
-              // Удаление — только у черновика (posted перехватывает ветка чипа выше).
-              <button className="del-btn" title="Удалить документ" onClick={onDelete}>🗑</button>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+      {/* Ф4 (волна 16): удаление вынесено из шапки в плавающую кнопку в правом
+          нижнем углу — чтобы второй клик по замку не попадал случайно в корзину.
+          Только у черновика (posted перехватывает ветка чипа фиксации). */}
+      {!fixed && onDelete && (
+        <button className="del-fab" title="Удалить документ" onClick={onDelete}>🗑</button>
+      )}
+    </>
   )
 }

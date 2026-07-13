@@ -205,11 +205,14 @@ body { overflow: hidden; }
   display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-base); }
 .lock-btn:hover { background: var(--bg-hover); color: var(--fg); }
 .lock-btn.open { color: var(--accent); }
-/* удаление ордера (тускло по умолчанию, краснеет на наведении) */
-.del-btn { background: none; border: 1px solid transparent; color: var(--fg-dim);
-  cursor: pointer; border-radius: 4px; padding: 3px 6px; font-size: 14px; line-height: 1;
-  display: inline-flex; align-items: center; font-family: var(--font-base); }
-.del-btn:hover { background: var(--bg-hover); color: var(--st-order); }
+/* Ф4 (волна 16): удаление — плавающая кнопка в правом нижнем углу контент-панели,
+   вынесена из шапки подальше от замка. Тускло по умолчанию, краснеет на наведении. */
+.del-fab { position: fixed; right: 22px; bottom: 18px; z-index: 30;
+  width: 34px; height: 34px; border-radius: 6px; font-size: 15px; line-height: 1;
+  background: var(--bg-widget); border: 1px solid var(--border-strong); color: var(--fg-dim);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 14px #00000055; }
+.del-fab:hover { color: var(--st-order); border-color: var(--st-order); }
 /* чип фиксации (заливка) */
 .fix-chip { background: var(--bg-widget); border: 1px solid var(--border-strong);
   color: var(--fg-dim); cursor: pointer; border-radius: 4px; padding: 3px 9px;
