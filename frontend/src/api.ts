@@ -24,15 +24,18 @@ export interface ItemRow {
   uom: string; temperature: string; produced: boolean; used: boolean
 }
 
-export interface DeficitLine {
+// Узел дерева аккордеона прибора (Ф5b): плоский pre-order с `depth`. Лист (покупной)
+// несёт покрытие; узел-подсборка (`is_leaf=false`) — структурный (без покрытия), статус
+// = worst-of поддерева. Купить можно только листья → заказ живёт в своде «Потребность».
+export interface DeficitTreeNode {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
-  need: number; have: number; on_order: number; to_order: number
-  status: Status; available_raw: number; anomaly: boolean
+  need: number; depth: number; is_leaf: boolean; status: Status
+  have?: number; on_order?: number; to_order?: number; available_raw?: number; anomaly?: boolean
 }
 export interface DeficitDemand {
   demand_id: number; target_id: number; target_design_item_id: string; target_description: string
   qty: number; device: { done: number; wip: number; not_started: number }
-  status: Status; badge: Status; lines: DeficitLine[]
+  status: Status; badge: Status; tree: DeficitTreeNode[]
 }
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
 export interface DeficitComponent {

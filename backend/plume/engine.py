@@ -489,39 +489,129 @@ def _best_of(statuses):
 
 
 # --------------------------------------------------------------------------- #
+#  Разузлование потребности до покупных листьев (Ф5, волна 16)
+# --------------------------------------------------------------------------- #
+def _explode_demand(item, qty, leaves, incomplete, visiting):
+    """Разузловать потребность `item × qty` до покупных листьев (структурно).
+
+    Покупной `item` (`produced=False`) — лист-терминал: копим `qty` в `leaves`.
+    Производимый узел — рекурсия в детей (`qty × bl.qty`): купить его нельзя, деньги/
+    заказ живут на листьях (резисторы/ИС/материалы). Нетинга подсборок здесь НЕТ
+    (согласовано В16): покрытие складом/заказом считает `_coverage` на самом листе.
+    Производимый узел без BOM оценить нечем → в `incomplete` (вклад 0). Циклы —
+    страховка `visiting` (гасит уже `add_bom_line`), как в `_rollup_cost`.
+    """
+    if not item.produced:
+        leaves[item] = leaves.get(item, ZERO) + qty
+        return
+    if item.id in visiting:
+        raise ValidationError(f'Цикл в составе: {item.design_item_id}.')
+    visiting.add(item.id)
+    lines = list(item.bom_lines.select_related('component'))
+    if not lines:
+        incomplete.append(item.design_item_id)
+    for bl in lines:
+        _explode_demand(bl.component, qty * bl.qty, leaves, incomplete, visiting)
+    visiting.discard(item.id)
+
+
+def project_leaf_demand(project):
+    """Свод потребности проекта до покупных листьев: `({leaf: qty}, incomplete)`.
+
+    Разузловывает каждую потребность (`target_item × demand.qty`) до листьев и
+    складывает по Item через все приборы проекта. `incomplete` — производимые узлы
+    без BOM (оценить нечем), для честного флага неполноты.
+    """
+    leaves, incomplete = {}, []
+    for demand in project.demands.select_related('target_item'):
+        _explode_demand(demand.target_item, demand.qty, leaves, incomplete, set())
+    return leaves, incomplete
+
+
+def _leaf_row(item, need, project):
+    """Строка покрытия листа (`_coverage` + реквизиты Item) для секций дефицита.
+
+    Ключи `component_*` сохранены (фронт/сериализатор их ждут): лист — тот же Item.
+    """
+    available = item_available(item, project)
+    cov = _coverage(need, available, item_on_order(item, project))
+    cov.update({
+        'component_id': item.id,
+        'component_design_item_id': item.design_item_id,
+        'component_description': item.description,
+        'uom': item.uom,
+        'available_raw': available,            # сырой остаток (может быть < 0)
+        'anomaly': item_has_negative_lot(item, project),
+    })
+    return cov
+
+
+def _demand_tree(item, qty, project, depth, visiting, out):
+    """Плоский pre-order список узлов BOM с `depth` — древовидный аккордеон прибора
+    (Ф5b, В16): видно вложенность (прибор → подсборка → лист), а не только листья.
+
+    Покупной лист — строка покрытия (`_leaf_row`) + `depth`/`is_leaf=True`. Производимый
+    узел — структурная строка (без покрытия, купить нельзя): `need`, `status` = worst-of
+    поддерева (где под ним «горит»), дети рекурсией ниже. Цикл — страховка `visiting`.
+    Возвращает статус поддерева (для сворачивания цвета вверх)."""
+    if not item.produced:
+        row = _leaf_row(item, qty, project)
+        row['need'] = qty
+        row['depth'] = depth
+        row['is_leaf'] = True
+        out.append(row)
+        return row['status']
+    if item.id in visiting:
+        raise ValidationError(f'Цикл в составе: {item.design_item_id}.')
+    visiting.add(item.id)
+    row = {
+        'component_id': item.id,
+        'component_design_item_id': item.design_item_id,
+        'component_description': item.description,
+        'uom': item.uom,
+        'need': qty,
+        'depth': depth,
+        'is_leaf': False,
+    }
+    out.append(row)          # pre-order: узел раньше детей; статус допишем после
+    child_statuses = [
+        _demand_tree(bl.component, qty * bl.qty, project, depth + 1, visiting, out)
+        for bl in item.bom_lines.select_related('component')
+    ]
+    visiting.discard(item.id)
+    row['status'] = _worst_of(child_statuses) if child_statuses else 'available'
+    return row['status']
+
+
+# --------------------------------------------------------------------------- #
 #  Дефицит проекта (главная проекция волны 1)
 # --------------------------------------------------------------------------- #
 def project_deficit(project):
-    """Дефицит проекта: по каждой потребности — прибор и его компоненты (1 уровень).
+    """Дефицит проекта: по каждой потребности — прибор и его состав (Ф5b: аккордеон —
+    дерево BOM со всеми уровнями; свод «Потребность» — плоско по покупным листьям).
 
-    Возвращает структуру, готовую к сериализации (Decimal → строки на уровне DRF).
+    «ДО» купить нельзя — деньги/дефицит на листьях; но структуру (прибор → подсборка →
+    лист) видно в дереве. Возвращает структуру под сериализацию (Decimal → строки в DRF).
     """
     demands = []
-    # Свод потребности по компонентам на весь проект (секция «Потребность»):
-    # need по компоненту = Σ(bl.qty × demand.qty) по всем приборам. Склад/заказано —
-    # общие по компоненту в проекте (не per-demand), считаем один раз ниже.
-    need_by_component = {}      # component → суммарная потребность (Decimal)
+    # Свод потребности по листьям на весь проект (секция «Потребность»): каждый прибор
+    # разузловываем до покупных листьев, копим Σ. Склад/заказано — общие по листу.
+    need_by_leaf = {}          # leaf Item → суммарная потребность (Decimal)
     for demand in project.demands.select_related('target_item'):
         target = demand.target_item
-        lines = []
+        # Свод листьев этой потребности — для секции «Потребность» и цвета прибора.
+        leaves, _incomplete = {}, []
+        _explode_demand(target, demand.qty, leaves, _incomplete, set())
         statuses = []
-        for bl in target.bom_lines.select_related('component'):
-            component = bl.component
-            need = bl.qty * demand.qty
-            need_by_component[component] = need_by_component.get(component, ZERO) + need
-            available = item_available(component, project)
-            on_order = item_on_order(component, project)
-            cov = _coverage(need, available, on_order)
-            cov.update({
-                'component_id': component.id,
-                'component_design_item_id': component.design_item_id,
-                'component_description': component.description,
-                'uom': component.uom,
-                'available_raw': available,        # сырой остаток (может быть < 0)
-                'anomaly': item_has_negative_lot(component, project),
-            })
-            lines.append(cov)
+        for leaf, need in leaves.items():
+            need_by_leaf[leaf] = need_by_leaf.get(leaf, ZERO) + need
+            cov = _coverage(need, item_available(leaf, project), item_on_order(leaf, project))
             statuses.append(cov['status'])
+        # Дерево BOM для аккордеона (все уровни, pre-order + depth).
+        tree = []
+        visiting = {target.id}
+        for bl in target.bom_lines.select_related('component'):
+            _demand_tree(bl.component, demand.qty * bl.qty, project, 0, visiting, tree)
 
         # триплет прибора: готово (проведённые лоты) / делается (draft) / не начато
         done = models.StockMovement.objects.filter(
@@ -539,27 +629,14 @@ def project_deficit(project):
             'target_description': target.description,
             'qty': demand.qty,
             'device': {'done': done, 'wip': wip, 'not_started': not_started},
-            # цвет прибора: worst-of строк (внимание) + бейдж лучшего прогресса
+            # цвет прибора: worst-of листьев (внимание) + бейдж лучшего прогресса
             'status': _worst_of(statuses),
             'badge': _best_of(statuses),
-            'lines': lines,
+            'tree': tree,
         })
 
-    # Сводная таблица по компонентам (полная картина проекта, всегда видна).
-    components = []
-    for component, need in need_by_component.items():
-        available = item_available(component, project)
-        on_order = item_on_order(component, project)
-        cov = _coverage(need, available, on_order)
-        cov.update({
-            'component_id': component.id,
-            'component_design_item_id': component.design_item_id,
-            'component_description': component.description,
-            'uom': component.uom,
-            'available_raw': available,
-            'anomaly': item_has_negative_lot(component, project),
-        })
-        components.append(cov)
+    # Сводная таблица по листьям (полная покупная картина проекта, всегда видна).
+    components = [_leaf_row(leaf, need, project) for leaf, need in need_by_leaf.items()]
     # «Горит вперёд»: сначала ▲ к заказу, затем ● в пути, затем ✓; внутри — по коду.
     components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_design_item_id']))
 
@@ -592,34 +669,27 @@ def _project_spent(project):
 def _project_estimate(project):
     """Прогнозная стоимость ещё-не-полученного покупного материала (по estimated_cost).
 
-    Потребность агрегируем по компоненту (1 уровень BOM, как `project_deficit`),
-    затем один разбор `_coverage` на компонент. Оцениваем «в пути + к заказу»
-    (● заказано + ▲ заказать) — то, что ещё потребует денег; ✓ уже покрыто (склад
-    приходной = в «потрачено», заём = бесплатно). Возвращает
-    `(estimate, unestimated_codes)` — сумма оценки и коды покупных позиций без
-    `estimated_cost` (план по ним неполон, не молчим 0).
+    Ф5 (В16): потребность разузловываем до покупных **листьев** (`project_leaf_demand`),
+    затем один разбор `_coverage` на лист. Считаем только листья — производимые узлы
+    разузловываются насквозь, их роллап-`estimated_cost` в план НЕ складываем (иначе
+    двойной счёт: цена узла = Σ его листьев). Оцениваем «в пути + к заказу» (● + ▲) —
+    то, что ещё потребует денег; ✓ уже покрыто (склад приходной = в «потрачено», заём =
+    бесплатно). Возвращает `(estimate, unestimated_codes)` — сумма оценки и коды
+    покупных листьев без `estimated_cost` (план по ним неполон, не молчим 0).
     """
-    need_by_item = {}
-    for demand in project.demands.select_related('target_item'):
-        for bl in demand.target_item.bom_lines.select_related('component'):
-            need_by_item[bl.component] = (
-                need_by_item.get(bl.component, ZERO) + bl.qty * demand.qty
-            )
-
+    leaves, _incomplete = project_leaf_demand(project)
     estimate = ZERO
     unestimated = []
-    for component, need in need_by_item.items():
-        if component.produced:
-            continue  # снимок себестоимости узла считаем отдельно, не в деньгах бюджета
-        cov = _coverage(need, item_available(component, project),
-                        item_on_order(component, project))
+    for leaf, need in leaves.items():
+        cov = _coverage(need, item_available(leaf, project),
+                        item_on_order(leaf, project))
         remaining = cov['on_order'] + cov['to_order']
         if remaining <= 0:
             continue
-        if component.estimated_cost is None:
-            unestimated.append(component.design_item_id)
+        if leaf.estimated_cost is None:
+            unestimated.append(leaf.design_item_id)
             continue
-        estimate += remaining * component.estimated_cost
+        estimate += remaining * leaf.estimated_cost
     return estimate, unestimated
 
 
@@ -2119,13 +2189,13 @@ def command_deficit():
     """Командный свод: суммарный дефицит по оси Item через все активные внешние проекты.
 
     Консолидация-проекция (не таблица): для каждого проекта считаем потребность по
-    каждому компоненту (Σ через потребности BOM, 1 уровень) и покрываем её складом/
-    заказами **этого** проекта (`_coverage`, как дефицит проекта — покрытие на уровне
-    Item в проекте, агрегат), затем складываем сегменты по Item через проекты. Между
-    проектами **не** перенеттим (чужие ФЛС/склады не смешиваем): профицит проекта A не
-    гасит нужду проекта B. Итог по Item: `to_order` = сколько всего докупить (▲ красный
-    член), `have`/`on_order` — контекст. Только внешние проекты (внутренние склады —
-    источник покрытия, не потребитель). Read-only витрина.
+    покупным **листьям** (Ф5 В16: разузлование насквозь, а не 1 уровень) и покрываем её
+    складом/заказами **этого** проекта (`_coverage`, как дефицит проекта — покрытие на
+    уровне Item в проекте, агрегат), затем складываем сегменты по Item через проекты.
+    Между проектами **не** перенеттим (чужие ФЛС/склады не смешиваем): профицит проекта
+    A не гасит нужду проекта B. Итог по Item: `to_order` = сколько всего докупить (▲
+    красный член), `have`/`on_order` — контекст. Только внешние проекты (внутренние
+    склады — источник покрытия, не потребитель). Read-only витрина.
     """
     acc = {}  # item_id → агрегат по Item через проекты
     projects = (models.Project.objects
@@ -2133,12 +2203,8 @@ def command_deficit():
                         status=models.Project.Status.ACTIVE)
                 .order_by('code'))
     for project in projects:
-        # потребность проекта по компоненту (Σ через потребности BOM, 1 уровень)
-        need_by_item = {}
-        for demand in project.demands.select_related('target_item'):
-            for bl in demand.target_item.bom_lines.select_related('component'):
-                need_by_item[bl.component] = (
-                    need_by_item.get(bl.component, ZERO) + bl.qty * demand.qty)
+        # потребность проекта по покупным листьям (разузлование насквозь)
+        need_by_item, _incomplete = project_leaf_demand(project)
         for component, need in need_by_item.items():
             cov = _coverage(need, item_available(component, project),
                             item_on_order(component, project))

@@ -4,7 +4,7 @@
 // приборов с инлайн-правкой кол-ва, аккордеон раскрывает дефицит по конкретному прибору.
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
-  type ItemRow, type ProjectDetail } from './api'
+  type DeficitTreeNode, type ItemRow, type ProjectDetail } from './api'
 import { Segment, money, num } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
@@ -93,7 +93,7 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
           <dd><CommitInput value={phead.started_at ?? ''} type="date" disabled={busy}
             onCommit={v => runP(api.updateProject(projectId, { started_at: v || null }))} /></dd>
         </dl>}
-      <div className="subtitle">Проект · приборы, потребность, склад · дефицит = надо − склад − заказано (1 уровень BOM)</div>
+      <div className="subtitle">Проект · приборы, потребность, склад · дефицит = надо − склад − заказано (разузловано до покупных листьев)</div>
       <BudgetPanel projectId={projectId} rev={rev} />
 
       <div className="section-h">Приборы
@@ -103,7 +103,7 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
         : <div className="pgrid">
             <CompHead />
             {data.demands.map(d => <DeviceRow key={d.demand_id} d={d} closed={closed}
-              busy={busy} openItem={openItem} order={order} run={run} />)}
+              busy={busy} openItem={openItem} run={run} />)}
           </div>}
       {!closed && <AddDevice items={items} demands={data.demands} busy={busy}
         add={(target_item_id, qty) => run(api.addDemand(projectId, { target_item_id, qty }))} />}
@@ -191,17 +191,16 @@ function CompHead() {
 // Прибор в потребности: строка в том же шаблоне колонок, что и его состав.
 // Статус — тонкой полосой слева (без ведущего глифа); название серым. Клик по
 // шеврону раскрывает аккордеон с дефицитом по этому прибору.
-function DeviceRow({ d, closed, busy, openItem, order, run }: {
+function DeviceRow({ d, closed, busy, openItem, run }: {
   d: DeficitDemand; closed: boolean; busy: boolean
-  openItem: (id: number) => void
-  order: (itemId: number, qty: number) => void; run: (p: Promise<Deficit>) => void
+  openItem: (id: number) => void; run: (p: Promise<Deficit>) => void
 }) {
   const [open, setOpen] = useState(false)
   const dev = d.device
   return (
     <>
       <div className={`prow prow--device s-${d.status}`}>
-        <button className="chev" title={open ? 'свернуть' : 'раскрыть дефицит'}
+        <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
           onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
         <a className="link" onClick={() => openItem(d.target_id)}>{d.target_design_item_id}</a>
         <span className="name">{d.target_description}</span>
@@ -222,13 +221,80 @@ function DeviceRow({ d, closed, busy, openItem, order, run }: {
               onClick={() => { if (confirm(`Убрать ${d.target_design_item_id} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
         </span>
       </div>
-      {open && (d.lines.length === 0
+      {open && (d.tree.length === 0
         ? <div className="prow prow--comp" style={{ color: 'var(--fg-dim)' }}>
             <span /><span style={{ gridColumn: '2 / -1' }}>Состав пуст — задайте BOM прибора.</span>
           </div>
-        : d.lines.map(ln => <CompRow key={ln.component_id} ln={ln}
-            busy={busy} openItem={openItem} order={order} />))}
+        : <DeviceTree tree={d.tree} openItem={openItem} />)}
     </>
+  )
+}
+
+// Дерево BOM в аккордеоне прибора (Ф5b) со сворачиванием подсборок. Узлы-подсборки
+// свёрнуты по умолчанию (expanded — пусто): при раскрытии прибора видно только прямые
+// компоненты, дальше — по шевронам. Плоский pre-order + `depth` от бэка: скрываем строки
+// глубже свёрнутого узла (пока не вернёмся на его уровень).
+function DeviceTree({ tree, openItem }: {
+  tree: DeficitTreeNode[]; openItem: (id: number) => void
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const toggle = (i: number) => setExpanded(s => {
+    const next = new Set(s)
+    if (next.has(i)) next.delete(i); else next.add(i)
+    return next
+  })
+  // Видимые строки: узел скрыт, если он глубже ближайшего свёрнутого предка.
+  const visible: { n: DeficitTreeNode; i: number; hasChildren: boolean; isExp: boolean }[] = []
+  let hideDepth = Infinity
+  tree.forEach((n, i) => {
+    if (n.depth > hideDepth) return       // под свёрнутым узлом — прячем
+    hideDepth = Infinity                  // вернулись на уровень предка — снимаем сокрытие
+    const hasChildren = !n.is_leaf
+    const isExp = expanded.has(i)
+    if (hasChildren && !isExp) hideDepth = n.depth   // свёрнут → прячем его поддерево
+    visible.push({ n, i, hasChildren, isExp })
+  })
+  return <>{visible.map(({ n, i, hasChildren, isExp }) =>
+    <TreeRow key={i} n={n} hasChildren={hasChildren} expanded={isExp}
+      onToggle={() => toggle(i)} openItem={openItem} />)}</>
+}
+
+// Строка дерева. Отступ = глубина; статус-полоса слева (у узла — worst-of поддерева).
+// Узел-подсборка: кликабельный шеврон (свернуть/раскрыть), купить нельзя — «＋ в заказ»
+// живёт в своде «Потребность». Лист: разбор ✓/●/▲ + склад (read-only).
+function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
+  n: DeficitTreeNode; hasChildren: boolean; expanded: boolean
+  onToggle: () => void; openItem: (id: number) => void
+}) {
+  const indent = n.depth * 18
+  return (
+    <div className={`prow prow--comp s-${n.status}`}>
+      <span />
+      <span className="tree-cell" style={{ paddingLeft: indent }}>
+        {hasChildren
+          ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
+              onClick={onToggle}>{expanded ? '▾' : '▸'}</button>
+          : <span className="tree-lead" />}
+        <a className="link" onClick={() => openItem(n.component_id)}>{n.component_design_item_id}</a>
+      </span>
+      <span className="name">{n.component_description}</span>
+      <span className="pnum">{num(n.need)} {n.uom}</span>
+      {n.is_leaf ? <>
+        <span>
+          <Segment status="available" value={n.have ?? 0} />
+          <Segment status="on_order" value={n.on_order ?? 0} />
+          <Segment status="to_order" value={n.to_order ?? 0} />
+        </span>
+        <span className="pnum">
+          {num(n.available_raw ?? 0)}
+          {n.anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
+        </span>
+      </> : <>
+        <span style={{ color: 'var(--fg-dim)', fontSize: 11 }}>подсборка</span>
+        <span />
+      </>}
+      <span className="act" />
+    </div>
   )
 }
 

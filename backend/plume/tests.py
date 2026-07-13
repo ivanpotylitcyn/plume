@@ -232,9 +232,11 @@ class DeficitTests(EngineTestBase):
         d = engine.project_deficit(self.prj)
         dm = d['demands'][0]
         self.assertEqual(dm['status'], 'to_order')   # worst-of (SCR ▲)
-        lines = {ln['component_design_item_id']: ln for ln in dm['lines']}
+        # аккордеон-дерево: CASE/SCR — прямые покупные листья прибора (depth 0)
+        lines = {ln['component_design_item_id']: ln for ln in dm['tree']}
         self.assertEqual(lines['CASE']['status'], 'available')
         self.assertEqual(lines['CASE']['have'], D(10))
+        self.assertTrue(lines['CASE']['is_leaf'])
         self.assertEqual(lines['SCR']['need'], D(40))
         self.assertEqual(lines['SCR']['on_order'], D(25))
         self.assertEqual(lines['SCR']['to_order'], D(15))
@@ -1823,6 +1825,113 @@ class ProjectBudgetTests(EngineTestBase):
         b = engine.project_budget(self.prj)
         self.assertIsNone(b['budget'])
         self.assertIsNone(b['compass'])
+
+
+class MultiLevelDemandTests(EngineTestBase):
+    """Ф5 (волна 16): потребность и план разузловываются до покупных листьев, а не на
+    1 уровень. Прибор из подсборок → деньги/дефицит живут на листьях (подсборку купить
+    нельзя). Стоимость опущена до листьев — узел (роллап) в план не задваивается."""
+
+    def _tree(self):
+        # 3 уровня: DEV → {SUB×2, A×1}; SUB → {A×2, B×3}. Листья A(@100), B(@10).
+        # На 1 DEV: A = 2×2 + 1 = 5, B = 2×3 = 6. Лист A виден из двух путей (через
+        # SUB и напрямую) → агрегируется.
+        a = self.make_item('A', kind='material')
+        b = self.make_item('B', kind='material')
+        a.estimated_cost = D(100); a.save()
+        b.estimated_cost = D(10); b.save()
+        sub = self.make_item('SUB', manufactured=True)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
+        models.BomLine.objects.create(parent=sub, component=a, qty=D(2))
+        models.BomLine.objects.create(parent=sub, component=b, qty=D(3))
+        models.BomLine.objects.create(parent=dev, component=sub, qty=D(2))
+        models.BomLine.objects.create(parent=dev, component=a, qty=D(1))
+        return dev, sub, a, b
+
+    def test_leaf_demand_explodes_and_multiplies(self):
+        dev, sub, a, b = self._tree()
+        leaves, incomplete = engine.project_leaf_demand(self.prj)  # пусто без потребности
+        self.assertEqual(leaves, {})
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        leaves, incomplete = engine.project_leaf_demand(self.prj)
+        # только листья A/B, узел SUB не в потребности; кол-во перемножено сквозь дерево
+        self.assertEqual({i.design_item_id: q for i, q in leaves.items()},
+                         {'A': D(50), 'B': D(60)})
+        self.assertEqual(incomplete, [])
+
+    def test_deficit_components_are_leaves(self):
+        dev, sub, a, b = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        d = engine.project_deficit(self.prj)
+        comps = {c['component_design_item_id']: c for c in d['components']}
+        self.assertEqual(set(comps), {'A', 'B'})     # свод: SUB не просочился (купить нельзя)
+        self.assertEqual(comps['A']['need'], D(50))
+        self.assertEqual(comps['B']['need'], D(60))
+        # аккордеон — ДЕРЕВО BOM (Ф5b): виден узел SUB + вложенные листья + прямой A.
+        # Ключ (код, глубина): A на depth1 (под SUB) и depth0 (прямой) — разные строки.
+        tree = {(n['component_design_item_id'], n['depth']): n
+                for n in d['demands'][0]['tree']}
+        self.assertEqual(set(tree), {('SUB', 0), ('A', 1), ('B', 1), ('A', 0)})
+        self.assertFalse(tree[('SUB', 0)]['is_leaf'])   # SUB — узел, не лист
+        self.assertEqual(tree[('SUB', 0)]['need'], D(20))   # 10 приборов × 2
+        self.assertTrue(tree[('A', 1)]['is_leaf'])
+        self.assertEqual(tree[('A', 1)]['need'], D(40))     # 20 SUB × 2
+        self.assertEqual(tree[('B', 1)]['need'], D(60))     # 20 SUB × 3
+        self.assertEqual(tree[('A', 0)]['need'], D(10))     # прямой в приборе
+
+    def test_plan_sums_leaf_costs_no_double_count(self):
+        # Ровно репортнутый баг: план подсборки должен пробрасываться в прогноз.
+        dev, sub, a, b = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        bud = engine.project_budget(self.prj)
+        # план = 50×100 + 60×10 = 5600 (роллап SUB=230 НЕ добавлен вторым разом)
+        self.assertEqual(bud['plan'], D(5600))
+        self.assertEqual(bud['unestimated'], [])
+
+    def test_command_deficit_explodes_to_leaves(self):
+        dev, sub, a, b = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        rows = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}
+        self.assertEqual(set(rows), {'A', 'B'})
+        self.assertEqual(rows['A']['need'], D(5))
+        self.assertEqual(rows['B']['need'], D(6))
+
+    def test_tree_intermediate_status_is_worst_of_subtree(self):
+        # Ф5b: цвет узла-подсборки в дереве = worst-of поддерева (где под ним «горит»).
+        dev, sub, a, b = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        self.receipt_lot(a, self.prj, 100)   # лист A покрыт, лист B — нет
+        tree = {(n['component_design_item_id'], n['depth']): n
+                for n in engine.project_deficit(self.prj)['demands'][0]['tree']}
+        self.assertEqual(tree[('A', 1)]['status'], 'available')   # ✓ покрыт
+        self.assertEqual(tree[('B', 1)]['status'], 'to_order')    # ▲ надо купить
+        self.assertEqual(tree[('SUB', 0)]['status'], 'to_order')  # узел = worst-of (B горит)
+
+    def test_produced_without_bom_is_incomplete_zero(self):
+        # производимый узел без состава оценить нечем: 0 в план, помечен неполнотой,
+        # без краха. (Витрина неполноты — отдельно; здесь важно, что не падает и не врёт.)
+        empty = self.make_item('EMPTY', manufactured=True)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
+        models.BomLine.objects.create(parent=dev, component=empty, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+        leaves, incomplete = engine.project_leaf_demand(self.prj)
+        self.assertEqual(leaves, {})
+        self.assertEqual(incomplete, ['EMPTY'])
+        self.assertEqual(engine.project_budget(self.prj)['plan'], D(0))
+        self.assertEqual(engine.project_deficit(self.prj)['components'], [])
+
+    def test_leaf_coverage_nets_stock_and_order(self):
+        # нетинг — на листе (через _coverage), не на подсборке. Купили часть листа A.
+        dev, sub, a, b = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        self.receipt_lot(a, self.prj, 20)                # A: склад 20 из нужных 50
+        comps = {c['component_design_item_id']: c
+                 for c in engine.project_deficit(self.prj)['components']}
+        self.assertEqual(comps['A']['need'], D(50))
+        self.assertEqual(comps['A']['have'], D(20))
+        self.assertEqual(comps['A']['to_order'], D(30))
+        # план оценивает только докупаемое (30×100) + весь B (60×10) = 3600
+        self.assertEqual(engine.project_budget(self.prj)['plan'], D(3600))
 
 
 class ProjectBudgetHttpTests(TestCase):

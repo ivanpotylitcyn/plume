@@ -282,6 +282,11 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .prow .chev { background: none; border: none; color: var(--fg-dim); cursor: pointer;
   padding: 0; font-size: 12px; line-height: 1; justify-self: start; }
 .prow .chev:hover { color: var(--fg-bright); }
+/* Ф5b: ячейка кода в дереве аккордеона — шеврон подсборки + код, отступ по глубине.
+   Лист получает spacer вместо шеврона, чтобы коды выравнивались. */
+.prow .tree-cell { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.prow .tree-cell .chev { flex: 0 0 auto; }
+.prow .tree-lead { flex: 0 0 auto; width: 12px; }
 .prow .act { text-align: right; }
 
 /* значки статусов */
