@@ -2,7 +2,7 @@
 // Партии на складе (по проектам, с живым остатком), where-used, состав.
 // Волна 5: блок «Отгруженные партии» — куда и по какой накладной ушло заказчику.
 // Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
 import { num } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
@@ -222,36 +222,66 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
 
 // Добавить компонент в состав: пикер изделий (кроме самого и уже добавленных) + кол-во.
 // Циклы/дубли ловит бэкенд — здесь только базовый отсев для чистого списка.
+// Ф3 (волна 16): вместо большого <select> со всеми изделиями — type-ahead.
+// Вводишь код/название → список кандидатов сокращается → выбираешь. Отсев самого
+// изделия и уже добавленных остаётся. Пока компонент не выбран — кнопка заблокирована.
 function AddComponent({ items, parentId, bom, busy, add }: {
   items: ItemRow[]; parentId: number; bom: ItemDetail['bom']; busy: boolean
   add: (componentId: number, qty: number) => void
 }) {
-  const taken = new Set(bom.map(b => b.component_id))
-  const options = items.filter(i => i.id !== parentId && !taken.has(i.id))
+  const options = useMemo(() => {
+    const taken = new Set(bom.map(b => b.component_id))
+    return items.filter(i => i.id !== parentId && !taken.has(i.id))
+  }, [items, parentId, bom])
+  const [q, setQ] = useState('')
   const [componentId, setComponentId] = useState<number | ''>('')
   const [qty, setQty] = useState('1')
-  useEffect(() => { setComponentId(options[0]?.id ?? '') }, [options.map(o => o.id).join()])
+
+  const matches = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    if (!s) return []
+    return options.filter(i =>
+      i.design_item_id.toLowerCase().includes(s) || i.description.toLowerCase().includes(s)
+    ).slice(0, 20)
+  }, [options, q])
+
+  const pick = (i: ItemRow) => { setComponentId(i.id); setQ(`${i.design_item_id} — ${i.description}`) }
 
   const submit = () => {
     const n = Number(qty)
     if (!componentId || !(n > 0)) return
     add(componentId, n)
+    setComponentId(''); setQ('')
   }
 
   if (options.length === 0)
     return <div className="kit-actions" style={{ marginTop: 10, color: 'var(--fg-dim)', fontSize: 12 }}>
       ＋ компонент: нет доступных изделий.</div>
   return (
-    <div className="kit-actions" style={{ marginTop: 10 }}>
-      <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ компонент</span>
-      <select className="lot-sel" value={componentId} disabled={busy}
-        onChange={e => setComponentId(Number(e.target.value))}>
-        {options.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
-      </select>
-      <input className="qty-in" value={qty} disabled={busy}
-        onChange={e => setQty(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') submit() }} />
-      <button className="btn sm" disabled={busy} onClick={submit}>добавить</button>
+    <div style={{ marginTop: 10, position: 'relative' }}>
+      <div className="kit-actions">
+        <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ компонент</span>
+        <input className="lot-sel" value={q} disabled={busy} placeholder="код или название…"
+          onChange={e => { setQ(e.target.value); setComponentId('') }}
+          onKeyDown={e => { if (e.key === 'Enter' && componentId) submit() }} />
+        <input className="qty-in" value={qty} disabled={busy}
+          onChange={e => setQty(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && componentId) submit() }} />
+        <button className="btn sm" disabled={busy || !componentId} onClick={submit}>добавить</button>
+      </div>
+      {componentId === '' && matches.length > 0 &&
+        <div className="typeahead-menu">
+          {matches.map(i => (
+            <div key={i.id} className="typeahead-item" onClick={() => pick(i)}>
+              <span className={`ci ci-${i.category.icon || 'chip'}`} />
+              <span className="code">{i.design_item_id}</span>
+              <span style={{ color: 'var(--fg-dim)' }}>{i.description}</span>
+            </div>
+          ))}
+        </div>}
+      {componentId === '' && q.trim() && matches.length === 0 &&
+        <div style={{ color: 'var(--fg-dim)', fontSize: 12, marginTop: 4 }}>
+          ничего не найдено — компонент должен быть в справочнике изделий.</div>}
     </div>
   )
 }

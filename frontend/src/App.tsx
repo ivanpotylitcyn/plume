@@ -321,7 +321,7 @@ export default function App() {
                 : <span className="glyph g-info">○</span> }))} />}
 
         {mode === 'items' &&
-          <ModeList heading="Изделия" newLabel="＋ Новое изделие"
+          <ModeList heading="Изделия" newLabel="＋ Новое изделие" categoryFilter
             newSel={sel?.kind === 'new-item'} onNew={() => setSel({ kind: 'new-item' })}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
@@ -332,7 +332,7 @@ export default function App() {
                 <span className="code">Синхронизация с библиотекой</span>
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
-              id: i.id, code: i.design_item_id, name: i.description,
+              id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
               glyph: <span className={`ci ci-${i.category.icon || 'chip'}`} /> }))} />}
 
         {mode === 'orders' &&
@@ -465,27 +465,34 @@ const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
 
 // Единый список режима (§7): призрачный «＋ Новая…» первым, строка = глиф · моно-код
 // (подписи нет), фильтр-строка и — где есть проект — дропдаун по проекту.
-interface ListRow { id: number; code: string; name: string; glyph: ReactNode; projectCode?: string }
-function ModeList({ heading, newLabel, newSel, onNew, rows, selId, onSelect, projectFilter, extraTop }: {
+interface ListRow { id: number; code: string; name: string; glyph: ReactNode; projectCode?: string; category?: string }
+function ModeList({ heading, newLabel, newSel, onNew, rows, selId, onSelect, projectFilter, categoryFilter, extraTop }: {
   heading: string; newLabel: string; newSel: boolean; onNew: () => void
   rows: ListRow[]; selId: number | null; onSelect: (id: number) => void
-  projectFilter?: boolean; extraTop?: ReactNode
+  projectFilter?: boolean; categoryFilter?: boolean; extraTop?: ReactNode
 }) {
   const [q, setQ] = useState('')
   const [proj, setProj] = useState('')
-  useEffect(() => { setQ(''); setProj('') }, [heading])
+  const [cat, setCat] = useState('')
+  useEffect(() => { setQ(''); setProj(''); setCat('') }, [heading])
 
   const projOptions = useMemo(() => {
     if (!projectFilter) return []
     return [...new Set(rows.map(r => r.projectCode).filter((x): x is string => !!x))].sort()
   }, [rows, projectFilter])
 
+  const catOptions = useMemo(() => {
+    if (!categoryFilter) return []
+    return [...new Set(rows.map(r => r.category).filter((x): x is string => !!x))].sort()
+  }, [rows, categoryFilter])
+
   const shown = useMemo(() => {
     const s = q.trim().toLowerCase()
     return rows.filter(r =>
       (!proj || r.projectCode === proj) &&
+      (!cat || r.category === cat) &&
       (!s || r.code.toLowerCase().includes(s) || r.name.toLowerCase().includes(s)))
-  }, [rows, q, proj])
+  }, [rows, q, proj, cat])
 
   return (
     <>
@@ -497,6 +504,11 @@ function ModeList({ heading, newLabel, newSel, onNew, rows, selId, onSelect, pro
           <select className="list-proj" value={proj} onChange={e => setProj(e.target.value)}>
             <option value="">все проекты</option>
             {projOptions.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>}
+        {categoryFilter && catOptions.length > 1 &&
+          <select className="list-proj" value={cat} onChange={e => setCat(e.target.value)}>
+            <option value="">все категории</option>
+            {catOptions.map(c => <option key={c} value={c}>{c}</option>)}
           </select>}
       </div>
       <div className="list-scroll">

@@ -344,6 +344,19 @@ tr.row.ghost .glyph { opacity: 1; }
 .lot-sel { background: var(--bg); color: var(--fg); border: 1px solid var(--border-strong);
   border-radius: 3px; padding: 1px 4px; font-family: var(--font-mono); font-size: 12px; max-width: 320px; }
 .lot-sel:focus { outline: none; border-color: var(--accent); }
+.lot-sel:disabled { opacity: .5; }
+
+/* Ф3 (волна 16): type-ahead выпадашка выбора компонента в составе (BOM). */
+.typeahead-menu { position: absolute; z-index: 20; margin-top: 2px; min-width: 320px;
+  max-height: 240px; overflow-y: auto; background: var(--bg-widget);
+  border: 1px solid var(--border-strong); border-radius: 4px;
+  box-shadow: 0 6px 20px #00000055; }
+.typeahead-item { display: flex; align-items: center; gap: 8px; padding: 3px 12px;
+  cursor: pointer; white-space: nowrap; font-size: 12px; }
+.typeahead-item:hover { background: var(--bg-hover); }
+.typeahead-item .code { color: var(--fg); font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; }
+.typeahead-item .ci { flex: 0 0 auto; font-size: 13px; color: var(--fg-dim); }
 
 .x { background: none; border: none; color: var(--fg-dim); cursor: pointer;
   font-size: 15px; line-height: 1; padding: 0 4px; }
