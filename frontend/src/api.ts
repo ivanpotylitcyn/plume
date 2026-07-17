@@ -95,9 +95,12 @@ export interface ItemDetail {
 // ── Синхронизация справочника с библиотекой Altium (волна 15) ──
 // Диф-строка: `status` задаёт действие/флаг; `incoming` — из библиотеки (нет у
 // gone/orphan), `current` — из БД (нет у new), `changes` — что отличается (только changed).
-export type LibraryStatus = 'new' | 'changed' | 'gone' | 'orphan' | 'same'
+// `refix` (волна 17) — содержимое совпадает с библиотекой, но изделие ещё draft →
+// подтвердить = зафиксировать (post_item). Закрывает дыру миграции волны 17.
+export type LibraryStatus = 'new' | 'changed' | 'refix' | 'gone' | 'orphan' | 'same'
 export interface LibrarySnapshot {
-  description: string; temperature: string; category: string; produced?: boolean
+  description: string; temperature: string; category: string
+  produced?: boolean; status?: ItemStatus
 }
 export interface LibraryChange { old: string; new: string }
 export interface LibraryDiffRow {
@@ -106,7 +109,7 @@ export interface LibraryDiffRow {
   changes?: Partial<Record<'description' | 'temperature' | 'category', LibraryChange>>
 }
 export interface LibraryDiff { categories: string[]; rows: LibraryDiffRow[] }
-export interface LibraryApplySummary { created: number; updated: number; deleted: number }
+export interface LibraryApplySummary { created: number; updated: number; fixed: number; deleted: number }
 // Роллап стоимости: детальный экран изделия + сводка пересчёта.
 export interface RollupResult {
   estimated_cost: number | null; updated: string[]; incomplete: string[]

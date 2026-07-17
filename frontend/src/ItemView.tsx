@@ -127,14 +127,12 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
           : (d.estimated_cost != null ? `${d.estimated_cost} ₽` : '—')}</dd>
       </dl>
 
-      {/* Фиксация (волна 17): закрой мягкий замок → «Зафиксировать» → форма read-only.
-          Расфиксация — чипом в шапке (onUnfix). Кнопка только у черновика. */}
-      {!fixed && <div className="kit-actions" style={{ marginBottom: 4 }}>
-        <button className="btn primary" disabled={busy || unlocked}
-          title={unlocked ? 'Сначала закройте замок — просмотрите чистовик'
-                          : 'Зафиксировать изделие — форма станет read-only, правки заблокируются'}
-          onClick={() => run(api.postItem(d.id))}>Зафиксировать</button>
-      </div>}
+      {/* Хот-фикс волны 17 (по запросу пользователей): ручной фиксации из вью НЕТ —
+          кнопка «Зафиксировать» убрана намеренно. `posted` изделие можно расфиксировать
+          (чип → onUnfix) и править, но обратно зафиксировать — только повторным синком
+          с библиотекой (`refix`). Так библиотечные (posted) и «ручные» (draft) изделия
+          чётко разделены; производимые с BOM в библиотеке не бывают → всегда draft.
+          Бэкенд `post_item`/эндпойнт живы (их зовёт синк), просто не вызываются из вью. */}
 
       {d.produced && <div className="kit-actions" style={{ marginBottom: 4 }}>
         <button className="btn sm" disabled={busy} onClick={recalc}

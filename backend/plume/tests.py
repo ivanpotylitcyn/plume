@@ -3870,7 +3870,8 @@ class LibraryDiffTests(TestCase):
 
     def test_new_changed_same(self):
         self._item('CAP-1', 'capacitors', desc='старое', temp='-40-85°C')
-        self._item('CAP-2', 'capacitors', desc='совпадает', temp='-55-125°C')
+        c2 = self._item('CAP-2', 'capacitors', desc='совпадает', temp='-55-125°C')
+        c2.status = models.Item.Status.POSTED; c2.save()   # совпадает И posted → same
         files = [('capacitors.csv', _lib_csv([
             ('CAP-1', 'новое', '-40-85°C'),     # description изменился
             ('CAP-2', 'совпадает', '-55-125°C'), # без изменений
@@ -3881,6 +3882,13 @@ class LibraryDiffTests(TestCase):
         self.assertIn('description', rows['CAP-1']['changes'])
         self.assertEqual(rows['CAP-2']['status'], 'same')
         self.assertEqual(rows['CAP-3']['status'], 'new')
+
+    def test_refix_when_draft_matches_library(self):
+        # Волна 17: содержимое совпадает, но изделие ещё draft → refix (зафиксировать).
+        self._item('CAP-9', 'capacitors', desc='совп', temp='')   # draft по умолчанию
+        rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-9', 'совп', '')]))]))
+        self.assertEqual(rows['CAP-9']['status'], 'refix')
+        self.assertEqual(rows['CAP-9']['current']['status'], 'draft')
 
     def test_gone_when_unused(self):
         self._item('CAP-OLD', 'capacitors')      # в БД, не в загрузке, не используется
@@ -3951,6 +3959,25 @@ class LibraryApplyTests(TestCase):
         self.assertTrue(models.Item.objects.filter(design_item_id='S-1').exists())
         self.assertFalse(models.Item.objects.filter(design_item_id='S-2').exists())
         self.assertTrue(models.Item.objects.filter(design_item_id='S-OLD').exists())
+
+    def test_apply_refix_posts_matching_draft(self):
+        # Волна 17: совпадающее по содержимому draft-изделие → refix → post_item.
+        it = self._item('S-1', 'sensors', desc='датчик', temp='')   # draft, совпадает
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
+        summary = engine.apply_library_diff(parsed, ['S-1'])
+        self.assertEqual(summary['fixed'], 1)
+        self.assertEqual(summary['updated'], 0)   # содержимое не трогали
+        it.refresh_from_db()
+        self.assertTrue(it.is_posted)
+
+    def test_apply_refix_only_confirmed(self):
+        # Не подтверждённый refix — не фиксируется.
+        it = self._item('S-1', 'sensors', desc='датчик', temp='')
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
+        summary = engine.apply_library_diff(parsed, [])   # ничего не подтверждаем
+        self.assertEqual(summary['fixed'], 0)
+        it.refresh_from_db()
+        self.assertFalse(it.is_posted)
 
     def test_orphan_not_deleted_even_if_confirmed(self):
         used = self._item('S-USED', 'sensors')
@@ -4172,7 +4199,7 @@ class LibrarySyncHttpTests(TestCase):
         a = self.c.post('/api/library/apply/',
                         {'files': up2, 'confirmed': json.dumps(['CAP-1', 'CAP-OLD'])})
         self.assertEqual(a.status_code, 200)
-        self.assertEqual(a.json(), {'created': 1, 'updated': 0, 'deleted': 1})
+        self.assertEqual(a.json(), {'created': 1, 'updated': 0, 'fixed': 0, 'deleted': 1})
         self.assertTrue(models.Item.objects.filter(design_item_id='CAP-1').exists())
         self.assertFalse(models.Item.objects.filter(design_item_id='CAP-OLD').exists())
 

@@ -2998,7 +2998,7 @@ def parse_library(files):
 
 
 # Порядок статусов в диф-вью: сперва требующие действия, потом флаги, потом «совпало».
-_DIFF_ORDER = {'new': 0, 'changed': 1, 'gone': 2, 'orphan': 3, 'same': 4}
+_DIFF_ORDER = {'new': 0, 'changed': 1, 'refix': 2, 'gone': 3, 'orphan': 4, 'same': 5}
 
 
 def _library_changes(item, row):
@@ -3025,7 +3025,7 @@ def _diff_row(status, row, item, changes=None):
     if item is not None:
         out['current'] = {'description': item.description,
                           'temperature': item.temperature, 'category': item.category.code,
-                          'produced': item.produced}
+                          'produced': item.produced, 'status': item.status}
     if changes:
         out['changes'] = changes
     return out
@@ -3035,9 +3035,12 @@ def library_diff(parsed):
     """Полная сверка загруженной библиотеки против БД по ключу `design_item_id`.
     `parsed` — из `parse_library`. Возвращает список диф-строк со статусом:
 
-    - `new`     — ключа нет в БД → создать (`produced=false`);
-    - `changed` — есть, отличается description/category/temperature → обновить;
-    - `same`    — есть, совпадает → ничего;
+    - `new`     — ключа нет в БД → создать (`produced=false`, `posted`);
+    - `changed` — есть, отличается description/category/temperature → обновить (+`posted`);
+    - `refix`   — есть, содержимое совпадает, но изделие ещё `draft` → зафиксировать
+      (`post_item`). Закрывает дыру миграции волны 17 (все ушли в draft, а `same` синк
+      не трогал → библиотечные застревали draft); одноразово на изделие;
+    - `same`    — есть, совпадает И уже `posted` → ничего;
     - `gone`    — в БД (в одном из загруженных классов), нет в загрузке, не
       используется → кандидат на удаление;
     - `orphan`  — то же, но используется (живые ссылки) → флаг «сирота, нет в
@@ -3056,7 +3059,13 @@ def library_diff(parsed):
             result.append(_diff_row('new', row, None))
             continue
         changes = _library_changes(item, row)
-        result.append(_diff_row('changed' if changes else 'same', row, item, changes))
+        if changes:
+            status = 'changed'
+        elif not item.is_posted:
+            status = 'refix'      # совпадает по содержимому, но черновик → зафиксировать
+        else:
+            status = 'same'
+        result.append(_diff_row(status, row, item, changes))
     for key, item in existing.items():
         if key in by_key or item.category.code not in categories:
             continue
@@ -3071,15 +3080,16 @@ def apply_library_diff(parsed, confirmed):
     доверяем присланным клиентом значениям): действие берётся из свежего статуса,
     поля — из `parsed`. Всё в одной транзакции (bulk = всё-или-ничего).
 
-    - `new`     → создать `Item` (`produced=false`, категория `ensure_category`);
-    - `changed` → обновить description/category/temperature;
+    - `new`     → создать `Item` (`produced=false`, `posted`, категория `ensure_category`);
+    - `changed` → обновить description/category/temperature (+ `posted`);
+    - `refix`   → зафиксировать (`post_item`; содержимое уже совпадает);
     - `gone`    → удалить (`delete_item` — guard добьёт, если стало используемым);
     - `orphan`/`same` → no-op даже если ключ подтверждён.
 
-    Возвращает сводку `{created, updated, deleted}`."""
+    Возвращает сводку `{created, updated, fixed, deleted}`."""
     confirmed = set(confirmed or [])
     by_key = {r['design_item_id']: r for r in parsed['rows']}
-    summary = {'created': 0, 'updated': 0, 'deleted': 0}
+    summary = {'created': 0, 'updated': 0, 'fixed': 0, 'deleted': 0}
     with transaction.atomic():
         for diff in library_diff(parsed):
             key = diff['design_item_id']
@@ -3108,6 +3118,10 @@ def apply_library_diff(parsed, confirmed):
                 item.save(update_fields=['description', 'category', 'temperature',
                                          'status'])
                 summary['updated'] += 1
+            elif status == 'refix':
+                # Содержимое уже совпадает — фиксируем только статус (draft → posted).
+                post_item(models.Item.objects.get(design_item_id=key))
+                summary['fixed'] += 1
             elif status == 'gone':
                 item = models.Item.objects.get(design_item_id=key)
                 unpost_item(item)          # расфиксировать перед удалением (гейт)

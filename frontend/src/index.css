@@ -273,10 +273,18 @@ tr.row.s-available { border-left-color: var(--st-ok); }
    auto) — колонки выравниваются между всеми строками. Имя усекается, не расталкивает. */
 .pgrid { max-width: 840px; }
 .prow { display: grid; align-items: baseline; column-gap: 8px;
-  grid-template-columns: 18px 148px minmax(140px, 1fr) 96px 124px 60px 88px;
+  /* Волна 17: колонка «Компонент» расширена (148→190) под длинные Design Item ID,
+     ширину донирует «Склад» (60→46, там одно число). Общий шаблон → «Приборы» и
+     «Потребность» синхронны. Длинные коды переносятся внутри своей колонки (см.
+     .prow .link overflow-wrap), а не наезжают на «Назв.». */
+  grid-template-columns: 18px 190px minmax(140px, 1fr) 96px 124px 46px 88px;
   border-left: 2px solid transparent; padding: 3px 0 3px 8px; }
 .prow .pnum { text-align: right; font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; }
+/* Код-ссылка переносится в любом месте (коды без дефисов, напр. BGB707L7ESDE6327XTSA,
+   иначе горизонтально наезжают на соседнюю колонку). min-width:0 — чтобы ужималась
+   внутри flex-ячейки дерева (.tree-cell). */
+.prow .link { overflow-wrap: anywhere; min-width: 0; }
 .prow .name { color: var(--fg-dim); min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prow.s-to_order { border-left-color: var(--st-order); }
