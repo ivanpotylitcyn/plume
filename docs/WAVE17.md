@@ -7,9 +7,10 @@
 режимы «Изделия»/«Компоненты», статус-глиф везде, где есть строки Item.**
 
 **Статус: В РАБОТЕ.** Развилки сняты с Иваном 2026-07-17. Четыре блока сведены в 3
-фазы. **Фаза 1 (бэкенд-фундамент `Item.status`) — СДЕЛАНА 2026-07-17** (331 тест
-зелёный). Дальше — Фаза 2 (фронт: статус-глиф + замок/фиксация формы) и Фаза 3
-(режимы «Изделия»/«Компоненты»), после согласования.
+фазы. **Фаза 1 (бэкенд `Item.status`) — СДЕЛАНА** (331 тест). **Фаза 2 (фронт:
+статус-глиф + замок/фиксация формы, BOM под замком, «Назв.»→«Описание») — СДЕЛАНА**
+(tsc/build/lint зелёные, живой smoke сервера). Остаётся **Фаза 3** (режимы
+«Изделия»/«Компоненты»), после согласования.
 
 ## Развилки (СНЯТЫ с Иваном 2026-07-17)
 
@@ -102,19 +103,28 @@
       `engine.project_deficit`, Django-`Client` на `/api/items/<pk>/post|unpost`).
       Docker MySQL, рецепт `DB_USER=root DB_PASSWORD=root manage.py test plume`.
 
-### Фаза 2 — фронт: статус-глиф везде + замок формы (Блоки 4 + 2)
-- [ ] `status.tsx`: глиф статуса изделия — `posted` = ✓ (зелёный, класс как
-      `g-available`), `draft` = ○ (оранжевый). Маленький компонент `ItemStatusGlyph`.
-- [ ] Глиф в списках режимов (`ModeList`/`ListRow` — слева, вместе с иконкой категории),
-      в «Состав (BOM)», в «Потребность» (`CompRow` + `TreeRow`).
-- [ ] ItemView перенимает фиксацию StockDocument: `fixed = d.status==='posted'`,
-      `locked = fixed || !unlocked`; `FormHeader` c `fixed`/`onUnfix`(unpost)/чип;
-      кнопка «зафиксировать» (disabled пока открыт мягкий замок); обёртка
-      `form-locked`. Свойства **и** BOM гейтятся на `locked`.
-- [ ] BOM под замком: `AddComponent`/удаление ×/правка кол-ва — только при `!locked`;
-      иначе read-only список.
-- [ ] «Назв.» → «Описание» в шапке «Состав (BOM)»; усечение описания в одну строку
-      (CSS-класс, `nowrap`+ellipsis).
+### Фаза 2 — фронт: статус-глиф везде + замок формы (Блоки 4 + 2) — **СДЕЛАНО 2026-07-17**
+- [x] `status.tsx`: `ItemStatusGlyph` — `posted` = ✓ (`g-available`, зелёный),
+      `draft` = ○ (`g-draft` = оранжевый `--st-wip`). Типы `ItemStatus` в api.ts,
+      `status`/`component_status` в `ItemRow`/`ItemDetail`/BOM/`DeficitComponent`/
+      `DeficitTreeNode`; `api.postItem`/`unpostItem`.
+- [x] Глиф в списках режимов (App.tsx items-rows — слева, перед иконкой категории),
+      в «Состав (BOM)» (ItemView), в «Потребность» (`CompRow` + `TreeRow` — в первой
+      18px-колонке грида `.prow`).
+- [x] ItemView перенимает фиксацию StockDocument: `fixed = d.status==='posted'`,
+      `locked = fixed || !unlocked`; `FormHeader` c `fixed`/`fixedLabel`/`onUnfix`(unpost)/
+      чип; кнопка «Зафиксировать» (`disabled` пока открыт мягкий замок); обёртка
+      `form-locked`. Все свойства (`!locked ?`) **и** BOM гейтятся на `locked`.
+- [x] BOM под замком: `AddComponent`/удаление ×/правка кол-ва — только при `!locked`;
+      иначе read-only список (кол-во текстом).
+- [x] «Назв.» → «Описание» в шапке «Состав (BOM)»; усечение описания в одну строку
+      (`.cell-ellip`, `nowrap`+ellipsis, `title` = полный текст).
+- **Verify:** `tsc --noEmit`, `vite build`, `oxlint` — зелёные, **0 новых warning**.
+      Живой smoke реального сервера (Docker MySQL + seed): `/api/items/` несёт `status`;
+      post→posted, правка BOM зафиксированной → **400 «зафиксировано — сперва
+      расфиксируйте»**, unpost→draft; `project_deficit` несёт `component_status` в своде
+      и дереве (РЕЗ-10К posted, узлы/листья draft). Браузерный клик-прогон — за Иваном
+      (Playwright не установлен, как в Ф5b волны 16).
 
 ### Фаза 3 — режимы «Изделия»/«Компоненты» (Блок 3)
 - [ ] `Mode`-тип + `MODES`: новый режим `products` («Изделия», свой Codicon);

@@ -1,5 +1,19 @@
 // Сквозной словарь статусов (единый везде): значок + цвет текста, не заливка.
-import type { Status } from './api'
+import type { Status, ItemStatus } from './api'
+
+// Статус-замок изделия (волна 17): posted — зелёная галочка (зафиксировано,
+// источник правды/библиотека), draft — оранжевый кружок (черновик, редактируемо).
+// Ставится слева от строки Item везде (списки режимов, BOM, потребность проекта).
+const ITEM_GLYPH: Record<ItemStatus, string> = { posted: '✓', draft: '○' }
+const ITEM_LABEL: Record<ItemStatus, string> = {
+  posted: 'зафиксировано (из библиотеки / проведено)',
+  draft: 'черновик (редактируется)',
+}
+
+export function ItemStatusGlyph({ status }: { status: ItemStatus }) {
+  const cls = status === 'posted' ? 'g-available' : 'g-draft'
+  return <span className={`glyph ${cls}`} title={ITEM_LABEL[status]}>{ITEM_GLYPH[status]}</span>
+}
 
 export const GLYPH: Record<Status, string> = {
   to_order: '▲',     // красный — дефицит, нужна работа

@@ -4,7 +4,7 @@
 // Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num } from './status'
+import { num, ItemStatusGlyph } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
@@ -58,8 +58,14 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   // Состав правим у производимых (или если он уже задан) — у покупных BOM нет.
   const composable = d.produced || d.bom.length > 0
 
+  // Фиксация (волна 17) — ровно как у StockDocument (см. ReceiptView): `posted` =
+  // изделие зафиксировано (форма read-only, бэк гейтит мутации), чип вместо замка.
+  // `locked` = фиксация ИЛИ закрытый личный мягкий замок → всё в форме read-only.
+  const fixed = d.status === 'posted'
+  const locked = fixed || !unlocked
+
   return (
-    <div>
+    <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
         name={d.description}
         meta={<>
@@ -70,30 +76,32 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
           {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
-        onDelete={unlocked ? del : undefined}
+        fixed={fixed} fixedLabel="зафиксировано"
+        onUnfix={() => { if (confirm('Расфиксировать изделие? Форма станет черновиком (draft) и снова редактируемой.')) run(api.unpostItem(d.id)) }}
+        onDelete={!locked ? del : undefined}
       />
       <dl className="props">
         <dt>Изделие</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <CommitInput value={d.design_item_id} width={160} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { design_item_id: v }))}
               validate={v => v.trim() !== ''} />
           : d.design_item_id}</dd>
         <dt>Описание</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <CommitInput value={d.description} width={260} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { description: v }))}
               validate={v => v.trim() !== ''} />
           : d.description}</dd>
         <dt>Категория</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <select className="lot-sel" value={d.category.id} disabled={busy}
               onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
               {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           : d.category.label}</dd>
         <dt>Производимое</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={d.produced} disabled={busy}
                 onChange={e => run(api.updateItem(d.id, { produced: e.target.checked }))} />
@@ -101,23 +109,32 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
             </label>
           : (d.produced ? 'да' : 'нет')}</dd>
         <dt>Температурный диапазон</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <CommitInput value={d.temperature} width={160} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
           : (d.temperature || '—')}</dd>
         <dt>Ед. изм.</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <CommitInput value={d.uom} width={80} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
           : d.uom}</dd>
         <dt>Оценка</dt>
-        <dd>{unlocked
+        <dd>{!locked
           ? <><CommitInput value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
               width={100} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}
               validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</>
           : (d.estimated_cost != null ? `${d.estimated_cost} ₽` : '—')}</dd>
       </dl>
+
+      {/* Фиксация (волна 17): закрой мягкий замок → «Зафиксировать» → форма read-only.
+          Расфиксация — чипом в шапке (onUnfix). Кнопка только у черновика. */}
+      {!fixed && <div className="kit-actions" style={{ marginBottom: 4 }}>
+        <button className="btn primary" disabled={busy || unlocked}
+          title={unlocked ? 'Сначала закройте замок — просмотрите чистовик'
+                          : 'Зафиксировать изделие — форма станет read-only, правки заблокируются'}
+          onClick={() => run(api.postItem(d.id))}>Зафиксировать</button>
+      </div>}
 
       {d.produced && <div className="kit-actions" style={{ marginBottom: 4 }}>
         <button className="btn sm" disabled={busy} onClick={recalc}
@@ -149,28 +166,35 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
       {composable && <>
         <div className="section-h">Состав (BOM)
           <span className="hint">компонентов {d.bom.length}</span></div>
-        {d.bom.length === 0 && <div style={{ color: 'var(--fg-dim)' }}>Состав пуст — добавьте компонент ниже.</div>}
+        {d.bom.length === 0 && <div style={{ color: 'var(--fg-dim)' }}>
+          {locked ? 'Состав пуст.' : 'Состав пуст — добавьте компонент ниже.'}</div>}
         {d.bom.length > 0 &&
           <table className="grid">
-            <thead><tr><th>Компонент</th><th>Назв.</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th><th /></tr></thead>
+            <thead><tr><th /><th>Компонент</th><th>Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th>{!locked && <th />}</tr></thead>
             <tbody>{d.bom.map(b => (
               <tr key={b.id} className="row">
+                <td><ItemStatusGlyph status={b.component_status} /></td>
                 <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_design_item_id}</a></td>
-                <td style={{ color: 'var(--fg-dim)' }}>{b.component_description}</td>
+                <td style={{ color: 'var(--fg-dim)' }}>
+                  <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
                 <td className="num">
-                  <CommitInput value={String(b.qty)} width={56} disabled={busy}
-                    onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
-                    validate={v => Number(v) > 0} /> {b.component_uom}
+                  {!locked
+                    ? <><CommitInput value={String(b.qty)} width={56} disabled={busy}
+                        onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
+                        validate={v => Number(v) > 0} /> {b.component_uom}</>
+                    : <>{num(b.qty)} {b.component_uom}</>}
                 </td>
-                <td style={{ textAlign: 'right' }}>
+                {!locked && <td style={{ textAlign: 'right' }}>
                   <button className="x" title="убрать компонент из состава" disabled={busy}
                     onClick={() => run(api.deleteBomLine(b.id))}>×</button>
-                </td>
+                </td>}
               </tr>))}</tbody>
           </table>}
-        <AddComponent items={items} parentId={d.id} bom={d.bom} busy={busy}
-          add={(component_id, qty) => run(api.addBomLine(d.id, { component_id, qty }))} />
+        {/* Добавление компонента — только когда форма редактируема (мягкий замок открыт
+            и не зафиксировано). Под замком/фиксацией состав = read-only список. */}
+        {!locked && <AddComponent items={items} parentId={d.id} bom={d.bom} busy={busy}
+          add={(component_id, qty) => run(api.addBomLine(d.id, { component_id, qty }))} />}
         {err && <div className="anomaly">{err}</div>}
       </>}
 

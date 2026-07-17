@@ -1,6 +1,10 @@
 // API-клиент витрин волны 1. Все эндпоинты — read-only проекции движка.
 export type Status = 'available' | 'on_order' | 'to_order'
 
+// Статус-замок изделия (волна 17): фиксация как у StockDocument. `posted` = форма
+// read-only (свойства+BOM), мутации гейтятся бэком; `draft` = редактируемо.
+export type ItemStatus = 'draft' | 'posted'
+
 // ── Авторство шапки (волна 13, Ф2j) — единый пикер автора, редактируемо под
 //    замком на всех ордерах/закупках. `UserRow` — справочник пикера. ──
 export interface UserRow {
@@ -21,7 +25,7 @@ export interface Category {
 export interface ItemRow {
   // `id` — PK (FK-ссылки/мутации); `design_item_id` — бизнес-ключ (канон библиотеки).
   id: number; design_item_id: string; description: string; category: Category
-  uom: string; temperature: string; produced: boolean; used: boolean
+  uom: string; temperature: string; produced: boolean; used: boolean; status: ItemStatus
 }
 
 // Узел дерева аккордеона прибора (Ф5b): плоский pre-order с `depth`. Лист (покупной)
@@ -29,6 +33,7 @@ export interface ItemRow {
 // = worst-of поддерева. Купить можно только листья → заказ живёт в своде «Потребность».
 export interface DeficitTreeNode {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
+  component_status: ItemStatus
   need: number; depth: number; is_leaf: boolean; status: Status
   have?: number; on_order?: number; to_order?: number; available_raw?: number; anomaly?: boolean
 }
@@ -40,6 +45,7 @@ export interface DeficitDemand {
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
 export interface DeficitComponent {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
+  component_status: ItemStatus
   need: number; have: number; on_order: number; to_order: number
   status: Status; available_raw: number; anomaly: boolean
 }
@@ -75,10 +81,11 @@ export interface ItemShipment {
 }
 export interface ItemDetail {
   id: number; design_item_id: string; description: string; category: Category
-  uom: string; temperature: string; produced: boolean; used: boolean
+  uom: string; temperature: string; produced: boolean; used: boolean; status: ItemStatus
   estimated_cost: number | null
   bom: { id: number; component_id: number; component_design_item_id: string;
-         component_description: string; component_uom: string; qty: number; position: string }[]
+         component_description: string; component_uom: string; component_status: ItemStatus;
+         qty: number; position: string }[]
   where_used: { parent_id: number; parent_design_item_id: string; parent_description: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
           live_qty: number; unit_cost: number; part_number: string; lot_name: string }[]
@@ -489,6 +496,9 @@ export const api = {
     estimated_cost: number | null }>) =>
     send<ItemDetail>('PATCH', `/api/items/${id}/`, b),
   deleteItem: (id: number) => send<void>('DELETE', `/api/items/${id}/`),
+  // Фиксация изделия (волна 17): draft ⇄ posted (как approve/unapprove у поставки).
+  postItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/post/`),
+  unpostItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/unpost/`),
   addBomLine: (itemId: number, b: { component_id: number; qty: number; position?: string }) =>
     send<ItemDetail>('POST', `/api/items/${itemId}/bom/`, b),
   updateBomLine: (lineId: number, b: Partial<{ qty: number; position: string }>) =>

@@ -19,6 +19,7 @@ import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm, type OrderKind } from './OrderForm'
 import { LocationView } from './LocationView'
+import { ItemStatusGlyph } from './status'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
@@ -333,7 +334,7 @@ export default function App() {
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
               id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-              glyph: <span className={`ci ci-${i.category.icon || 'chip'}`} /> }))} />}
+              glyph: <><ItemStatusGlyph status={i.status} /><span className={`ci ci-${i.category.icon || 'chip'}`} /></> }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}

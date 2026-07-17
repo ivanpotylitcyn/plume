@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectDetail } from './api'
-import { Segment, money, num } from './status'
+import { Segment, money, num, ItemStatusGlyph } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 
@@ -269,7 +269,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   const indent = n.depth * 18
   return (
     <div className={`prow prow--comp s-${n.status}`}>
-      <span />
+      <span><ItemStatusGlyph status={n.component_status} /></span>
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
@@ -305,7 +305,7 @@ function CompRow({ ln, busy, openItem, order }: {
 }) {
   return (
     <div className={`prow prow--comp s-${ln.status}`}>
-      <span />
+      <span><ItemStatusGlyph status={ln.component_status} /></span>
       <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)} {ln.uom}</span>
