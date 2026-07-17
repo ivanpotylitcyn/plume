@@ -336,7 +336,7 @@ export default function App() {
             rows={[...items].filter(i => i.produced)
               .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
                 id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-                glyph: <><ItemStatusGlyph status={i.status} /><span className={`ci ci-${i.category.icon || 'chip'}`} /></> }))} />}
+                glyph: <ItemStatusGlyph status={i.status} /> }))} />}
 
         {mode === 'items' &&
           <ModeList heading="Компоненты" newLabel="＋ Новое изделие" categoryFilter
@@ -351,7 +351,7 @@ export default function App() {
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
               id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-              glyph: <><ItemStatusGlyph status={i.status} /><span className={`ci ci-${i.category.icon || 'chip'}`} /></> }))} />}
+              glyph: <ItemStatusGlyph status={i.status} /> }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
@@ -475,12 +475,12 @@ export default function App() {
 // (планирование → исполнение → приёмка → сборка → выбытие → сверка).
 const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'projects',     icon: 'project',       title: 'Проекты — дефицит, панель проекта' },
-  { mode: 'products',     icon: 'vm',            title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
+  { mode: 'products',     icon: 'rocket',        title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
   { mode: 'items',        icon: 'circuit-board', title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
-  { mode: 'procurements', icon: 'table',         title: 'Закупки — командный свод, order.xlsx' },
-  { mode: 'purchases',    icon: 'checklist',     title: 'Заказы — обязательства поставщику' },
-  { mode: 'orders',       icon: 'package',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
-  { mode: 'locations',    icon: 'database',      title: 'Склады — места хранения, что на них лежит' },
+  { mode: 'procurements', icon: 'law',           title: 'Закупки — командный свод, order.xlsx' },
+  { mode: 'purchases',    icon: 'package',       title: 'Заказы — обязательства поставщику' },
+  { mode: 'orders',       icon: 'preview',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
+  { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },
 ]
 
 // Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
