@@ -539,6 +539,7 @@ def _leaf_row(item, need, project):
         'component_id': item.id,
         'component_design_item_id': item.design_item_id,
         'component_description': item.description,
+        'component_status': item.status,       # статус-глиф изделия (волна 17)
         'uom': item.uom,
         'available_raw': available,            # сырой остаток (может быть < 0)
         'anomaly': item_has_negative_lot(item, project),
@@ -568,6 +569,7 @@ def _demand_tree(item, qty, project, depth, visiting, out):
         'component_id': item.id,
         'component_design_item_id': item.design_item_id,
         'component_description': item.description,
+        'component_status': item.status,       # статус-глиф изделия (волна 17)
         'uom': item.uom,
         'need': qty,
         'depth': depth,
@@ -2813,10 +2815,39 @@ def create_item(design_item_id, description, category_id=None, uom='шт',
         estimated_cost=estimated_cost)
 
 
+def _require_item_draft(item):
+    """Гейт фиксации (волна 17): мутации свойств/состава запрещены у `posted`
+    изделия — сперва расфиксировать. Защищает библиотечные изделия от ручного
+    дрейфа (библиотека = источник правды). Ловит и прямой запрос к API, не только
+    UI. Синк библиотеки правит в обход (свои прямые ORM-операции)."""
+    if item.is_posted:
+        raise ValidationError(
+            f'Изделие {item.design_item_id} зафиксировано — сперва расфиксируйте.')
+
+
+def post_item(item):
+    """Зафиксировать изделие (draft → posted): форма становится read-only, мутации
+    гейтятся. Идемпотентно."""
+    if not item.is_posted:
+        item.status = models.Item.Status.POSTED
+        item.save(update_fields=['status'])
+    return item
+
+
+def unpost_item(item):
+    """Расфиксировать изделие (posted → draft): снова редактируемо. Идемпотентно.
+    У библиотечного изделия следующий синк вернёт `posted`."""
+    if item.is_posted:
+        item.status = models.Item.Status.DRAFT
+        item.save(update_fields=['status'])
+    return item
+
+
 def update_item(item, changes):
     """Правка свойств изделия под замком формы (§6). `changes` — только присланные
     поля (частичный PATCH). `design_item_id` уникален; категория из справочника
-    (ключ `category_id`); описание непустое."""
+    (ключ `category_id`); описание непустое. Гейт фиксации: `posted` не правят."""
+    _require_item_draft(item)
     fields = []
     if 'design_item_id' in changes:
         v = (changes['design_item_id'] or '').strip()
@@ -2857,7 +2888,12 @@ def delete_item(item):
     в человеческий отказ вместо 500: изделие держат партии, вхождение в чужой BOM,
     потребность проекта, строки заказа/закупки, цель комплектации. Свой состав (строки
     BOM, где изделие — parent) и вложения — каскад; файлы вложений сносим явно, иначе
-    каскад БД осиротит их на диске (как в `delete_stock_document`)."""
+    каскад БД осиротит их на диске (как в `delete_stock_document`).
+
+    Гейт фиксации (волна 17): `posted` изделие руками не удаляют — сперва
+    расфиксировать (UI прячет удаление у зафиксированного). Синк библиотеки удаляет
+    ушедшие из библиотеки изделия в обход — расфиксирует их перед `delete_item`."""
+    _require_item_draft(item)
     if item.lots.exists():
         raise ValidationError('У изделия есть партии на складе — удаление заблокировано.')
     if item.used_in.exists():
@@ -3052,10 +3088,13 @@ def apply_library_diff(parsed, confirmed):
             status = diff['status']
             if status == 'new':
                 src = by_key[key]
+                # Библиотека = источник правды → изделие рождается `posted`
+                # (зафиксировано, защищено от ручного дрейфа; волна 17).
                 models.Item.objects.create(
                     design_item_id=key, description=src['description'],
                     category=ensure_category(src['category']),
-                    temperature=src['temperature'], produced=False)
+                    temperature=src['temperature'], produced=False,
+                    status=models.Item.Status.POSTED)
                 summary['created'] += 1
             elif status == 'changed':
                 src = by_key[key]
@@ -3063,10 +3102,16 @@ def apply_library_diff(parsed, confirmed):
                 item.description = src['description']
                 item.category = ensure_category(src['category'])
                 item.temperature = src['temperature']
-                item.save(update_fields=['description', 'category', 'temperature'])
+                # Синк подтверждает библиотечное происхождение → `posted` (в т.ч.
+                # если изделие было заведено руками как draft, а теперь совпало).
+                item.status = models.Item.Status.POSTED
+                item.save(update_fields=['description', 'category', 'temperature',
+                                         'status'])
                 summary['updated'] += 1
             elif status == 'gone':
-                delete_item(models.Item.objects.get(design_item_id=key))
+                item = models.Item.objects.get(design_item_id=key)
+                unpost_item(item)          # расфиксировать перед удалением (гейт)
+                delete_item(item)
                 summary['deleted'] += 1
     return summary
 
@@ -3249,7 +3294,9 @@ def _bom_would_cycle(parent, component):
 
 
 def add_bom_line(parent, component, qty, position=''):
-    """Добавить компонент в состав изделия. Без самоссылки, циклов и дублей."""
+    """Добавить компонент в состав изделия. Без самоссылки, циклов и дублей.
+    Гейт фиксации: у `posted` изделия состав не правят (волна 17)."""
+    _require_item_draft(parent)
     if qty is None or qty <= ZERO:
         raise ValidationError('Кол-во должно быть больше нуля.')
     if component.id == parent.id:
@@ -3264,7 +3311,9 @@ def add_bom_line(parent, component, qty, position=''):
 
 
 def update_bom_line(line, qty=None, position=None):
-    """Правка строки состава (кол-во/позиция, автосейв)."""
+    """Правка строки состава (кол-во/позиция, автосейв). Гейт фиксации у изделия-
+    владельца (волна 17)."""
+    _require_item_draft(line.parent)
     fields = []
     if qty is not None:
         if qty <= ZERO:
@@ -3280,7 +3329,8 @@ def update_bom_line(line, qty=None, position=None):
 
 
 def remove_bom_line(line):
-    """Убрать строку из состава изделия."""
+    """Убрать строку из состава изделия. Гейт фиксации у изделия-владельца (волна 17)."""
+    _require_item_draft(line.parent)
     line.delete()
 
 

@@ -15,6 +15,7 @@ from django.test import Client, TestCase, override_settings
 
 from plume import models
 from plume import engine
+from plume import views
 
 
 def D(x):
@@ -3959,6 +3960,133 @@ class LibraryApplyTests(TestCase):
         summary = engine.apply_library_diff(parsed, ['S-USED'])   # подтверждаем сироту
         self.assertEqual(summary['deleted'], 0)          # orphan — не действие
         self.assertTrue(models.Item.objects.filter(design_item_id='S-USED').exists())
+
+
+class ItemStatusTests(EngineTestBase):
+    """Волна 17, фаза 1: статус изделия `draft ⇄ posted` (фиксация), гейт мутаций,
+    синк библиотеки → posted, проброс статуса в сериализацию."""
+
+    POSTED = models.Item.Status.POSTED
+    DRAFT = models.Item.Status.DRAFT
+
+    def test_manual_item_defaults_draft(self):
+        i = engine.create_item('R100', 'Резистор', category_id=_cat().id)
+        self.assertEqual(i.status, self.DRAFT)
+        self.assertFalse(i.is_posted)
+
+    def test_post_unpost_idempotent(self):
+        i = self.make_item('R')
+        engine.post_item(i)
+        i.refresh_from_db()
+        self.assertTrue(i.is_posted)
+        engine.post_item(i)                       # повторно — без падения
+        i.refresh_from_db()
+        self.assertEqual(i.status, self.POSTED)
+        engine.unpost_item(i)
+        i.refresh_from_db()
+        self.assertEqual(i.status, self.DRAFT)
+        engine.unpost_item(i)                     # повторно — без падения
+        i.refresh_from_db()
+        self.assertEqual(i.status, self.DRAFT)
+
+    def test_gate_blocks_property_edit_when_posted(self):
+        i = self.make_item('R')
+        engine.post_item(i)
+        with self.assertRaises(ValidationError):
+            engine.update_item(i, {'description': 'нельзя'})
+        # расфиксировали — правка снова проходит
+        engine.unpost_item(i)
+        engine.update_item(i, {'description': 'можно'})
+        i.refresh_from_db()
+        self.assertEqual(i.description, 'можно')
+
+    def test_gate_blocks_bom_edits_when_parent_posted(self):
+        dev = self.make_item('DEV', manufactured=True)
+        comp = self.make_item('R')
+        line = engine.add_bom_line(dev, comp, D(2))
+        engine.post_item(dev)
+        with self.assertRaises(ValidationError):
+            engine.add_bom_line(dev, self.make_item('C'), D(1))
+        with self.assertRaises(ValidationError):
+            engine.update_bom_line(line, qty=D(5))
+        with self.assertRaises(ValidationError):
+            engine.remove_bom_line(line)
+        line.refresh_from_db()
+        self.assertEqual(line.qty, D(2))          # не изменилось
+
+    def test_gate_blocks_delete_when_posted(self):
+        i = self.make_item('R')
+        engine.post_item(i)
+        with self.assertRaises(ValidationError):
+            engine.delete_item(i)
+        self.assertTrue(models.Item.objects.filter(pk=i.pk).exists())
+        engine.unpost_item(i)
+        engine.delete_item(i)
+        self.assertFalse(models.Item.objects.filter(pk=i.pk).exists())
+
+    def test_library_new_is_posted(self):
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'Датчик', '')]))])
+        engine.apply_library_diff(parsed, ['S-1'])
+        item = models.Item.objects.get(design_item_id='S-1')
+        self.assertEqual(item.status, self.POSTED)
+
+    def test_library_changed_forces_posted(self):
+        # заведено руками как draft, затем совпало с библиотекой → синк фиксирует
+        models.Item.objects.create(design_item_id='S-1', description='старое',
+                                   category=engine.ensure_category('sensors'))
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
+        engine.apply_library_diff(parsed, ['S-1'])
+        item = models.Item.objects.get(design_item_id='S-1')
+        self.assertEqual(item.status, self.POSTED)
+        self.assertEqual(item.description, 'новое')
+
+    def test_library_deletes_gone_posted(self):
+        # ушедшее из библиотеки изделие — posted; синк расфиксирует и удалит (гейт не мешает)
+        gone = models.Item.objects.create(design_item_id='S-OLD', description='ушло',
+                                          category=engine.ensure_category('sensors'),
+                                          status=self.POSTED)
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
+        summary = engine.apply_library_diff(parsed, ['S-OLD'])
+        self.assertEqual(summary['deleted'], 1)
+        self.assertFalse(models.Item.objects.filter(pk=gone.pk).exists())
+
+    def test_status_in_item_serialization(self):
+        i = self.make_item('R')
+        engine.post_item(i)
+        i.refresh_from_db()
+        self.assertEqual(views._item_row(i)['status'], self.POSTED)
+        self.assertEqual(views._item_detail_payload(i)['status'], self.POSTED)
+
+    def test_component_status_in_bom_and_demand(self):
+        dev = self.make_item('DEV', manufactured=True)
+        comp = self.make_item('R')                # покупной лист
+        engine.post_item(comp)
+        engine.add_bom_line(dev, comp, D(2))
+        # BOM в форме изделия несёт статус компонента
+        bom = views._item_detail_payload(dev)['bom']
+        self.assertEqual(bom[0]['component_status'], self.POSTED)
+        # Потребность проекта: свод по листьям + дерево несут статус компонента
+        engine.add_project_demand(self.prj, dev, D(1))
+        deficit = engine.project_deficit(self.prj)
+        leaf = next(c for c in deficit['components'] if c['component_id'] == comp.id)
+        self.assertEqual(leaf['component_status'], self.POSTED)
+        tree_leaf = next(n for n in deficit['demands'][0]['tree'] if n['component_id'] == comp.id)
+        self.assertEqual(tree_leaf['component_status'], self.POSTED)
+
+    def test_http_post_unpost_endpoints(self):
+        get_user_model().objects.filter(username='t').update(
+            is_staff=True, is_superuser=True)
+        c = Client()
+        c.force_login(self.user)
+        i = self.make_item('R')
+        r = c.post(f'/api/items/{i.id}/post/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['status'], self.POSTED)
+        i.refresh_from_db()
+        self.assertTrue(i.is_posted)
+        r = c.post(f'/api/items/{i.id}/unpost/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['status'], self.DRAFT)
 
 
 class RollupCostTests(TestCase):

@@ -34,6 +34,9 @@ urlpatterns = [
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),
     path('items/<int:pk>/recalc-cost/', views.item_recalc_cost, name='item-recalc-cost'),
+    # фиксация изделия (волна 17): draft ⇄ posted (по образцу approve/unapprove)
+    path('items/<int:pk>/post/', views.item_post, name='item-post'),
+    path('items/<int:pk>/unpost/', views.item_unpost, name='item-unpost'),
     # синхронизация справочника с библиотекой компонентов (волна 15): диф → применение
     path('library/diff/', views.library_diff, name='library-diff'),
     path('library/apply/', views.library_apply, name='library-apply'),

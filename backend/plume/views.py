@@ -260,7 +260,7 @@ def _item_row(i):
     return {'id': i.id, 'design_item_id': i.design_item_id,
             'description': i.description, 'category': _category_row(i.category),
             'uom': i.uom, 'temperature': i.temperature, 'produced': i.produced,
-            'used': engine.item_is_used(i)}
+            'status': i.status, 'used': engine.item_is_used(i)}
 
 
 @api_view(['GET'])
@@ -347,6 +347,7 @@ def _item_detail_payload(item):
          'component_design_item_id': bl.component.design_item_id,
          'component_description': bl.component.description,
          'component_uom': bl.component.uom,
+         'component_status': bl.component.status,
          'qty': bl.qty, 'position': bl.position}
         for bl in item.bom_lines.select_related('component')
     ]
@@ -361,7 +362,7 @@ def _item_detail_payload(item):
         'id': item.id, 'design_item_id': item.design_item_id,
         'description': item.description, 'category': _category_row(item.category),
         'uom': item.uom, 'temperature': item.temperature, 'produced': item.produced,
-        'used': engine.item_is_used(item),
+        'status': item.status, 'used': engine.item_is_used(item),
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'shipments': engine.item_shipments(item),
@@ -427,6 +428,23 @@ def bom_line_detail(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(_item_detail_payload(parent))
+
+
+@api_view(['POST'])
+def item_post(request, pk):
+    """Зафиксировать изделие (draft → posted): форма read-only, правки гейтятся.
+    Волна 17 — по образцу `receipt_approve`."""
+    item = get_object_or_404(models.Item, pk=pk)
+    engine.post_item(item)
+    return Response(_item_detail_payload(item))
+
+
+@api_view(['POST'])
+def item_unpost(request, pk):
+    """Расфиксировать изделие (posted → draft): снова редактируемо. Волна 17."""
+    item = get_object_or_404(models.Item, pk=pk)
+    engine.unpost_item(item)
+    return Response(_item_detail_payload(item))
 
 
 # --------------------------------------------------------------------------- #

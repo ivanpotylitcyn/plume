@@ -199,6 +199,13 @@ class Item(models.Model):
     Item Id` = заказной PN); осознанно НЕ `item_id`, чтобы не столкнуться с Django
     FK-PK аксессором `item_id` в рукописном JSON-API (JOURNAL 2026-07-12)."""
 
+    # Персистентный статус-замок (волна 17) — та же ось `draft ⇄ posted`, что у
+    # `StockDocument` (переиспользуем `DocStatus`). `posted` = ФИКСАЦИЯ: форма
+    # read-only (свойства + BOM), мутации гейтятся в движке (защита от ручного
+    # дрейфа). Синк библиотеки ставит `posted` (библиотека = источник правды);
+    # заведённые руками изделия — `draft`.
+    Status = DocStatus
+
     design_item_id = models.CharField('изделие', max_length=128, unique=True)
     description = models.CharField('описание', max_length=255)
     category = models.ForeignKey(Category, on_delete=models.PROTECT,
@@ -208,6 +215,8 @@ class Item(models.Model):
                                    blank=True, default='')
     estimated_cost = money(verbose_name='оценочная стоимость', null=True, blank=True)
     produced = models.BooleanField('производимое', default=False)
+    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
+                              default=DocStatus.DRAFT)
 
     class Meta:
         verbose_name = 'изделие'
@@ -216,6 +225,10 @@ class Item(models.Model):
 
     def __str__(self):
         return f'{self.design_item_id} — {self.description}'
+
+    @property
+    def is_posted(self):
+        return self.status == DocStatus.POSTED
 
 
 class BomLine(models.Model):
