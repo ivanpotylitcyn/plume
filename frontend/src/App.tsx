@@ -24,12 +24,17 @@ import { ItemStatusGlyph } from './status'
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
 // создания — единые. Procurement/Purchase — вне (лотов не трогают).
-type Mode = 'projects' | 'items' | 'orders' | 'locations' | 'procurements' | 'purchases'
+// Волна 17: справочник изделий разделён на два режима. `items` — «Компоненты» (весь
+// справочник, фильтр по категории, синк с библиотекой; оставлен как есть). `products`
+// — «Изделия»: только производимые (`produced=True`), без фильтра категорий и синка;
+// NewItem там по умолчанию `produced=True` (снимает боль ручного выбора типа).
+type Mode = 'projects' | 'products' | 'items' | 'orders' | 'locations' | 'procurements' | 'purchases'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'new-project' }
   | { kind: 'item'; id: number }
   | { kind: 'new-item' }
+  | { kind: 'new-product' }        // новое изделие из режима «Изделия» (produced=True)
   | { kind: 'library-sync' }
   | { kind: 'kitting'; id: number }
   | { kind: 'receipt'; id: number }
@@ -321,8 +326,20 @@ export default function App() {
                 ? <span className="glyph g-lock">🔒</span>
                 : <span className="glyph g-info">○</span> }))} />}
 
+        {/* Режим «Изделия» (волна 17): только производимые; без фильтра категорий и
+            синка. Открывает ту же форму изделия (sel.kind='item'). */}
+        {mode === 'products' &&
+          <ModeList heading="Изделия" newLabel="＋ Новое изделие"
+            newSel={sel?.kind === 'new-product'} onNew={() => setSel({ kind: 'new-product' })}
+            selId={sel?.kind === 'item' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'item', id })}
+            rows={[...items].filter(i => i.produced)
+              .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
+                id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
+                glyph: <><ItemStatusGlyph status={i.status} /><span className={`ci ci-${i.category.icon || 'chip'}`} /></> }))} />}
+
         {mode === 'items' &&
-          <ModeList heading="Изделия" newLabel="＋ Новое изделие" categoryFilter
+          <ModeList heading="Компоненты" newLabel="＋ Новое изделие" categoryFilter
             newSel={sel?.kind === 'new-item'} onNew={() => setSel({ kind: 'new-item' })}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
@@ -407,6 +424,10 @@ export default function App() {
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
+        {/* Новое изделие из режима «Изделия»: produced=True по умолчанию; после создания
+            остаёмся в этом режиме (openItem увёл бы в «Компоненты»). */}
+        {sel?.kind === 'new-product' &&
+          <NewItem defaultProduced onCreated={id => { reloadItems(); setMode('products'); setSel({ kind: 'item', id }) }} />}
         {sel?.kind === 'library-sync' &&
           <LibraryImportView onApplied={reloadItems} openItem={openItem} />}
         {/* Ф2i: единый вход detail-формы «Ордера» вместо шести условных веток. */}
@@ -454,7 +475,8 @@ export default function App() {
 // (планирование → исполнение → приёмка → сборка → выбытие → сверка).
 const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'projects',     icon: 'project',       title: 'Проекты — дефицит, панель проекта' },
-  { mode: 'items',        icon: 'circuit-board', title: 'Изделия — справочник, остатки, состав' },
+  { mode: 'products',     icon: 'vm',            title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
+  { mode: 'items',        icon: 'circuit-board', title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
   { mode: 'procurements', icon: 'table',         title: 'Закупки — командный свод, order.xlsx' },
   { mode: 'purchases',    icon: 'checklist',     title: 'Заказы — обязательства поставщику' },
   { mode: 'orders',       icon: 'package',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
@@ -712,13 +734,14 @@ function NewPurchase({ projects, onCreated }: {
 
 // Создание нового изделия (справочник, канон «＋ Новое»): артикул + название + вид +
 // производимое + ед.изм. + оценочная стоимость (опц.). BOM правится отдельно.
-function NewItem({ onCreated }: { onCreated: (id: number) => void }) {
+function NewItem({ onCreated, defaultProduced = false }:
+  { onCreated: (id: number) => void; defaultProduced?: boolean }) {
   const [designItemId, setDesignItemId] = useState('')
   const [description, setDescription] = useState('')
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryId, setCategoryId] = useState<number | ''>('')
   const [temperature, setTemperature] = useState('')
-  const [produced, setProduced] = useState(false)
+  const [produced, setProduced] = useState(defaultProduced)   // режим «Изделия» → True
   const [uom, setUom] = useState('шт')
   const [cost, setCost] = useState('')
   const [err, setErr] = useState<string | null>(null)

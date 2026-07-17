@@ -43,9 +43,15 @@
 `unpost_item`; гейт-хелпер `_require_item_draft` в мутациях изделия/BOM/delete; синк
 `apply_library_diff` → posted на new+changed, gone-ветка расфиксирует перед удалением;
 сериализация `status`/`component_status` в row/detail/BOM/потребности; HTTP `items/<pk>/
-post|unpost`. Тесты `ItemStatusTests` (11), сюита **331 зелёная**. Осталось: Фаза 2
-(фронт-глиф + замок/фиксация формы, BOM под замком, «Назв.»→«Описание») и Фаза 3
-(режимы «Изделия»/«Компоненты»).
+post|unpost`. Тесты `ItemStatusTests` (11), сюита **331 зелёная**.
+**Фаза 2 (фронт, 2026-07-17):** `ItemStatusGlyph` (posted=✓ зелёный, draft=○ оранжевый)
+в списках режимов / BOM / потребности; ItemView перенял фиксацию `StockDocument`
+(`fixed=status==='posted'`, `locked=fixed||!unlocked`, чип/расфиксация/«Зафиксировать»,
+BOM под замком = read-only список); «Назв.»→«Описание» + усечение в 1 строку. tsc/build/
+oxlint зелёные, живой smoke сервера (гейт → 400, `component_status` в потребности).
+**Фаза 3 (режимы, 2026-07-17):** новый режим «Изделия» (`products`, `produced=True`, без
+фильтра категорий и синка, NewItem default produced=True); текущий → «Компоненты»
+(как есть). **Волна 17 закрыта.** Браузерный клик-прогон — за Иваном.
 
 ---
 
