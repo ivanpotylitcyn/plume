@@ -138,4 +138,10 @@ bash deploy/deploy_local.sh \
   `CompressedStaticFilesStorage` (без манифеста).
 - **`createsuperuser`** — ручной разовый шаг, в `deploy.sh` его нет.
 - **Прод-`.env` живёт только на сервере** — `deploy_local.sh` его не заливает и не
-  удаляет (mirror без `--delete`).
+  удаляет (основной mirror без `--delete`).
+- **Каталог миграций — единственное исключение: заливается С `--delete`.** Он обязан
+  ТОЧНО совпадать с репо. Иначе стухшие после сквоша файлы (напр. `0002_transfer_posted`
+  после «Сквош миграций») остаются на сервере и дают `CommandError: multiple leaf nodes
+  in the migration graph` на `migrate`. В каталоге нет серверных файлов, удаление
+  безопасно. Разовая ручная чистка стухших миграций на сервере:
+  `rm backend/plume/migrations/0002_transfer_posted.py` + `rm -rf` его `__pycache__`.

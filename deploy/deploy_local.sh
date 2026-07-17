@@ -98,6 +98,14 @@ mirror -R \
   --exclude-glob=.DS_Store \
   --exclude-glob=db.sqlite3 \
   "$REPO_DIR/backend" "$REMOTE_DIR/backend"
+# Каталог миграций синхронизируем С --delete: он обязан ТОЧНО совпадать с репо, иначе
+# стухшие после сквоша файлы (напр. старый 0002_transfer_posted) остаются на сервере и
+# дают «multiple leaf nodes» на migrate. Тут нет серверных файлов (.env и пр.), удаление
+# безопасно; __pycache__/*.pyc исключены (их --delete не трогает).
+mirror -R --delete \
+  --exclude-glob=__pycache__/ \
+  --exclude-glob=*.pyc \
+  "$REPO_DIR/backend/plume/migrations" "$REMOTE_DIR/backend/plume/migrations"
 mirror -R \
   --exclude-glob=.DS_Store \
   "$REPO_DIR/frontend/dist" "$REMOTE_DIR/frontend/dist"
