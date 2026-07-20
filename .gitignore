@@ -53,6 +53,10 @@ dist-ssr/
 .env.*
 !.env.example
 
+# --- Снимки прод-БД (deploy/pull_prod.sh) ---
+# Живые данные пользователей: локально держим, в репозиторий НИКОГДА.
+deploy/snapshots/
+
 # --- ОС ---
 .DS_Store
 Thumbs.db

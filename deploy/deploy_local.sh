@@ -15,11 +15,14 @@
 #     --server ПОЛЬЗОВАТЕЛЬ@ХОСТ \
 #     --remote-dir '~/www/твой-сайт' \      # в ОДИНАРНЫХ кавычках! (см. ниже)
 #     --key ~/.ssh/твой_приватный_ключ \
-#     [--init] [--seed] [--skip-build] [--python /opt/python/python-3.12.x/bin/python]
+#     [--init] [--seed] [--skip-build] [--skip-preflight] [--python /opt/python/python-3.12.x/bin/python]
 #
 #   --init        первый деплой: создать venv на сервере
 #   --seed        прогнать seed_demo (обычно только вместе с --init)
 #   --skip-build  не пересобирать фронт (залить уже собранный frontend/dist)
+#   --skip-preflight  пропустить предполётную проверку (deploy/preflight.sh).
+#                 По умолчанию проверка ОБЯЗАТЕЛЬНА и выполняется до заливки:
+#                 упала — на прод ничего не поехало. Обходить осознанно и редко.
 #   --python      полный путь к бинарю Python на сервере для создания venv
 #                 (только с --init). Стек — Django 6.0 на Python 3.14;
 #                 по умолчанию deploy.sh берёт /opt/python/python-3.14/bin/python.
@@ -35,6 +38,7 @@ PYTHON_BIN=""
 DO_INIT=0
 DO_SEED=0
 SKIP_BUILD=0
+SKIP_PREFLIGHT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -45,6 +49,7 @@ while [ $# -gt 0 ]; do
         --init)       DO_INIT=1; shift ;;
         --seed)       DO_SEED=1; shift ;;
         --skip-build) SKIP_BUILD=1; shift ;;
+        --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         *) echo "Неизвестный аргумент: $1"; exit 1 ;;
     esac
 done
@@ -64,6 +69,21 @@ REMOTE_FLAGS=""
 [ "$DO_INIT" = "1" ] && REMOTE_FLAGS="$REMOTE_FLAGS --init"
 [ "$DO_SEED" = "1" ] && REMOTE_FLAGS="$REMOTE_FLAGS --seed"
 [ -n "$PYTHON_BIN" ] && REMOTE_FLAGS="$REMOTE_FLAGS --python $PYTHON_BIN"
+
+# --- 0. Предполётная проверка ---
+# Выполняется ДО заливки: упала — на прод ничего не поехало. Это и есть механизм
+# культуры «сначала локально»: не отдельный шаг, о котором надо помнить, а условие
+# деплоя. Аварийный обход — --skip-preflight (осознанно и редко).
+if [ "$SKIP_PREFLIGHT" = "0" ]; then
+    bash "$(dirname "$0")/preflight.sh" || {
+        echo
+        echo "Деплой отменён предполётной проверкой."
+        echo "Починить и повторить; обойти (на свой риск) — --skip-preflight."
+        exit 1
+    }
+else
+    echo "==> ВНИМАНИЕ: предполётная проверка пропущена (--skip-preflight)."
+fi
 
 # --- 1. Сборка фронта локально ---
 if [ "$SKIP_BUILD" = "0" ]; then
