@@ -307,8 +307,9 @@ class Project(models.Model):
         INTERNAL_STOCK = 'internal_stock', 'Собственный склад (белые)'
         INTERNAL_WRITEOFF = 'internal_writeoff', 'Свободные неучтённые (серые)'
 
+    # Это ЖИЗНЕННЫЙ ЦИКЛ, а не замок, — осознанно не сводим к draft/posted
+    # (волна 19, Ф1). Мёртвый `draft` убран: `create_project` всегда ставил `active`.
     class Status(models.TextChoices):
-        DRAFT = 'draft', 'Черновик'
         ACTIVE = 'active', 'Активен'
         CLOSED = 'closed', 'Закрыт'
 
@@ -368,21 +369,23 @@ class Procurement(models.Model):
     """Закупка — планирование (что и сколько решили купить; один поток общения с
     контрагентом). Без проекта — маркер командной высоты."""
 
-    class Status(models.TextChoices):
-        DRAFT = 'draft', 'Черновик'
-        SENT = 'sent', 'Отправлена'
-        CANCELLED = 'cancelled', 'Отменена'
-
+    # Статус — общая ось `DocStatus` (волна 19, Ф1): тот же замок, что у ордеров и
+    # изделия. Своего enum больше нет; отмена = удаление (развилка Р1).
+    # Подпись («Утверждена») — забота представления, живёт в словаре фронта.
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='procurements', verbose_name='автор')
-    status = models.CharField('статус', max_length=16, choices=Status.choices,
-                              default=Status.DRAFT)
+    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
+                              default=DocStatus.DRAFT)
     date = models.DateField('дата (начало переговоров)', null=True, blank=True)
     note = models.CharField('примечание', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'закупка (план)'
         verbose_name_plural = 'закупки (план)'
+
+    @property
+    def is_posted(self):
+        return self.status == DocStatus.POSTED
 
     def __str__(self):
         return f'Закупка #{self.pk} [{self.get_status_display()}]'
@@ -405,27 +408,27 @@ class ProcurementLine(models.Model):
 class Purchase(models.Model):
     """Заказ — проектное исполнение (документальное обязательство)."""
 
-    class Status(models.TextChoices):
-        DRAFT = 'draft', 'Черновик'
-        SENT = 'sent', 'Отправлен'
-        PARTIAL = 'partial', 'Частично получен'
-        RECEIVED = 'received', 'Получен'
-        CANCELLED = 'cancelled', 'Отменён'
-
+    # Статус — общая ось `DocStatus` (волна 19, Ф1). Мёртвые `partial`/`received`
+    # убраны: «получено» — величина ВЫЧИСЛЯЕМАЯ из приходов (`_line_received`), а не
+    # замок. Две оси не путать: замок (draft/posted) и покрытие (▲/●/✓).
     procurement = models.ForeignKey(Procurement, on_delete=models.PROTECT,
                                     related_name='purchases')
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='purchases')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='purchases', verbose_name='автор')
-    status = models.CharField('статус', max_length=16, choices=Status.choices,
-                              default=Status.DRAFT)
+    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
+                              default=DocStatus.DRAFT)
     date = models.DateField('дата (оформление)', null=True, blank=True)
     note = models.CharField('примечание', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'заказ'
         verbose_name_plural = 'заказы'
+
+    @property
+    def is_posted(self):
+        return self.status == DocStatus.POSTED
 
     def __str__(self):
         return f'Заказ #{self.pk} ({self.project.code}) [{self.get_status_display()}]'

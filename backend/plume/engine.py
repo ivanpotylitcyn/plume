@@ -124,14 +124,17 @@ def ensure_category(code):
 # --------------------------------------------------------------------------- #
 #  Единый мягкий замок складского документа (волна 13, Ф1)
 # --------------------------------------------------------------------------- #
-def _require_draft(doc):
+def _require_draft(doc, msg=None):
     """Единый guard правки: документ должен быть в черновике (замок снят).
 
     Свернул разнородные `_require_wip`/`_require_unapproved`/`_require_unposted` —
     один мягкий замок `status {draft⇄posted}` на всех ордерах. posted = edit-freeze.
+    С волны 19 (Ф1) обслуживает и Закупку с Заказом — та же ось `DocStatus`; своих
+    `_require_*_draft` больше нет. `msg` уточняет формулировку по сущности.
     """
     if doc.is_posted:
-        raise ValidationError('Документ проведён (замок) — снимите замок для правки.')
+        raise ValidationError(
+            msg or 'Документ проведён (замок) — снимите замок для правки.')
 
 
 def _require_header(doc):
@@ -429,7 +432,7 @@ def _purchased_on_order(item, project):
     total = ZERO
     lines = models.PurchaseLine.objects.filter(
         item=item, purchase__project=project,
-        purchase__status=models.Purchase.Status.SENT,
+        purchase__status=models.DocStatus.POSTED,
     ).select_related('purchase')
     for line in lines:
         total += max(ZERO, line.qty - _line_received(line))
@@ -1109,7 +1112,7 @@ def _solo_procurement(user):
     командная волна введёт общие Procurement, веерно нарезаемые на проектные Purchase.
     """
     return models.Procurement.objects.create(
-        user=user, status=models.Procurement.Status.DRAFT,
+        user=user, status=models.DocStatus.DRAFT,
         note='авто (проектный заказ)')
 
 
@@ -1118,7 +1121,7 @@ def create_purchase(project, user, date=None, note=''):
     proc = _solo_procurement(user)
     return models.Purchase.objects.create(
         procurement=proc, project=project, user=user,
-        status=models.Purchase.Status.DRAFT, date=date, note=note or '')
+        status=models.DocStatus.DRAFT, date=date, note=note or '')
 
 
 def purchase_cockpit(purchase):
@@ -1129,7 +1132,7 @@ def purchase_cockpit(purchase):
     Статусы `partial`/`received` не храним — это вычисляемая закрытость. Ничего не
     хранит (чистая проекция).
     """
-    is_draft = purchase.status == models.Purchase.Status.DRAFT
+    is_draft = purchase.status == models.DocStatus.DRAFT
     rows = []
     statuses = []
     total_ordered = ZERO
@@ -1170,15 +1173,12 @@ def purchase_cockpit(purchase):
     }
 
 
-def _require_purchase_draft(purchase):
-    if purchase.status != models.Purchase.Status.DRAFT:
-        raise ValidationError(
-            'Строки правятся только в черновике заказа — снимите отправку (unsend).')
+PURCHASE_LOCKED = 'Строки правятся только в черновике заказа — снимите замок (unpost).'
 
 
 def add_purchase_line(purchase, item, qty):
     """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна."""
-    _require_purchase_draft(purchase)
+    _require_draft(purchase, PURCHASE_LOCKED)
     if qty is None or qty <= 0:
         raise ValidationError('Количество заказа должно быть положительным.')
     if purchase.lines.filter(item=item).exists():
@@ -1189,7 +1189,7 @@ def add_purchase_line(purchase, item, qty):
 
 def update_purchase_line(line, qty):
     """Автосейв количества строки заказа (только в черновике)."""
-    _require_purchase_draft(line.purchase)
+    _require_draft(line.purchase, PURCHASE_LOCKED)
     if qty is None or qty <= 0:
         raise ValidationError('Количество заказа должно быть положительным.')
     line.qty = qty
@@ -1199,54 +1199,41 @@ def update_purchase_line(line, qty):
 
 def remove_purchase_line(line):
     """Удалить строку заказа (только в черновике)."""
-    _require_purchase_draft(line.purchase)
+    _require_draft(line.purchase, PURCHASE_LOCKED)
     line.delete()
 
 
-def send_purchase(purchase):
-    """Отправить заказ (`draft → sent`) — мягкий замок: теперь считается в «заказано»,
-    строки становятся read-only. Снятие (`unsend`) ничего не разрушает."""
-    if purchase.status == models.Purchase.Status.CANCELLED:
-        raise ValidationError('Отменённый заказ нельзя отправить — восстановите его.')
+def post_purchase(purchase):
+    """Поставить замок заказа (`draft → posted`) — теперь считается в «заказано»,
+    строки становятся read-only. Снятие (`unpost`) ничего не разрушает.
+
+    Волна 19 (Ф1): бывший `send_purchase`. Отмены больше нет — отмена = удаление
+    (развилка Р1), поэтому проверять «отменённый нельзя отправить» стало нечего.
+    """
     if not purchase.lines.exists():
-        raise ValidationError('Нельзя отправить пустой заказ — добавьте строку.')
-    purchase.status = models.Purchase.Status.SENT
+        raise ValidationError('Нельзя утвердить пустой заказ — добавьте строку.')
+    purchase.status = models.DocStatus.POSTED
     purchase.save(update_fields=['status'])
     return purchase
 
 
-def unsend_purchase(purchase):
-    """Вернуть заказ в черновик (`sent → draft`). Purchase лотов не рождает —
-    снятие обязательства ничего не разрушает (связанные приходы остаются, заказ
-    просто выходит из счёта «заказано»), guard по потомкам не нужен."""
-    purchase.status = models.Purchase.Status.DRAFT
-    purchase.save(update_fields=['status'])
-    return purchase
-
-
-def cancel_purchase(purchase):
-    """Отменить заказ — выводит из счёта «заказано» (не удаляет)."""
-    purchase.status = models.Purchase.Status.CANCELLED
-    purchase.save(update_fields=['status'])
-    return purchase
-
-
-def restore_purchase(purchase):
-    """Восстановить отменённый заказ в черновик."""
-    purchase.status = models.Purchase.Status.DRAFT
+def unpost_purchase(purchase):
+    """Снять замок заказа (`posted → draft`). Purchase лотов не рождает — снятие
+    обязательства ничего не разрушает (связанные приходы остаются, заказ просто
+    выходит из счёта «заказано»), guard по потомкам не нужен."""
+    purchase.status = models.DocStatus.DRAFT
     purchase.save(update_fields=['status'])
     return purchase
 
 
 def delete_purchase(purchase):
-    """Удалить заказ (WAVE14 Ф2). Мягкий замок как у ордеров: отправленный/полученный
-    сперва вернуть в черновик (снять отправку); привязанный приход (`Receipt.purchase`,
+    """Удалить заказ (WAVE14 Ф2). Мягкий замок как у ордеров: утверждённый сперва
+    вернуть в черновик (снять замок); привязанный приход (`Receipt.purchase`,
     SET_NULL) держит — иначе удаление молча обнулило бы ссылку у поставок. Строки
     заказа (`PurchaseLine`) — каскад."""
-    if purchase.status not in (models.Purchase.Status.DRAFT,
-                               models.Purchase.Status.CANCELLED):
+    if purchase.is_posted:
         raise ValidationError(
-            'Заказ отправлен — сперва верните его в черновик (снимите отправку), затем удаляйте.')
+            'Заказ утверждён — сперва верните его в черновик (снимите замок), затем удаляйте.')
     if purchase.receipts.exists():
         raise ValidationError('К заказу привязаны поставки (приход) — удаление заблокировано.')
     try:
@@ -1264,7 +1251,7 @@ def add_to_project_order(project, item, qty, user):
     """
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
-    purchase = (project.purchases.filter(status=models.Purchase.Status.DRAFT)
+    purchase = (project.purchases.filter(status=models.DocStatus.DRAFT)
                 .order_by('-id').first())
     if purchase is None:
         purchase = create_purchase(project, user)
@@ -2078,7 +2065,7 @@ def update_purchase(purchase, date=None, note=None, user=_UNSET, project=_UNSET,
     приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный отказ (сперва
     отвязать приходы). Оба поля NOT NULL → `None` отклоняем.
     """
-    _require_purchase_draft(purchase)
+    _require_draft(purchase, PURCHASE_LOCKED)
     _set_author(purchase, user)
     fields = []
     if project is not _UNSET:
@@ -2249,7 +2236,7 @@ def procurement_cockpit(procurement):
     высоты); нарезка на проектные `Purchase` (pegging) — волна 8. Мягкий замок
     `status` зеркалит заказ: строки правятся только в черновике. Чистая проекция.
     """
-    is_draft = procurement.status == models.Procurement.Status.DRAFT
+    is_draft = procurement.status == models.DocStatus.DRAFT
     rows = []
     total_qty = ZERO
     for line in procurement.lines.select_related('item').order_by('id'):
@@ -2269,19 +2256,17 @@ def procurement_cockpit(procurement):
 def create_procurement(user, date=None, note=''):
     """Создать закупку-план (черновик) без проекта."""
     return models.Procurement.objects.create(
-        user=user, status=models.Procurement.Status.DRAFT,
+        user=user, status=models.DocStatus.DRAFT,
         date=date, note=(note or '').strip())
 
 
-def _require_procurement_draft(procurement):
-    if procurement.status != models.Procurement.Status.DRAFT:
-        raise ValidationError(
-            'Строки правятся только в черновике закупки — снимите отправку (unsend).')
+PROCUREMENT_LOCKED = (
+    'Строки правятся только в черновике закупки — снимите замок (unpost).')
 
 
 def add_procurement_line(procurement, item, qty):
     """Добавить строку закупки-плана (только в черновике). `(procurement, item)` — одна строка."""
-    _require_procurement_draft(procurement)
+    _require_draft(procurement, PROCUREMENT_LOCKED)
     if qty is None or qty <= 0:
         raise ValidationError('Количество закупки должно быть положительным.')
     if procurement.lines.filter(item=item).exists():
@@ -2293,7 +2278,7 @@ def add_procurement_line(procurement, item, qty):
 
 def update_procurement_line(line, qty):
     """Автосейв количества строки закупки-плана (только в черновике)."""
-    _require_procurement_draft(line.procurement)
+    _require_draft(line.procurement, PROCUREMENT_LOCKED)
     if qty is None or qty <= 0:
         raise ValidationError('Количество закупки должно быть положительным.')
     line.qty = qty
@@ -2303,38 +2288,25 @@ def update_procurement_line(line, qty):
 
 def remove_procurement_line(line):
     """Удалить строку закупки-плана (только в черновике)."""
-    _require_procurement_draft(line.procurement)
+    _require_draft(line.procurement, PROCUREMENT_LOCKED)
     line.delete()
 
 
-def send_procurement(procurement):
-    """Отправить закупку-план (`draft → sent`) — мягкий замок: строки read-only."""
-    if procurement.status == models.Procurement.Status.CANCELLED:
-        raise ValidationError('Отменённую закупку нельзя отправить — восстановите её.')
+def post_procurement(procurement):
+    """Поставить замок закупки-плана (`draft → posted`) — строки read-only.
+
+    Волна 19 (Ф1): бывший `send_procurement`; отмена = удаление (Р1).
+    """
     if not procurement.lines.exists():
-        raise ValidationError('Нельзя отправить пустую закупку — добавьте строку.')
-    procurement.status = models.Procurement.Status.SENT
+        raise ValidationError('Нельзя утвердить пустую закупку — добавьте строку.')
+    procurement.status = models.DocStatus.POSTED
     procurement.save(update_fields=['status'])
     return procurement
 
 
-def unsend_procurement(procurement):
-    """Вернуть закупку-план в черновик (`sent → draft`) — ничего не разрушает."""
-    procurement.status = models.Procurement.Status.DRAFT
-    procurement.save(update_fields=['status'])
-    return procurement
-
-
-def cancel_procurement(procurement):
-    """Отменить закупку-план (не удаляет)."""
-    procurement.status = models.Procurement.Status.CANCELLED
-    procurement.save(update_fields=['status'])
-    return procurement
-
-
-def restore_procurement(procurement):
-    """Восстановить отменённую закупку-план в черновик."""
-    procurement.status = models.Procurement.Status.DRAFT
+def unpost_procurement(procurement):
+    """Снять замок закупки-плана (`posted → draft`) — ничего не разрушает."""
+    procurement.status = models.DocStatus.DRAFT
     procurement.save(update_fields=['status'])
     return procurement
 
@@ -2344,7 +2316,7 @@ def update_procurement(procurement, date=None, note=None, user=_UNSET):
 
     Дата закупки nullable — пустая строка очищает её в NULL (как заказ).
     """
-    _require_procurement_draft(procurement)
+    _require_draft(procurement, PROCUREMENT_LOCKED)
     _set_author(procurement, user)
     fields = []
     if date is not None:
@@ -2359,13 +2331,12 @@ def update_procurement(procurement, date=None, note=None, user=_UNSET):
 
 
 def delete_procurement(procurement):
-    """Удалить закупку-план (WAVE14 Ф2). Мягкий замок: отправленную сперва вернуть в
-    черновик (снять отправку); привязанные заказы (`Purchase.procurement`, PROTECT)
+    """Удалить закупку-план (WAVE14 Ф2). Мягкий замок: утверждённую сперва вернуть в
+    черновик (снять замок); привязанные заказы (`Purchase.procurement`, PROTECT)
     держат — их сперва открепить/удалить. Строки плана (`ProcurementLine`) — каскад."""
-    if procurement.status not in (models.Procurement.Status.DRAFT,
-                                  models.Procurement.Status.CANCELLED):
+    if procurement.is_posted:
         raise ValidationError(
-            'Закупка отправлена — сперва верните её в черновик (снимите отправку), затем удаляйте.')
+            'Закупка утверждена — сперва верните её в черновик (снимите замок), затем удаляйте.')
     if procurement.purchases.exists():
         raise ValidationError('К закупке привязаны заказы — удаление заблокировано.')
     try:
@@ -2400,7 +2371,7 @@ def add_to_procurement(item, qty, user):
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
     procurement = (_plan_procurements()
-                   .filter(status=models.Procurement.Status.DRAFT)
+                   .filter(status=models.DocStatus.DRAFT)
                    .order_by('-id').first())
     if procurement is None:
         procurement = create_procurement(user)
@@ -2450,12 +2421,12 @@ def _procurement_pegs(procurement):
     """Σ пегнутого по `(item_id, project_id)` под этим планом: `{(item, project): qty}`.
 
     Пег = строка проектного заказа (`PurchaseLine`), чей заказ висит на этом плане.
-    Отменённые заказы (`cancelled`) не в счёте — обязательство снято.
+    Отсева по статусу больше нет (волна 19, Ф1): отмена = удаление, а удалённого в
+    счёте нет по построению.
     """
     pegs = {}
     rows = (models.PurchaseLine.objects
             .filter(purchase__procurement=procurement)
-            .exclude(purchase__status=models.Purchase.Status.CANCELLED)
             .values_list('item_id', 'purchase__project_id')
             .annotate(total=Sum('qty')))
     for item_id, project_id, total in rows:
@@ -2472,7 +2443,10 @@ def procurement_pegging(procurement):
     по этому Item) плюс фактически пегнутым. Внизу — веер проектных `Purchase` под этим
     планом (навигация в их кокпиты). Read-only проекция; правит peg/unpeg/autopeg.
     """
-    editable = procurement.status != models.Procurement.Status.CANCELLED
+    # Пеггинг правится всегда (волна 19, Ф1): единственным стопором была отмена, а
+    # её больше нет. Замок плана (`posted`) пеггинг НЕ гейтит — он правит не строки
+    # плана, а проектные заказы под ним; поведение сознательно оставлено прежним.
+    editable = True
     pegs = _procurement_pegs(procurement)
     suggest = {row['item_id']: row['by_project'] for row in command_deficit()['rows']}
     rows = []
@@ -2523,11 +2497,6 @@ def procurement_pegging(procurement):
     }
 
 
-def _require_procurement_peggable(procurement):
-    if procurement.status == models.Procurement.Status.CANCELLED:
-        raise ValidationError('Отменённую закупку нельзя пегать — восстановите её.')
-
-
 def _project_purchase_under(procurement, project, user):
     """Найти-или-создать **черновиковый** проектный заказ под этим планом-родителем.
 
@@ -2535,12 +2504,12 @@ def _project_purchase_under(procurement, project, user):
     (веер проектных обязательств висит на общем плане), а не с throwaway-родителем.
     """
     pu = (procurement.purchases
-          .filter(project=project, status=models.Purchase.Status.DRAFT)
+          .filter(project=project, status=models.DocStatus.DRAFT)
           .order_by('-id').first())
     if pu is None:
         pu = models.Purchase.objects.create(
             procurement=procurement, project=project, user=user,
-            status=models.Purchase.Status.DRAFT)
+            status=models.DocStatus.DRAFT)
     return pu
 
 
@@ -2552,7 +2521,6 @@ def peg_procurement_line(procurement, item, project, qty, user):
     не клампим по остатку плана (перепегнуть можно — расхождение информативнее, в духе
     мутабельной ДНК). Возвращает план.
     """
-    _require_procurement_peggable(procurement)
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
     if not procurement.lines.filter(item=item).exists():
@@ -2579,13 +2547,12 @@ def unpeg_procurement_line(procurement, item, project):
     черновиковых заказах проекта под планом; если пег в **отправленном** заказе —
     просим сначала снять отправку (не рушим обязательство молча). Возвращает план.
     """
-    _require_procurement_peggable(procurement)
     lines = models.PurchaseLine.objects.filter(
         purchase__procurement=procurement, purchase__project=project, item=item)
-    if lines.filter(purchase__status=models.Purchase.Status.SENT).exists():
+    if lines.filter(purchase__status=models.DocStatus.POSTED).exists():
         raise ValidationError(
             'Пег в отправленном заказе — снимите отправку заказа, потом снимайте пег.')
-    lines.filter(purchase__status=models.Purchase.Status.DRAFT).delete()
+    lines.filter(purchase__status=models.DocStatus.DRAFT).delete()
     return procurement
 
 
@@ -2597,7 +2564,6 @@ def autopeg_procurement(procurement, user):
     положительную дельту). Идемпотентно (повтор ничего не добавит) и не трогает ручной
     перепег (delta<0 → пропуск). Возвращает план.
     """
-    _require_procurement_peggable(procurement)
     suggest = {row['item_id']: row['by_project'] for row in command_deficit()['rows']}
     pegs = _procurement_pegs(procurement)
     for line in procurement.lines.select_related('item'):

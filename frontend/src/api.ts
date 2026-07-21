@@ -575,10 +575,8 @@ export const api = {
     send<PurchaseCockpit>('PATCH', `/api/purchase-lines/${id}/`, { qty }),
   deletePurchaseLine: (id: number) =>
     send<PurchaseCockpit>('DELETE', `/api/purchase-lines/${id}/`),
-  sendPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/send/`),
-  unsendPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/unsend/`),
-  cancelPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/cancel/`),
-  restorePurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/restore/`),
+  postPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/post/`),
+  unpostPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/unpost/`),
   projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
   addToOrder: (id: number, b: { item_id: number; qty: number }) =>
     send<{ purchase_id: number }>('POST', `/api/projects/${id}/order/`, b),
@@ -701,10 +699,8 @@ export const api = {
     send<ProcurementCockpit>('PATCH', `/api/procurement-lines/${id}/`, { qty }),
   deleteProcurementLine: (id: number) =>
     send<ProcurementCockpit>('DELETE', `/api/procurement-lines/${id}/`),
-  sendProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/send/`),
-  unsendProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/unsend/`),
-  cancelProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/cancel/`),
-  restoreProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/restore/`),
+  postProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/post/`),
+  unpostProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/unpost/`),
   orderXlsxUrl: (id: number) => `/api/procurements/${id}/order.xlsx`,
   // pegging (волна 8)
   pegging: (id: number) => get<Pegging>(`/api/procurements/${id}/pegging/`),

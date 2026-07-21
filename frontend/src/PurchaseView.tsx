@@ -1,8 +1,8 @@
 // Витрина волны 4: кокпит заказа (Purchase) — записываемое ядро.
 // Строки-обязательства: заказано (автосейв в черновике), поступило по связанным
 // приходам (Receipt.purchase), остаток. Закрытость строки красится тем же словарём
-// ✓/●/▲. Мягкий замок = отправка (draft→sent): строки read-only, заказ считается в
-// члене «заказано» дашборда дефицита. cancel/restore — выход из счёта и возврат.
+// ✓/●/▲. Мягкий замок = утверждение (draft→posted): строки read-only, заказ считается
+// в члене «заказано» дашборда дефицита. Отмены нет — отмена = удаление (волна 19, Р1).
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementRow, type PurchaseCockpit,
   type PurchaseCockpitLine } from './api'
@@ -10,11 +10,11 @@ import { CommitInput } from './ReceiptView'
 import { AnchorSelect, AuthorField, FormHeader, ProjectField, useFormLock } from './FormHeader'
 import { Glyph, num } from './status'
 
-// Статус заказа → значок/цвет: draft ▲ (твой ход), sent ● (ждём), cancelled ○.
+// Статус заказа → значок/цвет: draft ▲ (твой ход), posted ● (ждём поставку).
+// Подпись — по сущности («утверждён»), ось общая `DocStatus` (волна 19, Ф1).
 export const PURCH_ST: Record<string, { label: string; cls: string; g: string }> = {
   draft: { label: 'черновик', cls: 'g-to_order', g: '▲' },
-  sent: { label: 'отправлен', cls: 'g-on_order', g: '●' },
-  cancelled: { label: 'отменён', cls: 'g-info', g: '○' },
+  posted: { label: 'утверждён', cls: 'g-on_order', g: '●' },
 }
 
 export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChanged, onDeleted }: {
@@ -69,8 +69,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
         onDelete={unlocked ? del : undefined}
         fixed={fixed} fixedLabel={st.label}
         onUnfix={() => {
-          if (c.status === 'sent' && confirm('Вернуть заказ в черновик?')) run(api.unsendPurchase(c.id))
-          else if (c.status === 'cancelled' && confirm('Восстановить заказ из отменённых?')) run(api.restorePurchase(c.id))
+          if (confirm('Вернуть заказ в черновик?')) run(api.unpostPurchase(c.id))
         }}
         error={err}
       />
@@ -93,16 +92,12 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
       </dl>
 
       <div className="kit-actions">
-        {c.status === 'draft' && <>
+        {/* Отмены нет (волна 19, Р1): ненужный заказ удаляется — кнопка удаления
+            живёт в шапке под замком, чтобы «отменить» и «удалить» не двоились. */}
+        {c.status === 'draft' &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.sendPurchase(c.id))}>Отправить · зафиксировать</button>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.cancelPurchase(c.id))}>Отменить</button>
-        </>}
-        {c.status === 'sent' &&
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.cancelPurchase(c.id))}>Отменить</button>}
+            onClick={() => run(api.postPurchase(c.id))}>Утвердить · зафиксировать</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

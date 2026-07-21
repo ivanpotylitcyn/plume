@@ -185,10 +185,10 @@ class OnOrderTests(EngineTestBase):
     def test_purchased_open_order_minus_received(self):
         item = self.make_item('SCR', kind='material')
         proc = models.Procurement.objects.create(user=self.user,
-                                                 status=models.Procurement.Status.SENT)
+                                                 status=models.DocStatus.POSTED)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
-            status=models.Purchase.Status.SENT)
+            status=models.DocStatus.POSTED)
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         # поступило 15 по этому заказу
         self.receipt_lot(item, self.prj, 15, purchase=purchase)
@@ -199,7 +199,7 @@ class OnOrderTests(EngineTestBase):
         proc = models.Procurement.objects.create(user=self.user)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
-            status=models.Purchase.Status.DRAFT)
+            status=models.DocStatus.DRAFT)
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
 
@@ -224,10 +224,10 @@ class DeficitTests(EngineTestBase):
         self.receipt_lot(case, self.prj, 12)
         # SCR: заказано 25 (sent), склада нет → ●25 ▲15
         proc = models.Procurement.objects.create(user=self.user,
-                                                 status=models.Procurement.Status.SENT)
+                                                 status=models.DocStatus.POSTED)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
-            status=models.Purchase.Status.SENT)
+            status=models.DocStatus.POSTED)
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=D(25))
 
         d = engine.project_deficit(self.prj)
@@ -515,7 +515,7 @@ class PurchaseCockpitTests(EngineTestBase):
 
     def test_create_purchase_autocreates_procurement(self):
         p = engine.create_purchase(self.prj, self.user)
-        self.assertEqual(p.status, models.Purchase.Status.DRAFT)
+        self.assertEqual(p.status, models.DocStatus.DRAFT)
         self.assertIsNotNone(p.procurement_id)          # авто-родитель
         self.assertEqual(p.project_id, self.prj.id)
 
@@ -551,55 +551,58 @@ class PurchaseCockpitTests(EngineTestBase):
         engine.remove_purchase_line(line)
         self.assertFalse(models.PurchaseLine.objects.filter(pk=line.pk).exists())
 
-    def test_send_counts_in_on_order(self):
+    def test_post_counts_in_on_order(self):
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, item, D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))  # draft не в счёте
-        engine.send_purchase(p)
+        engine.post_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(40))
 
-    def test_send_rejects_empty(self):
+    def test_post_rejects_empty(self):
         p = engine.create_purchase(self.prj, self.user)
         with self.assertRaises(ValidationError):
-            engine.send_purchase(p)
+            engine.post_purchase(p)
 
-    def test_lines_locked_after_send(self):
+    def test_lines_locked_after_post(self):
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, self.make_item('A'), D(10))
-        engine.send_purchase(p)
+        engine.post_purchase(p)
         with self.assertRaises(ValidationError):
             engine.update_purchase_line(line, D(5))
         with self.assertRaises(ValidationError):
             engine.add_purchase_line(p, self.make_item('B'), D(1))
 
-    def test_unsend_reenables_and_drops_from_on_order(self):
+    def test_unpost_reenables_and_drops_from_on_order(self):
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, item, D(40))
-        engine.send_purchase(p)
-        engine.unsend_purchase(p)
+        engine.post_purchase(p)
+        engine.unpost_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
         engine.update_purchase_line(line, D(30))       # снова можно
         self.assertEqual(line.qty, D(30))
 
-    def test_cancel_drops_from_on_order(self):
+    def test_delete_drops_from_on_order(self):
+        """Отмена = удаление (волна 19, Р1): статуса `cancelled` больше нет, снять
+        обязательство можно только удалив заказ — и сперва сняв замок."""
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, item, D(40))
-        engine.send_purchase(p)
-        engine.cancel_purchase(p)
+        engine.post_purchase(p)
+        self.assertEqual(engine.item_on_order(item, self.prj), D(40))
+        with self.assertRaises(ValidationError):        # утверждённый не удалить
+            engine.delete_purchase(p)
+        engine.unpost_purchase(p)
+        engine.delete_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
-        with self.assertRaises(ValidationError):        # отменённый не отправить
-            engine.send_purchase(p)
-        engine.restore_purchase(p)
-        self.assertEqual(p.status, models.Purchase.Status.DRAFT)
+        self.assertFalse(models.Purchase.objects.filter(pk=p.pk).exists())
 
     def test_linked_receipt_reduces_on_order_and_closes_line(self):
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, item, D(40))
-        engine.send_purchase(p)
+        engine.post_purchase(p)
         # приход 15, связанный с заказом → поступило 15, «заказано» 25
         self.receipt_lot(item, self.prj, 15, purchase=p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(25))
@@ -1087,7 +1090,7 @@ class ProcurementCockpitTests(EngineTestBase):
         self.assertEqual(len(c['lines']), 2)
         self.assertEqual(c['total_qty'], D(15))
         self.assertTrue(c['editable'])
-        self.assertEqual(c['status'], models.Procurement.Status.DRAFT)
+        self.assertEqual(c['status'], models.DocStatus.DRAFT)
         self.assertEqual(c['note'], 'весна')
 
     def test_add_line_rejects_duplicate_and_nonpositive(self):
@@ -1108,31 +1111,33 @@ class ProcurementCockpitTests(EngineTestBase):
         engine.remove_procurement_line(line)
         self.assertFalse(models.ProcurementLine.objects.filter(pk=line.pk).exists())
 
-    def test_send_locks_and_rejects_empty(self):
+    def test_post_locks_and_rejects_empty(self):
         p = engine.create_procurement(self.user)
         with self.assertRaises(ValidationError):
-            engine.send_procurement(p)                 # пустую нельзя
+            engine.post_procurement(p)                 # пустую нельзя
         line = engine.add_procurement_line(p, self.make_item('A'), D(10))
-        engine.send_procurement(p)
-        self.assertEqual(p.status, models.Procurement.Status.SENT)
+        engine.post_procurement(p)
+        self.assertEqual(p.status, models.DocStatus.POSTED)
         with self.assertRaises(ValidationError):
             engine.update_procurement_line(line, D(5))  # строки под замком
         with self.assertRaises(ValidationError):
             engine.add_procurement_line(p, self.make_item('B'), D(1))
 
-    def test_unsend_cancel_restore(self):
+    def test_unpost_reopens_and_delete_replaces_cancel(self):
+        """Замок снимается и возвращается; отмены нет — только удаление (Р1)."""
         p = engine.create_procurement(self.user)
         line = engine.add_procurement_line(p, self.make_item('A'), D(10))
-        engine.send_procurement(p)
-        engine.unsend_procurement(p)
+        engine.post_procurement(p)
+        engine.unpost_procurement(p)
         engine.update_procurement_line(line, D(30))    # снова можно
         self.assertEqual(line.qty, D(30))
-        engine.send_procurement(p)
-        engine.cancel_procurement(p)
-        with self.assertRaises(ValidationError):
-            engine.send_procurement(p)                 # отменённую не отправить
-        engine.restore_procurement(p)
-        self.assertEqual(p.status, models.Procurement.Status.DRAFT)
+        engine.post_procurement(p)
+        with self.assertRaises(ValidationError):        # утверждённую не удалить
+            engine.delete_procurement(p)
+        engine.unpost_procurement(p)
+        self.assertEqual(p.status, models.DocStatus.DRAFT)
+        engine.delete_procurement(p)
+        self.assertFalse(models.Procurement.objects.filter(pk=p.pk).exists())
 
     def test_bridge_add_to_procurement_creates_and_increments(self):
         item = self.make_item('SCR', kind='material')
@@ -1193,7 +1198,7 @@ class PeggingTests(EngineTestBase):
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
         pu = self.plan.purchases.get(project=self.prj)
         self.assertEqual(pu.procurement_id, self.plan.id)   # под планом, не solo-заглушка
-        self.assertEqual(pu.status, models.Purchase.Status.DRAFT)
+        self.assertEqual(pu.status, models.DocStatus.DRAFT)
         self.assertEqual(pu.lines.get(item=self.scr).qty, D(40))
         # повторный пег — инкремент в тот же заказ
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
@@ -1237,7 +1242,7 @@ class PeggingTests(EngineTestBase):
         self.assertFalse(pu.lines.exists())                 # пег снят
         # пег в отправленном заказе — снять нельзя, пока не снят send
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
-        engine.send_purchase(pu)
+        engine.post_purchase(pu)
         with self.assertRaises(ValidationError):
             engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
 
@@ -1364,10 +1369,10 @@ class ProcurementHttpTests(TestCase):
         dup = self.c.post(f'/api/procurements/{pid}/lines/',
             {'item_id': self.scr.id, 'qty': 1}, content_type='application/json')
         self.assertEqual(dup.status_code, 400)
-        # отправка → строки под замком
-        sent = self.c.post(f'/api/procurements/{pid}/send/')
-        self.assertEqual(sent.status_code, 200)
-        self.assertEqual(sent.json()['status'], 'sent')
+        # утверждение → строки под замком
+        posted = self.c.post(f'/api/procurements/{pid}/post/')
+        self.assertEqual(posted.status_code, 200)
+        self.assertEqual(posted.json()['status'], 'posted')
         locked = self.c.post(f'/api/procurements/{pid}/lines/',
             {'item_id': self.dev.id, 'qty': 1}, content_type='application/json')
         self.assertEqual(locked.status_code, 400)
@@ -3664,7 +3669,7 @@ class EntityDeleteTests(EngineTestBase):
     def test_delete_purchase_blocked_when_sent(self):
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, self.make_item('A'), D(4))
-        engine.send_purchase(p)
+        engine.post_purchase(p)
         with self.assertRaises(ValidationError):
             engine.delete_purchase(p)                # отправлен — сперва в черновик
 

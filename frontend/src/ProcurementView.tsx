@@ -1,15 +1,20 @@
 // Витрина волны 7: кокпит закупки-плана (Procurement) — записываемое ядро.
 // Самостоятельный план без проекта (маркер командной высоты). Строки (item + qty,
-// автосейв в черновике). Мягкий замок = отправка (draft→sent): строки read-only. Кнопка
-// выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на проектные
-// заказы (веер Purchase под этим планом-родителем).
+// автосейв в черновике). Мягкий замок = утверждение (draft→posted): строки read-only.
+// Кнопка выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на
+// проектные заказы (веер Purchase под этим планом-родителем).
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, useFormLock } from './FormHeader'
-import { PURCH_ST } from './PurchaseView'
 import { PeggingPanel } from './PeggingPanel'
 import { num } from './status'
+
+// Ось та же (`DocStatus`), подпись — своя, женского рода (волна 19, Ф1).
+const PROC_ST: Record<string, { label: string; cls: string; g: string }> = {
+  draft: { label: 'черновик', cls: 'g-to_order', g: '▲' },
+  posted: { label: 'утверждена', cls: 'g-on_order', g: '●' },
+}
 
 export function ProcurementView({ procurementId, items, openItem, openPurchase, onChanged, onDeleted }: {
   procurementId: number; items: ItemRow[]
@@ -47,7 +52,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const st = PURCH_ST[c.status] ?? PURCH_ST.draft
+  const st = PROC_ST[c.status] ?? PROC_ST.draft
   const editable = c.editable
   const fixed = !editable                  // отправлен/отменён — read-only (фиксация)
   return (
@@ -63,8 +68,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
         onDelete={unlocked ? del : undefined}
         fixed={fixed} fixedLabel={st.label}
         onUnfix={() => {
-          if (c.status === 'sent' && confirm('Вернуть закупку в черновик?')) run(api.unsendProcurement(c.id))
-          else if (c.status === 'cancelled' && confirm('Восстановить закупку из отменённых?')) run(api.restoreProcurement(c.id))
+          if (confirm('Вернуть закупку в черновик?')) run(api.unpostProcurement(c.id))
         }}
         error={err}
       />
@@ -81,16 +85,11 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
       </dl>
 
       <div className="kit-actions">
-        {c.status === 'draft' && <>
+        {/* Отмены нет (волна 19, Р1): ненужный план удаляется из шапки под замком. */}
+        {c.status === 'draft' &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.sendProcurement(c.id))}>Отправить · зафиксировать</button>
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.cancelProcurement(c.id))}>Отменить</button>
-        </>}
-        {c.status === 'sent' &&
-          <button className="btn" disabled={busy}
-            onClick={() => run(api.cancelProcurement(c.id))}>Отменить</button>}
+            onClick={() => run(api.postProcurement(c.id))}>Утвердить · зафиксировать</button>}
         <a className="btn" href={api.orderXlsxUrl(c.id)} download
           title="выгрузить order.xlsx для поставщика">Скачать order.xlsx</a>
         {err && <span className="anomaly">{err}</span>}
@@ -114,8 +113,8 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
       {c.lines.length === 0 && !editable &&
         <div className="empty">Закупка пуста.</div>}
 
-      {c.status !== 'cancelled' &&
-        <PeggingPanel procurementId={c.id} rev={rev} openPurchase={openPurchase} />}
+      {/* Гейт по «не отменённой» снят вместе со статусом (волна 19, Ф1). */}
+      <PeggingPanel procurementId={c.id} rev={rev} openPurchase={openPurchase} />
     </div>
   )
 }

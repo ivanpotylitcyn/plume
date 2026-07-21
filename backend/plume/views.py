@@ -816,7 +816,7 @@ def purchase_line_detail(request, pk):
 
 
 def _purchase_transition(request, pk, fn):
-    """Общий обработчик перехода статуса заказа (send/unsend/cancel/restore)."""
+    """Общий обработчик перехода замка заказа (post/unpost)."""
     p = get_object_or_404(models.Purchase, pk=pk)
     try:
         fn(p)
@@ -826,38 +826,26 @@ def _purchase_transition(request, pk, fn):
 
 
 @api_view(['POST'])
-def purchase_send(request, pk):
-    """Отправить заказ (draft → sent) — мягкий замок, счёт в «заказано»."""
-    return _purchase_transition(request, pk, engine.send_purchase)
+def purchase_post(request, pk):
+    """Утвердить заказ (draft → posted) — мягкий замок, счёт в «заказано»."""
+    return _purchase_transition(request, pk, engine.post_purchase)
 
 
 @api_view(['POST'])
-def purchase_unsend(request, pk):
-    """Вернуть заказ в черновик (sent → draft)."""
-    return _purchase_transition(request, pk, engine.unsend_purchase)
-
-
-@api_view(['POST'])
-def purchase_cancel(request, pk):
-    """Отменить заказ (выводит из счёта «заказано»)."""
-    return _purchase_transition(request, pk, engine.cancel_purchase)
-
-
-@api_view(['POST'])
-def purchase_restore(request, pk):
-    """Восстановить отменённый заказ в черновик."""
-    return _purchase_transition(request, pk, engine.restore_purchase)
+def purchase_unpost(request, pk):
+    """Вернуть заказ в черновик (posted → draft)."""
+    return _purchase_transition(request, pk, engine.unpost_purchase)
 
 
 @api_view(['GET'])
 def project_purchases(request, pk):
-    """Заказы проекта (не отменённые) — пикер связи прихода с заказом."""
+    """Заказы проекта — пикер связи прихода с заказом (волна 19, Ф1: отсева по
+    статусу нет, отменённых не существует — отмена = удаление)."""
     project = get_object_or_404(models.Project, pk=pk)
     rows = [
         {'id': p.id, 'status': p.status, 'date': p.date, 'note': p.note,
          'lines': p.lines.count()}
-        for p in project.purchases.exclude(status=models.Purchase.Status.CANCELLED)
-        .order_by('-id')
+        for p in project.purchases.order_by('-id')
     ]
     return Response(rows)
 
@@ -1657,7 +1645,7 @@ def procurement_line_detail(request, pk):
 
 
 def _procurement_transition(request, pk, fn):
-    """Общий обработчик перехода статуса закупки-плана (send/unsend/cancel/restore)."""
+    """Общий обработчик перехода замка закупки-плана (post/unpost)."""
     p = get_object_or_404(models.Procurement, pk=pk)
     try:
         fn(p)
@@ -1667,27 +1655,15 @@ def _procurement_transition(request, pk, fn):
 
 
 @api_view(['POST'])
-def procurement_send(request, pk):
-    """Отправить закупку-план (draft → sent) — мягкий замок, строки read-only."""
-    return _procurement_transition(request, pk, engine.send_procurement)
+def procurement_post(request, pk):
+    """Утвердить закупку-план (draft → posted) — мягкий замок, строки read-only."""
+    return _procurement_transition(request, pk, engine.post_procurement)
 
 
 @api_view(['POST'])
-def procurement_unsend(request, pk):
-    """Вернуть закупку-план в черновик (sent → draft)."""
-    return _procurement_transition(request, pk, engine.unsend_procurement)
-
-
-@api_view(['POST'])
-def procurement_cancel(request, pk):
-    """Отменить закупку-план (не удаляет)."""
-    return _procurement_transition(request, pk, engine.cancel_procurement)
-
-
-@api_view(['POST'])
-def procurement_restore(request, pk):
-    """Восстановить отменённую закупку-план в черновик."""
-    return _procurement_transition(request, pk, engine.restore_procurement)
+def procurement_unpost(request, pk):
+    """Вернуть закупку-план в черновик (posted → draft)."""
+    return _procurement_transition(request, pk, engine.unpost_procurement)
 
 
 @api_view(['GET'])

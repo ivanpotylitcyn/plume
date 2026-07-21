@@ -220,6 +220,21 @@ CORS_ALLOWED_ORIGINS = [
     ).split(',') if o
 ]
 
+# CSRF-origin-ы: те же, что и CORS. В dev фронт живёт на своём origin (Vite :5173) и
+# ходит в API через прокси — браузер шлёт `Origin: http://localhost:5173`, а Django
+# видит хост бэкенда. Проверка Origin (Django 4.0+) на этом падала:
+#     CSRF Failed: Origin checking failed — ... does not match any trusted origins
+# DRF отдавал 403, а фронт трактует 403 как «сессия истекла» и выкидывает на логин —
+# любая мутация из браузера в dev under логином разлогинивала (см. JOURNAL 2026-07-20).
+# Раньше не жало: до входа по сессии (волна 12) dev ходил анонимом, а после — в dev
+# работали на синтетике и почти не мутировали.
+# На проде этот список перекрывается ниже значением из .env (домены — не в репозиторий).
+CSRF_TRUSTED_ORIGINS = [
+    o for o in env(
+        'DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173'
+    ).split(',') if o
+]
+
 
 # --- Прод-настройки (включаются при DEBUG=False) ---
 # Reg.ru shared: сайт за Apache/Passenger с терминацией SSL на прокси. Django должен
@@ -230,6 +245,8 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     # Django 4.2 требует https-origin в списке доверенных для POST в /admin/.
     # Домен(ы) задаются в .env на сервере, в репозиторий не попадают.
+    # ПЕРЕКРЫВАЕТ dev-дефолты выше намеренно: пустой env → пустой список, чтобы
+    # localhost-origin-ы ни при каких обстоятельствах не оказались доверенными в проде.
     CSRF_TRUSTED_ORIGINS = [
         o for o in env('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',') if o
     ]
