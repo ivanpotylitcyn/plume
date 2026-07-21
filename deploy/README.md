@@ -189,6 +189,32 @@ bash deploy/pull_prod.sh \
 
 ## Эксплуатация (после деплоя)
 
+- **Посмотреть состояние прод-БД / выполнить SQL.** Доступы руками не вводим — Django
+  берёт их из `backend/.env` на сервере.
+
+  ⚠️ **Раскладка на проде НЕ такая, как локально.** Локально venv внутри бэкенда
+  (`backend/.venv`), на сервере — **в корне сайта, рядом с `backend`** (так его создаёт
+  `deploy.sh`). Путь `backend/.venv/bin/python` на проде не существует:
+  ```
+  ~/www/твой-сайт/
+    ├── venv/        ← окружение здесь
+    └── backend/     ← manage.py здесь
+  ```
+  ```bash
+  ssh -i ~/.ssh/ключ ПОЛЬЗОВАТЕЛЬ@ХОСТ
+  cd ~/www/твой-сайт
+  source venv/bin/activate
+  cd backend
+  python manage.py dbshell        # mysql-клиент с прод-доступами
+  ```
+  Надёжнее — без сырого SQL, через ORM. Например, состояние миграций
+  (`showmigrations` не годится: он показывает только те, у которых есть файл, а
+  записи-призраки как раз без файлов). Одной строкой — чтобы не воевать с кавычками
+  и переносами через ssh:
+  ```bash
+  python manage.py shell -c "from django.db.migrations.recorder import MigrationRecorder as R; from django.db import connection; qs=R(connection).migration_qs.filter(app='plume').order_by('id'); [print(m.id, m.name, m.applied) for m in qs]"
+  ```
+
 - **Вход в админку:** заходи по прямой ссылке `/admin/login/`. На `/admin/` reg.ru
   вешает анти-бот challenge (страница `<meta refresh>` + cookie `RCPC`) — браузер
   проходит его сам и попадает на Django-админку; `curl` на нём «залипает» (не исполняет
