@@ -57,21 +57,23 @@ ATTACHMENT_OWNER_FIELDS = ('item', 'document')
 # --------------------------------------------------------------------------- #
 #  Абстрактная шапка складского документа (волна 13, Ф1)
 # --------------------------------------------------------------------------- #
-class DocStatus(models.TextChoices):
-    """Единый мягкий замок складского документа: `draft ⇄ posted`."""
-    DRAFT = 'draft', 'Черновик'
-    POSTED = 'posted', 'Проведён'
+# Волна 19, Ф1c: строковый `DocStatus {draft,posted}` снят — ось стала `bool locked`
+# на всех пяти сущностях (Item / StockDocument / Procurement / Purchase / Project).
+# Мотив — понятность модели: два состояния, которые не надо запоминать словами
+# («доверять или проверять»). Подписи («Зафиксировать»/«Расфиксировать») живут во
+# фронте: смена слова больше не стоит миграции. Даром закрылась дыра валидации —
+# `choices` не проверяются в `.save()`, а `tinyint(1)` мусор принять не может.
 
 
 class StockDocument(models.Model):
     """Конкретный MTI-родитель складского ордера (Приход/Комплектация/Инвентаризация/
     Требование/Передача/Списание) — «Ордер» в UI (волна 13, Ф2a).
 
-    Несёт **единый мягкий замок** `status {draft ⇄ posted}` (волна 13, Ф1): свернул
-    разнородные `Receipt.approved`, `Transfer.posted`, `Kitting.status{wip/closed/
-    cancelled}` в одну ось. `posted` = edit-freeze (форма read-only); склад **НЕ
-    гейтится** — замок чисто интерфейсный (остатки собираются независимо от статуса).
-    `cancelled` снят: отмена = удаление.
+    Несёт **единый мягкий замок** `locked` (волна 13, Ф1; строка → bool в волне 19,
+    Ф1c): свернул разнородные `Receipt.approved`, `Transfer.posted`,
+    `Kitting.status{wip/closed/cancelled}` в одну ось. `locked=True` = edit-freeze
+    (форма read-only); склад **НЕ гейтится** — замок чисто интерфейсный (остатки
+    собираются независимо от него). `cancelled` снят: отмена = удаление.
 
     **Ф2a:** абстрактный миксин `StockDoc` схлопнут в этого конкретного родителя —
     6 документов стали MTI-наследниками, их PK = единый `id` этой таблицы (унификация
@@ -95,8 +97,6 @@ class StockDocument(models.Model):
         WRITEOFF = 'writeoff', 'Списание'
         RELOCATION = 'relocation', 'Перемещение'  # ← новый вид, дочерней таблицы пока нет
 
-    Status = DocStatus
-
     # Дочерний класс объявляет свой вид (`KIND`); `save()` штампует его в `kind`.
     KIND = None
 
@@ -106,8 +106,8 @@ class StockDocument(models.Model):
     # `date`(NOT NULL)+`number`(required non-blank), а kitting — nullable-дату и вовсе без
     # поля номера (см. reverse-часть миграции 0007). Здесь это правило живёт **одним
     # kind-driven источником**: `clean()` зовёт `full_clean` админ-ModelForm; движок
-    # дублирует его гейтом полноты на проведении (`post_document`/`approve_receipt`/
-    # `post_transfer`). `relocation` (дочерней таблицы пока нет) — без обязательной шапки.
+    # дублирует его гейтом полноты на фиксации (`lock_document`/`lock_receipt`/
+    # `lock_transfer`). `relocation` (дочерней таблицы пока нет) — без обязательной шапки.
     REQUIRED_HEADER_BY_KIND = {
         Kind.RECEIPT:     ('date', 'number'),
         Kind.INVENTORY:   ('date', 'number'),
@@ -120,8 +120,7 @@ class StockDocument(models.Model):
 
     kind = models.CharField('вид ордера', max_length=16, choices=Kind.choices,
                             blank=True, default='')
-    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
-                              default=DocStatus.DRAFT)
+    locked = models.BooleanField('зафиксирован', default=False)
 
     # Ф2c — общие поля подняты с 6 детей в родителя (дедуп). Специфика (contractor/
     # purchase/target_item/qty/reason) осталась на детях. `project` строкой ('Project'
@@ -140,10 +139,6 @@ class StockDocument(models.Model):
     class Meta:
         verbose_name = 'ордер'
         verbose_name_plural = 'ордера'
-
-    @property
-    def is_posted(self):
-        return self.status == DocStatus.POSTED
 
     def clean(self):
         """Условная валидация шапки по виду (Ф2d): восстанавливает per-kind
@@ -199,13 +194,12 @@ class Item(models.Model):
     Item Id` = заказной PN); осознанно НЕ `item_id`, чтобы не столкнуться с Django
     FK-PK аксессором `item_id` в рукописном JSON-API (JOURNAL 2026-07-12)."""
 
-    # Персистентный статус-замок (волна 17) — та же ось `draft ⇄ posted`, что у
-    # `StockDocument` (переиспользуем `DocStatus`). `posted` = ФИКСАЦИЯ: форма
-    # read-only (свойства + BOM), мутации гейтятся в движке (защита от ручного
-    # дрейфа). Синк библиотеки ставит `posted` (библиотека = источник правды);
-    # заведённые руками изделия — `draft`.
-    Status = DocStatus
-
+    # Персистентный замок (волна 17) — та же ось `locked`, что у `StockDocument`.
+    # `locked=True` = ФИКСАЦИЯ: форма read-only (свойства + BOM), мутации гейтятся
+    # в движке (защита от ручного дрейфа). Проявляется слабее, чем у документов:
+    # только заморозка, без арифметики (у заказа замок ещё и включает счёт
+    # «заказано»). Синк библиотеки ставит `locked=True` (библиотека = источник
+    # правды); заведённые руками изделия — `False`.
     design_item_id = models.CharField('изделие', max_length=128, unique=True)
     description = models.CharField('описание', max_length=255)
     category = models.ForeignKey(Category, on_delete=models.PROTECT,
@@ -215,8 +209,7 @@ class Item(models.Model):
                                    blank=True, default='')
     estimated_cost = money(verbose_name='оценочная стоимость', null=True, blank=True)
     produced = models.BooleanField('производимое', default=False)
-    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
-                              default=DocStatus.DRAFT)
+    locked = models.BooleanField('зафиксировано', default=False)
 
     class Meta:
         verbose_name = 'изделие'
@@ -225,10 +218,6 @@ class Item(models.Model):
 
     def __str__(self):
         return f'{self.design_item_id} — {self.description}'
-
-    @property
-    def is_posted(self):
-        return self.status == DocStatus.POSTED
 
 
 class BomLine(models.Model):
@@ -307,21 +296,21 @@ class Project(models.Model):
         INTERNAL_STOCK = 'internal_stock', 'Собственный склад (белые)'
         INTERNAL_WRITEOFF = 'internal_writeoff', 'Свободные неучтённые (серые)'
 
-    # Это ЖИЗНЕННЫЙ ЦИКЛ, а не замок, — осознанно не сводим к draft/posted
-    # (волна 19, Ф1). Мёртвый `draft` убран: `create_project` всегда ставил `active`.
-    class Status(models.TextChoices):
-        ACTIVE = 'active', 'Активен'
-        CLOSED = 'closed', 'Закрыт'
-
     code = models.CharField('код', max_length=64, unique=True)
     name = models.CharField('название', max_length=255)
     budget = money(verbose_name='бюджет на материалы', null=True, blank=True)
     kind = models.CharField('вид', max_length=20, choices=Kind.choices,
                             default=Kind.EXTERNAL)
-    status = models.CharField('статус', max_length=16, choices=Status.choices,
-                              default=Status.ACTIVE)
-    started_at = models.DateField('начат', null=True, blank=True)
-    closed_at = models.DateField('закрыт', null=True, blank=True)
+    # Волна 19, Ф1c: `status {active,closed}` → та же ось `locked`, что у изделия и
+    # ордеров. Проявляется слабо (заморозка, без арифметики). Хранимый, а не
+    # вычисляемый: иначе разузлование гонялось бы на каждый чих — вместо этого
+    # «Проверить возможность закрытия» пробегает по остаткам и открывает фиксацию.
+    locked = models.BooleanField('зафиксирован', default=False)
+    # Даты — чисто информационные: ни с чем не связаны, ни на что не влияют.
+    # Проставляются руками (реальные сроки работы, а не формальности), поэтому
+    # `close_project` их больше НЕ штампует. Суффикс `_at` снят вместе со связью.
+    started = models.DateField('начат', null=True, blank=True)
+    closed = models.DateField('закрыт', null=True, blank=True)
 
     INTERNAL_KINDS = {Kind.INTERNAL_STOCK, Kind.INTERNAL_WRITEOFF}
 
@@ -369,13 +358,12 @@ class Procurement(models.Model):
     """Закупка — планирование (что и сколько решили купить; один поток общения с
     контрагентом). Без проекта — маркер командной высоты."""
 
-    # Статус — общая ось `DocStatus` (волна 19, Ф1): тот же замок, что у ордеров и
-    # изделия. Своего enum больше нет; отмена = удаление (развилка Р1).
-    # Подпись («Утверждена») — забота представления, живёт в словаре фронта.
+    # Замок — общая ось `locked` (волна 19: Ф1 свела enum к draft/posted, Ф1c сделала
+    # его bool): тот же замок, что у ордеров и изделия. Отмена = удаление (Р1).
+    # Подпись («Зафиксирована») — забота представления, живёт во фронте.
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='procurements', verbose_name='автор')
-    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
-                              default=DocStatus.DRAFT)
+    locked = models.BooleanField('зафиксирована', default=False)
     date = models.DateField('дата (начало переговоров)', null=True, blank=True)
     note = models.CharField('примечание', max_length=255, blank=True, default='')
 
@@ -383,12 +371,8 @@ class Procurement(models.Model):
         verbose_name = 'закупка (план)'
         verbose_name_plural = 'закупки (план)'
 
-    @property
-    def is_posted(self):
-        return self.status == DocStatus.POSTED
-
     def __str__(self):
-        return f'Закупка #{self.pk} [{self.get_status_display()}]'
+        return f'Закупка #{self.pk}' + (' 🔒' if self.locked else '')
 
 
 class ProcurementLine(models.Model):
@@ -408,17 +392,17 @@ class ProcurementLine(models.Model):
 class Purchase(models.Model):
     """Заказ — проектное исполнение (документальное обязательство)."""
 
-    # Статус — общая ось `DocStatus` (волна 19, Ф1). Мёртвые `partial`/`received`
+    # Замок — общая ось `locked` (волна 19: Ф1 + Ф1c). Мёртвые `partial`/`received`
     # убраны: «получено» — величина ВЫЧИСЛЯЕМАЯ из приходов (`_line_received`), а не
-    # замок. Две оси не путать: замок (draft/posted) и покрытие (▲/●/✓).
+    # замок. Две оси не путать: замок (`locked`) и покрытие (▲/●/✓).
+    # У заказа замок проявляется СИЛЬНО: зафиксированный заказ считается в «заказано».
     procurement = models.ForeignKey(Procurement, on_delete=models.PROTECT,
                                     related_name='purchases')
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='purchases')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='purchases', verbose_name='автор')
-    status = models.CharField('статус', max_length=16, choices=DocStatus.choices,
-                              default=DocStatus.DRAFT)
+    locked = models.BooleanField('зафиксирован', default=False)
     date = models.DateField('дата (оформление)', null=True, blank=True)
     note = models.CharField('примечание', max_length=255, blank=True, default='')
 
@@ -426,12 +410,8 @@ class Purchase(models.Model):
         verbose_name = 'заказ'
         verbose_name_plural = 'заказы'
 
-    @property
-    def is_posted(self):
-        return self.status == DocStatus.POSTED
-
     def __str__(self):
-        return f'Заказ #{self.pk} ({self.project.code}) [{self.get_status_display()}]'
+        return f'Заказ #{self.pk} ({self.project.code})' + (' 🔒' if self.locked else '')
 
 
 class PurchaseLine(models.Model):
@@ -476,7 +456,7 @@ class Receipt(StockDocument):
 
 class Kitting(StockDocument):
     """Комплектация — инструмент ведения сборки лота: списывает компоненты и
-    рождает партию-прибор. Замок `draft → posted` (закрытие рождает лот-прибор)."""
+    рождает партию-прибор. Замок `locked` (фиксация рождает лот-прибор)."""
 
     KIND = StockDocument.Kind.KITTING
 
@@ -489,8 +469,8 @@ class Kitting(StockDocument):
         verbose_name_plural = 'комплектации'
 
     def __str__(self):
-        return (f'Комплектация #{self.pk} {self.target_item.design_item_id} '
-                f'[{self.get_status_display()}]')
+        return (f'Комплектация #{self.pk} {self.target_item.design_item_id}'
+                + (' 🔒' if self.locked else ''))
 
 
 class Inventory(StockDocument):

@@ -26,7 +26,7 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const fixed = c.approved                 // фиксация (проведена/сверена) — read-only
+  const fixed = c.locked                 // фиксация (проведена/сверена) — read-only
   const locked = fixed || !unlocked        // + личный замок формы
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -38,7 +38,7 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="сверена"
-        onUnfix={() => { if (confirm('Снять фиксацию поставки? Форма станет черновиком.')) run(api.unapproveReceipt(c.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать поставки?')) run(api.unlockReceipt(c.id)) }}
         onDelete={del}
         error={err}
       />
@@ -62,14 +62,14 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         {!fixed &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.approveReceipt(c.id))}>Сверено со сканом · зафиксировать</button>}
+            onClick={() => run(api.lockReceipt(c.id))}>Сверено со сканом · зафиксировать</button>}
         <span className="hint">Заказ (закрывает):</span>
         <select className="lot-sel" value={c.purchase_id ?? ''} disabled={locked || busy}
           onChange={e => run(api.linkReceiptPurchase(
             c.id, e.target.value ? Number(e.target.value) : null))}>
           <option value="">— не связан —</option>
           {purchases.map(p => (
-            <option key={p.id} value={p.id}>Заказ #{p.id} · {p.status} · {p.lines} стр.</option>
+            <option key={p.id} value={p.id}>Заказ #{p.id}{p.locked ? ' · зафиксирован' : ''} · {p.lines} стр.</option>
           ))}
         </select>
         {c.purchase_id &&

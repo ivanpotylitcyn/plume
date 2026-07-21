@@ -74,7 +74,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.DocStatus.DRAFT)
+                                          locked=False)
         models.StockLine.objects.create(document=k, lot=lot,
                                         location=self.main, qty=D(-30))
         engine.rebuild_movements(lot)
@@ -86,7 +86,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.DocStatus.DRAFT)
+                                          locked=False)
         models.StockLine.objects.create(document=k, lot=lot,
                                         location=self.main, qty=D(-8))
         engine.rebuild_movements(lot)
@@ -108,11 +108,11 @@ class RebuildAndStockTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1))
         engine.add_kitting_line(k, comp, lot, D(4))
-        born = engine.close_kitting(k)              # posted + рождается лот-прибор
+        born = engine.lock_kitting(k)              # posted + рождается лот-прибор
         self.assertTrue(models.Lot.objects.filter(pk=born.pk).exists())
-        engine.reopen_kitting(k)                    # расфиксировать: born-лот снят
+        engine.unlock_kitting(k)                    # расфиксировать: born-лот снят
         self.assertFalse(models.Lot.objects.filter(pk=born.pk).exists())  # не фантом
-        self.assertEqual(k.status, models.DocStatus.DRAFT)
+        self.assertFalse(k.locked)
         k.delete()                                  # черновик удаляется свободно
         engine.rebuild_movements(lot)               # компонент освобождён (нет −ISSUE)
         self.assertEqual(engine.lot_live_qty(lot), D(10))
@@ -129,7 +129,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.DocStatus.DRAFT)
+                                          locked=False)
         w = models.Writeoff.objects.create(project=self.prj, user=self.user,
                                            number='W-1', date='2026-06-01')
         cust = models.Project.objects.create(
@@ -185,10 +185,10 @@ class OnOrderTests(EngineTestBase):
     def test_purchased_open_order_minus_received(self):
         item = self.make_item('SCR', kind='material')
         proc = models.Procurement.objects.create(user=self.user,
-                                                 status=models.DocStatus.POSTED)
+                                                 locked=True)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
-            status=models.DocStatus.POSTED)
+            locked=True)
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         # поступило 15 по этому заказу
         self.receipt_lot(item, self.prj, 15, purchase=purchase)
@@ -199,7 +199,7 @@ class OnOrderTests(EngineTestBase):
         proc = models.Procurement.objects.create(user=self.user)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
-            status=models.DocStatus.DRAFT)
+            locked=False)
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
 
@@ -207,7 +207,7 @@ class OnOrderTests(EngineTestBase):
         board = self.make_item('BRD', manufactured=True)
         models.Kitting.objects.create(project=self.prj, target_item=board,
                                       user=self.user, qty=D(4),
-                                      status=models.DocStatus.DRAFT)
+                                      locked=False)
         self.assertEqual(engine.item_on_order(board, self.prj), D(4))
 
 
@@ -224,10 +224,10 @@ class DeficitTests(EngineTestBase):
         self.receipt_lot(case, self.prj, 12)
         # SCR: заказано 25 (sent), склада нет → ●25 ▲15
         proc = models.Procurement.objects.create(user=self.user,
-                                                 status=models.DocStatus.POSTED)
+                                                 locked=True)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=self.prj, user=self.user,
-            status=models.DocStatus.POSTED)
+            locked=True)
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=D(25))
 
         d = engine.project_deficit(self.prj)
@@ -285,7 +285,7 @@ class KittingCockpitTests(EngineTestBase):
     def make_kitting(self, qty=2):
         return models.Kitting.objects.create(
             project=self.prj, target_item=self.device, user=self.user,
-            qty=D(qty), status=models.DocStatus.DRAFT)
+            qty=D(qty), locked=False)
 
     def test_ghost_rows_before_piercing(self):
         # склад пуст → обе призрачные строки красные (▲ to_order)
@@ -357,9 +357,9 @@ class KittingCockpitTests(EngineTestBase):
         k = self.make_kitting(qty=2)
         engine.add_kitting_line(k, self.case, case_lot, D(2))   # 2×800
         engine.add_kitting_line(k, self.res, res_lot, D(4))     # 4×1
-        lot = engine.close_kitting(k)
+        lot = engine.lock_kitting(k)
         k.refresh_from_db()
-        self.assertEqual(k.status, models.DocStatus.POSTED)
+        self.assertTrue(k.locked)
         self.assertEqual(lot.qty, D(2))
         # (2×800 + 4×1) / 2 = 802
         self.assertEqual(lot.unit_cost, D('802.00'))
@@ -367,28 +367,28 @@ class KittingCockpitTests(EngineTestBase):
 
     def test_close_only_wip(self):
         k = self.make_kitting(qty=1)
-        engine.close_kitting(k)
+        engine.lock_kitting(k)
         with self.assertRaises(ValidationError):
-            engine.close_kitting(k)
+            engine.lock_kitting(k)
 
     def test_pierce_blocked_after_close(self):
         lot = self.receipt_lot(self.case, self.prj, 10)
         k = self.make_kitting(qty=1)
-        engine.close_kitting(k)
+        engine.lock_kitting(k)
         with self.assertRaises(ValidationError):
             engine.add_kitting_line(k, self.case, lot, D(1))
 
     def test_reopen_restores_wip_and_removes_lot(self):
         k = self.make_kitting(qty=1)
-        lot = engine.close_kitting(k)
-        engine.reopen_kitting(k)
+        lot = engine.lock_kitting(k)
+        engine.unlock_kitting(k)
         k.refresh_from_db()
-        self.assertEqual(k.status, models.DocStatus.DRAFT)
+        self.assertFalse(k.locked)
         self.assertFalse(models.Lot.objects.filter(pk=lot.pk).exists())
 
     def test_reopen_blocked_when_device_consumed(self):
         k = self.make_kitting(qty=1)
-        device_lot = engine.close_kitting(k)
+        device_lot = engine.lock_kitting(k)
         # прибор передан заказчику → потомок вниз, переоткрытие запрещено
         transfer = models.Transfer.objects.create(
             project=self.prj, user=self.user, date='2026-06-01', number='TN-1')
@@ -396,7 +396,7 @@ class KittingCockpitTests(EngineTestBase):
                                         location=self.main, qty=D(-1))
         engine.rebuild_movements(device_lot)
         with self.assertRaises(ValidationError):
-            engine.reopen_kitting(k)
+            engine.unlock_kitting(k)
 
 
 class ReceiptCockpitTests(EngineTestBase):
@@ -406,7 +406,7 @@ class ReceiptCockpitTests(EngineTestBase):
         return models.Receipt.objects.create(
             number='УПД-Т', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user,
-            status=models.DocStatus.POSTED if approved else models.DocStatus.DRAFT)
+            locked=approved)
 
     def test_add_lot_births_receipt_movement(self):
         r = self.make_receipt()
@@ -426,7 +426,7 @@ class ReceiptCockpitTests(EngineTestBase):
         c = engine.receipt_cockpit(r)
         self.assertEqual(len(c['lots']), 2)
         self.assertEqual(c['total_cost'], D(230))        # 2×100 + 3×10
-        self.assertFalse(c['approved'])
+        self.assertFalse(c['locked'])
 
     def test_add_lot_rejects_nonpositive_qty(self):
         r = self.make_receipt()
@@ -462,7 +462,7 @@ class ReceiptCockpitTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.DocStatus.DRAFT)
+                                          locked=False)
         engine.add_kitting_line(k, comp, lot, D(30))   # спаяли — потреблён ниже
         with self.assertRaises(ValidationError):
             engine.remove_receipt_lot(lot)
@@ -470,9 +470,9 @@ class ReceiptCockpitTests(EngineTestBase):
     def test_approve_locks_edits(self):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        engine.approve_receipt(r)
+        engine.lock_receipt(r)
         r.refresh_from_db()
-        self.assertTrue(r.is_posted)
+        self.assertTrue(r.locked)
         with self.assertRaises(ValidationError):
             engine.update_receipt_lot(lot, qty=D(9))
         with self.assertRaises(ValidationError):
@@ -481,15 +481,15 @@ class ReceiptCockpitTests(EngineTestBase):
     def test_approve_rejects_empty(self):
         r = self.make_receipt()
         with self.assertRaises(ValidationError):
-            engine.approve_receipt(r)
+            engine.lock_receipt(r)
 
     def test_unapprove_reenables_edits(self):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        engine.approve_receipt(r)
-        engine.unapprove_receipt(r)
+        engine.lock_receipt(r)
+        engine.unlock_receipt(r)
         r.refresh_from_db()
-        self.assertFalse(r.is_posted)
+        self.assertFalse(r.locked)
         engine.update_receipt_lot(lot, qty=D(9))       # снова можно
         self.assertEqual(engine.lot_live_qty(lot), D(9))
 
@@ -502,7 +502,7 @@ class ReceiptCockpitTests(EngineTestBase):
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          status=models.DocStatus.DRAFT)
+                                          locked=False)
         c = engine.kitting_cockpit(k)
         row = {r['component_design_item_id']: r for r in c['rows']}['R']
         self.assertEqual(row['ghost']['status'], 'available')
@@ -515,7 +515,7 @@ class PurchaseCockpitTests(EngineTestBase):
 
     def test_create_purchase_autocreates_procurement(self):
         p = engine.create_purchase(self.prj, self.user)
-        self.assertEqual(p.status, models.DocStatus.DRAFT)
+        self.assertFalse(p.locked)
         self.assertIsNotNone(p.procurement_id)          # авто-родитель
         self.assertEqual(p.project_id, self.prj.id)
 
@@ -556,18 +556,18 @@ class PurchaseCockpitTests(EngineTestBase):
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, item, D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))  # draft не в счёте
-        engine.post_purchase(p)
+        engine.lock_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(40))
 
     def test_post_rejects_empty(self):
         p = engine.create_purchase(self.prj, self.user)
         with self.assertRaises(ValidationError):
-            engine.post_purchase(p)
+            engine.lock_purchase(p)
 
     def test_lines_locked_after_post(self):
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, self.make_item('A'), D(10))
-        engine.post_purchase(p)
+        engine.lock_purchase(p)
         with self.assertRaises(ValidationError):
             engine.update_purchase_line(line, D(5))
         with self.assertRaises(ValidationError):
@@ -577,8 +577,8 @@ class PurchaseCockpitTests(EngineTestBase):
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, item, D(40))
-        engine.post_purchase(p)
-        engine.unpost_purchase(p)
+        engine.lock_purchase(p)
+        engine.unlock_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
         engine.update_purchase_line(line, D(30))       # снова можно
         self.assertEqual(line.qty, D(30))
@@ -589,11 +589,11 @@ class PurchaseCockpitTests(EngineTestBase):
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, item, D(40))
-        engine.post_purchase(p)
+        engine.lock_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(40))
         with self.assertRaises(ValidationError):        # утверждённый не удалить
             engine.delete_purchase(p)
-        engine.unpost_purchase(p)
+        engine.unlock_purchase(p)
         engine.delete_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
         self.assertFalse(models.Purchase.objects.filter(pk=p.pk).exists())
@@ -602,7 +602,7 @@ class PurchaseCockpitTests(EngineTestBase):
         item = self.make_item('SCR', kind='material')
         p = engine.create_purchase(self.prj, self.user)
         line = engine.add_purchase_line(p, item, D(40))
-        engine.post_purchase(p)
+        engine.lock_purchase(p)
         # приход 15, связанный с заказом → поступило 15, «заказано» 25
         self.receipt_lot(item, self.prj, 15, purchase=p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(25))
@@ -720,8 +720,8 @@ class TransferCockpitTests(EngineTestBase):
     def test_post_locks_edits(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         line = engine.add_transfer_line(t, self.lot, D(2))
-        engine.post_transfer(t)
-        self.assertTrue(engine.transfer_cockpit(t)['posted'])
+        engine.lock_transfer(t)
+        self.assertTrue(engine.transfer_cockpit(t)['locked'])
         with self.assertRaises(ValidationError):
             engine.update_transfer_line(line, qty=D(1))
         with self.assertRaises(ValidationError):
@@ -732,14 +732,14 @@ class TransferCockpitTests(EngineTestBase):
     def test_post_rejects_empty(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         with self.assertRaises(ValidationError):
-            engine.post_transfer(t)
+            engine.lock_transfer(t)
 
     def test_unpost_reenables_edits(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         line = engine.add_transfer_line(t, self.lot, D(2))
-        engine.post_transfer(t)
-        engine.unpost_transfer(t)
-        self.assertFalse(engine.transfer_cockpit(t)['posted'])
+        engine.lock_transfer(t)
+        engine.unlock_transfer(t)
+        self.assertFalse(engine.transfer_cockpit(t)['locked'])
         engine.update_transfer_line(line, qty=D(3))            # снова можно
         self.assertEqual(engine.lot_live_qty(self.lot), D(2))
 
@@ -751,7 +751,7 @@ class TransferCockpitTests(EngineTestBase):
         self.assertEqual(rows[0]['number'], 'Н-7')
         self.assertEqual(rows[0]['qty'], D(2))
         self.assertEqual(rows[0]['display_name'], 'Прибор №7')
-        self.assertFalse(rows[0]['posted'])
+        self.assertFalse(rows[0]['locked'])
 
 
 class WriteoffCockpitTests(EngineTestBase):
@@ -892,17 +892,18 @@ class ProjectClosureTests(EngineTestBase):
         self.assertEqual(c['residual_positive'], D(10))
         self.assertFalse(c['can_close'])
         with self.assertRaises(ValidationError):
-            engine.close_project(self.prj)
+            engine.lock_project(self.prj)
 
     def test_writeoff_bridge_then_close(self):
         engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
         c = engine.project_closure(self.prj)
         self.assertEqual(c['residuals'], [])
         self.assertTrue(c['can_close'])
-        engine.close_project(self.prj)
+        engine.lock_project(self.prj)
         self.prj.refresh_from_db()
-        self.assertEqual(self.prj.status, models.Project.Status.CLOSED)
-        self.assertIsNotNone(self.prj.closed_at)
+        self.assertTrue(self.prj.locked)
+        # Ф1c: дата `closed` информационная — фиксация её НЕ штампует.
+        self.assertIsNone(self.prj.closed)
 
     def test_requisition_bridge_moves_to_white(self):
         engine.requisition_lot(self.prj, self.lot, D(10), self.user)
@@ -928,15 +929,14 @@ class ProjectClosureTests(EngineTestBase):
         self.assertFalse(c['is_external'])
         self.assertFalse(c['can_close'])
         with self.assertRaises(ValidationError):
-            engine.close_project(white)
+            engine.lock_project(white)
 
-    def test_reopen_restores_active(self):
+    def test_unlock_restores_editable(self):
         engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
-        engine.close_project(self.prj)
-        engine.reopen_project(self.prj)
+        engine.lock_project(self.prj)
+        engine.unlock_project(self.prj)
         self.prj.refresh_from_db()
-        self.assertEqual(self.prj.status, models.Project.Status.ACTIVE)
-        self.assertIsNone(self.prj.closed_at)
+        self.assertFalse(self.prj.locked)
 
 
 class HeaderEditTests(EngineTestBase):
@@ -954,7 +954,7 @@ class HeaderEditTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.update_transfer(t, number='   ')          # пустой номер
         engine.add_transfer_line(t, lot, D(1))
-        engine.post_transfer(t)
+        engine.lock_transfer(t)
         with self.assertRaises(ValidationError):
             engine.update_transfer(t, number='Н-100')        # под замком нельзя
 
@@ -965,7 +965,7 @@ class HeaderEditTests(EngineTestBase):
         engine.update_receipt(r, number='U-2')
         r.refresh_from_db()
         self.assertEqual(r.number, 'U-2')
-        engine.approve_receipt(r)
+        engine.lock_receipt(r)
         with self.assertRaises(ValidationError):
             engine.update_receipt(r, number='U-3')
 
@@ -982,11 +982,11 @@ class HeaderEditTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
-            user=self.user, qty=D(1), status=models.DocStatus.DRAFT)
+            user=self.user, qty=D(1), locked=False)
         self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(2))
         engine.update_kitting(k, qty=D(3))
         self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(6))
-        engine.close_kitting(k)
+        engine.lock_kitting(k)
         with self.assertRaises(ValidationError):
             engine.update_kitting(k, qty=D(4))               # не wip — нельзя
 
@@ -1046,7 +1046,7 @@ class CommandDeficitTests(EngineTestBase):
         scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 2)
         closed = models.Project.objects.create(code='PC', name='Закрытый',
-            kind=models.Project.Kind.EXTERNAL, status=models.Project.Status.CLOSED)
+            kind=models.Project.Kind.EXTERNAL, locked=True)
         white = models.Project.objects.create(code='WHITE', name='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         models.ProjectDemand.objects.create(project=closed, target_item=dev, qty=D(3))
@@ -1090,7 +1090,7 @@ class ProcurementCockpitTests(EngineTestBase):
         self.assertEqual(len(c['lines']), 2)
         self.assertEqual(c['total_qty'], D(15))
         self.assertTrue(c['editable'])
-        self.assertEqual(c['status'], models.DocStatus.DRAFT)
+        self.assertFalse(c['locked'])
         self.assertEqual(c['note'], 'весна')
 
     def test_add_line_rejects_duplicate_and_nonpositive(self):
@@ -1114,10 +1114,10 @@ class ProcurementCockpitTests(EngineTestBase):
     def test_post_locks_and_rejects_empty(self):
         p = engine.create_procurement(self.user)
         with self.assertRaises(ValidationError):
-            engine.post_procurement(p)                 # пустую нельзя
+            engine.lock_procurement(p)                 # пустую нельзя
         line = engine.add_procurement_line(p, self.make_item('A'), D(10))
-        engine.post_procurement(p)
-        self.assertEqual(p.status, models.DocStatus.POSTED)
+        engine.lock_procurement(p)
+        self.assertTrue(p.locked)
         with self.assertRaises(ValidationError):
             engine.update_procurement_line(line, D(5))  # строки под замком
         with self.assertRaises(ValidationError):
@@ -1127,15 +1127,15 @@ class ProcurementCockpitTests(EngineTestBase):
         """Замок снимается и возвращается; отмены нет — только удаление (Р1)."""
         p = engine.create_procurement(self.user)
         line = engine.add_procurement_line(p, self.make_item('A'), D(10))
-        engine.post_procurement(p)
-        engine.unpost_procurement(p)
+        engine.lock_procurement(p)
+        engine.unlock_procurement(p)
         engine.update_procurement_line(line, D(30))    # снова можно
         self.assertEqual(line.qty, D(30))
-        engine.post_procurement(p)
+        engine.lock_procurement(p)
         with self.assertRaises(ValidationError):        # утверждённую не удалить
             engine.delete_procurement(p)
-        engine.unpost_procurement(p)
-        self.assertEqual(p.status, models.DocStatus.DRAFT)
+        engine.unlock_procurement(p)
+        self.assertFalse(p.locked)
         engine.delete_procurement(p)
         self.assertFalse(models.Procurement.objects.filter(pk=p.pk).exists())
 
@@ -1198,7 +1198,7 @@ class PeggingTests(EngineTestBase):
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
         pu = self.plan.purchases.get(project=self.prj)
         self.assertEqual(pu.procurement_id, self.plan.id)   # под планом, не solo-заглушка
-        self.assertEqual(pu.status, models.DocStatus.DRAFT)
+        self.assertFalse(pu.locked)
         self.assertEqual(pu.lines.get(item=self.scr).qty, D(40))
         # повторный пег — инкремент в тот же заказ
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
@@ -1231,7 +1231,7 @@ class PeggingTests(EngineTestBase):
         with self.assertRaises(ValidationError):            # не внешний проект
             engine.peg_procurement_line(self.plan, self.scr, white, D(1), self.user)
         closed = models.Project.objects.create(code='CL', name='Закрыт',
-            kind=models.Project.Kind.EXTERNAL, status=models.Project.Status.CLOSED)
+            kind=models.Project.Kind.EXTERNAL, locked=True)
         with self.assertRaises(ValidationError):            # не активный проект
             engine.peg_procurement_line(self.plan, self.scr, closed, D(1), self.user)
 
@@ -1242,7 +1242,7 @@ class PeggingTests(EngineTestBase):
         self.assertFalse(pu.lines.exists())                 # пег снят
         # пег в отправленном заказе — снять нельзя, пока не снят send
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
-        engine.post_purchase(pu)
+        engine.lock_purchase(pu)
         with self.assertRaises(ValidationError):
             engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
 
@@ -1302,14 +1302,14 @@ class ClosureHttpTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()['can_close'])
         # закрытие 200 + повторное закрытие → 400
-        c1 = self.c.post(f'/api/projects/{self.prj.id}/close/')
+        c1 = self.c.post(f'/api/projects/{self.prj.id}/lock/')
         self.assertEqual(c1.status_code, 200)
-        self.assertEqual(c1.json()['status'], 'closed')
-        c2 = self.c.post(f'/api/projects/{self.prj.id}/close/')
+        self.assertTrue(c1.json()['locked'])
+        c2 = self.c.post(f'/api/projects/{self.prj.id}/lock/')
         self.assertEqual(c2.status_code, 400)
         # переоткрытие
-        ro = self.c.post(f'/api/projects/{self.prj.id}/reopen/')
-        self.assertEqual(ro.json()['status'], 'active')
+        ro = self.c.post(f'/api/projects/{self.prj.id}/unlock/')
+        self.assertFalse(ro.json()['locked'])
 
     def test_requisition_flow(self):
         white = models.Project.objects.create(code='WHITE', name='Собственный склад',
@@ -1370,9 +1370,9 @@ class ProcurementHttpTests(TestCase):
             {'item_id': self.scr.id, 'qty': 1}, content_type='application/json')
         self.assertEqual(dup.status_code, 400)
         # утверждение → строки под замком
-        posted = self.c.post(f'/api/procurements/{pid}/post/')
+        posted = self.c.post(f'/api/procurements/{pid}/lock/')
         self.assertEqual(posted.status_code, 200)
-        self.assertEqual(posted.json()['status'], 'posted')
+        self.assertTrue(posted.json()['locked'])
         locked = self.c.post(f'/api/procurements/{pid}/lines/',
             {'item_id': self.dev.id, 'qty': 1}, content_type='application/json')
         self.assertEqual(locked.status_code, 400)
@@ -1473,10 +1473,10 @@ class ReferenceCreateTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.create_item('X3', 'Плохая', category_id=999999)    # неизвестная категория
 
-    def test_create_project_is_external_active(self):
+    def test_create_project_is_external_unlocked(self):
         p = engine.create_project('НИР-1', 'Тема', budget=D('100000'))
         self.assertEqual(p.kind, models.Project.Kind.EXTERNAL)
-        self.assertEqual(p.status, models.Project.Status.ACTIVE)
+        self.assertFalse(p.locked)
         self.assertEqual(p.budget, D('100000'))
 
     def test_create_project_rejects_dup_and_empty(self):
@@ -1519,7 +1519,7 @@ class ReferenceCreateHttpTests(TestCase):
         self.assertEqual(r.status_code, 201)
         body = r.json()
         self.assertEqual(body['kind'], 'external')
-        self.assertEqual(body['status'], 'active')
+        self.assertFalse(body['locked'])
         bad = self.c.post('/api/projects/', {'code': '', 'name': 'X'},
             content_type='application/json')
         self.assertEqual(bad.status_code, 400)
@@ -1699,14 +1699,14 @@ class OrderDeleteHttpTests(TestCase):
         self.c.post(f'/api/writeoffs/{wid}/lines/', {'lot_id': self.lot.id, 'qty': 4},
             content_type='application/json')
         # провести
-        posted = self.c.post(f'/api/writeoffs/{wid}/post/')
+        posted = self.c.post(f'/api/writeoffs/{wid}/lock/')
         self.assertEqual(posted.status_code, 200)
-        self.assertTrue(posted.json()['posted'])
+        self.assertTrue(posted.json()['locked'])
         # posted — удаление отклонено (сперва расфиксировать)
         blocked = self.c.delete(f'/api/writeoffs/{wid}/')
         self.assertEqual(blocked.status_code, 400)
         # расфиксировать → удалить
-        self.assertEqual(self.c.post(f'/api/writeoffs/{wid}/unpost/').status_code, 200)
+        self.assertEqual(self.c.post(f'/api/writeoffs/{wid}/unlock/').status_code, 200)
         gone = self.c.delete(f'/api/writeoffs/{wid}/')
         self.assertEqual(gone.status_code, 204)
         self.assertFalse(models.Writeoff.objects.filter(pk=wid).exists())
@@ -1817,10 +1817,10 @@ class ProjectBudgetTests(EngineTestBase):
 
         # собираем прибор
         k = models.Kitting.objects.create(project=self.prj, target_item=device,
-            user=self.user, qty=D(1), status=models.DocStatus.DRAFT)
+            user=self.user, qty=D(1), locked=False)
         engine.add_kitting_line(k, case, case_lot, D(1))
         engine.add_kitting_line(k, res, res_lot, D(2))
-        engine.close_kitting(k)
+        engine.lock_kitting(k)
 
         b = engine.project_budget(self.prj)
         self.assertEqual(b['spent'], D(800))    # только CASE
@@ -2204,7 +2204,7 @@ class ProjectDemandEditTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True, kind='device')
         closed = models.Project.objects.create(
             code='PC', name='Закрытый', kind=models.Project.Kind.EXTERNAL,
-            status=models.Project.Status.CLOSED)
+            locked=True)
         with self.assertRaises(ValidationError):
             engine.add_project_demand(closed, dev, D(1))
         internal = models.Project.objects.create(
@@ -2277,11 +2277,11 @@ class ItemProjectUpdateTests(EngineTestBase):
 
     def test_update_project_fields_and_clear_budget(self):
         engine.update_project(self.prj, {'name': 'Переименован',
-                                         'budget': D('1000'), 'started_at': '2026-01-15'})
+                                         'budget': D('1000'), 'started': '2026-01-15'})
         self.prj.refresh_from_db()
         self.assertEqual(self.prj.name, 'Переименован')
         self.assertEqual(self.prj.budget, D('1000'))
-        self.assertEqual(str(self.prj.started_at), '2026-01-15')
+        self.assertEqual(str(self.prj.started), '2026-01-15')
         engine.update_project(self.prj, {'budget': None})
         self.prj.refresh_from_db()
         self.assertIsNone(self.prj.budget)
@@ -2334,11 +2334,11 @@ class ItemProjectUpdateTests(EngineTestBase):
         self.assertEqual(it.estimated_cost, D('9.9'))
 
 
-class UnifiedDocStatusTests(EngineTestBase):
-    """Волна 13 Ф1: единый мягкий замок `status {draft⇄posted}` на всех складских
+class UnifiedLockTests(EngineTestBase):
+    """Волна 13 Ф1: единый мягкий замок `locked` на всех складских
     документах (свернул `Receipt.approved`/`Transfer.posted`/`Kitting.wip-closed`)."""
 
-    def test_all_docs_default_to_draft(self):
+    def test_all_docs_default_to_unlocked(self):
         """Плоское создание любого ордера рождает черновик (единый дефолт)."""
         r = models.Receipt.objects.create(
             number='У-1', date='2026-05-01', contractor=self.supplier,
@@ -2355,8 +2355,8 @@ class UnifiedDocStatusTests(EngineTestBase):
         w = models.Writeoff.objects.create(
             project=self.prj, user=self.user, number='С-1', date='2026-05-01')
         for doc in (r, k, inv, req, t, w):
-            self.assertEqual(doc.status, models.DocStatus.DRAFT)
-            self.assertFalse(doc.is_posted)
+            self.assertFalse(doc.locked)
+            self.assertFalse(doc.locked)
 
     def test_single_guard_freezes_edits_across_doc_types(self):
         """Один `_require_draft` гейтит правку прихода / передачи / комплектации."""
@@ -2365,8 +2365,8 @@ class UnifiedDocStatusTests(EngineTestBase):
             number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        engine.approve_receipt(r)
-        self.assertTrue(r.is_posted)
+        engine.lock_receipt(r)
+        self.assertTrue(r.locked)
         with self.assertRaises(ValidationError):
             engine.add_receipt_lot(r, self.make_item('B'), D(1))
         # передача
@@ -2374,20 +2374,20 @@ class UnifiedDocStatusTests(EngineTestBase):
         dlot = self.receipt_lot(dev, self.prj, 5)
         t = engine.create_transfer(self.prj, self.user, 'Н-2')
         engine.add_transfer_line(t, dlot, D(1))
-        engine.post_transfer(t)
+        engine.lock_transfer(t)
         t.refresh_from_db()
-        self.assertTrue(t.is_posted)
+        self.assertTrue(t.locked)
         with self.assertRaises(ValidationError):
             engine.add_transfer_line(t, dlot, D(1))
 
-    def test_kitting_status_projection_is_backward_compatible(self):
+    def test_kitting_lock_projection(self):
         """До фронт-среза (Ф1b) кокпит отдаёт исторические `wip`/`closed`."""
         k = models.Kitting.objects.create(
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
             user=self.user, qty=D(1))
-        self.assertEqual(engine.kitting_cockpit(k)['status'], 'wip')   # draft
-        engine.close_kitting(k)
-        self.assertEqual(engine.kitting_cockpit(k)['status'], 'closed')  # posted
+        self.assertFalse(engine.kitting_cockpit(k)['locked'])
+        engine.lock_kitting(k)
+        self.assertTrue(engine.kitting_cockpit(k)['locked'])
 
 
 class Wave13Fase1bTests(EngineTestBase):
@@ -2406,40 +2406,40 @@ class Wave13Fase1bTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'С-1')
         engine.add_writeoff_line(w, lot, D(3))
-        engine.post_writeoff(w); w.refresh_from_db()
-        self.assertTrue(w.is_posted)
-        self.assertTrue(engine.writeoff_cockpit(w)['posted'])
-        engine.unpost_writeoff(w); w.refresh_from_db()
-        self.assertFalse(w.is_posted)
+        engine.lock_writeoff(w); w.refresh_from_db()
+        self.assertTrue(w.locked)
+        self.assertTrue(engine.writeoff_cockpit(w)['locked'])
+        engine.unlock_writeoff(w); w.refresh_from_db()
+        self.assertFalse(w.locked)
         # инвентаризация
         inv = engine.create_inventory(self.prj, self.user, 'И-1')
         engine.add_inventory_lot(inv, self.make_item('B'), D(4))
-        engine.post_inventory(inv); inv.refresh_from_db()
-        self.assertTrue(inv.is_posted)
-        self.assertTrue(engine.inventory_cockpit(inv)['posted'])
-        engine.unpost_inventory(inv); inv.refresh_from_db()
-        self.assertFalse(inv.is_posted)
+        engine.lock_inventory(inv); inv.refresh_from_db()
+        self.assertTrue(inv.locked)
+        self.assertTrue(engine.inventory_cockpit(inv)['locked'])
+        engine.unlock_inventory(inv); inv.refresh_from_db()
+        self.assertFalse(inv.locked)
         # требование
         src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
         req = engine.create_requisition(self.prj, self.user, 'Т-1')
         engine.add_requisition_line(req, src, D(2))
-        engine.post_requisition(req); req.refresh_from_db()
-        self.assertTrue(req.is_posted)
-        self.assertTrue(engine.requisition_cockpit(req)['posted'])
-        engine.unpost_requisition(req); req.refresh_from_db()
-        self.assertFalse(req.is_posted)
+        engine.lock_requisition(req); req.refresh_from_db()
+        self.assertTrue(req.locked)
+        self.assertTrue(engine.requisition_cockpit(req)['locked'])
+        engine.unlock_requisition(req); req.refresh_from_db()
+        self.assertFalse(req.locked)
 
     def test_post_empty_doc_refused(self):
         """Пустой ордер нельзя провести (как приход/передача)."""
         w = engine.create_writeoff(self.prj, self.user, 'С-2')
         with self.assertRaises(ValidationError):
-            engine.post_writeoff(w)
+            engine.lock_writeoff(w)
         inv = engine.create_inventory(self.prj, self.user, 'И-2')
         with self.assertRaises(ValidationError):
-            engine.post_inventory(inv)
+            engine.lock_inventory(inv)
         req = engine.create_requisition(self.prj, self.user, 'Т-2')
         with self.assertRaises(ValidationError):
-            engine.post_requisition(req)
+            engine.lock_requisition(req)
 
     # ── edit-freeze: проведённый документ read-only ──
     def test_edit_freeze_blocks_edits_on_posted_three_docs(self):
@@ -2448,7 +2448,7 @@ class Wave13Fase1bTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'С-3')
         line = engine.add_writeoff_line(w, lot, D(3))
-        engine.post_writeoff(w)
+        engine.lock_writeoff(w)
         with self.assertRaises(ValidationError):
             engine.update_writeoff(w, number='С-3x')
         with self.assertRaises(ValidationError):
@@ -2460,7 +2460,7 @@ class Wave13Fase1bTests(EngineTestBase):
         # инвентаризация
         inv = engine.create_inventory(self.prj, self.user, 'И-3')
         ilot = engine.add_inventory_lot(inv, self.make_item('B'), D(4))
-        engine.post_inventory(inv)
+        engine.lock_inventory(inv)
         with self.assertRaises(ValidationError):
             engine.update_inventory(inv, number='И-3x')
         with self.assertRaises(ValidationError):
@@ -2473,7 +2473,7 @@ class Wave13Fase1bTests(EngineTestBase):
         src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
         req = engine.create_requisition(self.prj, self.user, 'Т-3')
         rline = engine.add_requisition_line(req, src, D(2))
-        engine.post_requisition(req)
+        engine.lock_requisition(req)
         with self.assertRaises(ValidationError):
             engine.update_requisition(req, number='Т-3x')
         with self.assertRaises(ValidationError):
@@ -2497,10 +2497,10 @@ class Wave13Fase1bTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'С-5')
         engine.add_writeoff_line(w, lot, D(4))
-        engine.post_writeoff(w)
+        engine.lock_writeoff(w)
         with self.assertRaises(ValidationError):
             engine.delete_stock_document(w)
-        engine.unpost_writeoff(w)
+        engine.unlock_writeoff(w)
         engine.delete_stock_document(w)
         self.assertFalse(models.Writeoff.objects.filter(pk=w.pk).exists())
 
@@ -2812,24 +2812,24 @@ class Wave13Fase2dTests(EngineTestBase):
                                             number='', date='2026-05-01', reason='порча')
         engine.add_writeoff_line(w, lot, D(5))
         with self.assertRaises(ValidationError):
-            engine.post_writeoff(w)
+            engine.lock_writeoff(w)
         w.number = 'С-1'
         w.save(update_fields=['number'])
-        engine.post_writeoff(w)
-        self.assertTrue(w.is_posted)
+        engine.lock_writeoff(w)
+        self.assertTrue(w.locked)
 
     def test_approve_receipt_gated_on_missing_date(self):
-        """approve_receipt гейтит отсутствующую дату (прямой ORM-обход дефолта create)."""
+        """lock_receipt гейтит отсутствующую дату (прямой ORM-обход дефолта create)."""
         r = models.Receipt.objects.create(project=self.prj, user=self.user,
                                            contractor=self.supplier, number='У-9', date=None)
         models.Lot.objects.create(item=self.make_item('B'), project=self.prj,
                                   origin=r, qty=D(3))
         with self.assertRaises(ValidationError):
-            engine.approve_receipt(r)
+            engine.lock_receipt(r)
         r.date = '2026-05-01'
         r.save(update_fields=['date'])
-        engine.approve_receipt(r)
-        self.assertTrue(r.is_posted)
+        engine.lock_receipt(r)
+        self.assertTrue(r.locked)
 
 
 class Wave13Fase2eTests(EngineTestBase):
@@ -2951,7 +2951,7 @@ class Wave13Fase2eTests(EngineTestBase):
         empty = engine.create_relocation(self.prj, self.user, number='ПЕР-3',
                                          date='2026-06-05')
         with self.assertRaises(ValidationError):
-            engine.post_relocation(empty)
+            engine.lock_relocation(empty)
         # шапка обязательна на проведении (relocation стал строгим, Ф2e); прямой ORM
         # обходит create-guard пустым номером
         r = models.Relocation.objects.create(project=self.prj, user=self.user,
@@ -2959,11 +2959,11 @@ class Wave13Fase2eTests(EngineTestBase):
         engine.add_relocation_line(r, self.lot, D(2),
                                    from_location=self.main, to_location=self.sold)
         with self.assertRaises(ValidationError):
-            engine.post_relocation(r)
+            engine.lock_relocation(r)
         r.number = 'ПЕР-4'
         r.save(update_fields=['number'])
-        engine.post_relocation(r)
-        self.assertTrue(r.is_posted)
+        engine.lock_relocation(r)
+        self.assertTrue(r.locked)
         # под замком правка запрещена
         with self.assertRaises(ValidationError):
             engine.add_relocation_line(r, self.lot, D(1),
@@ -3006,7 +3006,7 @@ class Wave13Fase2fTests(EngineTestBase):
         return models.Receipt.objects.create(
             number='UPD-2f', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user,
-            status=models.DocStatus.POSTED if approved else models.DocStatus.DRAFT)
+            locked=approved)
 
     def test_born_lot_carries_both_identifiers(self):
         lot = engine.add_receipt_lot(self.receipt, self.item, D(5),
@@ -3232,7 +3232,7 @@ class Wave13Fase2jTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('Rj'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'СП-j', date='2026-05-01')
         engine.add_writeoff_line(w, lot, D(2))
-        engine.post_writeoff(w)
+        engine.lock_writeoff(w)
         with self.assertRaises(ValidationError):
             engine.update_writeoff(w, user=self.author2)
         w.refresh_from_db()
@@ -3322,7 +3322,7 @@ class Wave13Fase2kTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('Rk4'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'СП-k4', date='2026-05-01')
         engine.add_writeoff_line(w, lot, D(2))
-        engine.post_writeoff(w)
+        engine.lock_writeoff(w)
         with self.assertRaises(ValidationError):
             engine.update_writeoff(w, project=self.prj2)
 
@@ -3500,9 +3500,9 @@ class Wave13Fase3HttpTests(EngineTestBase):
                      'from_location_id': self.main.id,
                      'to_location_id': self.sold.id},
                     content_type='application/json')
-        posted = self.c.post(f'/api/relocations/{rid}/post/')
+        posted = self.c.post(f'/api/relocations/{rid}/lock/')
         self.assertEqual(posted.status_code, 200)
-        self.assertTrue(posted.json()['posted'])
+        self.assertTrue(posted.json()['locked'])
         # posted — удаление отклонено (сперва расфиксировать)
         self.assertEqual(self.c.delete(f'/api/relocations/{rid}/').status_code, 400)
         # добавление хода под замком отклонено
@@ -3513,7 +3513,7 @@ class Wave13Fase3HttpTests(EngineTestBase):
                               content_type='application/json')
         self.assertEqual(blocked.status_code, 400)
         # расфиксировать → удалить; тотал лота цел
-        self.assertEqual(self.c.post(f'/api/relocations/{rid}/unpost/').status_code, 200)
+        self.assertEqual(self.c.post(f'/api/relocations/{rid}/unlock/').status_code, 200)
         self.assertEqual(self.c.delete(f'/api/relocations/{rid}/').status_code, 204)
         self.assertFalse(models.Relocation.objects.filter(pk=rid).exists())
         self.assertEqual(engine.lot_live_qty(self.lot), D(12))
@@ -3521,7 +3521,7 @@ class Wave13Fase3HttpTests(EngineTestBase):
 
     def test_empty_relocation_cannot_be_posted(self):
         rid = self._create()
-        resp = self.c.post(f'/api/relocations/{rid}/post/')
+        resp = self.c.post(f'/api/relocations/{rid}/lock/')
         self.assertEqual(resp.status_code, 400)
 
     def test_patch_header_number_and_project_anchor(self):
@@ -3669,7 +3669,7 @@ class EntityDeleteTests(EngineTestBase):
     def test_delete_purchase_blocked_when_sent(self):
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, self.make_item('A'), D(4))
-        engine.post_purchase(p)
+        engine.lock_purchase(p)
         with self.assertRaises(ValidationError):
             engine.delete_purchase(p)                # отправлен — сперва в черновик
 
@@ -3876,7 +3876,7 @@ class LibraryDiffTests(TestCase):
     def test_new_changed_same(self):
         self._item('CAP-1', 'capacitors', desc='старое', temp='-40-85°C')
         c2 = self._item('CAP-2', 'capacitors', desc='совпадает', temp='-55-125°C')
-        c2.status = models.Item.Status.POSTED; c2.save()   # совпадает И posted → same
+        c2.locked = True; c2.save()          # совпадает И зафиксировано → same
         files = [('capacitors.csv', _lib_csv([
             ('CAP-1', 'новое', '-40-85°C'),     # description изменился
             ('CAP-2', 'совпадает', '-55-125°C'), # без изменений
@@ -3893,7 +3893,7 @@ class LibraryDiffTests(TestCase):
         self._item('CAP-9', 'capacitors', desc='совп', temp='')   # draft по умолчанию
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-9', 'совп', '')]))]))
         self.assertEqual(rows['CAP-9']['status'], 'refix')
-        self.assertEqual(rows['CAP-9']['current']['status'], 'draft')
+        self.assertFalse(rows['CAP-9']['current']['locked'])
 
     def test_gone_when_unused(self):
         self._item('CAP-OLD', 'capacitors')      # в БД, не в загрузке, не используется
@@ -3966,14 +3966,14 @@ class LibraryApplyTests(TestCase):
         self.assertTrue(models.Item.objects.filter(design_item_id='S-OLD').exists())
 
     def test_apply_refix_posts_matching_draft(self):
-        # Волна 17: совпадающее по содержимому draft-изделие → refix → post_item.
+        # Волна 17: совпадающее по содержимому draft-изделие → refix → lock_item.
         it = self._item('S-1', 'sensors', desc='датчик', temp='')   # draft, совпадает
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])
         self.assertEqual(summary['fixed'], 1)
         self.assertEqual(summary['updated'], 0)   # содержимое не трогали
         it.refresh_from_db()
-        self.assertTrue(it.is_posted)
+        self.assertTrue(it.locked)
 
     def test_apply_refix_only_confirmed(self):
         # Не подтверждённый refix — не фиксируется.
@@ -3982,7 +3982,7 @@ class LibraryApplyTests(TestCase):
         summary = engine.apply_library_diff(parsed, [])   # ничего не подтверждаем
         self.assertEqual(summary['fixed'], 0)
         it.refresh_from_db()
-        self.assertFalse(it.is_posted)
+        self.assertFalse(it.locked)
 
     def test_orphan_not_deleted_even_if_confirmed(self):
         used = self._item('S-USED', 'sensors')
@@ -3998,36 +3998,34 @@ class ItemStatusTests(EngineTestBase):
     """Волна 17, фаза 1: статус изделия `draft ⇄ posted` (фиксация), гейт мутаций,
     синк библиотеки → posted, проброс статуса в сериализацию."""
 
-    POSTED = models.Item.Status.POSTED
-    DRAFT = models.Item.Status.DRAFT
 
     def test_manual_item_defaults_draft(self):
         i = engine.create_item('R100', 'Резистор', category_id=_cat().id)
-        self.assertEqual(i.status, self.DRAFT)
-        self.assertFalse(i.is_posted)
+        self.assertFalse(i.locked)
+        self.assertFalse(i.locked)
 
     def test_post_unpost_idempotent(self):
         i = self.make_item('R')
-        engine.post_item(i)
+        engine.lock_item(i)
         i.refresh_from_db()
-        self.assertTrue(i.is_posted)
-        engine.post_item(i)                       # повторно — без падения
+        self.assertTrue(i.locked)
+        engine.lock_item(i)                       # повторно — без падения
         i.refresh_from_db()
-        self.assertEqual(i.status, self.POSTED)
-        engine.unpost_item(i)
+        self.assertTrue(i.locked)
+        engine.unlock_item(i)
         i.refresh_from_db()
-        self.assertEqual(i.status, self.DRAFT)
-        engine.unpost_item(i)                     # повторно — без падения
+        self.assertFalse(i.locked)
+        engine.unlock_item(i)                     # повторно — без падения
         i.refresh_from_db()
-        self.assertEqual(i.status, self.DRAFT)
+        self.assertFalse(i.locked)
 
     def test_gate_blocks_property_edit_when_posted(self):
         i = self.make_item('R')
-        engine.post_item(i)
+        engine.lock_item(i)
         with self.assertRaises(ValidationError):
             engine.update_item(i, {'description': 'нельзя'})
         # расфиксировали — правка снова проходит
-        engine.unpost_item(i)
+        engine.unlock_item(i)
         engine.update_item(i, {'description': 'можно'})
         i.refresh_from_db()
         self.assertEqual(i.description, 'можно')
@@ -4036,7 +4034,7 @@ class ItemStatusTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         comp = self.make_item('R')
         line = engine.add_bom_line(dev, comp, D(2))
-        engine.post_item(dev)
+        engine.lock_item(dev)
         with self.assertRaises(ValidationError):
             engine.add_bom_line(dev, self.make_item('C'), D(1))
         with self.assertRaises(ValidationError):
@@ -4048,35 +4046,35 @@ class ItemStatusTests(EngineTestBase):
 
     def test_gate_blocks_delete_when_posted(self):
         i = self.make_item('R')
-        engine.post_item(i)
+        engine.lock_item(i)
         with self.assertRaises(ValidationError):
             engine.delete_item(i)
         self.assertTrue(models.Item.objects.filter(pk=i.pk).exists())
-        engine.unpost_item(i)
+        engine.unlock_item(i)
         engine.delete_item(i)
         self.assertFalse(models.Item.objects.filter(pk=i.pk).exists())
 
-    def test_library_new_is_posted(self):
+    def test_library_new_is_locked(self):
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'Датчик', '')]))])
         engine.apply_library_diff(parsed, ['S-1'])
         item = models.Item.objects.get(design_item_id='S-1')
-        self.assertEqual(item.status, self.POSTED)
+        self.assertTrue(item.locked)
 
-    def test_library_changed_forces_posted(self):
+    def test_library_changed_forces_lock(self):
         # заведено руками как draft, затем совпало с библиотекой → синк фиксирует
         models.Item.objects.create(design_item_id='S-1', description='старое',
                                    category=engine.ensure_category('sensors'))
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
         engine.apply_library_diff(parsed, ['S-1'])
         item = models.Item.objects.get(design_item_id='S-1')
-        self.assertEqual(item.status, self.POSTED)
+        self.assertTrue(item.locked)
         self.assertEqual(item.description, 'новое')
 
-    def test_library_deletes_gone_posted(self):
+    def test_library_deletes_gone_locked(self):
         # ушедшее из библиотеки изделие — posted; синк расфиксирует и удалит (гейт не мешает)
         gone = models.Item.objects.create(design_item_id='S-OLD', description='ушло',
                                           category=engine.ensure_category('sensors'),
-                                          status=self.POSTED)
+                                          locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-OLD'])
         self.assertEqual(summary['deleted'], 1)
@@ -4084,26 +4082,26 @@ class ItemStatusTests(EngineTestBase):
 
     def test_status_in_item_serialization(self):
         i = self.make_item('R')
-        engine.post_item(i)
+        engine.lock_item(i)
         i.refresh_from_db()
-        self.assertEqual(views._item_row(i)['status'], self.POSTED)
-        self.assertEqual(views._item_detail_payload(i)['status'], self.POSTED)
+        self.assertTrue(views._item_row(i)['locked'])
+        self.assertTrue(views._item_detail_payload(i)['locked'])
 
     def test_component_status_in_bom_and_demand(self):
         dev = self.make_item('DEV', manufactured=True)
         comp = self.make_item('R')                # покупной лист
-        engine.post_item(comp)
+        engine.lock_item(comp)
         engine.add_bom_line(dev, comp, D(2))
         # BOM в форме изделия несёт статус компонента
         bom = views._item_detail_payload(dev)['bom']
-        self.assertEqual(bom[0]['component_status'], self.POSTED)
+        self.assertTrue(bom[0]['component_locked'])
         # Потребность проекта: свод по листьям + дерево несут статус компонента
         engine.add_project_demand(self.prj, dev, D(1))
         deficit = engine.project_deficit(self.prj)
         leaf = next(c for c in deficit['components'] if c['component_id'] == comp.id)
-        self.assertEqual(leaf['component_status'], self.POSTED)
+        self.assertTrue(leaf['component_locked'])
         tree_leaf = next(n for n in deficit['demands'][0]['tree'] if n['component_id'] == comp.id)
-        self.assertEqual(tree_leaf['component_status'], self.POSTED)
+        self.assertTrue(tree_leaf['component_locked'])
 
     def test_http_post_unpost_endpoints(self):
         get_user_model().objects.filter(username='t').update(
@@ -4111,14 +4109,14 @@ class ItemStatusTests(EngineTestBase):
         c = Client()
         c.force_login(self.user)
         i = self.make_item('R')
-        r = c.post(f'/api/items/{i.id}/post/')
+        r = c.post(f'/api/items/{i.id}/lock/')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()['status'], self.POSTED)
+        self.assertTrue(r.json()['locked'])
         i.refresh_from_db()
-        self.assertTrue(i.is_posted)
-        r = c.post(f'/api/items/{i.id}/unpost/')
+        self.assertTrue(i.locked)
+        r = c.post(f'/api/items/{i.id}/unlock/')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()['status'], self.DRAFT)
+        self.assertFalse(r.json()['locked'])
 
 
 class RollupCostTests(TestCase):

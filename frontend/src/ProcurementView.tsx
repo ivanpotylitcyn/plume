@@ -1,6 +1,6 @@
 // Витрина волны 7: кокпит закупки-плана (Procurement) — записываемое ядро.
 // Самостоятельный план без проекта (маркер командной высоты). Строки (item + qty,
-// автосейв в черновике). Мягкий замок = утверждение (draft→posted): строки read-only.
+// автосейв, пока расфиксирована). Замок делает строки read-only.
 // Кнопка выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 import { useEffect, useState } from 'react'
@@ -10,10 +10,11 @@ import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { PeggingPanel } from './PeggingPanel'
 import { num } from './status'
 
-// Ось та же (`DocStatus`), подпись — своя, женского рода (волна 19, Ф1).
-const PROC_ST: Record<string, { label: string; cls: string; g: string }> = {
-  draft: { label: 'черновик', cls: 'g-to_order', g: '▲' },
-  posted: { label: 'утверждена', cls: 'g-on_order', g: '●' },
+// Ось та же (`locked`), подпись — своя, женского рода (волна 19, Ф1c).
+function procurementLock(locked: boolean) {
+  return locked
+    ? { label: 'зафиксирована', cls: 'g-on_order', g: '●' }
+    : { label: 'расфиксирована', cls: 'g-to_order', g: '▲' }
 }
 
 export function ProcurementView({ procurementId, items, openItem, openPurchase, onChanged, onDeleted }: {
@@ -39,7 +40,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
       .finally(() => setBusy(false))
   }
 
-  // Удаление закупки-плана (WAVE14 Ф2) под замком: только черновик (posted → fix-chip);
+  // Удаление закупки-плана (WAVE14 Ф2) под замком: только расфиксированную (иначе fix-chip);
   // friendly-guard бэка держит привязанные заказы.
   const del = () => {
     if (!c || !confirm('Удалить закупку-план? Строки будут сняты. Действие необратимо.')) return
@@ -52,9 +53,9 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const st = PROC_ST[c.status] ?? PROC_ST.draft
+  const st = procurementLock(c.locked)
   const editable = c.editable
-  const fixed = !editable                  // отправлен/отменён — read-only (фиксация)
+  const fixed = !editable                  // зафиксирована — read-only
   return (
     <div className={unlocked && editable ? '' : 'form-locked'}>
       <FormHeader
@@ -68,7 +69,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
         onDelete={unlocked ? del : undefined}
         fixed={fixed} fixedLabel={st.label}
         onUnfix={() => {
-          if (confirm('Вернуть закупку в черновик?')) run(api.unpostProcurement(c.id))
+          if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
         }}
         error={err}
       />
@@ -86,10 +87,10 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
 
       <div className="kit-actions">
         {/* Отмены нет (волна 19, Р1): ненужный план удаляется из шапки под замком. */}
-        {c.status === 'draft' &&
+        {!c.locked &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postProcurement(c.id))}>Утвердить · зафиксировать</button>}
+            onClick={() => run(api.lockProcurement(c.id))}>Зафиксировать</button>}
         <a className="btn" href={api.orderXlsxUrl(c.id)} download
           title="выгрузить order.xlsx для поставщика">Скачать order.xlsx</a>
         {err && <span className="anomaly">{err}</span>}
@@ -119,7 +120,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
   )
 }
 
-// Строка плана: изделие + кол-во (автосейв в черновике).
+// Строка плана: изделие + кол-во (автосейв, пока расфиксировано).
 function LineRow({ ln, editable, busy, openItem, run }: {
   ln: ProcurementCockpitLine; editable: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<ProcurementCockpit>) => void
@@ -146,7 +147,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
   )
 }
 
-// Призрачная строка: добавить позицию в план (только в черновике).
+// Призрачная строка: добавить позицию в план (только пока расфиксировано).
 function GhostRow({ procurementId, items, busy, run }: {
   procurementId: number; items: ItemRow[]; busy: boolean
   run: (p: Promise<ProcurementCockpit>) => void

@@ -32,7 +32,7 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const fixed = c.posted                   // отгружено (проведена) — read-only
+  const fixed = c.locked                   // отгружено (проведена) — read-only
   const locked = fixed || !unlocked
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -45,7 +45,7 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="отгружена"
-        onUnfix={() => { if (confirm('Снять фиксацию передачи? Отгрузка откатится, форма станет черновиком.')) run(api.unpostTransfer(c.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать передачу? Отгрузка откатится.')) run(api.unlockTransfer(c.id)) }}
         onDelete={del}
         error={err}
       />
@@ -78,7 +78,7 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
         {!fixed &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postTransfer(c.id))}>Отгружено · зафиксировать</button>}
+            onClick={() => run(api.lockTransfer(c.id))}>Отгружено · зафиксировать</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

@@ -5,7 +5,7 @@
 // Пег рождает проектный Purchase под этим планом-родителем (ломает 1:1-заглушку).
 import { useEffect, useState } from 'react'
 import { api, type Pegging, type PeggingRow, type PeggingProject } from './api'
-import { PURCH_ST } from './PurchaseView'
+import { purchaseLock } from './PurchaseView'
 import { Glyph, num } from './status'
 
 export function PeggingPanel({ procurementId, rev, openPurchase }: {
@@ -67,7 +67,7 @@ export function PeggingPanel({ procurementId, rev, openPurchase }: {
             <th style={{ textAlign: 'right' }}>всего</th></tr></thead>
           <tbody>
             {p.fan.map(f => {
-              const st = PURCH_ST[f.status] ?? PURCH_ST.draft
+              const st = purchaseLock(f.locked)
               return (
                 <tr key={f.purchase_id} className="row s-available">
                   <td>

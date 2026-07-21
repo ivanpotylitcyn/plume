@@ -29,7 +29,7 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const fixed = c.posted                   // проведено — read-only (единый мягкий замок)
+  const fixed = c.locked                   // проведено — read-only (единый мягкий замок)
   const locked = fixed || !unlocked
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -42,7 +42,7 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="проведено"
-        onUnfix={() => { if (confirm('Снять фиксацию списания? Форма станет черновиком.')) run(api.unpostWriteoff(c.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать списания?')) run(api.unlockWriteoff(c.id)) }}
         onDelete={del}
         error={err}
       />
@@ -69,7 +69,7 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
         <div className="kit-actions">
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postWriteoff(c.id))}>Провести · зафиксировать</button>
+            onClick={() => run(api.lockWriteoff(c.id))}>Зафиксировать</button>
           {err && <span className="anomaly">{err}</span>}
         </div>}
 

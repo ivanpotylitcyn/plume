@@ -1,5 +1,5 @@
 // Витрина волны 4: кокпит заказа (Purchase) — записываемое ядро.
-// Строки-обязательства: заказано (автосейв в черновике), поступило по связанным
+// Строки-обязательства: заказано (автосейв, пока расфиксировано), поступило по связанным
 // приходам (Receipt.purchase), остаток. Закрытость строки красится тем же словарём
 // ✓/●/▲. Мягкий замок = утверждение (draft→posted): строки read-only, заказ считается
 // в члене «заказано» дашборда дефицита. Отмены нет — отмена = удаление (волна 19, Р1).
@@ -10,11 +10,13 @@ import { CommitInput } from './ReceiptView'
 import { AnchorSelect, AuthorField, FormHeader, ProjectField, useFormLock } from './FormHeader'
 import { Glyph, num } from './status'
 
-// Статус заказа → значок/цвет: draft ▲ (твой ход), posted ● (ждём поставку).
-// Подпись — по сущности («утверждён»), ось общая `DocStatus` (волна 19, Ф1).
-export const PURCH_ST: Record<string, { label: string; cls: string; g: string }> = {
-  draft: { label: 'черновик', cls: 'g-to_order', g: '▲' },
-  posted: { label: 'утверждён', cls: 'g-on_order', g: '●' },
+// Замок заказа → значок/цвет: расфиксирован ▲ (твой ход), зафиксирован ● (ждём
+// поставку). Ось — общая `locked` (волна 19, Ф1c); подпись живёт здесь, во вью,
+// поэтому смена слова больше не стоит миграции. Ф1b заменит это общим StatusGlyph.
+export function purchaseLock(locked: boolean) {
+  return locked
+    ? { label: 'зафиксирован', cls: 'g-on_order', g: '●' }
+    : { label: 'расфиксирован', cls: 'g-to_order', g: '▲' }
 }
 
 export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChanged, onDeleted }: {
@@ -54,9 +56,9 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const st = PURCH_ST[c.status] ?? PURCH_ST.draft
+  const st = purchaseLock(c.locked)
   const editable = c.editable
-  const fixed = !editable                  // отправлен/отменён — read-only (фиксация)
+  const fixed = !editable                  // зафиксирован — read-only
   return (
     <div className={unlocked && editable ? '' : 'form-locked'}>
       <FormHeader
@@ -69,7 +71,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
         onDelete={unlocked ? del : undefined}
         fixed={fixed} fixedLabel={st.label}
         onUnfix={() => {
-          if (confirm('Вернуть заказ в черновик?')) run(api.unpostPurchase(c.id))
+          if (confirm('Расфиксировать заказ?')) run(api.unlockPurchase(c.id))
         }}
         error={err}
       />
@@ -86,7 +88,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={!editable || busy}
           onChange={id => run(api.updatePurchase(c.id, { project_id: id }))} />
         <AnchorSelect label="Закупка" id={c.procurement_id} currentLabel={`#${c.procurement_id}`}
-          options={procs.map(p => ({ id: p.id, label: `Закупка #${p.id} · ${p.status}` }))}
+          options={procs.map(p => ({ id: p.id, label: `Закупка #${p.id}${p.locked ? ' · зафиксирована' : ''}` }))}
           disabled={!editable || busy}
           onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))} />
       </dl>
@@ -94,10 +96,10 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
       <div className="kit-actions">
         {/* Отмены нет (волна 19, Р1): ненужный заказ удаляется — кнопка удаления
             живёт в шапке под замком, чтобы «отменить» и «удалить» не двоились. */}
-        {c.status === 'draft' &&
+        {!c.locked &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postPurchase(c.id))}>Утвердить · зафиксировать</button>}
+            onClick={() => run(api.lockPurchase(c.id))}>Зафиксировать</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 
@@ -141,7 +143,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
   )
 }
 
-// Строка заказа: заказано (автосейв в черновике) + поступило/остаток + закрытость.
+// Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
 function LineRow({ ln, editable, busy, openItem, run }: {
   ln: PurchaseCockpitLine; editable: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<PurchaseCockpit>) => void
@@ -172,7 +174,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
   )
 }
 
-// Призрачная строка: добавить позицию в заказ (только в черновике).
+// Призрачная строка: добавить позицию в заказ (только пока расфиксировано).
 function GhostRow({ purchaseId, items, busy, run }: {
   purchaseId: number; items: ItemRow[]; busy: boolean
   run: (p: Promise<PurchaseCockpit>) => void

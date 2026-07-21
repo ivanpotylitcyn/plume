@@ -1,9 +1,10 @@
 // API-клиент витрин волны 1. Все эндпоинты — read-only проекции движка.
 export type Status = 'available' | 'on_order' | 'to_order'
 
-// Статус-замок изделия (волна 17): фиксация как у StockDocument. `posted` = форма
-// read-only (свойства+BOM), мутации гейтятся бэком; `draft` = редактируемо.
-export type ItemStatus = 'draft' | 'posted'
+// Замок изделия (волна 17; строка → bool в волне 19, Ф1c): `locked` = форма
+// read-only (свойства+BOM), мутации гейтятся бэком. Ось общая для ВСЕХ сущностей —
+// изделия, ордеров, закупки, заказа, проекта: одно поле, один глагол, один глиф.
+// Подписи («Зафиксировать»/«Расфиксировать») живут здесь, во вью, а не в БД.
 
 // ── Авторство шапки (волна 13, Ф2j) — единый пикер автора, редактируемо под
 //    замком на всех ордерах/закупках. `UserRow` — справочник пикера. ──
@@ -13,10 +14,10 @@ export interface UserRow {
 export interface Authored { user_id: number; user_name: string }
 
 export interface ProjectRow {
-  id: number; code: string; name: string; kind: string; status: string
+  id: number; code: string; name: string; kind: string; locked: boolean
 }
 export interface ProjectDetail extends ProjectRow {
-  budget: number | null; started_at: string | null
+  budget: number | null; started: string | null
 }
 // Категория изделия (волна 15): FK-справочник, снимает хардкод-карту KIND_RU/ICON.
 export interface Category {
@@ -25,7 +26,7 @@ export interface Category {
 export interface ItemRow {
   // `id` — PK (FK-ссылки/мутации); `design_item_id` — бизнес-ключ (канон библиотеки).
   id: number; design_item_id: string; description: string; category: Category
-  uom: string; temperature: string; produced: boolean; used: boolean; status: ItemStatus
+  uom: string; temperature: string; produced: boolean; used: boolean; locked: boolean
 }
 
 // Узел дерева аккордеона прибора (Ф5b): плоский pre-order с `depth`. Лист (покупной)
@@ -33,7 +34,7 @@ export interface ItemRow {
 // = worst-of поддерева. Купить можно только листья → заказ живёт в своде «Потребность».
 export interface DeficitTreeNode {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
-  component_status: ItemStatus
+  component_locked: boolean
   need: number; depth: number; is_leaf: boolean; status: Status
   have?: number; on_order?: number; to_order?: number; available_raw?: number; anomaly?: boolean
 }
@@ -45,7 +46,7 @@ export interface DeficitDemand {
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
 export interface DeficitComponent {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
-  component_status: ItemStatus
+  component_locked: boolean
   need: number; have: number; on_order: number; to_order: number
   status: Status; available_raw: number; anomaly: boolean
 }
@@ -76,15 +77,15 @@ export interface StockMap {
 }
 export interface ItemShipment {
   transfer_id: number; number: string; date: string; project_code: string
-  posted: boolean; lot_id: number; qty: number; display_name: string
+  locked: boolean; lot_id: number; qty: number; display_name: string
   lot_name: string
 }
 export interface ItemDetail {
   id: number; design_item_id: string; description: string; category: Category
-  uom: string; temperature: string; produced: boolean; used: boolean; status: ItemStatus
+  uom: string; temperature: string; produced: boolean; used: boolean; locked: boolean
   estimated_cost: number | null
   bom: { id: number; component_id: number; component_design_item_id: string;
-         component_description: string; component_uom: string; component_status: ItemStatus;
+         component_description: string; component_uom: string; component_locked: boolean;
          qty: number; position: string }[]
   where_used: { parent_id: number; parent_design_item_id: string; parent_description: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
@@ -96,11 +97,11 @@ export interface ItemDetail {
 // Диф-строка: `status` задаёт действие/флаг; `incoming` — из библиотеки (нет у
 // gone/orphan), `current` — из БД (нет у new), `changes` — что отличается (только changed).
 // `refix` (волна 17) — содержимое совпадает с библиотекой, но изделие ещё draft →
-// подтвердить = зафиксировать (post_item). Закрывает дыру миграции волны 17.
+// подтвердить = зафиксировать (lock_item). Закрывает дыру миграции волны 17.
 export type LibraryStatus = 'new' | 'changed' | 'refix' | 'gone' | 'orphan' | 'same'
 export interface LibrarySnapshot {
   description: string; temperature: string; category: string
-  produced?: boolean; status?: ItemStatus
+  produced?: boolean; locked?: boolean
 }
 export interface LibraryChange { old: string; new: string }
 export interface LibraryDiffRow {
@@ -119,7 +120,7 @@ export type ItemDetailWithRollup = ItemDetail & { rollup: RollupResult }
 // ── Кокпит комплектации (волна 2 — записываемое ядро) ──
 export interface KittingRow {
   id: number; project_code: string; target_design_item_id: string; target_description: string
-  qty: number; status: string; date: string | null
+  qty: number; locked: boolean; date: string | null
 }
 export interface CandidateLot {
   lot_id: number; live_qty: number; unit_cost: number; part_number: string
@@ -141,7 +142,7 @@ export interface BornLot {
   id: number; qty: number; unit_cost: number; lot_name: string; part_number: string
 }
 export interface Cockpit extends Authored {
-  id: number; status: string; project_id: number; project_code: string
+  id: number; locked: boolean; project_id: number; project_code: string
   target_id: number; target_design_item_id: string; target_description: string; uom: string
   qty: number; date: string | null; cockpit_status: Status
   rows: CockpitRow[]; born_lots: BornLot[]
@@ -156,7 +157,7 @@ export interface CounterpartyRow {
 // ── Приход / УПД (волна 3 — записываемое ядро) ──
 export interface ReceiptRow {
   id: number; number: string; date: string; contractor_name: string
-  project_code: string; approved: boolean; lines: number
+  project_code: string; locked: boolean; lines: number
 }
 export interface ReceiptLot {
   id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
@@ -168,12 +169,12 @@ export interface ReceiptCockpit extends Authored {
   contractor_id: number; contractor_name: string
   project_id: number; project_code: string; project_name: string
   purchase_id: number | null
-  approved: boolean; total_cost: number; lots: ReceiptLot[]
+  locked: boolean; total_cost: number; lots: ReceiptLot[]
 }
 
 // ── Заказ / Purchase (волна 4 — записываемое ядро) ──
 export interface PurchaseRow {
-  id: number; project_code: string; status: string
+  id: number; project_code: string; locked: boolean
   date: string | null; note: string; lines: number
 }
 export interface PurchaseCockpitLine {
@@ -184,20 +185,20 @@ export interface PurchaseReceiptRow {
   id: number; number: string; date: string; contractor_name: string; lines: number
 }
 export interface PurchaseCockpit extends Authored {
-  id: number; status: string; project_id: number; project_code: string
+  id: number; locked: boolean; project_id: number; project_code: string
   project_name: string; procurement_id: number; date: string | null; note: string
   editable: boolean; cockpit_status: Status
   total_ordered: number; total_received: number
   rows: PurchaseCockpitLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
-  id: number; status: string; date: string | null; note: string; lines: number
+  id: number; locked: boolean; date: string | null; note: string; lines: number
 }
 
 // ── Передача / Transfer (волна 5 — записываемое ядро) ──
 export interface TransferRow {
   id: number; number: string; date: string; project_code: string
-  posted: boolean; lines: number
+  locked: boolean; lines: number
 }
 export interface AvailableLot {
   lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
@@ -211,14 +212,14 @@ export interface TransferCockpitLine {
 export interface TransferCockpit extends Authored {
   id: number; number: string; date: string
   contractor_id: number | null; contractor_name: string
-  project_id: number; project_code: string; project_name: string; posted: boolean
+  project_id: number; project_code: string; project_name: string; locked: boolean
   total_qty: number; lines: TransferCockpitLine[]
 }
 
 // ── Списание / Writeoff (волна 6 — записываемое ядро) ──
 export interface WriteoffRow {
   id: number; number: string; date: string; project_code: string
-  reason: string; posted: boolean; lines: number
+  reason: string; locked: boolean; lines: number
 }
 export interface WriteoffCockpitLine {
   id: number; lot_id: number; lot_label: string; item_id: number; item_design_item_id: string
@@ -228,13 +229,13 @@ export interface WriteoffCockpitLine {
 export interface WriteoffCockpit extends Authored {
   id: number; number: string; date: string; reason: string
   project_id: number; project_code: string; project_name: string
-  posted: boolean; total_qty: number; lines: WriteoffCockpitLine[]
+  locked: boolean; total_qty: number; lines: WriteoffCockpitLine[]
 }
 
 // ── Требование / Requisition (волна 6 — записываемое ядро) ──
 export interface RequisitionRow {
   id: number; number: string; date: string; project_code: string
-  posted: boolean; lines: number
+  locked: boolean; lines: number
 }
 export interface AllAvailableLot {
   lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
@@ -250,7 +251,7 @@ export interface RequisitionCockpitLine {
 export interface RequisitionCockpit extends Authored {
   id: number; number: string; date: string
   project_id: number; project_code: string; project_name: string
-  posted: boolean; total_qty: number; lines: RequisitionCockpitLine[]
+  locked: boolean; total_qty: number; lines: RequisitionCockpitLine[]
 }
 
 // ── Место хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
@@ -268,7 +269,7 @@ export interface LocationCockpit {
 // ── Перемещение / Relocation (волна 13 Ф3 — записываемое ядро) ──
 export interface RelocationRow {
   id: number; number: string; date: string; project_code: string
-  posted: boolean; lines: number
+  locked: boolean; lines: number
 }
 export interface RelocationMove {
   lot_id: number; lot_label: string; item_id: number; item_design_item_id: string
@@ -280,7 +281,7 @@ export interface RelocationMove {
 export interface RelocationCockpit extends Authored {
   id: number; number: string; date: string
   project_id: number; project_code: string; project_name: string
-  posted: boolean; total_qty: number; moves: RelocationMove[]
+  locked: boolean; total_qty: number; moves: RelocationMove[]
 }
 export interface LotLocation {
   location_id: number; code: string; name: string; qty: number
@@ -294,7 +295,7 @@ export interface RelocationSourceLot {
 // ── Инвентаризация / Inventory (волна 9 — записываемое ядро) ──
 export interface InventoryRow {
   id: number; number: string; date: string; project_code: string
-  note: string; posted: boolean; lines: number
+  note: string; locked: boolean; lines: number
 }
 export interface InventoryCockpitLot {
   id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
@@ -305,7 +306,7 @@ export interface InventoryCockpitLot {
 export interface InventoryCockpit extends Authored {
   id: number; number: string; date: string; note: string
   project_id: number; project_code: string; project_name: string
-  posted: boolean; total_cost: number; lots: InventoryCockpitLot[]
+  locked: boolean; total_cost: number; lots: InventoryCockpitLot[]
 }
 export interface WrittenOffLot {
   lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
@@ -320,7 +321,7 @@ export interface ResidualLot {
 }
 export interface ProjectClosure {
   project_id: number; project_code: string; project_name: string; kind: string
-  status: string; closed_at: string | null; is_external: boolean
+  locked: boolean; closed: string | null; is_external: boolean
   residuals: ResidualLot[]; residual_positive: number; anomaly_count: number
   can_close: boolean; blocker: string
 }
@@ -339,14 +340,14 @@ export interface CommandDeficitRow {
 export interface CommandDeficit { rows: CommandDeficitRow[] }
 
 export interface ProcurementRow {
-  id: number; status: string; date: string | null; note: string; lines: number
+  id: number; locked: boolean; date: string | null; note: string; lines: number
 }
 export interface ProcurementCockpitLine {
   id: number; item_id: number; item_design_item_id: string; item_description: string
   uom: string; qty: number
 }
 export interface ProcurementCockpit extends Authored {
-  id: number; status: string; date: string | null; note: string; editable: boolean
+  id: number; locked: boolean; date: string | null; note: string; editable: boolean
   total_qty: number; lines: ProcurementCockpitLine[]
 }
 
@@ -361,11 +362,11 @@ export interface PeggingRow {
   by_project: PeggingProject[]
 }
 export interface PeggingFanRow {
-  purchase_id: number; status: string; project_id: number
+  purchase_id: number; locked: boolean; project_id: number
   project_code: string; project_name: string; lines: number; total: number
 }
 export interface Pegging {
-  id: number; status: string; editable: boolean
+  id: number; locked: boolean; editable: boolean
   rows: PeggingRow[]; fan: PeggingFanRow[]
 }
 
@@ -474,7 +475,7 @@ export const api = {
   users: () => get<UserRow[]>('/api/users/'),
 
   projects: () => get<ProjectRow[]>('/api/projects/'),
-  createProject: (b: { code: string; name: string; budget?: number; started_at?: string }) =>
+  createProject: (b: { code: string; name: string; budget?: number; started?: string }) =>
     send<ProjectRow>('POST', '/api/projects/', b),
   items: () => get<ItemRow[]>('/api/items/'),
   categories: () => get<Category[]>('/api/categories/'),
@@ -482,7 +483,7 @@ export const api = {
     uom?: string; temperature?: string; produced?: boolean; estimated_cost?: number }) =>
     send<ItemRow>('POST', '/api/items/', b),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
-  updateProject: (id: number, b: Partial<{ code: string; name: string; budget: number | null; started_at: string | null }>) =>
+  updateProject: (id: number, b: Partial<{ code: string; name: string; budget: number | null; started: string | null }>) =>
     send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),
   deleteProject: (id: number) => send<void>('DELETE', `/api/projects/${id}/`),
   deficit: (id: number) => get<Deficit>(`/api/projects/${id}/deficit/`),
@@ -499,9 +500,10 @@ export const api = {
     estimated_cost: number | null }>) =>
     send<ItemDetail>('PATCH', `/api/items/${id}/`, b),
   deleteItem: (id: number) => send<void>('DELETE', `/api/items/${id}/`),
-  // Фиксация изделия (волна 17): draft ⇄ posted (как approve/unapprove у поставки).
-  postItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/post/`),
-  unpostItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/unpost/`),
+  // Фиксация изделия (волна 17). Волна 19 Ф1c: единый глагол `lock`/`unlock`
+  // на всех сущностях — approve/unapprove и close/reopen из API ушли.
+  lockItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/lock/`),
+  unlockItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/unlock/`),
   addBomLine: (itemId: number, b: { component_id: number; qty: number; position?: string }) =>
     send<ItemDetail>('POST', `/api/items/${itemId}/bom/`, b),
   updateBomLine: (lineId: number, b: Partial<{ qty: number; position: string }>) =>
@@ -533,8 +535,8 @@ export const api = {
   updateLine: (id: number, qty: number) =>
     send<Cockpit>('PATCH', `/api/kitting-lines/${id}/`, { qty }),
   deleteLine: (id: number) => send<Cockpit>('DELETE', `/api/kitting-lines/${id}/`),
-  closeKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/close/`),
-  reopenKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/reopen/`),
+  lockKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/lock/`),
+  unlockKitting: (id: number) => send<Cockpit>('POST', `/api/kittings/${id}/unlock/`),
   deleteKitting: (id: number) => send<void>('DELETE', `/api/kittings/${id}/`),
 
   counterparties: (role?: 'supplier' | 'customer') =>
@@ -555,8 +557,8 @@ export const api = {
     qty: number; unit_cost: number; lot_name: string; part_number: string
   }>) => send<ReceiptCockpit>('PATCH', `/api/lots/${id}/`, b),
   deleteReceiptLot: (id: number) => send<ReceiptCockpit>('DELETE', `/api/lots/${id}/`),
-  approveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/approve/`),
-  unapproveReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/unapprove/`),
+  lockReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/lock/`),
+  unlockReceipt: (id: number) => send<ReceiptCockpit>('POST', `/api/receipts/${id}/unlock/`),
   linkReceiptPurchase: (id: number, purchase_id: number | null) =>
     send<ReceiptCockpit>('POST', `/api/receipts/${id}/link/`, { purchase_id }),
   deleteReceipt: (id: number) => send<void>('DELETE', `/api/receipts/${id}/`),
@@ -575,8 +577,8 @@ export const api = {
     send<PurchaseCockpit>('PATCH', `/api/purchase-lines/${id}/`, { qty }),
   deletePurchaseLine: (id: number) =>
     send<PurchaseCockpit>('DELETE', `/api/purchase-lines/${id}/`),
-  postPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/post/`),
-  unpostPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/unpost/`),
+  lockPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/lock/`),
+  unlockPurchase: (id: number) => send<PurchaseCockpit>('POST', `/api/purchases/${id}/unlock/`),
   projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
   addToOrder: (id: number, b: { item_id: number; qty: number }) =>
     send<{ purchase_id: number }>('POST', `/api/projects/${id}/order/`, b),
@@ -593,8 +595,8 @@ export const api = {
     send<TransferCockpit>('PATCH', `/api/transfer-lines/${id}/`, b),
   deleteTransferLine: (id: number) =>
     send<TransferCockpit>('DELETE', `/api/transfer-lines/${id}/`),
-  postTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/post/`),
-  unpostTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/unpost/`),
+  lockTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/lock/`),
+  unlockTransfer: (id: number) => send<TransferCockpit>('POST', `/api/transfers/${id}/unlock/`),
   deleteTransfer: (id: number) => send<void>('DELETE', `/api/transfers/${id}/`),
   projectAvailableLots: (id: number) =>
     get<AvailableLot[]>(`/api/projects/${id}/available-lots/`),
@@ -611,8 +613,8 @@ export const api = {
     send<WriteoffCockpit>('PATCH', `/api/writeoff-lines/${id}/`, { qty }),
   deleteWriteoffLine: (id: number) =>
     send<WriteoffCockpit>('DELETE', `/api/writeoff-lines/${id}/`),
-  postWriteoff: (id: number) => send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/post/`),
-  unpostWriteoff: (id: number) => send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/unpost/`),
+  lockWriteoff: (id: number) => send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/lock/`),
+  unlockWriteoff: (id: number) => send<WriteoffCockpit>('POST', `/api/writeoffs/${id}/unlock/`),
   deleteWriteoff: (id: number) => send<void>('DELETE', `/api/writeoffs/${id}/`),
 
   requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
@@ -627,8 +629,8 @@ export const api = {
     send<RequisitionCockpit>('PATCH', `/api/requisition-lines/${id}/`, { qty }),
   deleteRequisitionLine: (id: number) =>
     send<RequisitionCockpit>('DELETE', `/api/requisition-lines/${id}/`),
-  postRequisition: (id: number) => send<RequisitionCockpit>('POST', `/api/requisitions/${id}/post/`),
-  unpostRequisition: (id: number) => send<RequisitionCockpit>('POST', `/api/requisitions/${id}/unpost/`),
+  lockRequisition: (id: number) => send<RequisitionCockpit>('POST', `/api/requisitions/${id}/lock/`),
+  unlockRequisition: (id: number) => send<RequisitionCockpit>('POST', `/api/requisitions/${id}/unlock/`),
   deleteRequisition: (id: number) => send<void>('DELETE', `/api/requisitions/${id}/`),
   allAvailableLots: () => get<AllAvailableLot[]>('/api/available-lots/'),
 
@@ -647,8 +649,8 @@ export const api = {
   }>) => send<InventoryCockpit>('PATCH', `/api/inventory-lots/${id}/`, b),
   deleteInventoryLot: (id: number) =>
     send<InventoryCockpit>('DELETE', `/api/inventory-lots/${id}/`),
-  postInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/post/`),
-  unpostInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/unpost/`),
+  lockInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/lock/`),
+  unlockInventory: (id: number) => send<InventoryCockpit>('POST', `/api/inventories/${id}/unlock/`),
   deleteInventory: (id: number) => send<void>('DELETE', `/api/inventories/${id}/`),
   writtenOffLots: () => get<WrittenOffLot[]>('/api/written-off-lots/'),
 
@@ -676,8 +678,8 @@ export const api = {
   }>) => send<RelocationCockpit>('PATCH', `/api/relocations/${id}/lines/${lotId}/`, b),
   deleteRelocationLine: (id: number, lotId: number) =>
     send<RelocationCockpit>('DELETE', `/api/relocations/${id}/lines/${lotId}/`),
-  postRelocation: (id: number) => send<RelocationCockpit>('POST', `/api/relocations/${id}/post/`),
-  unpostRelocation: (id: number) => send<RelocationCockpit>('POST', `/api/relocations/${id}/unpost/`),
+  lockRelocation: (id: number) => send<RelocationCockpit>('POST', `/api/relocations/${id}/lock/`),
+  unlockRelocation: (id: number) => send<RelocationCockpit>('POST', `/api/relocations/${id}/unlock/`),
   deleteRelocation: (id: number) => send<void>('DELETE', `/api/relocations/${id}/`),
   relocationSourceLots: (id: number) =>
     get<RelocationSourceLot[]>(`/api/relocations/${id}/source-lots/`),
@@ -699,8 +701,8 @@ export const api = {
     send<ProcurementCockpit>('PATCH', `/api/procurement-lines/${id}/`, { qty }),
   deleteProcurementLine: (id: number) =>
     send<ProcurementCockpit>('DELETE', `/api/procurement-lines/${id}/`),
-  postProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/post/`),
-  unpostProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/unpost/`),
+  lockProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/lock/`),
+  unlockProcurement: (id: number) => send<ProcurementCockpit>('POST', `/api/procurements/${id}/unlock/`),
   orderXlsxUrl: (id: number) => `/api/procurements/${id}/order.xlsx`,
   // pegging (волна 8)
   pegging: (id: number) => get<Pegging>(`/api/procurements/${id}/pegging/`),
@@ -724,6 +726,6 @@ export const api = {
     send<ProjectClosure>('POST', `/api/projects/${id}/writeoff-lot/`, b),
   stockLot: (id: number, b: { lot_id: number; qty: number }) =>
     send<ProjectClosure>('POST', `/api/projects/${id}/stock-lot/`, b),
-  closeProject: (id: number) => send<ProjectClosure>('POST', `/api/projects/${id}/close/`),
-  reopenProject: (id: number) => send<ProjectClosure>('POST', `/api/projects/${id}/reopen/`),
+  lockProject: (id: number) => send<ProjectClosure>('POST', `/api/projects/${id}/lock/`),
+  unlockProject: (id: number) => send<ProjectClosure>('POST', `/api/projects/${id}/unlock/`),
 }

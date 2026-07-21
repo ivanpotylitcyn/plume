@@ -189,7 +189,7 @@ function RowDetail({ row, verb }: { row: LibraryDiffRow; verb: string }) {
       <div key={f}>{FIELD_RU[f] || f}: <s>{ch!.old || '—'}</s> → <b style={{ color: 'var(--fg)' }}>{ch!.new || '—'}</b></div>
     ))}</>
   if (row.status === 'refix')
-    return <>черновик → <b style={{ color: 'var(--st-ok)' }}>зафиксировать ✓</b>
+    return <>расфиксировано → <b style={{ color: 'var(--st-ok)' }}>зафиксировать ✓</b>
       <span className="kind-chip"> · совпадает с библиотекой</span></>
   if ((row.status === 'gone' || row.status === 'orphan') && row.current)
     return <>{verb}

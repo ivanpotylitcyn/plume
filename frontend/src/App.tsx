@@ -14,7 +14,7 @@ import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
 import { ItemView } from './ItemView'
 import { LibraryImportView } from './LibraryImportView'
-import { PurchaseView, PURCH_ST } from './PurchaseView'
+import { PurchaseView, purchaseLock } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm, type OrderKind } from './OrderForm'
@@ -72,7 +72,7 @@ const ORDER_SEL_KINDS = new Set(ORDER_KINDS.map(k => k.kind as string))
 // Нормализованная строка единого списка ордеров (собирается клиентски из 6 фидов).
 interface OrderEntry {
   kind: OrderKind; id: number; code: string; name: string
-  projectCode: string; posted: boolean; date: string | null
+  projectCode: string; locked: boolean; date: string | null
 }
 
 export default function App() {
@@ -222,19 +222,19 @@ export default function App() {
   const orderEntries = useMemo<OrderEntry[]>(() => {
     const es: OrderEntry[] = []
     receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.number,
-      name: r.contractor_name, projectCode: r.project_code, posted: r.approved, date: r.date }))
+      name: r.contractor_name, projectCode: r.project_code, locked: r.locked, date: r.date }))
     kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.target_design_item_id,
-      name: k.target_description, projectCode: k.project_code, posted: k.status === 'closed', date: k.date }))
+      name: k.target_description, projectCode: k.project_code, locked: k.locked, date: k.date }))
     transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.number,
-      name: t.project_code, projectCode: t.project_code, posted: t.posted, date: t.date }))
+      name: t.project_code, projectCode: t.project_code, locked: t.locked, date: t.date }))
     requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.number,
-      name: r.project_code, projectCode: r.project_code, posted: r.posted, date: r.date }))
+      name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
     writeoffs.forEach(w => es.push({ kind: 'writeoff', id: w.id, code: w.number,
-      name: w.reason, projectCode: w.project_code, posted: w.posted, date: w.date }))
+      name: w.reason, projectCode: w.project_code, locked: w.locked, date: w.date }))
     inventories.forEach(i => es.push({ kind: 'inventory', id: i.id, code: i.number,
-      name: i.note, projectCode: i.project_code, posted: i.posted, date: i.date }))
+      name: i.note, projectCode: i.project_code, locked: i.locked, date: i.date }))
     relocations.forEach(r => es.push({ kind: 'relocation', id: r.id, code: r.number,
-      name: r.project_code, projectCode: r.project_code, posted: r.posted, date: r.date }))
+      name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
     return es.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id)
   }, [receipts, kittings, transfers, requisitions, writeoffs, inventories, relocations])
 
@@ -322,7 +322,7 @@ export default function App() {
             selId={sel?.kind === 'project' ? sel.id : null}
             onSelect={id => setSel({ kind: 'project', id })}
             rows={[...projects].map(p => ({ id: p.id, code: p.code, name: p.name,
-              glyph: p.status === 'closed'
+              glyph: p.locked
                 ? <span className="glyph g-lock">🔒</span>
                 : <span className="glyph g-info">○</span> }))} />}
 
@@ -336,7 +336,7 @@ export default function App() {
             rows={[...items].filter(i => i.produced)
               .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
                 id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-                glyph: <ItemStatusGlyph status={i.status} /> }))} />}
+                glyph: <ItemStatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'items' &&
           <ModeList heading="Компоненты" newLabel="＋ Новое изделие" categoryFilter
@@ -351,7 +351,7 @@ export default function App() {
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
               id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-              glyph: <ItemStatusGlyph status={i.status} /> }))} />}
+              glyph: <ItemStatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
@@ -372,7 +372,7 @@ export default function App() {
             selId={sel?.kind === 'purchase' ? sel.id : null}
             onSelect={id => setSel({ kind: 'purchase', id })}
             rows={[...purchases].reverse().map(p => {
-              const st = PURCH_ST[p.status] ?? PURCH_ST.draft
+              const st = purchaseLock(p.locked)
               return { id: p.id, code: `Заказ #${p.id}`, name: p.project_code,
                 projectCode: p.project_code, glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
             })} />}
@@ -389,7 +389,7 @@ export default function App() {
                 <span className="code">Командный свод</span>
               </div>}
             rows={[...procurements].reverse().map(p => {
-              const st = PURCH_ST[p.status] ?? PURCH_ST.draft
+              const st = purchaseLock(p.locked)
               return { id: p.id, code: `Закупка #${p.id}`, name: p.note,
                 glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
             })} />}
@@ -409,7 +409,7 @@ export default function App() {
               projectName={p.name} openItem={openItem} />
           return <>
             <DeficitView key={`deficit-${sel.id}`} projectId={sel.id} items={items}
-              closed={p?.status === 'closed'} openItem={openItem}
+              closed={p?.locked ?? false} openItem={openItem}
               openPurchase={id => { reloadPurchases(); openPurchase(id) }}
               onChanged={reloadProjects}
               onDeleted={() => { reloadProjects(); setSel(null) }} />
@@ -603,7 +603,7 @@ function OrderList({ entries, selKey, onSelect, onNew, newSel }: {
           return (
             <div key={key} className={'tree-item' + (selKey === key ? ' sel' : '')}
               onClick={() => onSelect(e)} title={ORDER_LABEL[e.kind]}>
-              <span className={`glyph ${e.posted ? 'g-lock' : 'g-info'}`}>{e.posted ? '🔒' : '○'}</span>
+              <span className={`glyph ${e.locked ? 'g-lock' : 'g-info'}`}>{e.locked ? '🔒' : '○'}</span>
               <span className="code">{e.code}</span>
               <span className="row-tag">{ORDER_LABEL[e.kind]}</span>
             </div>

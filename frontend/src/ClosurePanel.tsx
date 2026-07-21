@@ -30,14 +30,14 @@ export function ClosurePanel({ projectId, openItem, onChanged }: {
   if (!c) return null
   if (!c.is_external) return null         // внутренние склады не закрываются
 
-  const closed = c.status === 'closed'
+  const closed = c.locked
   const lots = c.residuals.length
   return (
     <div className="closure">
       <h2 className="section-h">Склад проекта
         <span className="hint">
           {closed
-            ? <>закрыт {c.closed_at} · остатков нет</>
+            ? <>зафиксирован · остатков нет</>
             : lots === 0
               ? <>склад пуст · живых остатков нет</>
               : <>живых лотов {lots}
@@ -68,14 +68,14 @@ export function ClosurePanel({ projectId, openItem, onChanged }: {
       <div className="closure-foot">
         {closed
           ? <>
-              <span className="hint">Проект закрыт {c.closed_at}.</span>
+              <span className="hint">Проект зафиксирован{c.closed && <> · закрыт {c.closed}</>}.</span>
               <button className="btn sm" disabled={busy}
-                onClick={() => run(api.reopenProject(c.project_id))}>Переоткрыть проект</button>
+                onClick={() => run(api.unlockProject(c.project_id))}>Расфиксировать проект</button>
             </>
           : <>
               <button className="btn sm" disabled={busy || !c.can_close}
                 title={c.can_close ? 'свести остатки в 0 и закрыть проект' : c.blocker}
-                onClick={() => { if (confirm('Закрыть проект? Остатков быть не должно.')) run(api.closeProject(c.project_id)) }}>
+                onClick={() => { if (confirm('Зафиксировать проект? Остатков быть не должно.')) run(api.lockProject(c.project_id)) }}>
                 Закрыть проект</button>
               <span className="hint">{c.can_close ? 'остатков нет — можно закрыть' : c.blocker}</span>
             </>}

@@ -142,7 +142,7 @@ export function FormHeader({
   fixed?: boolean
   fixedLabel?: string
   onUnfix?: () => void
-  onDelete?: () => void   // удаление ордера (только черновик; posted → «сперва расфиксировать»)
+  onDelete?: () => void   // удаление ордера (только расфиксированный; иначе «сперва расфиксировать»)
   error?: string | null
 }) {
   return (
@@ -182,7 +182,7 @@ export function FormHeader({
       </div>
       {/* Ф4 (волна 16): удаление вынесено из шапки в плавающую кнопку в правом
           нижнем углу — чтобы второй клик по замку не попадал случайно в корзину.
-          Только у черновика (posted перехватывает ветка чипа фиксации). */}
+          Только у расфиксированного (иначе перехватывает ветка чипа фиксации). */}
       {!fixed && onDelete && (
         <button className="del-fab" title="Удалить документ" onClick={onDelete}>🗑</button>
       )}

@@ -1,6 +1,6 @@
 // Витрина волны 7: командный свод (ось Item) — суммарный дефицит по всем активным
 // внешним проектам (Σ проектных, без перенеттинга). North-star линзы: «видеть всё к
-// закупке разом». Красное наверху. «＋ в закупку» кладёт позицию в черновик-план и
+// закупке разом». Красное наверху. «＋ в закупку» кладёт позицию в расфиксированный план и
 // открывает его. Раскрытие строки показывает разбивку по проектам (откуда нужда).
 import { useEffect, useState } from 'react'
 import { api, type CommandDeficit, type CommandDeficitRow } from './api'
@@ -20,7 +20,7 @@ export function CommandDeficitView({ openItem, openProcurement }: {
   }
   useEffect(reload, [])
 
-  // Мост «свод → закупка»: положить ▲-позицию в черновик-план и открыть его.
+  // Мост «свод → закупка»: положить ▲-позицию в расфиксированный план и открыть его.
   const toProcurement = (itemId: number, qty: number) => {
     setBusy(true)
     api.addToProcurement({ item_id: itemId, qty })
@@ -89,7 +89,7 @@ function Row({ r, busy, openItem, toProcurement }: {
         <td style={{ textAlign: 'right' }}>
           {r.to_order > 0 &&
             <button className="btn sm" disabled={busy}
-              title={`положить ${num(r.to_order)} ${r.uom} в черновик-закупку`}
+              title={`положить ${num(r.to_order)} ${r.uom} в расфиксированную закупку`}
               onClick={() => toProcurement(r.item_id, r.to_order)}>＋ в закупку</button>}
         </td>
       </tr>

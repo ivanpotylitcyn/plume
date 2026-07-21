@@ -51,7 +51,7 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
       .finally(() => setBusy(false))
   }
 
-  // Мост «дефицит → заказ»: положить ▲-позицию в черновик-заказ проекта и открыть его.
+  // Мост «дефицит → заказ»: положить ▲-позицию в расфиксированный заказ проекта и открыть его.
   const order = (itemId: number, qty: number) => {
     setBusy(true)
     api.addToOrder(projectId, { item_id: itemId, qty })
@@ -90,8 +90,8 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
             onCommit={v => runP(api.updateProject(projectId, { budget: v.trim() === '' ? null : Number(v) }))}
             validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</dd>
           <dt>Начат</dt>
-          <dd><CommitInput value={phead.started_at ?? ''} type="date" disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { started_at: v || null }))} /></dd>
+          <dd><CommitInput value={phead.started ?? ''} type="date" disabled={busy}
+            onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} /></dd>
         </dl>}
       <div className="subtitle">Проект · приборы, потребность, склад · дефицит = надо − склад − заказано (разузловано до покупных листьев)</div>
       <BudgetPanel projectId={projectId} rev={rev} />
@@ -269,7 +269,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   const indent = n.depth * 18
   return (
     <div className={`prow prow--comp s-${n.status}`}>
-      <span><ItemStatusGlyph status={n.component_status} /></span>
+      <span><ItemStatusGlyph locked={n.component_locked} /></span>
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
@@ -305,7 +305,7 @@ function CompRow({ ln, busy, openItem, order }: {
 }) {
   return (
     <div className={`prow prow--comp s-${ln.status}`}>
-      <span><ItemStatusGlyph status={ln.component_status} /></span>
+      <span><ItemStatusGlyph locked={ln.component_locked} /></span>
       <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)} {ln.uom}</span>
@@ -321,7 +321,7 @@ function CompRow({ ln, busy, openItem, order }: {
       <span className="act">
         {ln.to_order > 0 &&
           <button className="btn sm" disabled={busy}
-            title={`положить ${num(ln.to_order)} ${ln.uom} в черновик-заказ проекта`}
+            title={`положить ${num(ln.to_order)} ${ln.uom} в расфиксированный заказ проекта`}
             onClick={() => order(ln.component_id, ln.to_order)}>＋ в заказ</button>}
       </span>
     </div>

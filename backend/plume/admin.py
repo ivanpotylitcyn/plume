@@ -92,8 +92,8 @@ class ItemAdmin(admin.ModelAdmin):
 
 @admin.register(models.Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'kind', 'status', 'budget')
-    list_filter = ('kind', 'status')
+    list_display = ('code', 'name', 'kind', 'locked', 'budget')
+    list_filter = ('kind', 'locked')
     search_fields = ('code', 'name')
     inlines = [ProjectDemandInline]
 
@@ -113,28 +113,28 @@ class LocationAdmin(admin.ModelAdmin):
 # --- закупки -------------------------------------------------------------- #
 @admin.register(models.Procurement)
 class ProcurementAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'status', 'date', 'user')
-    list_filter = ('status',)
+    list_display = ('__str__', 'locked', 'date', 'user')
+    list_filter = ('locked',)
     inlines = [ProcurementLineInline]
 
 
 @admin.register(models.Purchase)
 class PurchaseAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'project', 'status', 'date', 'user')
-    list_filter = ('status', 'project')
+    list_display = ('__str__', 'project', 'locked', 'date', 'user')
+    list_filter = ('locked', 'project')
     inlines = [PurchaseLineInline]
 
 
 # --- ордера: гибрид «обзор + правка по типу» (волна 13, Ф2h) --------------- #
 # Родитель `StockDocument` — **read-only обзор «все ордера»** (зеркало режима «Ордер»
-# во фронте): смешанный список 7 видов с фильтром по `kind`/`status`/проекту,
+# во фронте): смешанный список 7 видов с фильтром по `kind`/`locked`/проекту,
 # новейшие сверху, строки некликабельны. Правка — в дочерних админках ниже (по типу,
 # с инлайнами строк). Bare-родитель не создаём (вид штампуют дети через `save()`),
 # менять/удалять через эту витрину нельзя — только смотреть.
 @admin.register(models.StockDocument)
 class StockDocumentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'kind', 'number', 'open_child', 'date', 'project', 'status', 'user')
-    list_filter = ('kind', 'status', 'project')
+    list_display = ('id', 'kind', 'number', 'open_child', 'date', 'project', 'locked', 'user')
+    list_filter = ('kind', 'locked', 'project')
     search_fields = ('number',)
     ordering = ('-id',)              # новейшие сверху — зеркалит OrderList
     list_display_links = None        # строки некликабельны: правка — в дочерних админках
@@ -173,29 +173,29 @@ class StockDocumentAdmin(admin.ModelAdmin):
 # --- документы-origin ----------------------------------------------------- #
 @admin.register(models.Receipt)
 class ReceiptAdmin(admin.ModelAdmin):
-    list_display = ('number', 'date', 'contractor', 'project', 'status')
-    list_filter = ('status', 'project')
+    list_display = ('number', 'date', 'contractor', 'project', 'locked')
+    list_filter = ('locked', 'project')
     search_fields = ('number',)
 
 
 @admin.register(models.Kitting)
 class KittingAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'project', 'target_item', 'qty', 'status', 'date')
-    list_filter = ('status', 'project')
+    list_display = ('__str__', 'project', 'target_item', 'qty', 'locked', 'date')
+    list_filter = ('locked', 'project')
     inlines = [KittingLineInline]
 
 
 @admin.register(models.Inventory)
 class InventoryAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date', 'status')
-    list_filter = ('status',)
+    list_display = ('number', 'project', 'date', 'locked')
+    list_filter = ('locked',)
     search_fields = ('number',)
 
 
 @admin.register(models.Requisition)
 class RequisitionAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date', 'status')
-    list_filter = ('status',)
+    list_display = ('number', 'project', 'date', 'locked')
+    list_filter = ('locked',)
     search_fields = ('number',)
     inlines = [RequisitionLineInline]
 
@@ -225,22 +225,22 @@ class StockLineAdmin(admin.ModelAdmin):
 # --- выбытие / передача --------------------------------------------------- #
 @admin.register(models.Transfer)
 class TransferAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'contractor', 'date', 'status')
-    list_filter = ('status',)
+    list_display = ('number', 'project', 'contractor', 'date', 'locked')
+    list_filter = ('locked',)
     inlines = [TransferLineInline]
 
 
 @admin.register(models.Writeoff)
 class WriteoffAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date', 'reason', 'status')
-    list_filter = ('status',)
+    list_display = ('number', 'project', 'date', 'reason', 'locked')
+    list_filter = ('locked',)
     inlines = [WriteoffLineInline]
 
 
 @admin.register(models.Relocation)
 class RelocationAdmin(admin.ModelAdmin):
-    list_display = ('number', 'project', 'date', 'status')
-    list_filter = ('status', 'project')
+    list_display = ('number', 'project', 'date', 'locked')
+    list_filter = ('locked', 'project')
     search_fields = ('number',)
     inlines = [RelocationLineInline]
 

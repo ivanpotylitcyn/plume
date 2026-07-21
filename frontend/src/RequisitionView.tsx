@@ -32,7 +32,7 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
 
   // Источник ≠ получатель: прячем из пикера лоты самого проекта-получателя.
   const pickable = lots.filter(l => l.project_id !== c.project_id)
-  const fixed = c.posted                   // проведено — read-only (единый мягкий замок)
+  const fixed = c.locked                   // проведено — read-only (единый мягкий замок)
   const locked = fixed || !unlocked
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -44,7 +44,7 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="проведено"
-        onUnfix={() => { if (confirm('Снять фиксацию требования? Форма станет черновиком.')) run(api.unpostRequisition(c.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать требования?')) run(api.unlockRequisition(c.id)) }}
         onDelete={del}
         error={err}
       />
@@ -68,7 +68,7 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
         <div className="kit-actions">
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postRequisition(c.id))}>Провести · зафиксировать</button>
+            onClick={() => run(api.lockRequisition(c.id))}>Зафиксировать</button>
           {err && <span className="anomaly">{err}</span>}
         </div>}
 

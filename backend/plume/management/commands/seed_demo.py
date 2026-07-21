@@ -73,13 +73,13 @@ class Command(BaseCommand):
         # --- проект и потребность -------------------------------------- #
         prj = models.Project.objects.create(
             code='ПРБ-1', name='НИР «Прибор А»', kind=models.Project.Kind.EXTERNAL,
-            status=models.Project.Status.ACTIVE, budget=200000, started_at=D(2026, 5, 1))
+            budget=200000, started=D(2026, 5, 1))
         models.ProjectDemand.objects.create(project=prj, target_item=device, qty=10)
 
         # --- КОРПУС-1: приход 12 (✓) ----------------------------------- #
         receipt = models.Receipt.objects.create(
             number='УПД-1', date=D(2026, 5, 20), contractor=supplier, project=prj,
-            user=user, status=models.DocStatus.POSTED)
+            user=user, locked=True)
         case_lot = models.Lot.objects.create(item=case, project=prj, origin=receipt,
                                              qty=12, unit_cost=800,
                                              lot_name='Корпус Al',
@@ -104,7 +104,7 @@ class Command(BaseCommand):
 
         closed_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=3, date=D(2026, 5, 25),
-            status=models.DocStatus.POSTED)
+            locked=True)
         models.StockLine.objects.create(document=closed_k, lot=res_lot,
                                         location=main, qty=-6, date=D(2026, 5, 25))
         models.Lot.objects.create(item=board, project=prj, origin=closed_k, qty=3,
@@ -112,7 +112,7 @@ class Command(BaseCommand):
 
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
-            status=models.DocStatus.DRAFT)
+            locked=False)
         models.StockLine.objects.create(document=wip_k, lot=res_lot,
                                         location=main, qty=-4, date=D(2026, 6, 2))
 
@@ -128,7 +128,7 @@ class Command(BaseCommand):
         reloc = engine.create_relocation(prj, user, number='ПЕР-1', date=D(2026, 6, 5))
         engine.add_relocation_line(reloc, case_lot, 4, from_location=main,
                                    to_location=sold)
-        engine.post_relocation(reloc)
+        engine.lock_relocation(reloc)
 
         # --- пересборка проекции склада -------------------------------- #
         rebuild_all()

@@ -58,10 +58,10 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
   // Состав правим у производимых (или если он уже задан) — у покупных BOM нет.
   const composable = d.produced || d.bom.length > 0
 
-  // Фиксация (волна 17) — ровно как у StockDocument (см. ReceiptView): `posted` =
+  // Фиксация (волна 17) — ровно как у StockDocument (см. ReceiptView): `d.locked` =
   // изделие зафиксировано (форма read-only, бэк гейтит мутации), чип вместо замка.
   // `locked` = фиксация ИЛИ закрытый личный мягкий замок → всё в форме read-only.
-  const fixed = d.status === 'posted'
+  const fixed = d.locked
   const locked = fixed || !unlocked
 
   return (
@@ -77,7 +77,7 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
         fixed={fixed} fixedLabel="зафиксировано"
-        onUnfix={() => { if (confirm('Расфиксировать изделие? Форма станет черновиком (draft) и снова редактируемой.')) run(api.unpostItem(d.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
         onDelete={!locked ? del : undefined}
       />
       <dl className="props">
@@ -130,8 +130,8 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
       {/* Хот-фикс волны 17 (по запросу пользователей): ручной фиксации из вью НЕТ —
           кнопка «Зафиксировать» убрана намеренно. `posted` изделие можно расфиксировать
           (чип → onUnfix) и править, но обратно зафиксировать — только повторным синком
-          с библиотекой (`refix`). Так библиотечные (posted) и «ручные» (draft) изделия
-          чётко разделены; производимые с BOM в библиотеке не бывают → всегда draft.
+          с библиотекой (`refix`). Так библиотечные (зафиксированные) и «ручные» изделия
+          чётко разделены; производимые с BOM в библиотеке не бывают → всегда расфиксированы.
           Бэкенд `post_item`/эндпойнт живы (их зовёт синк), просто не вызываются из вью. */}
 
       {d.produced && <div className="kit-actions" style={{ marginBottom: 4 }}>
@@ -172,7 +172,7 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
               <th style={{ textAlign: 'right' }}>Кол-во</th>{!locked && <th />}</tr></thead>
             <tbody>{d.bom.map(b => (
               <tr key={b.id} className="row">
-                <td><ItemStatusGlyph status={b.component_status} /></td>
+                <td><ItemStatusGlyph locked={b.component_locked} /></td>
                 <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_design_item_id}</a></td>
                 <td style={{ color: 'var(--fg-dim)' }}>
                   <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
@@ -226,7 +226,7 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
             <tbody>{d.shipments.map((s, i) => (
               <tr key={`${s.transfer_id}-${s.lot_id}-${i}`} className="row">
                 <td>
-                  <span className={`glyph ${s.posted ? 'g-lock' : 'g-on_order'}`}>{s.posted ? '🔒' : '●'}</span>{' '}
+                  <span className={`glyph ${s.locked ? 'g-lock' : 'g-on_order'}`}>{s.locked ? '🔒' : '●'}</span>{' '}
                   {s.number}
                 </td>
                 <td style={{ color: 'var(--fg-dim)' }}>{s.date}</td>

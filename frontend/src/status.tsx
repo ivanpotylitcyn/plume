@@ -1,18 +1,17 @@
 // Сквозной словарь статусов (единый везде): значок + цвет текста, не заливка.
-import type { Status, ItemStatus } from './api'
+import type { Status } from './api'
 
-// Статус-замок изделия (волна 17): posted — зелёная галочка (зафиксировано,
-// источник правды/библиотека), draft — оранжевый кружок (черновик, редактируемо).
+// Замок изделия (волна 17; bool с волны 19, Ф1c): зафиксировано — зелёная галочка
+// (источник правды/библиотека), расфиксировано — оранжевый кружок (редактируемо).
 // Ставится слева от строки Item везде (списки режимов, BOM, потребность проекта).
-const ITEM_GLYPH: Record<ItemStatus, string> = { posted: '✓', draft: '○' }
-const ITEM_LABEL: Record<ItemStatus, string> = {
-  posted: 'зафиксировано (из библиотеки / проведено)',
-  draft: 'черновик (редактируется)',
-}
-
-export function ItemStatusGlyph({ status }: { status: ItemStatus }) {
-  const cls = status === 'posted' ? 'g-available' : 'g-draft'
-  return <span className={`glyph ${cls}`} title={ITEM_LABEL[status]}>{ITEM_GLYPH[status]}</span>
+// Ф1b раскатает этот же глиф на закупки/заказы/ордера/проекты — ось уже общая.
+export function ItemStatusGlyph({ locked }: { locked: boolean }) {
+  return (
+    <span className={`glyph ${locked ? 'g-available' : 'g-draft'}`}
+          title={locked ? 'зафиксировано' : 'расфиксировано (редактируется)'}>
+      {locked ? '✓' : '○'}
+    </span>
+  )
 }
 
 export const GLYPH: Record<Status, string> = {

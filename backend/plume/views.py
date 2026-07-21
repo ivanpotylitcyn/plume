@@ -164,12 +164,12 @@ def logout_view(request):
 
 def _project_row(p):
     return {'id': p.id, 'code': p.code, 'name': p.name, 'kind': p.kind,
-            'status': p.status}
+            'locked': p.locked}
 
 
 def _project_detail_row(p):
     """Полный ряд проекта для формы (шапка под замком §6): + бюджет и дата начала."""
-    return {**_project_row(p), 'budget': p.budget, 'started_at': p.started_at}
+    return {**_project_row(p), 'budget': p.budget, 'started': p.started}
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -182,7 +182,7 @@ def project_detail(request, pk):
         return _friendly_delete(engine.delete_project, project)
     if request.method == 'PATCH':
         d = request.data
-        changes = {k: d[k] for k in ('code', 'name', 'started_at') if k in d}
+        changes = {k: d[k] for k in ('code', 'name', 'started') if k in d}
         if 'budget' in d:
             changes['budget'] = _dec(d['budget'])
         try:
@@ -200,7 +200,7 @@ def projects(request):
         try:
             p = engine.create_project(
                 d.get('code'), d.get('name'), budget=_dec(d.get('budget')),
-                started_at=d.get('started_at') or None)
+                started=d.get('started') or None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(_project_row(p), status=http.HTTP_201_CREATED)
@@ -260,7 +260,7 @@ def _item_row(i):
     return {'id': i.id, 'design_item_id': i.design_item_id,
             'description': i.description, 'category': _category_row(i.category),
             'uom': i.uom, 'temperature': i.temperature, 'produced': i.produced,
-            'status': i.status, 'used': engine.item_is_used(i)}
+            'locked': i.locked, 'used': engine.item_is_used(i)}
 
 
 @api_view(['GET'])
@@ -347,7 +347,7 @@ def _item_detail_payload(item):
          'component_design_item_id': bl.component.design_item_id,
          'component_description': bl.component.description,
          'component_uom': bl.component.uom,
-         'component_status': bl.component.status,
+         'component_locked': bl.component.locked,
          'qty': bl.qty, 'position': bl.position}
         for bl in item.bom_lines.select_related('component')
     ]
@@ -362,7 +362,7 @@ def _item_detail_payload(item):
         'id': item.id, 'design_item_id': item.design_item_id,
         'description': item.description, 'category': _category_row(item.category),
         'uom': item.uom, 'temperature': item.temperature, 'produced': item.produced,
-        'status': item.status, 'used': engine.item_is_used(item),
+        'locked': item.locked, 'used': engine.item_is_used(item),
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'shipments': engine.item_shipments(item),
@@ -431,19 +431,19 @@ def bom_line_detail(request, pk):
 
 
 @api_view(['POST'])
-def item_post(request, pk):
+def item_lock(request, pk):
     """Зафиксировать изделие (draft → posted): форма read-only, правки гейтятся.
-    Волна 17 — по образцу `receipt_approve`."""
+    Волна 17 — по образцу `receipt_lock`."""
     item = get_object_or_404(models.Item, pk=pk)
-    engine.post_item(item)
+    engine.lock_item(item)
     return Response(_item_detail_payload(item))
 
 
 @api_view(['POST'])
-def item_unpost(request, pk):
+def item_unlock(request, pk):
     """Расфиксировать изделие (posted → draft): снова редактируемо. Волна 17."""
     item = get_object_or_404(models.Item, pk=pk)
-    engine.unpost_item(item)
+    engine.unlock_item(item)
     return Response(_item_detail_payload(item))
 
 
@@ -456,7 +456,7 @@ def _kitting_row(k):
         'id': k.id, 'project_code': k.project.code,
         'target_design_item_id': k.target_item.design_item_id,
         'target_description': k.target_item.description,
-        'qty': k.qty, 'status': engine._kitting_status_out(k), 'date': k.date,
+        'qty': k.qty, 'locked': k.locked, 'date': k.date,
     }
 
 
@@ -540,22 +540,22 @@ def kitting_line_detail(request, pk):
 
 
 @api_view(['POST'])
-def kitting_close(request, pk):
+def kitting_lock(request, pk):
     """Закрыть комплектацию — рождается лот-прибор (`+RECEIPT`)."""
     k = get_object_or_404(models.Kitting, pk=pk)
     try:
-        engine.close_kitting(k)
+        engine.lock_kitting(k)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.kitting_cockpit(k))
 
 
 @api_view(['POST'])
-def kitting_reopen(request, pk):
+def kitting_unlock(request, pk):
     """Переоткрыть комплектацию (мягкий замок, guard по потомкам)."""
     k = get_object_or_404(models.Kitting, pk=pk)
     try:
-        engine.reopen_kitting(k)
+        engine.unlock_kitting(k)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.kitting_cockpit(k))
@@ -600,7 +600,7 @@ def _receipt_row(r):
     return {
         'id': r.id, 'number': r.number, 'date': r.date,
         'contractor_name': r.contractor.name, 'project_code': r.project.code,
-        'approved': r.is_posted, 'lines': r.lots.count(),
+        'locked': r.locked, 'lines': r.lots.count(),
     }
 
 
@@ -695,21 +695,21 @@ def receipt_lot_detail(request, pk):
 
 
 @api_view(['POST'])
-def receipt_approve(request, pk):
+def receipt_lock(request, pk):
     """Поставить замок «сверено со сканом» (форма read-only)."""
     r = get_object_or_404(models.Receipt, pk=pk)
     try:
-        engine.approve_receipt(r)
+        engine.lock_receipt(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.receipt_cockpit(r))
 
 
 @api_view(['POST'])
-def receipt_unapprove(request, pk):
+def receipt_unlock(request, pk):
     """Снять замок — снова разрешить правку."""
     r = get_object_or_404(models.Receipt, pk=pk)
-    engine.unapprove_receipt(r)
+    engine.unlock_receipt(r)
     return Response(engine.receipt_cockpit(r))
 
 
@@ -734,7 +734,7 @@ def receipt_link(request, pk):
 def _purchase_row(p):
     """Строка списка заказов для дерева навигации."""
     return {
-        'id': p.id, 'project_code': p.project.code, 'status': p.status,
+        'id': p.id, 'project_code': p.project.code, 'locked': p.locked,
         'date': p.date, 'note': p.note, 'lines': p.lines.count(),
     }
 
@@ -826,15 +826,15 @@ def _purchase_transition(request, pk, fn):
 
 
 @api_view(['POST'])
-def purchase_post(request, pk):
+def purchase_lock(request, pk):
     """Утвердить заказ (draft → posted) — мягкий замок, счёт в «заказано»."""
-    return _purchase_transition(request, pk, engine.post_purchase)
+    return _purchase_transition(request, pk, engine.lock_purchase)
 
 
 @api_view(['POST'])
-def purchase_unpost(request, pk):
+def purchase_unlock(request, pk):
     """Вернуть заказ в черновик (posted → draft)."""
-    return _purchase_transition(request, pk, engine.unpost_purchase)
+    return _purchase_transition(request, pk, engine.unlock_purchase)
 
 
 @api_view(['GET'])
@@ -843,7 +843,7 @@ def project_purchases(request, pk):
     статусу нет, отменённых не существует — отмена = удаление)."""
     project = get_object_or_404(models.Project, pk=pk)
     rows = [
-        {'id': p.id, 'status': p.status, 'date': p.date, 'note': p.note,
+        {'id': p.id, 'locked': p.locked, 'date': p.date, 'note': p.note,
          'lines': p.lines.count()}
         for p in project.purchases.order_by('-id')
     ]
@@ -876,7 +876,7 @@ def _transfer_row(t):
     """Строка списка передач для дерева навигации."""
     return {
         'id': t.id, 'number': t.number, 'date': t.date,
-        'project_code': t.project.code, 'posted': t.is_posted,
+        'project_code': t.project.code, 'locked': t.locked,
         'lines': t.lines.count(),
     }
 
@@ -974,21 +974,21 @@ def transfer_line_detail(request, pk):
 
 
 @api_view(['POST'])
-def transfer_post(request, pk):
+def transfer_lock(request, pk):
     """Поставить замок «отгружено» — накладная read-only."""
     t = get_object_or_404(models.Transfer, pk=pk)
     try:
-        engine.post_transfer(t)
+        engine.lock_transfer(t)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.transfer_cockpit(t))
 
 
 @api_view(['POST'])
-def transfer_unpost(request, pk):
+def transfer_unlock(request, pk):
     """Снять замок — снова разрешить правку накладной."""
     t = get_object_or_404(models.Transfer, pk=pk)
-    engine.unpost_transfer(t)
+    engine.unlock_transfer(t)
     return Response(engine.transfer_cockpit(t))
 
 
@@ -1007,7 +1007,7 @@ def _relocation_row(r):
     """Строка списка перемещений для смешанного дерева ордеров."""
     return {
         'id': r.id, 'number': r.number, 'date': r.date,
-        'project_code': r.project.code, 'posted': r.is_posted,
+        'project_code': r.project.code, 'locked': r.locked,
         'lines': r.lines.count(),
     }
 
@@ -1099,21 +1099,21 @@ def relocation_line_detail(request, pk, lot_pk):
 
 
 @api_view(['POST'])
-def relocation_post(request, pk):
+def relocation_lock(request, pk):
     """Провести перемещение — форма read-only (мягкий замок)."""
     r = get_object_or_404(models.Relocation, pk=pk)
     try:
-        engine.post_relocation(r)
+        engine.lock_relocation(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.relocation_cockpit(r))
 
 
 @api_view(['POST'])
-def relocation_unpost(request, pk):
+def relocation_unlock(request, pk):
     """Снять замок перемещения — снова разрешить правку."""
     r = get_object_or_404(models.Relocation, pk=pk)
-    engine.unpost_relocation(r)
+    engine.unlock_relocation(r)
     return Response(engine.relocation_cockpit(r))
 
 
@@ -1138,7 +1138,7 @@ def _writeoff_row(w):
     return {
         'id': w.id, 'number': w.number, 'date': w.date,
         'project_code': w.project.code, 'reason': w.reason,
-        'posted': w.is_posted, 'lines': w.lines.count(),
+        'locked': w.locked, 'lines': w.lines.count(),
     }
 
 
@@ -1221,21 +1221,21 @@ def writeoff_line_detail(request, pk):
 
 
 @api_view(['POST'])
-def writeoff_post(request, pk):
+def writeoff_lock(request, pk):
     """Провести списание — форма read-only (единый мягкий замок)."""
     w = get_object_or_404(models.Writeoff, pk=pk)
     try:
-        engine.post_writeoff(w)
+        engine.lock_writeoff(w)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.writeoff_cockpit(w))
 
 
 @api_view(['POST'])
-def writeoff_unpost(request, pk):
+def writeoff_unlock(request, pk):
     """Снять замок списания — снова разрешить правку."""
     w = get_object_or_404(models.Writeoff, pk=pk)
-    engine.unpost_writeoff(w)
+    engine.unlock_writeoff(w)
     return Response(engine.writeoff_cockpit(w))
 
 
@@ -1243,7 +1243,7 @@ def writeoff_unpost(request, pk):
 def _requisition_row(r):
     return {
         'id': r.id, 'number': r.number, 'date': r.date,
-        'project_code': r.project.code, 'posted': r.is_posted,
+        'project_code': r.project.code, 'locked': r.locked,
         'lines': r.lines.count(),
     }
 
@@ -1325,21 +1325,21 @@ def requisition_line_detail(request, pk):
 
 
 @api_view(['POST'])
-def requisition_post(request, pk):
+def requisition_lock(request, pk):
     """Провести требование — форма read-only (единый мягкий замок)."""
     r = get_object_or_404(models.Requisition, pk=pk)
     try:
-        engine.post_requisition(r)
+        engine.lock_requisition(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.requisition_cockpit(r))
 
 
 @api_view(['POST'])
-def requisition_unpost(request, pk):
+def requisition_unlock(request, pk):
     """Снять замок требования — снова разрешить правку."""
     r = get_object_or_404(models.Requisition, pk=pk)
-    engine.unpost_requisition(r)
+    engine.unlock_requisition(r)
     return Response(engine.requisition_cockpit(r))
 
 
@@ -1348,7 +1348,7 @@ def _inventory_row(i):
     return {
         'id': i.id, 'number': i.number, 'date': i.date,
         'project_code': i.project.code, 'note': i.note,
-        'posted': i.is_posted, 'lines': i.lots.count(),
+        'locked': i.locked, 'lines': i.lots.count(),
     }
 
 
@@ -1458,21 +1458,21 @@ def inventory_lot_detail(request, pk):
 
 
 @api_view(['POST'])
-def inventory_post(request, pk):
+def inventory_lock(request, pk):
     """Провести инвентаризацию — форма read-only (единый мягкий замок)."""
     i = get_object_or_404(models.Inventory, pk=pk)
     try:
-        engine.post_inventory(i)
+        engine.lock_inventory(i)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.inventory_cockpit(i))
 
 
 @api_view(['POST'])
-def inventory_unpost(request, pk):
+def inventory_unlock(request, pk):
     """Снять замок инвентаризации — снова разрешить правку."""
     i = get_object_or_404(models.Inventory, pk=pk)
-    engine.unpost_inventory(i)
+    engine.unlock_inventory(i)
     return Response(engine.inventory_cockpit(i))
 
 
@@ -1521,22 +1521,22 @@ def project_stock_lot(request, pk):
 
 
 @api_view(['POST'])
-def project_close(request, pk):
+def project_lock(request, pk):
     """Закрыть проект (`active → closed`) — мягкий замок-веха (gate: остатков нет)."""
     project = get_object_or_404(models.Project, pk=pk)
     try:
-        engine.close_project(project)
+        engine.lock_project(project)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.project_closure(project))
 
 
 @api_view(['POST'])
-def project_reopen(request, pk):
+def project_unlock(request, pk):
     """Переоткрыть закрытый проект (`closed → active`)."""
     project = get_object_or_404(models.Project, pk=pk)
     try:
-        engine.reopen_project(project)
+        engine.unlock_project(project)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.project_closure(project))
@@ -1571,7 +1571,7 @@ def command_deficit_add(request):
 def _procurement_row(p):
     """Строка списка закупок-планов для дерева навигации."""
     return {
-        'id': p.id, 'status': p.status, 'date': p.date, 'note': p.note,
+        'id': p.id, 'locked': p.locked, 'date': p.date, 'note': p.note,
         'lines': p.lines.count(),
     }
 
@@ -1655,15 +1655,15 @@ def _procurement_transition(request, pk, fn):
 
 
 @api_view(['POST'])
-def procurement_post(request, pk):
+def procurement_lock(request, pk):
     """Утвердить закупку-план (draft → posted) — мягкий замок, строки read-only."""
-    return _procurement_transition(request, pk, engine.post_procurement)
+    return _procurement_transition(request, pk, engine.lock_procurement)
 
 
 @api_view(['POST'])
-def procurement_unpost(request, pk):
+def procurement_unlock(request, pk):
     """Вернуть закупку-план в черновик (posted → draft)."""
-    return _procurement_transition(request, pk, engine.unpost_procurement)
+    return _procurement_transition(request, pk, engine.unlock_procurement)
 
 
 @api_view(['GET'])

@@ -26,7 +26,7 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const fixed = c.posted                   // проведено — read-only (единый мягкий замок)
+  const fixed = c.locked                   // проведено — read-only (единый мягкий замок)
   const locked = fixed || !unlocked
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -38,7 +38,7 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="проведено"
-        onUnfix={() => { if (confirm('Снять фиксацию инвентаризации? Форма станет черновиком.')) run(api.unpostInventory(c.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать инвентаризации?')) run(api.unlockInventory(c.id)) }}
         onDelete={del}
         error={err}
       />
@@ -65,7 +65,7 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
         <div className="kit-actions">
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postInventory(c.id))}>Провести · зафиксировать</button>
+            onClick={() => run(api.lockInventory(c.id))}>Зафиксировать</button>
           {err && <span className="anomaly">{err}</span>}
         </div>}
 

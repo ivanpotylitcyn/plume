@@ -32,7 +32,7 @@ export function RelocationView({ relocationId, openItem, onChanged, onDeleted }:
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const fixed = c.posted                   // проведено — read-only
+  const fixed = c.locked                   // проведено — read-only
   const locked = fixed || !unlocked
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -44,7 +44,7 @@ export function RelocationView({ relocationId, openItem, onChanged, onDeleted }:
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         fixed={fixed} fixedLabel="проведено"
-        onUnfix={() => { if (confirm('Снять фиксацию перемещения? Форма станет черновиком.')) run(api.unpostRelocation(c.id)) }}
+        onUnfix={() => { if (confirm('Расфиксировать перемещения?')) run(api.unlockRelocation(c.id)) }}
         onDelete={del}
         error={err}
       />
@@ -68,7 +68,7 @@ export function RelocationView({ relocationId, openItem, onChanged, onDeleted }:
         {!fixed &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.postRelocation(c.id))}>Провести · зафиксировать</button>}
+            onClick={() => run(api.lockRelocation(c.id))}>Зафиксировать</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 

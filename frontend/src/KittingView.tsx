@@ -9,9 +9,9 @@ import { AnchorSelect, AuthorField, FormHeader, ProjectField, useOrderCockpit } 
 import { Glyph, Segment, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-const KIT_STATUS: Record<string, string> = {
-  wip: 'в работе', closed: 'закрыт', cancelled: 'отменён',
-}
+// Волна 19, Ф1c: словарь `wip/closed/cancelled` снят — ось та же `locked`, что у
+// всех сущностей. Подпись остаётся своей: у комплектации фиксация рождает прибор.
+const kitLabel = (locked: boolean) => locked ? 'зафиксирована' : 'в работе'
 
 export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
   { kittingId: number; openItem: (id: number) => void; onChanged: () => void
@@ -29,8 +29,8 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const wip = c.status === 'wip'
-  const fixed = !wip                       // закрыт/отменён — read-only (фиксация)
+  const wip = !c.locked
+  const fixed = !wip                       // зафиксирована — read-only
   const locked = fixed || !unlocked
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
@@ -38,12 +38,12 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
         name={c.target_description}
         meta={<>
           <Glyph status={c.cockpit_status} /> {c.target_design_item_id} · {c.project_code} ·
-          {' '}образцов {num(c.qty)} · {KIT_STATUS[c.status] ?? c.status}
+          {' '}образцов {num(c.qty)} · {kitLabel(c.locked)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel={KIT_STATUS[c.status] ?? c.status}
-        onUnfix={c.status === 'closed'
-          ? () => { if (confirm('Переоткрыть комплектацию? Рождённый прибор откатится.')) run(api.reopenKitting(c.id)) }
+        fixed={fixed} fixedLabel={kitLabel(c.locked)}
+        onUnfix={c.locked
+          ? () => { if (confirm('Расфиксировать комплектацию? Рождённый прибор откатится.')) run(api.unlockKitting(c.id)) }
           : undefined}
         onDelete={del}
         error={err}
@@ -71,7 +71,7 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
         {wip &&
           <button className="btn primary" disabled={busy || unlocked}
             title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.closeKitting(c.id))}>Закрыть · родить прибор</button>}
+            onClick={() => run(api.lockKitting(c.id))}>Зафиксировать · родить прибор</button>}
         {err && <span className="anomaly">{err}</span>}
       </div>
 
