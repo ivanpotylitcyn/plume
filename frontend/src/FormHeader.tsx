@@ -204,8 +204,9 @@ export function FormHeader({
           </div>
         </div>
         {children}
-        {/* Корзина — у нижней границы зоны (низ-право), только у расфиксированного. */}
-        {!fixed && onDelete && (
+        {/* Корзина — у нижней границы зоны (низ-право), только в режиме ПРАВКИ
+            (§5, Ф9): просмотр чист и от случайного удаления защищён структурно. */}
+        {!fixed && unlocked && onDelete && (
           <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
             <span className="lbl">Удалить</span><span className="ci ci-trash" />
           </button>
