@@ -9,8 +9,8 @@ import { Segment, money, num, ItemStatusGlyph } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 
-export function DeficitView({ projectId, items, closed, openItem, openPurchase, onChanged, onDeleted }:
-  { projectId: number; items: ItemRow[]; closed: boolean
+export function DeficitView({ projectId, items, isNew, closed, openItem, openPurchase, onChanged, onDeleted }:
+  { projectId: number; items: ItemRow[]; isNew: boolean; closed: boolean
     openItem: (id: number) => void; openPurchase: (id: number) => void
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
@@ -18,7 +18,7 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)      // бюджет пересчитывается при правке потребности
-  const { unlocked, toggle } = useFormLock(false)   // замок §5: реквизиты правим открыв
+  const { unlocked, toggle } = useFormLock(projectId, isNew)   // §5: существующее — в просмотре
 
   useEffect(() => {
     setData(null); setPhead(null); setErr(null)
@@ -73,8 +73,8 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
         name={name}
         meta={<>{code} · проект</>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
-        onDelete={unlocked ? del : undefined}
-      />
+        onDelete={del}
+      >
       {unlocked && phead &&
         <dl className="props">
           <dt>Код</dt>
@@ -93,6 +93,7 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
           <dd><CommitInput value={phead.started ?? ''} type="date" disabled={busy}
             onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} /></dd>
         </dl>}
+      </FormHeader>
       <div className="subtitle">Проект · приборы, потребность, склад · дефицит = надо − склад − заказано (разузловано до покупных листьев)</div>
       <BudgetPanel projectId={projectId} rev={rev} />
 
@@ -102,10 +103,12 @@ export function DeficitView({ projectId, items, closed, openItem, openPurchase, 
         ? <div style={{ color: 'var(--fg-dim)' }}>Пока ничего — добавьте прибор ниже.</div>
         : <div className="pgrid">
             <CompHead />
-            {data.demands.map(d => <DeviceRow key={d.demand_id} d={d} closed={closed}
+            {data.demands.map(d => <DeviceRow key={d.demand_id} d={d}
+              editable={unlocked && !closed}
               busy={busy} openItem={openItem} run={run} />)}
           </div>}
-      {!closed && <AddDevice items={items} demands={data.demands} busy={busy}
+      {/* §5 (Ф9): контролы правки приборов только в режиме правки — просмотр чище. */}
+      {!closed && unlocked && <AddDevice items={items} demands={data.demands} busy={busy}
         add={(target_item_id, qty) => run(api.addDemand(projectId, { target_item_id, qty }))} />}
       {err && <div className="anomaly">{err}</div>}
 
@@ -191,8 +194,8 @@ function CompHead() {
 // Прибор в потребности: строка в том же шаблоне колонок, что и его состав.
 // Статус — тонкой полосой слева (без ведущего глифа); название серым. Клик по
 // шеврону раскрывает аккордеон с дефицитом по этому прибору.
-function DeviceRow({ d, closed, busy, openItem, run }: {
-  d: DeficitDemand; closed: boolean; busy: boolean
+function DeviceRow({ d, editable, busy, openItem, run }: {
+  d: DeficitDemand; editable: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<Deficit>) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -205,9 +208,11 @@ function DeviceRow({ d, closed, busy, openItem, run }: {
         <a className="link" onClick={() => openItem(d.target_id)}>{d.target_design_item_id}</a>
         <span className="name">{d.target_description}</span>
         <span className="pnum">
-          <CommitInput value={String(d.qty)} width={56} disabled={closed || busy}
-            onCommit={v => run(api.updateDemand(d.demand_id, Number(v)))}
-            validate={v => Number(v) > 0} />
+          {editable
+            ? <CommitInput value={String(d.qty)} width={56} disabled={busy}
+                onCommit={v => run(api.updateDemand(d.demand_id, Number(v)))}
+                validate={v => Number(v) > 0} />
+            : num(d.qty)}
         </span>
         <span title="сделано / делается / осталось сделать">
           <Segment status="available" value={dev.done} />
@@ -216,7 +221,7 @@ function DeviceRow({ d, closed, busy, openItem, run }: {
         </span>
         <span />
         <span className="act">
-          {!closed &&
+          {editable &&
             <button className="x" title="убрать прибор из потребности" disabled={busy}
               onClick={() => { if (confirm(`Убрать ${d.target_design_item_id} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
         </span>

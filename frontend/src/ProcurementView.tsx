@@ -17,8 +17,8 @@ function procurementLock(locked: boolean) {
     : { label: 'расфиксирована', cls: 'g-to_order', g: '▲' }
 }
 
-export function ProcurementView({ procurementId, items, openItem, openPurchase, onChanged, onDeleted }: {
-  procurementId: number; items: ItemRow[]
+export function ProcurementView({ procurementId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
+  procurementId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openPurchase: (id: number) => void; onChanged: () => void
   onDeleted?: () => void
 }) {
@@ -26,7 +26,7 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)     // растёт на мутациях — освежает панель pegging
-  const { unlocked, toggle } = useFormLock(true)
+  const { unlocked, toggle } = useFormLock(procurementId, isNew)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -40,8 +40,9 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
       .finally(() => setBusy(false))
   }
 
-  // Удаление закупки-плана (WAVE14 Ф2) под замком: только расфиксированную (иначе fix-chip);
-  // friendly-guard бэка держит привязанные заказы.
+  // Удаление закупки-плана (WAVE14 Ф2): корзина в шапке только у расфиксированной
+  // (§5: у запертой одна степень свободы — расфиксировать); friendly-guard бэка
+  // держит привязанные заказы.
   const del = () => {
     if (!c || !confirm('Удалить закупку-план? Строки будут сняты. Действие необратимо.')) return
     setBusy(true); setErr(null)
@@ -66,13 +67,14 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
           {c.note && <> · {c.note}</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        onDelete={unlocked ? del : undefined}
-        fixed={fixed} fixedLabel={st.label}
+        onDelete={del}
+        fixed={fixed}
+        onFixate={() => run(api.lockProcurement(c.id))}
         onUnfix={() => {
           if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
         }}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>Дата</dt>
@@ -84,16 +86,11 @@ export function ProcurementView({ procurementId, items, openItem, openPurchase, 
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
       </dl>
+      </FormHeader>
 
       <div className="kit-actions">
-        {/* Отмены нет (волна 19, Р1): ненужный план удаляется из шапки под замком. */}
-        {!c.locked &&
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockProcurement(c.id))}>Зафиксировать</button>}
         <a className="btn" href={api.orderXlsxUrl(c.id)} download
           title="выгрузить order.xlsx для поставщика">Скачать order.xlsx</a>
-        {err && <span className="anomaly">{err}</span>}
       </div>
 
       <table className="grid">

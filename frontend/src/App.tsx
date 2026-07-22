@@ -92,6 +92,9 @@ export default function App() {
   const [relocations, setRelocations] = useState<RelocationRow[]>([])
   const [locationRows, setLocationRows] = useState<LocationRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
+  // §5 (Ф9): «только что создан» — единственный документ, что открывается в правке.
+  // Помечается в onCreated-потоках, гаснет как только выбор ушёл с него (эффект ниже).
+  const [justCreated, setJustCreated] = useState<{ kind: string; id: number } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
@@ -203,6 +206,16 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Метка «только что создан» гаснет, как только выбор ушёл с этого документа —
+  // повторный заход в него уже откроется в просмотре, как любой существующий.
+  useEffect(() => {
+    if (justCreated && !(sel && 'id' in sel &&
+        sel.kind === justCreated.kind && sel.id === justCreated.id))
+      setJustCreated(null)
+  }, [sel, justCreated])
+  const isFresh = (kind: string, id: number) =>
+    justCreated?.kind === kind && justCreated.id === id
+
   const openProject = (id: number) => { setMode('projects'); setSel({ kind: 'project', id }) }
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   // 6 складских документов открываются в едином режиме «Ордера» (Ф1b-флагман).
@@ -251,13 +264,13 @@ export default function App() {
   }[k])()
   // После создания в единой форме: перезагрузить нужный фид и открыть detail.
   const afterCreate: Record<OrderKind, (id: number) => void> = {
-    receipt: id => { reloadReceipts(); openReceipt(id) },
-    kitting: id => { reloadKittings(); openKitting(id) },
-    transfer: id => { reloadTransfers(); openTransfer(id) },
-    requisition: id => { reloadRequisitions(); openRequisition(id) },
-    writeoff: id => { reloadWriteoffs(); openWriteoff(id) },
-    inventory: id => { reloadInventories(); openInventory(id) },
-    relocation: id => { reloadRelocations(); openRelocation(id) },
+    receipt: id => { reloadReceipts(); setJustCreated({ kind: 'receipt', id }); openReceipt(id) },
+    kitting: id => { reloadKittings(); setJustCreated({ kind: 'kitting', id }); openKitting(id) },
+    transfer: id => { reloadTransfers(); setJustCreated({ kind: 'transfer', id }); openTransfer(id) },
+    requisition: id => { reloadRequisitions(); setJustCreated({ kind: 'requisition', id }); openRequisition(id) },
+    writeoff: id => { reloadWriteoffs(); setJustCreated({ kind: 'writeoff', id }); openWriteoff(id) },
+    inventory: id => { reloadInventories(); setJustCreated({ kind: 'inventory', id }); openInventory(id) },
+    relocation: id => { reloadRelocations(); setJustCreated({ kind: 'relocation', id }); openRelocation(id) },
   }
   // Ключ выбранного ордера для подсветки строки (id пересекаются между таблицами).
   const orderSelKey = sel && ORDER_SEL_KINDS.has(sel.kind) && 'id' in sel
@@ -409,6 +422,7 @@ export default function App() {
               projectName={p.name} openItem={openItem} />
           return <>
             <DeficitView key={`deficit-${sel.id}`} projectId={sel.id} items={items}
+              isNew={isFresh('project', sel.id)}
               closed={p?.locked ?? false} openItem={openItem}
               openPurchase={id => { reloadPurchases(); openPurchase(id) }}
               onChanged={reloadProjects}
@@ -418,50 +432,55 @@ export default function App() {
           </>
         })()}
         {sel?.kind === 'new-project' &&
-          <NewProject onCreated={id => { reloadProjects(); openProject(id) }} />}
+          <NewProject onCreated={id => { reloadProjects(); setJustCreated({ kind: 'project', id }); openProject(id) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
+          isNew={isFresh('item', sel.id)}
           openItem={openItem} onChanged={reloadItems}
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'new-item' &&
-          <NewItem onCreated={id => { reloadItems(); openItem(id) }} />}
+          <NewItem onCreated={id => { reloadItems(); setJustCreated({ kind: 'item', id }); openItem(id) }} />}
         {/* Новое изделие из режима «Изделия»: produced=True по умолчанию; после создания
             остаёмся в этом режиме (openItem увёл бы в «Компоненты»). */}
         {sel?.kind === 'new-product' &&
-          <NewItem defaultProduced onCreated={id => { reloadItems(); setMode('products'); setSel({ kind: 'item', id }) }} />}
+          <NewItem defaultProduced onCreated={id => { reloadItems(); setJustCreated({ kind: 'item', id }); setMode('products'); setSel({ kind: 'item', id }) }} />}
         {sel?.kind === 'library-sync' &&
           <LibraryImportView onApplied={reloadItems} openItem={openItem} />}
         {/* Ф2i: единый вход detail-формы «Ордера» вместо шести условных веток. */}
         {sel && ORDER_SEL_KINDS.has(sel.kind) && (() => {
           const o = sel as { kind: OrderKind; id: number }
           return <OrderForm kind={o.kind} id={o.id} items={items}
+            isNew={isFresh(o.kind, o.id)}
             openItem={openItem} openPurchase={openPurchase}
             onChanged={() => reloadOrderKind(o.kind)}
             onDeleted={() => { reloadOrderKind(o.kind); setSel(null) }} />
         })()}
         {sel?.kind === 'purchase' &&
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
+            isNew={isFresh('purchase', sel.id)}
             openReceipt={openReceipt} onChanged={reloadPurchases}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'new-purchase' &&
           <NewPurchase projects={projects}
-            onCreated={id => { reloadPurchases(); openPurchase(id) }} />}
+            onCreated={id => { reloadPurchases(); setJustCreated({ kind: 'purchase', id }); openPurchase(id) }} />}
         {sel?.kind === 'command' &&
           <CommandDeficitView openItem={openItem}
             openProcurement={id => { reloadProcurements(); openProcurement(id) }} />}
         {sel?.kind === 'procurement' &&
           <ProcurementView procurementId={sel.id} items={items} openItem={openItem}
+            isNew={isFresh('procurement', sel.id)}
             openPurchase={id => { reloadPurchases(); openPurchase(id) }}
             onChanged={reloadProcurements}
             onDeleted={() => { reloadProcurements(); setSel(null) }} />}
         {sel?.kind === 'new-procurement' &&
-          <NewProcurement onCreated={id => { reloadProcurements(); openProcurement(id) }} />}
+          <NewProcurement onCreated={id => { reloadProcurements(); setJustCreated({ kind: 'procurement', id }); openProcurement(id) }} />}
         {sel?.kind === 'new-order' &&
           <NewOrder projects={projects} items={items} afterCreate={afterCreate} />}
         {sel?.kind === 'location' &&
-          <LocationView locationId={sel.id} openItem={openItem} onChanged={reloadLocations}
+          <LocationView locationId={sel.id} openItem={openItem}
+            isNew={isFresh('location', sel.id)} onChanged={reloadLocations}
             onDeleted={() => { reloadLocations(); setSel(null) }} />}
         {sel?.kind === 'new-location' &&
-          <NewLocation onCreated={id => { reloadLocations(); openLocation(id) }} />}
+          <NewLocation onCreated={id => { reloadLocations(); setJustCreated({ kind: 'location', id }); openLocation(id) }} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}
       </div>
 

@@ -9,8 +9,8 @@ import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 
-export function ReceiptView({ receiptId, items, openItem, openPurchase, onChanged, onDeleted }: {
-  receiptId: number; items: ItemRow[]
+export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
+  receiptId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openPurchase: (id: number) => void
   onChanged: () => void; onDeleted: () => void
 }) {
@@ -21,7 +21,7 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
       onLoad: c => { api.projectPurchases(c.project_id).then(setPurchases) },
       remove: api.deleteReceipt,
       confirmDelete: 'Удалить поставку (УПД)? Рождённые партии будут сняты. Действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -37,11 +37,13 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
           УПД {c.number} · {c.date} · {c.project_code} · сумма {num(c.total_cost)} ₽
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel="сверена"
+        fixed={fixed}
+        onFixate={() => run(api.lockReceipt(c.id))}
+        fixateTitle="Сверено со сканом — зафиксировать поставку"
         onUnfix={() => { if (confirm('Расфиксировать поставки?')) run(api.unlockReceipt(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>№ УПД</dt>
@@ -57,12 +59,9 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateReceipt(c.id, { project_id: id }))} />
       </dl>
+      </FormHeader>
 
       <div className="kit-actions">
-        {!fixed &&
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockReceipt(c.id))}>Сверено со сканом · зафиксировать</button>}
         <span className="hint">Заказ (закрывает):</span>
         <select className="lot-sel" value={c.purchase_id ?? ''} disabled={locked || busy}
           onChange={e => run(api.linkReceiptPurchase(
@@ -74,7 +73,6 @@ export function ReceiptView({ receiptId, items, openItem, openPurchase, onChange
         </select>
         {c.purchase_id &&
           <a className="link" onClick={() => openPurchase(c.purchase_id!)}>открыть заказ ›</a>}
-        {err && <span className="anomaly">{err}</span>}
       </div>
 
       <table className="grid">

@@ -9,15 +9,15 @@ import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
 
-export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
-  { itemId: number; items: ItemRow[]; openItem: (id: number) => void
+export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted }:
+  { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
     onChanged?: () => void; onDeleted?: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rollup, setRollup] = useState<RollupResult | null>(null)
-  const { unlocked, toggle } = useFormLock(false)   // замок §5: свойства правим открыв
+  const { unlocked, toggle } = useFormLock(itemId, isNew)   // §5: существующее — в просмотре
 
   useEffect(() => {
     setD(null); setErr(null); setRollup(null)
@@ -76,10 +76,10 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
           {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
-        fixed={fixed} fixedLabel="зафиксировано"
+        fixed={fixed}
         onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
-        onDelete={!locked ? del : undefined}
-      />
+        onDelete={del}
+      >
       <dl className="props">
         <dt>Изделие</dt>
         <dd>{!locked
@@ -126,6 +126,7 @@ export function ItemView({ itemId, items, openItem, onChanged, onDeleted }:
               validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</>
           : (d.estimated_cost != null ? `${d.estimated_cost} ₽` : '—')}</dd>
       </dl>
+      </FormHeader>
 
       {/* Хот-фикс волны 17 (по запросу пользователей): ручной фиксации из вью НЕТ —
           кнопка «Зафиксировать» убрана намеренно. `posted` изделие можно расфиксировать

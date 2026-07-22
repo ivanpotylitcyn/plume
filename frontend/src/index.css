@@ -97,6 +97,10 @@ body { overflow: hidden; }
 .ci-checklist::before    { content: '\eab3'; }
 .ci-export::before       { content: '\ebac'; }
 .ci-trash::before        { content: '\ea81'; }
+.ci-edit::before         { content: '\ea73'; }  /* контрол шапки: редактировать (§5) */
+.ci-eye::before          { content: '\ea70'; }  /* контрол шапки: просмотр */
+.ci-lock::before         { content: '\ea75'; }  /* контрол шапки: зафиксировать */
+.ci-unlock::before       { content: '\eb74'; }  /* контрол шапки: расфиксировать */
 .ci-arrow-swap::before   { content: '\ebcb'; }
 .ci-table::before        { content: '\ebb7'; }
 .ci-search::before       { content: '\ea6d'; }
@@ -196,32 +200,25 @@ body { overflow: hidden; }
   margin-top: 3px; font-variant-numeric: tabular-nums; }
 .fh-meta .glyph { margin-right: 4px; }
 .fh-meta a.link { color: var(--link); }
-.fh-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; padding-top: 3px; }
-/* индикатор сохранения */
-.save-ind { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
-.save-ind.editing { color: var(--st-wip); }
-.save-ind.saving  { color: var(--st-wip); }
-.save-ind.saved   { color: var(--st-ok); }
-.save-ind.error   { color: var(--st-order); }
-/* замок формы: контур = вид, заливка = фиксация (§5) */
-.lock-btn { background: none; border: 1px solid transparent; color: var(--fg-dim);
-  cursor: pointer; border-radius: 4px; padding: 3px 6px; font-size: 15px; line-height: 1;
-  display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-base); }
-.lock-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.lock-btn.open { color: var(--accent); }
-/* Ф4 (волна 16): удаление — плавающая кнопка в правом нижнем углу контент-панели,
-   вынесена из шапки подальше от замка. Тускло по умолчанию, краснеет на наведении. */
-.del-fab { position: fixed; right: 22px; bottom: 18px; z-index: 30;
-  width: 34px; height: 34px; border-radius: 6px; font-size: 15px; line-height: 1;
-  background: var(--bg-widget); border: 1px solid var(--border-strong); color: var(--fg-dim);
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 14px #00000055; }
-.del-fab:hover { color: var(--st-order); border-color: var(--st-order); }
-/* чип фиксации (заливка) */
-.fix-chip { background: var(--bg-widget); border: 1px solid var(--border-strong);
-  color: var(--fg-dim); cursor: pointer; border-radius: 4px; padding: 3px 9px;
-  font-family: var(--font-base); font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
-.fix-chip:hover { border-color: var(--fg-dim); color: var(--fg); }
+/* Зона шапки (§5, Ф9): заголовок+мета+свойства. relative — якорь для корзины,
+   которая садится в её НИЖНИЙ правый угол (разнесена с верхними контролами). */
+.fhz { position: relative; }
+/* Верхние контролы шапки: вертикальная колонка справа-сверху, иконки по правому краю,
+   подпись слева от иконки. Codicons монохромны — цвет от темы. */
+.fh-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  flex: 0 0 auto; }
+.fh-ctl { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px;
+  background: none; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
+  color: var(--fg-dim); padding: 3px 6px; font: inherit; }
+.fh-ctl .lbl { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.fh-ctl .ci { font-size: 16px; }
+.fh-ctl:hover { background: var(--bg-hover); color: var(--fg); }
+/* Корзина — у нижней границы зоны шапки (низ-право), подписана «Удалить». */
+.fh-del { position: absolute; right: 0; bottom: 0; }
+.fh-del:hover { color: var(--st-order); border-color: var(--st-order); }
+/* строка ошибки под шапкой (заменила индикатор в слоте сохранения) */
+.fh-error { font-family: var(--font-mono); font-size: 11px; color: var(--st-order);
+  margin: 4px 0 0; }
 
 /* ---- панель свойств (узкая, пары label:value) ---- */
 .props { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;

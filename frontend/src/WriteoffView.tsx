@@ -11,8 +11,9 @@ import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHe
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
+export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted }: {
   writeoffId: number
+  isNew: boolean
   openItem: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
@@ -24,7 +25,7 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
       onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
       remove: api.deleteWriteoff,
       confirmDelete: 'Удалить списание? Действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -41,11 +42,12 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
           {c.reason && <> · {c.reason}</>} · списано {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel="проведено"
+        fixed={fixed}
+        onFixate={() => run(api.lockWriteoff(c.id))}
         onUnfix={() => { if (confirm('Расфиксировать списания?')) run(api.unlockWriteoff(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>№ акта</dt>
@@ -64,14 +66,7 @@ export function WriteoffView({ writeoffId, openItem, onChanged, onDeleted }: {
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateWriteoff(c.id, { project_id: id }))} />
       </dl>
-
-      {!fixed &&
-        <div className="kit-actions">
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockWriteoff(c.id))}>Зафиксировать</button>
-          {err && <span className="anomaly">{err}</span>}
-        </div>}
+      </FormHeader>
 
       <table className="grid">
         <thead>

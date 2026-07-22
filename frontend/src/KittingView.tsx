@@ -13,8 +13,8 @@ import { AttachmentPanel } from './AttachmentPanel'
 // всех сущностей. Подпись остаётся своей: у комплектации фиксация рождает прибор.
 const kitLabel = (locked: boolean) => locked ? 'зафиксирована' : 'в работе'
 
-export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
-  { kittingId: number; openItem: (id: number) => void; onChanged: () => void
+export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }:
+  { kittingId: number; isNew: boolean; openItem: (id: number) => void; onChanged: () => void
     onDeleted: () => void }) {
   // Справочник изделий — для якоря «целевое изделие» (Ф2k). Загружаем один раз.
   const [items, setItems] = useState<ItemRow[]>([])
@@ -24,7 +24,7 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
       onChanged, onDeleted,
       remove: api.deleteKitting,
       confirmDelete: 'Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -41,13 +41,13 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
           {' '}образцов {num(c.qty)} · {kitLabel(c.locked)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel={kitLabel(c.locked)}
-        onUnfix={c.locked
-          ? () => { if (confirm('Расфиксировать комплектацию? Рождённый прибор откатится.')) run(api.unlockKitting(c.id)) }
-          : undefined}
+        fixed={fixed}
+        onFixate={() => run(api.lockKitting(c.id))}
+        fixateTitle="Зафиксировать комплектацию — родить прибор"
+        onUnfix={() => { if (confirm('Расфиксировать комплектацию? Рождённый прибор откатится.')) run(api.unlockKitting(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>Образцов</dt>
@@ -66,14 +66,8 @@ export function KittingView({ kittingId, openItem, onChanged, onDeleted }:
           disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
       </dl>
+      </FormHeader>
 
-      <div className="kit-actions">
-        {wip &&
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockKitting(c.id))}>Зафиксировать · родить прибор</button>}
-        {err && <span className="anomaly">{err}</span>}
-      </div>
 
       {c.born_lots.length > 0 && (
         <div className="born">

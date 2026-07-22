@@ -11,8 +11,9 @@ import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHe
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function RelocationView({ relocationId, openItem, onChanged, onDeleted }: {
+export function RelocationView({ relocationId, isNew, openItem, onChanged, onDeleted }: {
   relocationId: number
+  isNew: boolean
   openItem: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
@@ -27,7 +28,7 @@ export function RelocationView({ relocationId, openItem, onChanged, onDeleted }:
       onLoad: c => { api.relocationSourceLots(c.id).then(setLots) },
       remove: api.deleteRelocation,
       confirmDelete: 'Удалить перемещение? Ходы откатятся, действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -43,11 +44,12 @@ export function RelocationView({ relocationId, openItem, onChanged, onDeleted }:
           {c.project_code} · {c.project_name} · {c.date} · перемещено {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel="проведено"
+        fixed={fixed}
+        onFixate={() => run(api.lockRelocation(c.id))}
         onUnfix={() => { if (confirm('Расфиксировать перемещения?')) run(api.unlockRelocation(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>№ перемещения</dt>
@@ -63,14 +65,7 @@ export function RelocationView({ relocationId, openItem, onChanged, onDeleted }:
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateRelocation(c.id, { project_id: id }))} />
       </dl>
-
-      <div className="kit-actions">
-        {!fixed &&
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockRelocation(c.id))}>Зафиксировать</button>}
-        {err && <span className="anomaly">{err}</span>}
-      </div>
+      </FormHeader>
 
       <table className="grid">
         <thead>

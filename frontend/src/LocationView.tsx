@@ -9,8 +9,9 @@ import { num } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { CommitInput } from './ReceiptView'
 
-export function LocationView({ locationId, openItem, onChanged, onDeleted }: {
+export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted }: {
   locationId: number
+  isNew: boolean
   openItem: (id: number) => void
   onChanged?: () => void
   onDeleted?: () => void
@@ -18,7 +19,7 @@ export function LocationView({ locationId, openItem, onChanged, onDeleted }: {
   const [d, setD] = useState<LocationCockpit | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(false)   // замок §5: свойства правим открыв
+  const { unlocked, toggle } = useFormLock(locationId, isNew)   // §5: существующее — в просмотре
 
   useEffect(() => {
     setD(null); setErr(null)
@@ -54,8 +55,8 @@ export function LocationView({ locationId, openItem, onChanged, onDeleted }: {
           {d.code}{d.kind ? ` · ${d.kind}` : ''} · партий {d.stock.length}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
-        onDelete={unlocked ? del : undefined}
-      />
+        onDelete={del}
+      >
       <dl className="props">
         <dt>Код</dt>
         <dd>{unlocked
@@ -75,6 +76,7 @@ export function LocationView({ locationId, openItem, onChanged, onDeleted }: {
               onCommit={v => run(api.updateLocation(d.id, { kind: v }))} />
           : (d.kind || '—')}</dd>
       </dl>
+      </FormHeader>
 
       <div className="section-h">На складе
         <span className="hint">партий {d.stock.length} · всего {num(live)}</span></div>

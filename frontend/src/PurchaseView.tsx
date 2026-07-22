@@ -19,8 +19,8 @@ export function purchaseLock(locked: boolean) {
     : { label: 'расфиксирован', cls: 'g-to_order', g: '▲' }
 }
 
-export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChanged, onDeleted }: {
-  purchaseId: number; items: ItemRow[]
+export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, onChanged, onDeleted }: {
+  purchaseId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openReceipt: (id: number) => void
   onChanged: () => void; onDeleted?: () => void
 }) {
@@ -28,7 +28,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
-  const { unlocked, toggle } = useFormLock(true)
+  const { unlocked, toggle } = useFormLock(purchaseId, isNew)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -43,8 +43,9 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
       .finally(() => setBusy(false))
   }
 
-  // Удаление заказа (WAVE14 Ф2) под замком: только черновик (posted → fix-chip, без 🗑);
-  // friendly-guard бэка держит привязанный приход.
+  // Удаление заказа (WAVE14 Ф2): корзина в шапке живёт только у расфиксированного
+  // (§5: у запертого одна степень свободы — расфиксировать); friendly-guard бэка
+  // держит привязанный приход.
   const del = () => {
     if (!c || !confirm('Удалить заказ? Строки заказа будут сняты. Действие необратимо.')) return
     setBusy(true); setErr(null)
@@ -68,13 +69,14 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
           {c.date && <> · {c.date}</>} · заказано {num(c.total_ordered)} · поступило {num(c.total_received)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        onDelete={unlocked ? del : undefined}
-        fixed={fixed} fixedLabel={st.label}
+        onDelete={del}
+        fixed={fixed}
+        onFixate={() => run(api.lockPurchase(c.id))}
         onUnfix={() => {
           if (confirm('Расфиксировать заказ?')) run(api.unlockPurchase(c.id))
         }}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>Дата</dt>
@@ -92,16 +94,7 @@ export function PurchaseView({ purchaseId, items, openItem, openReceipt, onChang
           disabled={!editable || busy}
           onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))} />
       </dl>
-
-      <div className="kit-actions">
-        {/* Отмены нет (волна 19, Р1): ненужный заказ удаляется — кнопка удаления
-            живёт в шапке под замком, чтобы «отменить» и «удалить» не двоились. */}
-        {!c.locked &&
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockPurchase(c.id))}>Зафиксировать</button>}
-        {err && <span className="anomaly">{err}</span>}
-      </div>
+      </FormHeader>
 
       <table className="grid">
         <thead>

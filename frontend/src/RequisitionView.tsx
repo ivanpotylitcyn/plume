@@ -12,8 +12,9 @@ import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHe
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted }: {
+export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onDeleted }: {
   requisitionId: number
+  isNew: boolean
   openItem: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
@@ -25,7 +26,7 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
       onLoad: () => { api.allAvailableLots().then(setLots) },
       remove: api.deleteRequisition,
       confirmDelete: 'Удалить требование? Действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -43,11 +44,12 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
           получатель {c.project_code} · {c.date} · поставлено {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel="проведено"
+        fixed={fixed}
+        onFixate={() => run(api.lockRequisition(c.id))}
         onUnfix={() => { if (confirm('Расфиксировать требования?')) run(api.unlockRequisition(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>№ требования</dt>
@@ -63,14 +65,8 @@ export function RequisitionView({ requisitionId, openItem, onChanged, onDeleted 
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateRequisition(c.id, { project_id: id }))} />
       </dl>
+      </FormHeader>
 
-      {!fixed &&
-        <div className="kit-actions">
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockRequisition(c.id))}>Зафиксировать</button>
-          {err && <span className="anomaly">{err}</span>}
-        </div>}
 
       <table className="grid">
         <thead>

@@ -11,8 +11,9 @@ import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHe
 import { num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
+export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted }: {
   transferId: number
+  isNew: boolean
   openItem: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
@@ -27,7 +28,7 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
       onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
       remove: api.deleteTransfer,
       confirmDelete: 'Удалить передачу (накладную)? Действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -44,11 +45,13 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
           {c.contractor_name && <> · {c.contractor_name}</>} · {c.date} · отдано {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel="отгружена"
+        fixed={fixed}
+        onFixate={() => run(api.lockTransfer(c.id))}
+        fixateTitle="Отгружено — зафиксировать передачу"
         onUnfix={() => { if (confirm('Расфиксировать передачу? Отгрузка откатится.')) run(api.unlockTransfer(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>№ накладной</dt>
@@ -73,14 +76,7 @@ export function TransferView({ transferId, openItem, onChanged, onDeleted }: {
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateTransfer(c.id, { project_id: id }))} />
       </dl>
-
-      <div className="kit-actions">
-        {!fixed &&
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockTransfer(c.id))}>Отгружено · зафиксировать</button>}
-        {err && <span className="anomaly">{err}</span>}
-      </div>
+      </FormHeader>
 
       <table className="grid">
         <thead>

@@ -12,8 +12,8 @@ import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 
-export function InventoryView({ inventoryId, items, openItem, onChanged, onDeleted }: {
-  inventoryId: number; items: ItemRow[]
+export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, onDeleted }: {
+  inventoryId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; onChanged: () => void; onDeleted: () => void
 }) {
   const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
@@ -21,7 +21,7 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
       onChanged, onDeleted,
       remove: api.deleteInventory,
       confirmDelete: 'Удалить инвентаризацию? Действие необратимо.',
-    })
+    }, isNew)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -37,11 +37,12 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
           {c.project_code} · {c.project_name} · {c.date} · сумма {num(c.total_cost)} ₽
         </>}
         unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed} fixedLabel="проведено"
+        fixed={fixed}
+        onFixate={() => run(api.lockInventory(c.id))}
         onUnfix={() => { if (confirm('Расфиксировать инвентаризации?')) run(api.unlockInventory(c.id)) }}
         onDelete={del}
         error={err}
-      />
+      >
 
       <dl className="props">
         <dt>№ акта</dt>
@@ -60,14 +61,8 @@ export function InventoryView({ inventoryId, items, openItem, onChanged, onDelet
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateInventory(c.id, { project_id: id }))} />
       </dl>
+      </FormHeader>
 
-      {!fixed &&
-        <div className="kit-actions">
-          <button className="btn primary" disabled={busy || unlocked}
-            title={unlocked ? 'Сначала закройте замок — просмотрите чистовик' : 'Зафиксировать документ'}
-            onClick={() => run(api.lockInventory(c.id))}>Зафиксировать</button>
-          {err && <span className="anomaly">{err}</span>}
-        </div>}
 
       <table className="grid">
         <thead>

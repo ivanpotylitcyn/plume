@@ -16,10 +16,11 @@ export type OrderKind =
   | 'receipt' | 'kitting' | 'transfer' | 'requisition' | 'writeoff' | 'inventory'
   | 'relocation'
 
-export function OrderForm({ kind, id, items, openItem, openPurchase, onChanged, onDeleted }: {
+export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
   kind: OrderKind
   id: number
   items: ItemRow[]
+  isNew: boolean            // §5: только что созданный ордер открыть в правке
   openItem: (id: number) => void
   openPurchase: (id: number) => void
   onChanged: () => void
@@ -27,25 +28,25 @@ export function OrderForm({ kind, id, items, openItem, openPurchase, onChanged, 
 }) {
   switch (kind) {
     case 'receipt':
-      return <ReceiptView receiptId={id} items={items} openItem={openItem}
+      return <ReceiptView receiptId={id} items={items} isNew={isNew} openItem={openItem}
         openPurchase={openPurchase} onChanged={onChanged} onDeleted={onDeleted} />
     case 'kitting':
-      return <KittingView kittingId={id} openItem={openItem}
+      return <KittingView kittingId={id} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'transfer':
-      return <TransferView transferId={id} openItem={openItem}
+      return <TransferView transferId={id} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'requisition':
-      return <RequisitionView requisitionId={id} openItem={openItem}
+      return <RequisitionView requisitionId={id} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'writeoff':
-      return <WriteoffView writeoffId={id} openItem={openItem}
+      return <WriteoffView writeoffId={id} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'inventory':
-      return <InventoryView inventoryId={id} items={items} openItem={openItem}
+      return <InventoryView inventoryId={id} items={items} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'relocation':
-      return <RelocationView relocationId={id} openItem={openItem}
+      return <RelocationView relocationId={id} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />
   }
 }

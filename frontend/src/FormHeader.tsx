@@ -5,9 +5,17 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type UserRow, type ProjectRow } from './api'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
-// Черновики открыты сразу; существующие объекты закрыты по умолчанию.
-export function useFormLock(draft: boolean) {
-  const [unlocked, setUnlocked] = useState(draft)
+// Канон §5 (Ф9): всё существующее открывается В ПРОСМОТРЕ; исключение ровно одно —
+// только что созданный документ, он открыт в правке сразу. Признак «только что создан»
+// приносит `isNew` (App выводит его из `justCreated`). Сброс режима на смене `id`
+// лечит протечку Ф8: `useState` держал режим предыдущего документа, и он перетекал.
+export function useFormLock(id: number, isNew = false) {
+  const [unlocked, setUnlocked] = useState(isNew)
+  const freshRef = useRef(isNew); freshRef.current = isNew
+  // Ровно на смену документа: вернуть режим к дефолту этого документа (новый→правка,
+  // существующий→просмотр). Зависимость строго [id] — иначе гашение `justCreated` в App
+  // (isNew: true→false без смены id) слэмнуло бы открытую новую форму обратно в просмотр.
+  useEffect(() => { setUnlocked(freshRef.current) }, [id])
   return { unlocked, toggle: () => setUnlocked(v => !v), setUnlocked }
 }
 
@@ -26,11 +34,12 @@ export function useOrderCockpit<C extends { id: number }>(
     remove: (id: number) => Promise<unknown>   // DELETE-эндпойнт вида
     confirmDelete: string          // текст подтверждения удаления
   },
+  isNew = false,                   // §5: только что созданный открыть в правке
 ) {
   const [c, setC] = useState<C | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const { unlocked, toggle } = useFormLock(true)
+  const { unlocked, toggle } = useFormLock(id, isNew)
   // Колбэки/тексты пересоздаются каждый рендер — держим свежими через ref, чтобы
   // эффект зависел только от id (перезагрузка ровно при смене документа).
   const ref = useRef(cb)
@@ -132,60 +141,77 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
   )
 }
 
+// Шапка формы (§5, Ф9): контролы — вертикальной колонкой справа, подпись слева от
+// иконки, глиф = НАЗНАЧЕНИЕ (куда попадёшь), не состояние. Иконки — Codicons (§2).
+// Индикаторы «✓ сохранено»/«● редактируется» сняты (автосейв → «сохранено» всегда,
+// ничего не различало). Две оси не путаем: замок ФОРМЫ (Редактировать/Просмотр) —
+// личный, режим показа; фиксация ДОКУМЕНТА (Зафиксировать/Расфиксировать) — в данных.
+// У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
 export function FormHeader({
-  name, meta, unlocked, onToggleLock, fixed, fixedLabel, onUnfix, onDelete, error,
+  name, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete, error, children,
 }: {
   name: ReactNode
   meta: ReactNode
   unlocked?: boolean
   onToggleLock?: () => void
   fixed?: boolean
-  fixedLabel?: string
-  onUnfix?: () => void
-  onDelete?: () => void   // удаление ордера (только расфиксированный; иначе «сперва расфиксировать»)
+  onFixate?: () => void      // зафиксировать документ (draft→locked); только у расфиксированного
+  fixateTitle?: string       // подсказка-последствие («…родить прибор») — слово в кнопке едино
+  onUnfix?: () => void       // расфиксировать документ (locked→draft)
+  onDelete?: () => void      // удалить документ (только расфиксированный; под замком корзины нет)
   error?: string | null
+  children?: ReactNode       // блок свойств (.props) — входит в зону шапки, чтобы корзина
+                             // села у её НИЖНЕЙ границы (§5: слоты разнесены по вертикали)
 }) {
   return (
     <>
-      <div className="form-head">
-        <div className="fh-main">
-          <div className="fh-name">{name}</div>
-          <div className="fh-meta">{meta}</div>
-        </div>
-        <div className="fh-right">
-          {fixed ? (
-            // Зафиксирован: чип с заливкой, яркого индикатора нет — документ стабилен.
-            <button className="fix-chip" title="Снять фиксацию…"
-              onClick={onUnfix} disabled={!onUnfix}>
-              🔒 {fixedLabel ?? 'зафиксирован'}
-            </button>
-          ) : (
-            <>
-              {/* Индикатор детерминирован по замку: открыт → жёлтый «редактируется»,
-                  закрыт (чистая форма) → зелёный «сохранено». Ошибка перебивает. */}
-              {error
-                ? <span className="save-ind error">ошибка: {error}</span>
-                : unlocked
-                  ? <span className="save-ind editing">● редактируется</span>
-                  : <span className="save-ind saved">✓ сохранено</span>}
-              {onToggleLock && (
-                <button className={'lock-btn' + (unlocked ? ' open' : '')}
-                  title={unlocked ? 'Форма открыта — редактируется. Закрыть (чистый текст)'
-                                  : 'Форма закрыта. Открыть для правки'}
-                  onClick={onToggleLock}>
-                  {unlocked ? '🔓' : '🔒'}
+      {/* Зона шапки = заголовок+мета+свойства. relative — чтобы корзина легла в её
+          нижний правый угол, а не в плотную колонку под верхними контролами (§5). */}
+      <div className="fhz">
+        <div className="form-head">
+          <div className="fh-main">
+            <div className="fh-name">{name}</div>
+            <div className="fh-meta">{meta}</div>
+          </div>
+          <div className="fh-right">
+            {fixed ? (
+              // Зафиксирован: единственная степень свободы — расфиксировать. Корзины нет
+              // (движок всё равно не даст удалить запертое — «сперва расфиксируйте»).
+              onUnfix && (
+                <button className="fh-ctl" title="Снять фиксацию документа" onClick={onUnfix}>
+                  <span className="lbl">Расфиксировать</span><span className="ci ci-unlock" />
                 </button>
-              )}
-            </>
-          )}
+              )
+            ) : (
+              <>
+                {/* Режим показа: подпись/иконка говорят, КУДА ведёт клик (§5). */}
+                {onToggleLock && (
+                  <button className="fh-ctl" onClick={onToggleLock}
+                    title={unlocked ? 'Просмотр — закрыть форму (чистый текст)'
+                                    : 'Редактировать — открыть форму для правки'}>
+                    <span className="lbl">{unlocked ? 'Просмотр' : 'Редактировать'}</span>
+                    <span className={'ci ' + (unlocked ? 'ci-eye' : 'ci-edit')} />
+                  </button>
+                )}
+                {onFixate && (
+                  <button className="fh-ctl" onClick={onFixate}
+                    title={fixateTitle ?? 'Зафиксировать документ'}>
+                    <span className="lbl">Зафиксировать</span><span className="ci ci-lock" />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
+        {children}
+        {/* Корзина — у нижней границы зоны (низ-право), только у расфиксированного. */}
+        {!fixed && onDelete && (
+          <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
+            <span className="lbl">Удалить</span><span className="ci ci-trash" />
+          </button>
+        )}
       </div>
-      {/* Ф4 (волна 16): удаление вынесено из шапки в плавающую кнопку в правом
-          нижнем углу — чтобы второй клик по замку не попадал случайно в корзину.
-          Только у расфиксированного (иначе перехватывает ветка чипа фиксации). */}
-      {!fixed && onDelete && (
-        <button className="del-fab" title="Удалить документ" onClick={onDelete}>🗑</button>
-      )}
+      {error && <div className="fh-error">ошибка: {error}</div>}
     </>
   )
 }
