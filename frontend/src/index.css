@@ -101,6 +101,7 @@ body { overflow: hidden; }
 .ci-eye::before          { content: '\ea70'; }  /* контрол шапки: просмотр */
 .ci-lock::before         { content: '\ea75'; }  /* контрол шапки: зафиксировать */
 .ci-unlock::before       { content: '\eb74'; }  /* контрол шапки: расфиксировать */
+.ci-file::before         { content: '\ea7b'; }  /* контрол шапки: скачать xlsx */
 .ci-arrow-swap::before   { content: '\ebcb'; }
 .ci-table::before        { content: '\ebb7'; }
 .ci-search::before       { content: '\ea6d'; }
@@ -219,6 +220,11 @@ body { overflow: hidden; }
 /* Корзина — у нижней границы зоны шапки (низ-право), подписана «Удалить». */
 .fh-del { position: absolute; right: 0; bottom: 0; }
 .fh-del:hover { color: var(--st-order); border-color: var(--st-order); }
+/* Скачать order.xlsx — в слоте корзины, но только у ЗАФИКСИРОВАННОЙ закупки (корзина
+   там только у расфиксированной — слоты не сталкиваются). По умолчанию серая (как
+   «Удалить»); зелёный намёк на xlsx — только при наведении (Ф4, 2026-07-24). */
+.fh-download { position: absolute; right: 0; bottom: 0; text-decoration: none; }
+.fh-download:hover { color: var(--st-ok); border-color: var(--st-ok); }
 /* строка ошибки под шапкой (заменила индикатор в слоте сохранения) */
 .fh-error { font-family: var(--font-mono); font-size: 11px; color: var(--st-order);
   margin: 4px 0 0; }

@@ -426,20 +426,37 @@ tests 68, models 11, views 9…; фронт: api.ts 32, App 9, ItemView 9… —
 
 ---
 
-## Ф4. Контрагент у Закупки (функциональное поле для Ф6)
+## Ф4. Контрагент у Закупки (функциональное поле для Ф6) — СДЕЛАНО 2026-07-24
 
 > Идентичность Закупки/Заказа (`code`+`description`) переехала в **Ф10** (свёртка
 > интерфейса). Здесь остаётся только **функциональное** поле, которого требует поток
 > «Заказ → УПД».
 
-- [ ] `Procurement`: `+ contractor` (FK `Counterparty`, `null=True`, `on_delete=SET_NULL`
-      — удаление контрагента не должно ронять план-закупку; отличие от `Receipt.contractor`
+**СДЕЛАНО (код, 2026-07-24; браузерная приёмка — за Иваном).** Сюита 346 (было 344,
++2 теста), tsc/vite/oxlint зелёные, новых warning нет. Миграция `0005_procurement_contractor`.
+
+- [x] `Procurement`: `+ contractor` (FK `Counterparty`, `null=True`, `on_delete=SET_NULL`
+      — удаление контрагента не роняет план-закупку; отличие от `Receipt.contractor`
       с `PROTECT` осознанное). Роль пикера — `is_supplier` (Р3: закупка = один поток
       общения с поставщиком). Питает Ф6 (`create_receipt_from_purchase`) и шапку `order.xlsx`
-      (Ф4b).
-- [ ] Форма `ProcurementView`: пикер контрагента в шапке `.props` (стандарт
-      консистентности форм — [[form-consistency-standard]]).
-- [ ] README: обе диаграммы + `COUNTERPARTY ||--o{ PROCUREMENT : contractor`.
+      (Ф4b). `update_procurement` — часовой `contractor=_UNSET` (как `update_transfer`);
+      `procurement_cockpit` отдаёт `contractor_id`/`contractor_name`.
+- [x] Форма `ProcurementView`: пикер поставщика (`api.counterparties('supplier')`) в шапке
+      `.props` + контрагент в мета-строке (стандарт форм — [[form-consistency-standard]]).
+- [x] README: техническая ER-диаграмма (`PROCUREMENT.contractor_id` + связь
+      `COUNTERPARTY ||--o{ PROCUREMENT : "поставщик (nullable)"`). Продуктовая — flowchart,
+      полей FK не несёт; глоссарий уже упоминает контрагента.
+
+**Правки на приёмке (Иван 2026-07-24, «работает, нравится»):**
+- [x] **Кнопка «Скачать order.xlsx» перенесена в шапку** (была меж шапкой и списком, в
+      `.kit-actions` — «болталась»). Теперь: в слоте корзины (низ-право зоны шапки), но
+      **только у ЗАФИКСИРОВАННОЙ** закупки (корзина там только у расфиксированной — слоты
+      не сталкиваются). Глиф `file` (`ci-file` = `\ea7b`, добавлен), текст «Скачать»,
+      **зелёная подсветка** (`--st-ok`, намёк на xlsx). Реализовано общим слотом
+      `download?: {href,title}` в `FormHeader` (переиспользуемо).
+- [ ] **Имя файла = `Procurement.code`** — в **гигант-rename** (Ф3b/Ф10): `code` у
+      Procurement появляется со свёрткой интерфейса (Ф10); тогда `order.xlsx` отдавать
+      как `<code>.xlsx` вместо `procurements/<id>/order.xlsx`. Пока имя не трогаем.
 
 ### Ф4b. `order.xlsx` — доработка бланка (заказано Иваном 2026-07-20, делаем позже)
 

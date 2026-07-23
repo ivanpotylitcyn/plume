@@ -148,7 +148,8 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
 // личный, режим показа; фиксация ДОКУМЕНТА (Зафиксировать/Расфиксировать) — в данных.
 // У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
 export function FormHeader({
-  name, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete, error, children,
+  name, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete,
+  download, error, children,
 }: {
   name: ReactNode
   meta: ReactNode
@@ -159,6 +160,8 @@ export function FormHeader({
   fixateTitle?: string       // подсказка-последствие («…родить прибор») — слово в кнопке едино
   onUnfix?: () => void       // расфиксировать документ (locked→draft)
   onDelete?: () => void      // удалить документ (только расфиксированный; под замком корзины нет)
+  download?: { href: string; title?: string }  // скачать (xlsx) — в слоте корзины, но
+                             // только у ЗАФИКСИРОВАННОГО (слоты не сталкиваются с корзиной)
   error?: string | null
   children?: ReactNode       // блок свойств (.props) — входит в зону шапки, чтобы корзина
                              // села у её НИЖНЕЙ границы (§5: слоты разнесены по вертикали)
@@ -210,6 +213,14 @@ export function FormHeader({
           <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
             <span className="lbl">Удалить</span><span className="ci ci-trash" />
           </button>
+        )}
+        {/* Скачать (xlsx) — тот же слот, но у ЗАФИКСИРОВАННОГО: корзины там нет, слоты
+            не сталкиваются. Зелёная подсветка намекает на выгрузку. */}
+        {fixed && download && (
+          <a className="fh-ctl fh-download" href={download.href} download
+             title={download.title ?? 'Скачать'}>
+            <span className="lbl">Скачать</span><span className="ci ci-file" />
+          </a>
         )}
       </div>
       {error && <div className="fh-error">ошибка: {error}</div>}

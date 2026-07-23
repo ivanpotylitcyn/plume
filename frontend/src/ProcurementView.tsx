@@ -4,7 +4,8 @@
 // Кнопка выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine } from './api'
+import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine,
+  type CounterpartyRow } from './api'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { PeggingPanel } from './PeggingPanel'
@@ -19,7 +20,11 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)     // растёт на мутациях — освежает панель pegging
+  const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
   const { unlocked, toggle } = useFormLock(procurementId, isNew)
+
+  // Контрагенты-поставщики (Ф4, Р3): закупка = поток общения с поставщиком.
+  useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -56,6 +61,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
         meta={<>
           <StatusGlyph locked={c.locked} />
           {c.locked ? 'зафиксирована' : 'расфиксирована'}
+          {c.contractor_name && <> · {c.contractor_name}</>}
           {c.date && <> · {c.date}</>} · позиций {c.lines.length} · всего {num(c.total_qty)}
           {c.note && <> · {c.note}</>}
         </>}
@@ -66,6 +72,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
         onUnfix={() => {
           if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
         }}
+        download={{ href: api.orderXlsxUrl(c.id), title: 'Выгрузить order.xlsx для поставщика' }}
         error={err}
       >
 
@@ -76,15 +83,19 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
         <dt>Примечание</dt>
         <dd><CommitInput value={c.note} width={240} disabled={!editable || busy}
           onCommit={v => run(api.updateProcurement(c.id, { note: v }))} /></dd>
+        <dt>Контрагент</dt>
+        <dd>
+          <select className="lot-sel" value={c.contractor_id ?? ''} disabled={!editable || busy}
+            onChange={e => run(api.updateProcurement(c.id, {
+              contractor_id: e.target.value ? Number(e.target.value) : null }))}>
+            <option value="">— не указан —</option>
+            {suppliers.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
+          </select>
+        </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
       </dl>
       </FormHeader>
-
-      <div className="kit-actions">
-        <a className="btn" href={api.orderXlsxUrl(c.id)} download
-          title="выгрузить order.xlsx для поставщика">Скачать order.xlsx</a>
-      </div>
 
       <table className="grid">
         <thead>

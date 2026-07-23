@@ -1239,6 +1239,36 @@ class ProcurementCockpitTests(EngineTestBase):
         p.refresh_from_db()
         self.assertIsNone(p.date)
 
+    def test_update_contractor(self):
+        # Волна 19, Ф4: контрагент-поставщик у закупки-плана. Часовой `_UNSET`:
+        # не передан → не трогаем; Counterparty → выставить; None → снять.
+        p = engine.create_procurement(self.user)
+        self.assertIsNone(p.contractor_id)
+        engine.update_procurement(p, contractor=self.supplier)
+        p.refresh_from_db()
+        self.assertEqual(p.contractor_id, self.supplier.id)
+        # проекция кокпита отдаёт контрагента
+        cock = engine.procurement_cockpit(p)
+        self.assertEqual(cock['contractor_id'], self.supplier.id)
+        self.assertEqual(cock['contractor_name'], self.supplier.name)
+        # не передан → не трогаем (правка только даты)
+        engine.update_procurement(p, date='2026-07-10')
+        p.refresh_from_db()
+        self.assertEqual(p.contractor_id, self.supplier.id)
+        # None → снять
+        engine.update_procurement(p, contractor=None)
+        p.refresh_from_db()
+        self.assertIsNone(p.contractor_id)
+        self.assertEqual(engine.procurement_cockpit(p)['contractor_name'], '')
+
+    def test_contractor_set_null_on_counterparty_delete(self):
+        # SET_NULL: удаление контрагента не роняет план-закупку — поле опустевает.
+        p = engine.create_procurement(self.user)
+        engine.update_procurement(p, contractor=self.supplier)
+        self.supplier.delete()
+        p.refresh_from_db()
+        self.assertIsNone(p.contractor_id)
+
     def test_xlsx_bytes_have_header_and_rows(self):
         from io import BytesIO
 

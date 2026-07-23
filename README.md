@@ -139,6 +139,7 @@ erDiagram
 
   COUNTERPARTY ||--o{ RECEIPT : "поставщик"
   COUNTERPARTY ||--o{ TRANSFER : "заказчик (nullable)"
+  COUNTERPARTY ||--o{ PROCUREMENT : "поставщик (nullable)"
 
   STOCKDOCUMENT ||--|| RECEIPT : "MTI-наследник"
   STOCKDOCUMENT ||--|| KITTING : "MTI-наследник"
@@ -268,6 +269,7 @@ erDiagram
   PROCUREMENT {
     int id PK
     int user_id FK "автор"
+    int contractor_id FK "поставщик (nullable, SET_NULL)"
     bool locked "единый мягкий замок"
     date date "начало переговоров"
     string note

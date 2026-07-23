@@ -350,6 +350,7 @@ export interface ProcurementCockpitLine {
 }
 export interface ProcurementCockpit extends Authored {
   id: number; locked: boolean; date: string | null; note: string; editable: boolean
+  contractor_id: number | null; contractor_name: string
   total_qty: number; lines: ProcurementCockpitLine[]
 }
 
@@ -693,7 +694,7 @@ export const api = {
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementCockpit>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
-  updateProcurement: (id: number, b: Partial<{ date: string; note: string; user_id: number }>) =>
+  updateProcurement: (id: number, b: Partial<{ date: string; note: string; user_id: number; contractor_id: number | null }>) =>
     send<ProcurementCockpit>('PATCH', `/api/procurements/${id}/`, b),
   createProcurement: (b: { note?: string; date?: string }) =>
     send<ProcurementCockpit>('POST', '/api/procurements/', b),

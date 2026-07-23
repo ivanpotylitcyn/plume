@@ -2288,6 +2288,8 @@ def procurement_cockpit(procurement):
     return {
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
         'date': procurement.date, 'note': procurement.note,
+        'contractor_id': procurement.contractor_id,          # Ф4: поставщик (Р3)
+        'contractor_name': procurement.contractor.name if procurement.contractor_id else '',
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'total_qty': total_qty, 'lines': rows,
     }
@@ -2351,10 +2353,13 @@ def unlock_procurement(procurement):
     return procurement
 
 
-def update_procurement(procurement, date=None, note=None, user=_UNSET):
-    """Правка шапки закупки-плана (дата / примечание / автор). Только в черновике.
+def update_procurement(procurement, date=None, note=None, user=_UNSET,
+                       contractor=_UNSET):
+    """Правка шапки закупки-плана (дата / примечание / автор / контрагент). Только в черновике.
 
     Дата закупки nullable — пустая строка очищает её в NULL (как заказ).
+    `contractor` — часовой (волна 19, Ф4): не передан → не трогаем; `Counterparty` →
+    выставить; `None` → снять (nullable).
     """
     _require_unlocked(procurement, PROCUREMENT_LOCKED)
     _set_author(procurement, user)
@@ -2365,6 +2370,9 @@ def update_procurement(procurement, date=None, note=None, user=_UNSET):
     if note is not None:
         procurement.note = note.strip()
         fields.append('note')
+    if contractor is not _UNSET:
+        procurement.contractor = contractor
+        fields.append('contractor')
     if fields:
         procurement.save(update_fields=fields)
     return procurement

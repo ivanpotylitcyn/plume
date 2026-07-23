@@ -1604,9 +1604,17 @@ def procurement_detail(request, pk):
     if request.method == 'PATCH':
         d = request.data
         try:
+            contractor = engine._UNSET
+            if 'contractor_id' in d:
+                cid = d['contractor_id']
+                contractor = (models.Counterparty.objects.get(pk=cid)
+                              if cid else None)
             engine.update_procurement(
                 p, date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None, user=_resolve_author(d))
+                note=d['note'] if 'note' in d else None, user=_resolve_author(d),
+                contractor=contractor)
+        except models.Counterparty.DoesNotExist:
+            return _bad('Контрагент не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
