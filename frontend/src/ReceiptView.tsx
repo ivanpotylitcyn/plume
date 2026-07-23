@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
   type ReceiptLot } from './api'
-import { num } from './status'
+import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 
@@ -33,7 +33,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       <FormHeader
         name={c.contractor_name}
         meta={<>
-          <span className={`glyph ${fixed ? 'g-lock' : 'g-on_order'}`}>{fixed ? '🔒' : '●'}</span>
+          <StatusGlyph locked={c.locked} />
           УПД {c.number} · {c.date} · {c.project_code} · сумма {num(c.total_cost)} ₽
         </>}
         unlocked={unlocked} onToggleLock={toggle}

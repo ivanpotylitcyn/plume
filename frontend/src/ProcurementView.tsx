@@ -8,14 +8,7 @@ import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { PeggingPanel } from './PeggingPanel'
-import { num } from './status'
-
-// Ось та же (`locked`), подпись — своя, женского рода (волна 19, Ф1c).
-function procurementLock(locked: boolean) {
-  return locked
-    ? { label: 'зафиксирована', cls: 'g-on_order', g: '●' }
-    : { label: 'расфиксирована', cls: 'g-to_order', g: '▲' }
-}
+import { StatusGlyph, num } from './status'
 
 export function ProcurementView({ procurementId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
   procurementId: number; items: ItemRow[]; isNew: boolean
@@ -54,7 +47,6 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const st = procurementLock(c.locked)
   const editable = c.editable
   const fixed = !editable                  // зафиксирована — read-only
   return (
@@ -62,7 +54,8 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
       <FormHeader
         name={`Закупка #${c.id} · план (командная высота)`}
         meta={<>
-          <span className={`glyph ${st.cls}`}>{st.g}</span> {st.label}
+          <StatusGlyph locked={c.locked} />
+          {c.locked ? 'зафиксирована' : 'расфиксирована'}
           {c.date && <> · {c.date}</>} · позиций {c.lines.length} · всего {num(c.total_qty)}
           {c.note && <> · {c.note}</>}
         </>}

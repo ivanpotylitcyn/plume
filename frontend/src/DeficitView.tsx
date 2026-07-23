@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectDetail } from './api'
-import { Segment, money, num, ItemStatusGlyph } from './status'
+import { LayerSeg, money, num, StatusGlyph } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 
@@ -215,9 +215,9 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
             : num(d.qty)}
         </span>
         <span title="сделано / делается / осталось сделать">
-          <Segment status="available" value={dev.done} />
-          <Segment status="on_order" value={dev.wip} />
-          <Segment status="to_order" value={dev.not_started} />
+          <LayerSeg status="available" value={dev.done} />
+          <LayerSeg status="on_order" value={dev.wip} />
+          <LayerSeg status="to_order" value={dev.not_started} />
         </span>
         <span />
         <span className="act">
@@ -274,7 +274,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   const indent = n.depth * 18
   return (
     <div className={`prow prow--comp s-${n.status}`}>
-      <span><ItemStatusGlyph locked={n.component_locked} /></span>
+      <span><StatusGlyph locked={n.component_locked} /></span>
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
@@ -286,9 +286,9 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
       <span className="pnum">{num(n.need)} {n.uom}</span>
       {n.is_leaf ? <>
         <span>
-          <Segment status="available" value={n.have ?? 0} />
-          <Segment status="on_order" value={n.on_order ?? 0} />
-          <Segment status="to_order" value={n.to_order ?? 0} />
+          <LayerSeg status="available" value={n.have ?? 0} />
+          <LayerSeg status="on_order" value={n.on_order ?? 0} />
+          <LayerSeg status="to_order" value={n.to_order ?? 0} />
         </span>
         <span className="pnum">
           {num(n.available_raw ?? 0)}
@@ -310,14 +310,14 @@ function CompRow({ ln, busy, openItem, order }: {
 }) {
   return (
     <div className={`prow prow--comp s-${ln.status}`}>
-      <span><ItemStatusGlyph locked={ln.component_locked} /></span>
+      <span><StatusGlyph locked={ln.component_locked} /></span>
       <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)} {ln.uom}</span>
       <span>
-        <Segment status="available" value={ln.have} />
-        <Segment status="on_order" value={ln.on_order} />
-        <Segment status="to_order" value={ln.to_order} />
+        <LayerSeg status="available" value={ln.have} />
+        <LayerSeg status="on_order" value={ln.on_order} />
+        <LayerSeg status="to_order" value={ln.to_order} />
       </span>
       <span className="pnum">
         {num(ln.available_raw)}

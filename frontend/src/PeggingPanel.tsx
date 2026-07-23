@@ -5,8 +5,7 @@
 // Пег рождает проектный Purchase под этим планом-родителем (ломает 1:1-заглушку).
 import { useEffect, useState } from 'react'
 import { api, type Pegging, type PeggingRow, type PeggingProject } from './api'
-import { purchaseLock } from './PurchaseView'
-import { Glyph, num } from './status'
+import { Glyph, StatusGlyph, num } from './status'
 
 export function PeggingPanel({ procurementId, rev, openPurchase }: {
   procurementId: number; rev: number; openPurchase: (id: number) => void
@@ -66,23 +65,21 @@ export function PeggingPanel({ procurementId, rev, openPurchase }: {
             <th style={{ textAlign: 'right' }}>строк</th>
             <th style={{ textAlign: 'right' }}>всего</th></tr></thead>
           <tbody>
-            {p.fan.map(f => {
-              const st = purchaseLock(f.locked)
-              return (
-                <tr key={f.purchase_id} className="row s-available">
-                  <td>
-                    <span className={`glyph ${st.cls}`}>{st.g}</span>{' '}
-                    <a className="link" onClick={() => openPurchase(f.purchase_id)}>
-                      Заказ #{f.purchase_id}</a>{' '}
-                    <span className={st.cls} style={{ fontSize: 11 }}>{st.label}</span>
-                  </td>
-                  <td><span className="code">{f.project_code}</span>{' '}
-                    <span style={{ color: 'var(--fg-dim)' }}>{f.project_name}</span></td>
-                  <td className="num">{f.lines}</td>
-                  <td className="num">{num(f.total)}</td>
-                </tr>
-              )
-            })}
+            {p.fan.map(f => (
+              <tr key={f.purchase_id} className="row s-available">
+                <td>
+                  <StatusGlyph locked={f.locked} />{' '}
+                  <a className="link" onClick={() => openPurchase(f.purchase_id)}>
+                    Заказ #{f.purchase_id}</a>{' '}
+                  <span style={{ fontSize: 11, color: 'var(--fg-dim)' }}>
+                    {f.locked ? 'зафиксирован' : 'расфиксирован'}</span>
+                </td>
+                <td><span className="code">{f.project_code}</span>{' '}
+                  <span style={{ color: 'var(--fg-dim)' }}>{f.project_name}</span></td>
+                <td className="num">{f.lines}</td>
+                <td className="num">{num(f.total)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </>}

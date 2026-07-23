@@ -164,7 +164,7 @@ def logout_view(request):
 
 def _project_row(p):
     return {'id': p.id, 'code': p.code, 'name': p.name, 'kind': p.kind,
-            'locked': p.locked}
+            'locked': p.locked, 'health': engine.project_health(p)}
 
 
 def _project_detail_row(p):
@@ -736,6 +736,7 @@ def _purchase_row(p):
     return {
         'id': p.id, 'project_code': p.project.code, 'locked': p.locked,
         'date': p.date, 'note': p.note, 'lines': p.lines.count(),
+        'coverage': engine.purchase_coverage(p),
     }
 
 

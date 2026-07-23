@@ -9,7 +9,7 @@ import { api, type AllAvailableLot, type RequisitionCockpit,
   type RequisitionCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
-import { num } from './status'
+import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
 export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onDeleted }: {
@@ -40,7 +40,7 @@ export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onD
       <FormHeader
         name={`Требование ${c.number} → ${c.project_name}`}
         meta={<>
-          <span className={`glyph ${fixed ? 'g-lock' : 'g-info'}`}>{fixed ? '🔒' : '○'}</span>
+          <StatusGlyph locked={c.locked} />
           получатель {c.project_code} · {c.date} · поставлено {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}

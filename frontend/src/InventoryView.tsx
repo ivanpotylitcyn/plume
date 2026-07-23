@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type InventoryCockpit, type InventoryCockpitLot,
   type WrittenOffLot } from './api'
-import { num } from './status'
+import { StatusGlyph, num } from './status'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
@@ -33,7 +33,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, 
       <FormHeader
         name={`Инвентаризация ${c.number}`}
         meta={<>
-          <span className={`glyph ${fixed ? 'g-lock' : 'g-info'}`}>{fixed ? '🔒' : '○'}</span>
+          <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name} · {c.date} · сумма {num(c.total_cost)} ₽
         </>}
         unlocked={unlocked} onToggleLock={toggle}

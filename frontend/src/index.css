@@ -113,7 +113,9 @@ body { overflow: hidden; }
 /* волна 17 — иконки режимов (коды сверены с codicon.ttf) */
 .ci-preview::before      { content: '\eb2f'; }  /* Ордера */
 .ci-law::before          { content: '\eb12'; }  /* Закупки */
-.ci-layers::before       { content: '\ebd2'; }  /* Склады */
+.ci-layers::before       { content: '\ebd2'; }  /* Склады / ось разбора: не заказано */
+.ci-layers-dot::before   { content: '\ebd3'; }  /* ось разбора: заказано, ждём */
+.ci-layers-active::before{ content: '\ebd4'; }  /* ось разбора: на складе */
 /* волна 15 — синк библиотеки + иконки библиотечных категорий (LIBRARY_CATEGORIES) */
 .ci-sync::before            { content: '\ea77'; }  /* синхронизация с библиотекой */
 .ci-symbol-constant::before { content: '\eb5d'; }  /* конденсаторы */
@@ -199,6 +201,7 @@ body { overflow: hidden; }
 .fh-meta { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim);
   margin-top: 3px; font-variant-numeric: tabular-nums; }
 .fh-meta .glyph { margin-right: 4px; }
+.fh-meta .ci.sg { margin-right: 5px; }   /* StatusGlyph в мета-строке (Ф1b) */
 .fh-meta a.link { color: var(--link); }
 /* Зона шапки (§5, Ф9): заголовок+мета+свойства. relative — якорь для корзины,
    которая садится в её НИЖНИЙ правый угол (разнесена с верхними контролами). */
@@ -309,8 +312,17 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .g-info { color: var(--st-info); }
 .g-lock { color: var(--st-lock); }
 .g-draft { color: var(--st-wip); }   /* оранжевый кружок — черновик изделия (волна 17) */
+/* Единый StatusGlyph (Ф1b): codicon-замок оси фиксации. Базовый размер 13px (иначе
+   .ci=18px разъедет в таблицах/строках); tone-класс красит. Компаунд `.ci.sg-*`
+   (0,2,0) бьёт `.tree-item .ci` по порядку — глиф в списке красится тоном, не dim. */
+.ci.sg { font-size: 13px; vertical-align: -2px; }
+.ci.sg-ok    { color: var(--st-ok); }
+.ci.sg-wip   { color: var(--st-wip); }
+.ci.sg-order { color: var(--st-order); }
+.ci.sg-none  { color: var(--fg-dim); }
 .seg { font-variant-numeric: tabular-nums; }
 .seg .glyph { margin-right: 2px; }
+.seg .ci.sg { margin-right: 3px; }   /* ось разбора на codicon layers (Ф1b) */
 .seg + .seg { margin-left: 10px; }
 .anomaly { color: var(--st-order); margin-left: 8px; }
 .kind-chip { color: var(--fg-dim); font-size: 11px; }

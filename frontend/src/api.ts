@@ -15,6 +15,7 @@ export interface Authored { user_id: number; user_name: string }
 
 export interface ProjectRow {
   id: number; code: string; name: string; kind: string; locked: boolean
+  health: Status | null   // Ф1b: worst-of здоровья для цвета в списке (null — неприменимо)
 }
 export interface ProjectDetail extends ProjectRow {
   budget: number | null; started: string | null
@@ -176,6 +177,7 @@ export interface ReceiptCockpit extends Authored {
 export interface PurchaseRow {
   id: number; project_code: string; locked: boolean
   date: string | null; note: string; lines: number
+  coverage: Status   // Ф1b: покрытие лотами для цвета в списке
 }
 export interface PurchaseCockpitLine {
   id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string

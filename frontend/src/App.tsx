@@ -14,12 +14,12 @@ import { ClosurePanel } from './ClosurePanel'
 import { ProjectStockPanel } from './ProjectStockPanel'
 import { ItemView } from './ItemView'
 import { LibraryImportView } from './LibraryImportView'
-import { PurchaseView, purchaseLock } from './PurchaseView'
+import { PurchaseView } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm, type OrderKind } from './OrderForm'
 import { LocationView } from './LocationView'
-import { ItemStatusGlyph } from './status'
+import { StatusGlyph, statusTone } from './status'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
@@ -335,9 +335,10 @@ export default function App() {
             selId={sel?.kind === 'project' ? sel.id : null}
             onSelect={id => setSel({ kind: 'project', id })}
             rows={[...projects].map(p => ({ id: p.id, code: p.code, name: p.name,
-              glyph: p.locked
-                ? <span className="glyph g-lock">🔒</span>
-                : <span className="glyph g-info">○</span> }))} />}
+              // Ф1b: замок-проекция (unlock=активный / lock=архивный); цвет=worst-of
+              // здоровья проекта (`_project_health`), null → нейтральный.
+              glyph: <StatusGlyph locked={p.locked} tone={p.health ? statusTone(p.health) : 'none'}
+                title={p.locked ? 'архивный (закрыт)' : 'активный'} /> }))} />}
 
         {/* Режим «Изделия» (волна 17): только производимые; без фильтра категорий и
             синка. Открывает ту же форму изделия (sel.kind='item'). */}
@@ -349,7 +350,7 @@ export default function App() {
             rows={[...items].filter(i => i.produced)
               .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
                 id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-                glyph: <ItemStatusGlyph locked={i.locked} /> }))} />}
+                glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'items' &&
           <ModeList heading="Компоненты" newLabel="＋ Новое изделие" categoryFilter
@@ -364,7 +365,7 @@ export default function App() {
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
               id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
-              glyph: <ItemStatusGlyph locked={i.locked} /> }))} />}
+              glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
@@ -384,11 +385,11 @@ export default function App() {
             newSel={sel?.kind === 'new-purchase'} onNew={() => setSel({ kind: 'new-purchase' })}
             selId={sel?.kind === 'purchase' ? sel.id : null}
             onSelect={id => setSel({ kind: 'purchase', id })}
-            rows={[...purchases].reverse().map(p => {
-              const st = purchaseLock(p.locked)
-              return { id: p.id, code: `Заказ #${p.id}`, name: p.project_code,
-                projectCode: p.project_code, glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
-            })} />}
+            rows={[...purchases].reverse().map(p => ({
+              id: p.id, code: `Заказ #${p.id}`, name: p.project_code, projectCode: p.project_code,
+              // Ф1b: глиф=замок (фиксация), цвет=покрытие лотами (`_purchase_coverage`).
+              glyph: <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} />,
+            }))} />}
 
         {mode === 'procurements' &&
           <ModeList heading="Закупки" newLabel="＋ Новая закупка"
@@ -401,11 +402,11 @@ export default function App() {
                 <span className="ci ci-table" />
                 <span className="code">Командный свод</span>
               </div>}
-            rows={[...procurements].reverse().map(p => {
-              const st = purchaseLock(p.locked)
-              return { id: p.id, code: `Закупка #${p.id}`, name: p.note,
-                glyph: <span className={`glyph ${st.cls}`}>{st.g}</span> }
-            })} />}
+            rows={[...procurements].reverse().map(p => ({
+              id: p.id, code: `Закупка #${p.id}`, name: p.note,
+              // Ф1b: закупка-план — ось только фиксация, цвет=фиксация (зелёный заперт).
+              glyph: <StatusGlyph locked={p.locked} />,
+            }))} />}
       </div>
 
       <div className="work">
@@ -622,7 +623,7 @@ function OrderList({ entries, selKey, onSelect, onNew, newSel }: {
           return (
             <div key={key} className={'tree-item' + (selKey === key ? ' sel' : '')}
               onClick={() => onSelect(e)} title={ORDER_LABEL[e.kind]}>
-              <span className={`glyph ${e.locked ? 'g-lock' : 'g-info'}`}>{e.locked ? '🔒' : '○'}</span>
+              <StatusGlyph locked={e.locked} />
               <span className="code">{e.code}</span>
               <span className="row-tag">{ORDER_LABEL[e.kind]}</span>
             </div>

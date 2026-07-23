@@ -243,6 +243,80 @@ class DeficitTests(EngineTestBase):
         self.assertEqual(lines['SCR']['to_order'], D(15))
 
 
+class PurchaseCoverageTests(EngineTestBase):
+    """Ф1b: цвет заказа в списке — покрытие строк лотами приходов."""
+
+    def _purchase_with_line(self, item, qty):
+        p = engine.create_purchase(self.prj, self.user)
+        models.PurchaseLine.objects.create(purchase=p, item=item, qty=D(qty))
+        return p
+
+    def test_empty_purchase_to_order(self):
+        p = engine.create_purchase(self.prj, self.user)
+        self.assertEqual(engine.purchase_coverage(p), 'to_order')
+
+    def test_nothing_received_to_order(self):
+        p = self._purchase_with_line(self.make_item('R1'), 10)
+        self.assertEqual(engine.purchase_coverage(p), 'to_order')
+
+    def test_partial_on_order(self):
+        item = self.make_item('R1')
+        p = self._purchase_with_line(item, 10)
+        self.receipt_lot(item, self.prj, 4, purchase=p)
+        self.assertEqual(engine.purchase_coverage(p), 'on_order')
+
+    def test_fully_received_available(self):
+        item = self.make_item('R1')
+        p = self._purchase_with_line(item, 10)
+        self.receipt_lot(item, self.prj, 10, purchase=p)
+        self.assertEqual(engine.purchase_coverage(p), 'available')
+
+    def test_one_line_open_keeps_on_order(self):
+        a, b = self.make_item('A'), self.make_item('B')
+        p = engine.create_purchase(self.prj, self.user)
+        models.PurchaseLine.objects.create(purchase=p, item=a, qty=D(5))
+        models.PurchaseLine.objects.create(purchase=p, item=b, qty=D(5))
+        self.receipt_lot(a, self.prj, 5, purchase=p)      # A закрыт, B пуст
+        self.assertEqual(engine.purchase_coverage(p), 'on_order')
+
+
+class ProjectHealthTests(EngineTestBase):
+    """Ф1b: цвет проекта в списке — worst-of здоровья (вычисляемая проекция)."""
+
+    def _device_demand(self, qty):
+        dev = self.make_item('DEV', manufactured=True, kind='device')
+        case = self.make_item('CASE')
+        models.BomLine.objects.create(parent=dev, component=case, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(qty))
+        return dev, case
+
+    def test_internal_project_none(self):
+        white = models.Project.objects.create(
+            code='W', name='Собственный склад', kind=models.Project.Kind.INTERNAL_STOCK)
+        self.assertIsNone(engine.project_health(white))
+
+    def test_empty_project_none(self):
+        self.assertIsNone(engine.project_health(self.prj))
+
+    def test_component_to_order_red(self):
+        self._device_demand(5)                    # склад пуст → CASE к заказу
+        self.assertEqual(engine.project_health(self.prj), 'to_order')
+
+    def test_available_but_unassembled_orange(self):
+        _dev, case = self._device_demand(2)
+        self.receipt_lot(case, self.prj, 10)      # компонент есть, приборы не собраны
+        self.assertEqual(engine.project_health(self.prj), 'on_order')
+
+    def test_all_assembled_green(self):
+        dev, case = self._device_demand(1)
+        lot = self.receipt_lot(case, self.prj, 5)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1), locked=False)
+        engine.add_kitting_line(k, case, lot, D(1))
+        engine.lock_kitting(k)                     # рождает прибор → собрано
+        self.assertEqual(engine.project_health(self.prj), 'available')
+
+
 class StockMapTests(EngineTestBase):
     def test_map_across_projects_sorted(self):
         white = models.Project.objects.create(

@@ -8,7 +8,7 @@ import { api, type LocationRow, type RelocationCockpit, type RelocationMove,
   type RelocationSourceLot } from './api'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
-import { num } from './status'
+import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
 export function RelocationView({ relocationId, isNew, openItem, onChanged, onDeleted }: {
@@ -40,7 +40,7 @@ export function RelocationView({ relocationId, isNew, openItem, onChanged, onDel
       <FormHeader
         name={`Перемещение ${c.number}`}
         meta={<>
-          <span className={`glyph ${fixed ? 'g-lock' : 'g-on_order'}`}>{fixed ? '🔒' : '●'}</span>
+          <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name} · {c.date} · перемещено {num(c.total_qty)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}

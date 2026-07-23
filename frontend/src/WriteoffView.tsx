@@ -8,7 +8,7 @@ import { api, type AvailableLot, type WriteoffCockpit,
   type WriteoffCockpitLine } from './api'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
-import { num } from './status'
+import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
 export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted }: {
@@ -37,7 +37,7 @@ export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted
       <FormHeader
         name={`Списание ${c.number}`}
         meta={<>
-          <span className={`glyph ${fixed ? 'g-lock' : 'g-info'}`}>{fixed ? '🔒' : '○'}</span>
+          <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name} · {c.date}
           {c.reason && <> · {c.reason}</>} · списано {num(c.total_qty)}
         </>}

@@ -5,19 +5,10 @@
 // в члене «заказано» дашборда дефицита. Отмены нет — отмена = удаление (волна 19, Р1).
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementRow, type PurchaseCockpit,
-  type PurchaseCockpitLine } from './api'
+  type PurchaseCockpitLine, type Status } from './api'
 import { CommitInput } from './ReceiptView'
 import { AnchorSelect, AuthorField, FormHeader, ProjectField, useFormLock } from './FormHeader'
-import { Glyph, num } from './status'
-
-// Замок заказа → значок/цвет: расфиксирован ▲ (твой ход), зафиксирован ● (ждём
-// поставку). Ось — общая `locked` (волна 19, Ф1c); подпись живёт здесь, во вью,
-// поэтому смена слова больше не стоит миграции. Ф1b заменит это общим StatusGlyph.
-export function purchaseLock(locked: boolean) {
-  return locked
-    ? { label: 'зафиксирован', cls: 'g-on_order', g: '●' }
-    : { label: 'расфиксирован', cls: 'g-to_order', g: '▲' }
-}
+import { Glyph, StatusGlyph, statusTone, num } from './status'
 
 export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, onChanged, onDeleted }: {
   purchaseId: number; items: ItemRow[]; isNew: boolean
@@ -57,15 +48,18 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
-  const st = purchaseLock(c.locked)
   const editable = c.editable
   const fixed = !editable                  // зафиксирован — read-only
+  // Ф1b: глиф=замок (фиксация), цвет=покрытие лотами — как в списке Заказов.
+  const coverage: Status = c.total_received === 0 ? 'to_order'
+    : c.rows.every(r => r.remaining <= 0) ? 'available' : 'on_order'
   return (
     <div className={unlocked && editable ? '' : 'form-locked'}>
       <FormHeader
         name={`Заказ #${c.id} · ${c.project_name}`}
         meta={<>
-          <span className={`glyph ${st.cls}`}>{st.g}</span> {c.project_code} · {st.label}
+          <StatusGlyph locked={c.locked} tone={statusTone(coverage)} />
+          {c.project_code} · {c.locked ? 'зафиксирован' : 'расфиксирован'}
           {c.date && <> · {c.date}</>} · заказано {num(c.total_ordered)} · поступило {num(c.total_received)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}

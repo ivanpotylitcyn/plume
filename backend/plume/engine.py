@@ -583,12 +583,15 @@ def _demand_tree(item, qty, project, depth, visiting, out):
 # --------------------------------------------------------------------------- #
 #  Дефицит проекта (главная проекция волны 1)
 # --------------------------------------------------------------------------- #
-def project_deficit(project):
+def project_deficit(project, with_tree=True):
     """Дефицит проекта: по каждой потребности — прибор и его состав (Ф5b: аккордеон —
     дерево BOM со всеми уровнями; свод «Потребность» — плоско по покупным листьям).
 
     «ДО» купить нельзя — деньги/дефицит на листьях; но структуру (прибор → подсборка →
     лист) видно в дереве. Возвращает структуру под сериализацию (Decimal → строки в DRF).
+
+    `with_tree=False` — пропустить построение дерева-аккордеона (нужно только детальной
+    форме): `_project_health` считает worst-of без него, чтобы не гонять лишнее в списке.
     """
     demands = []
     # Свод потребности по листьям на весь проект (секция «Потребность»): каждый прибор
@@ -604,11 +607,13 @@ def project_deficit(project):
             need_by_leaf[leaf] = need_by_leaf.get(leaf, ZERO) + need
             cov = _coverage(need, item_available(leaf, project), item_on_order(leaf, project))
             statuses.append(cov['status'])
-        # Дерево BOM для аккордеона (все уровни, pre-order + depth).
+        # Дерево BOM для аккордеона (все уровни, pre-order + depth). Для цвета проекта
+        # (`_project_health`) дерево не нужно — пропускаем, чтобы не гонять лишнее в списке.
         tree = []
-        visiting = {target.id}
-        for bl in target.bom_lines.select_related('component'):
-            _demand_tree(bl.component, demand.qty * bl.qty, project, 0, visiting, tree)
+        if with_tree:
+            visiting = {target.id}
+            for bl in target.bom_lines.select_related('component'):
+                _demand_tree(bl.component, demand.qty * bl.qty, project, 0, visiting, tree)
 
         # триплет прибора: готово (зафиксированные лоты) / делается (в работе) / не начато
         done = models.StockMovement.objects.filter(
@@ -644,6 +649,47 @@ def project_deficit(project):
         'demands': demands,
         'components': components,
     }
+
+
+def project_health(project):
+    """Цвет проекта в списке (Ф1b): worst-of здоровья, вычисляемая проекция (как дефицит —
+    НЕ храним в БД). Семантика: `to_order` (красный) — хоть что-то не заказано; `on_order`
+    (оранжевый) — хоть что-то в пути ИЛИ прибор не собран; `available` (зелёный) — всё
+    приехало и собрано. Внутренние проекты и пустые (без потребностей) — `None` (дефицит
+    неприменим, глиф нейтрален). Лёгкая версия дефицита (`with_tree=False`)."""
+    if project.kind != models.Project.Kind.EXTERNAL:
+        return None
+    d = project_deficit(project, with_tree=False)
+    if not d['demands']:
+        return None
+    comp = _worst_of([c['status'] for c in d['components']]) if d['components'] else 'available'
+    assembled = all(dm['device']['not_started'] <= 0 and dm['device']['wip'] <= 0
+                    for dm in d['demands'])
+    if comp == 'to_order':
+        return 'to_order'
+    if comp == 'on_order' or not assembled:
+        return 'on_order'
+    return 'available'
+
+
+def purchase_coverage(purchase):
+    """Цвет заказа в списке (Ф1b): покрытие строк лотами приходов. `to_order` (красный) —
+    ни одного лота; `on_order` (оранжевый) — часть пришла; `available` (зелёный) — все
+    строки закрыты остатком. Пустой заказ — `to_order` (ничего нет). Из `_line_received`
+    (без разузлования — дёшево)."""
+    lines = list(purchase.lines.all())
+    if not lines:
+        return 'to_order'
+    total_received = ZERO
+    fully = True
+    for line in lines:
+        received = _line_received(line)
+        total_received += received
+        if received < line.qty:
+            fully = False
+    if fully:
+        return 'available'
+    return 'on_order' if total_received > ZERO else 'to_order'
 
 
 # --------------------------------------------------------------------------- #

@@ -4,7 +4,7 @@
 // Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num, ItemStatusGlyph } from './status'
+import { num, StatusGlyph } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
@@ -173,7 +173,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
               <th style={{ textAlign: 'right' }}>Кол-во</th>{!locked && <th />}</tr></thead>
             <tbody>{d.bom.map(b => (
               <tr key={b.id} className="row">
-                <td><ItemStatusGlyph locked={b.component_locked} /></td>
+                <td><StatusGlyph locked={b.component_locked} /></td>
                 <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_design_item_id}</a></td>
                 <td style={{ color: 'var(--fg-dim)' }}>
                   <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
