@@ -57,13 +57,13 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
   return (
     <div className={unlocked && editable ? '' : 'form-locked'}>
       <FormHeader
-        name={`Закупка #${c.id} · план (командная высота)`}
+        code={c.code || `Закупка #${c.id}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
-          {c.locked ? 'зафиксирована' : 'расфиксирована'}
+          {c.locked ? 'зафиксирована' : 'расфиксирована'} · план
+          {c.description && <> · {c.description}</>}
           {c.contractor_name && <> · {c.contractor_name}</>}
           {c.date && <> · {c.date}</>} · позиций {c.lines.length} · всего {num(c.total_qty)}
-          {c.note && <> · {c.note}</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
         onDelete={del}
@@ -77,19 +77,22 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={240} disabled={!editable || busy}
+          onCommit={v => run(api.updateProcurement(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={240} disabled={!editable || busy}
+          onCommit={v => run(api.updateProcurement(c.id, { description: v }))} /></dd>
         <dt>Дата</dt>
         <dd><CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
           onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></dd>
-        <dt>Примечание</dt>
-        <dd><CommitInput value={c.note} width={240} disabled={!editable || busy}
-          onCommit={v => run(api.updateProcurement(c.id, { note: v }))} /></dd>
         <dt>Контрагент</dt>
         <dd>
           <select className="lot-sel" value={c.contractor_id ?? ''} disabled={!editable || busy}
             onChange={e => run(api.updateProcurement(c.id, {
               contractor_id: e.target.value ? Number(e.target.value) : null }))}>
             <option value="">— не указан —</option>
-            {suppliers.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
+            {suppliers.map(cp => <option key={cp.id} value={cp.id}>{cp.description}</option>)}
           </select>
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}

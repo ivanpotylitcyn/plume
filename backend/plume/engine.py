@@ -98,26 +98,27 @@ ZERO = Decimal('0')
 # --------------------------------------------------------------------------- #
 #  Категории изделий (волна 15) — канон внешней библиотеки компонентов
 # --------------------------------------------------------------------------- #
-# Стем имени CSV-файла → (рус. label, Codicon). Синк и сид зовут `ensure_category`;
-# неизвестный стем всплывает с label=code (сырой — юзер правит в аппе/админке).
+# Стем имени CSV-файла → рус. описание. Синк и сид зовут `ensure_category`;
+# неизвестный стем всплывает с description=code (сырой — юзер правит в аппе/админке).
 # Стартовый набор — только эти 5 (прочие классы прибор/крепёж/деталь юзер добавит сам).
+# Волна 19, Ф10: иконки убраны (per-категорийный глиф отпал — режимы Изделия/Компоненты).
 LIBRARY_CATEGORIES = {
-    'capacitors': ('Конденсаторы', 'symbol-constant'),
-    'mcu':        ('Микроконтроллеры', 'chip'),
-    'regulators': ('Стабилизаторы', 'settings'),
-    'sensors':    ('Датчики', 'broadcast'),
-    'interfaces': ('Интерфейсы', 'plug'),
+    'capacitors': 'Конденсаторы',
+    'mcu':        'Микроконтроллеры',
+    'regulators': 'Стабилизаторы',
+    'sensors':    'Датчики',
+    'interfaces': 'Интерфейсы',
 }
 
 
 def ensure_category(code):
-    """get_or_create категории по стему CSV-файла. Канон label/icon — из
-    `LIBRARY_CATEGORIES`; неизвестный код всплывает с сырым `label=code`. Существующую
-    (юзер уже правил label/icon) НЕ перезаписываем."""
+    """get_or_create категории по стему CSV-файла. Канон `description` — из
+    `LIBRARY_CATEGORIES`; неизвестный код всплывает с сырым `description=code`.
+    Существующую (юзер уже правил описание) НЕ перезаписываем."""
     code = (code or '').strip()
-    label, icon = LIBRARY_CATEGORIES.get(code, (code, ''))
+    description = LIBRARY_CATEGORIES.get(code, code)
     cat, _ = models.Category.objects.get_or_create(
-        code=code, defaults={'label': label, 'icon': icon})
+        code=code, defaults={'description': description})
     return cat
 
 
@@ -292,7 +293,8 @@ def lot_locations(lot):
         loc = locs.get(r['location'])
         rows.append({
             'location_id': r['location'],
-            'code': loc.code if loc else '', 'name': loc.name if loc else '',
+            'code': loc.code if loc else '',
+            'description': loc.description if loc else '',
             'qty': r['q'],
         })
     return rows
@@ -325,35 +327,36 @@ def location_stock(location):
             'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': r['q'],
             'project_id': lot.project_id, 'project_code': lot.project.code,
-            'project_name': lot.project.name,
+            'project_name': lot.project.description,
         })
     return rows
 
 
 def location_cockpit(location):
-    """Проекция экрана склада: ДНК (код/название/вид) + что на нём лежит."""
+    """Проекция экрана склада: ДНК (код/описание/вид) + что на нём лежит."""
     return {
-        'id': location.id, 'code': location.code, 'name': location.name,
+        'id': location.id, 'code': location.code, 'description': location.description,
         'kind': location.kind, 'stock': location_stock(location),
     }
 
 
-def create_location(code, name, kind=''):
+def create_location(code, description, kind=''):
     """Завести место хранения (В13 Ф4). Код уникален (дружелюбная проверка до IntegrityError)."""
     code = (code or '').strip()
-    name = (name or '').strip()
+    description = (description or '').strip()
     if not code:
         raise ValidationError('Нужен код места хранения.')
-    if not name:
-        raise ValidationError('Нужно название места хранения.')
+    if not description:
+        raise ValidationError('Нужно описание места хранения.')
     if models.Location.objects.filter(code=code).exists():
         raise ValidationError('Место с таким кодом уже есть.')
-    return models.Location.objects.create(code=code, name=name, kind=(kind or '').strip())
+    return models.Location.objects.create(
+        code=code, description=description, kind=(kind or '').strip())
 
 
-def update_location(location, code=None, name=None, kind=None):
+def update_location(location, code=None, description=None, kind=None):
     """Правка ДНК места хранения (В13 Ф4) — мутабельная, под интерфейсным замком.
-    Часовые `None` (поле не передано); пустой код/название отклоняем."""
+    Часовые `None` (поле не передано); пустой код/описание отклоняем."""
     if code is not None:
         code = code.strip()
         if not code:
@@ -361,11 +364,11 @@ def update_location(location, code=None, name=None, kind=None):
         if models.Location.objects.filter(code=code).exclude(pk=location.pk).exists():
             raise ValidationError('Место с таким кодом уже есть.')
         location.code = code
-    if name is not None:
-        name = name.strip()
-        if not name:
-            raise ValidationError('Название места хранения обязательно.')
-        location.name = name
+    if description is not None:
+        description = description.strip()
+        if not description:
+            raise ValidationError('Описание места хранения обязательно.')
+        location.description = description
     if kind is not None:
         location.kind = kind.strip()
     location.save()
@@ -645,7 +648,7 @@ def project_deficit(project, with_tree=True):
     return {
         'project_id': project.id,
         'project_code': project.code,
-        'project_name': project.name,
+        'project_name': project.description,
         'demands': demands,
         'components': components,
     }
@@ -774,7 +777,7 @@ def project_budget(project):
     return {
         'project_id': project.id,
         'project_code': project.code,
-        'project_name': project.name,
+        'project_name': project.description,
         'budget': budget,                       # может быть None
         'spent': spent,                         # потрачено (факт)
         'plan': plan,                           # прогноз полной стоимости
@@ -807,17 +810,17 @@ def stock_map(item):
         # пока игнорирует (вьюхи потом); строки с нулём не показываем.
         loc_agg = (models.StockMovement.objects
                    .filter(lot__item=item, lot__project=project)
-                   .values('location', 'location__code', 'location__name')
+                   .values('location', 'location__code', 'location__description')
                    .annotate(q=Sum('qty')).order_by('location'))
         by_location = [
             {'location_id': r['location'], 'code': r['location__code'],
-             'name': r['location__name'], 'available': r['q']}
+             'description': r['location__description'], 'available': r['q']}
             for r in loc_agg if r['q']
         ]
         rows.append({
             'project_id': project.id,
             'project_code': project.code,
-            'project_name': project.name,
+            'project_name': project.description,
             'project_kind': project.kind,
             'available': available,
             'by_location': by_location,
@@ -912,6 +915,7 @@ def kitting_cockpit(kitting):
     ]
     return {
         'id': kitting.id, **_author(kitting), 'locked': kitting.locked,
+        'code': kitting.code, 'description': kitting.description,
         'project_id': project.id, 'project_code': project.code,
         'target_id': target.id, 'target_design_item_id': target.design_item_id,
         'target_description': target.description, 'uom': target.uom,
@@ -1037,10 +1041,11 @@ def receipt_cockpit(receipt):
         })
     return {
         'id': receipt.id, **_author(receipt), 'number': receipt.number, 'date': receipt.date,
+        'code': receipt.code, 'description': receipt.description,
         'contractor_id': receipt.contractor_id,
-        'contractor_name': receipt.contractor.name,
+        'contractor_name': receipt.contractor.description,
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
-        'project_name': receipt.project.name,
+        'project_name': receipt.project.description,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
         'locked': receipt.locked, 'total_cost': total,
         'lots': lots,
@@ -1151,15 +1156,16 @@ def _solo_procurement(user):
     """
     return models.Procurement.objects.create(
         user=user, locked=False,
-        note='авто (проектный заказ)')
+        description='авто (проектный заказ)')
 
 
-def create_purchase(project, user, date=None, note=''):
+def create_purchase(project, user, date=None, code=None, description=''):
     """Создать заказ проекта (черновик) с авто-`Procurement`-родителем."""
+    require_unique_code(models.Purchase, code)
     proc = _solo_procurement(user)
     return models.Purchase.objects.create(
         procurement=proc, project=project, user=user,
-        locked=False, date=date, note=note or '')
+        locked=False, date=date, code=code, description=description or '')
 
 
 def purchase_cockpit(purchase):
@@ -1195,15 +1201,16 @@ def purchase_cockpit(purchase):
         })
     receipts = [
         {'id': r.id, 'number': r.number, 'date': r.date,
-         'contractor_name': r.contractor.name, 'lines': r.lots.count()}
+         'contractor_name': r.contractor.description, 'lines': r.lots.count()}
         for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
     return {
         'id': purchase.id, **_author(purchase), 'locked': purchase.locked,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
-        'project_name': purchase.project.name,
+        'project_name': purchase.project.description,
         'procurement_id': purchase.procurement_id,   # якорь #A: закупка-план (Ф2k)
-        'date': purchase.date, 'note': purchase.note,
+        'code': purchase.code, 'description': purchase.description,
+        'date': purchase.date,
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'cockpit_status': _worst_of(statuses),      # worst-of закрытости строк
         'total_ordered': total_ordered, 'total_received': total_received,
@@ -1211,7 +1218,7 @@ def purchase_cockpit(purchase):
     }
 
 
-PURCHASE_LOCKED = 'Строки правятся только в черновике заказа — снимите замок (unpost).'
+PURCHASE_LOCKED = 'Строки правятся только в черновике заказа — снимите замок (unlock).'
 
 
 def add_purchase_line(purchase, item, qty):
@@ -1364,10 +1371,11 @@ def transfer_cockpit(transfer):
         })
     return {
         'id': transfer.id, **_author(transfer), 'number': transfer.number, 'date': transfer.date,
+        'code': transfer.code, 'description': transfer.description,
         'contractor_id': transfer.contractor_id,
-        'contractor_name': transfer.contractor.name if transfer.contractor_id else '',
+        'contractor_name': transfer.contractor.description if transfer.contractor_id else '',
         'project_id': transfer.project_id, 'project_code': transfer.project.code,
-        'project_name': transfer.project.name, 'locked': transfer.locked,
+        'project_name': transfer.project.description, 'locked': transfer.locked,
         'total_qty': total_qty, 'lines': lines,
     }
 
@@ -1486,12 +1494,12 @@ def _internal_project(kind):
     proj = models.Project.objects.filter(kind=kind).first()
     if proj is not None:
         return proj
-    code, name = {
+    code, description = {
         models.Project.Kind.INTERNAL_STOCK: ('WHITE', 'Собственный склад'),
         models.Project.Kind.INTERNAL_WRITEOFF: ('GREY', 'Свободные неучтённые'),
     }[kind]
     return models.Project.objects.create(
-        code=code, name=name, kind=kind)
+        code=code, description=description, kind=kind)
 
 
 def _auto_number(prefix, project):
@@ -1544,9 +1552,10 @@ def writeoff_cockpit(writeoff):
         })
     return {
         'id': writeoff.id, **_author(writeoff), 'number': writeoff.number, 'date': writeoff.date,
+        'code': writeoff.code, 'description': writeoff.description,
         'reason': writeoff.reason,
         'project_id': writeoff.project_id, 'project_code': writeoff.project.code,
-        'project_name': writeoff.project.name, 'locked': writeoff.locked,
+        'project_name': writeoff.project.description, 'locked': writeoff.locked,
         'total_qty': total_qty, 'lines': lines,
     }
 
@@ -1646,8 +1655,9 @@ def requisition_cockpit(requisition):
         })
     return {
         'id': requisition.id, **_author(requisition), 'number': requisition.number, 'date': requisition.date,
+        'code': requisition.code, 'description': requisition.description,
         'project_id': requisition.project_id, 'project_code': requisition.project.code,
-        'project_name': requisition.project.name, 'locked': requisition.locked,
+        'project_name': requisition.project.description, 'locked': requisition.locked,
         'total_qty': total_qty, 'lines': lines,
     }
 
@@ -1775,8 +1785,9 @@ def relocation_cockpit(relocation):
         })
     return {
         'id': relocation.id, **_author(relocation), 'number': relocation.number, 'date': relocation.date,
+        'code': relocation.code, 'description': relocation.description,
         'project_id': relocation.project_id, 'project_code': relocation.project.code,
-        'project_name': relocation.project.name, 'locked': relocation.locked,
+        'project_name': relocation.project.description, 'locked': relocation.locked,
         'total_qty': total_qty, 'moves': moves,
     }
 
@@ -1918,7 +1929,7 @@ def project_closure(project):
         blocker = ''
     return {
         'project_id': project.id, 'project_code': project.code,
-        'project_name': project.name, 'kind': project.kind,
+        'project_name': project.description, 'kind': project.kind,
         'locked': project.locked, 'closed': project.closed,
         'is_external': is_external,
         'residuals': residuals, 'residual_positive': positive,
@@ -2029,6 +2040,32 @@ def _require_date(date):
 _UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
 
 
+def require_unique_code(model, code, pk=None):
+    """Мягкая уникальность `code` (волна 19, Ф10, правило Ивана): плохой/занятый код
+    ловим дружелюбно ДО IntegrityError, чтобы трение не уходило команде в оффлайн.
+
+    `code` — уникальный короткий жаргон; занят в пределах своей сущности → отказ с
+    внятным текстом (не 500). Пустой/`None` пропускаем (несколько NULL легальны). Для
+    документов `model` = `StockDocument` (единое пространство кода на все ордера)."""
+    code = (code or '').strip()
+    if code and model.objects.filter(code=code).exclude(pk=pk).exists():
+        raise ValidationError(f'Код «{code}» уже занят — выберите уникальный.')
+
+
+def _set_code(instance, code):
+    """Выставить `code` документа/сущности (волна 19, Ф10) под замком формы.
+
+    `code` — часовой: `_UNSET` → не трогаем; иначе пустой → `NULL` (в MySQL несколько
+    NULL не конфликтуют по unique, так очистка кода не ловит IntegrityError), непустой
+    → строка. Уникальность — мягко (`require_unique_code`) на `StockDocument` (единое
+    пространство кода ордеров). Отдельным `save` (как контрагент у передачи) — вне
+    `_apply`, который пропускает None и не дал бы очистить код в NULL."""
+    if code is not _UNSET:
+        require_unique_code(models.StockDocument, code, instance.pk)
+        instance.code = (code or '').strip() or None
+        instance.save(update_fields=['code'])
+
+
 def _set_author(doc, user):
     """Сменить автора документа (Ф2j) — сквозная правка шапки под замком.
 
@@ -2086,25 +2123,29 @@ def _set_target_item(kitting, item):
     kitting.save(update_fields=['target_item'])
 
 
-def update_receipt(receipt, number=None, date=None, user=_UNSET, project=_UNSET):
-    """Правка шапки прихода (№ УПД / дата / автор / проект-якорь). До замка «сверено»."""
+def update_receipt(receipt, number=None, date=None, code=_UNSET, description=None,
+                   user=_UNSET, project=_UNSET):
+    """Правка шапки прихода (№ УПД / дата / код / описание / автор / проект-якорь). До замка «сверено»."""
     _require_unlocked(receipt)
     _require_number(number)
     _require_date(date)
     _set_author(receipt, user)
     _set_project(receipt, project)
-    return _apply(receipt, {'number': number and number.strip(), 'date': date})
+    _set_code(receipt, code)
+    return _apply(receipt, {'number': number and number.strip(), 'date': date,
+                            'description': None if description is None else description.strip()})
 
 
-def update_purchase(purchase, date=None, note=None, user=_UNSET, project=_UNSET,
-                    procurement=_UNSET):
-    """Правка шапки заказа (дата / примечание / автор / проект / закупка). Только в черновике.
+def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UNSET,
+                    project=_UNSET, procurement=_UNSET):
+    """Правка шапки заказа (дата / код / описание / автор / проект / закупка). Только в черновике.
 
     Дата заказа nullable — пустая строка очищает её в NULL (в отличие от
-    документов с обязательной датой). `project`/`procurement` — якоря #A (Ф2k):
-    заказ — проектное исполнение закупки-плана. Смена проекта у заказа со связанными
-    приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный отказ (сперва
-    отвязать приходы). Оба поля NOT NULL → `None` отклоняем.
+    документов с обязательной датой). `code` — часовой `_UNSET` (пустой → NULL, чтобы
+    несколько заказов без кода не конфликтовали по unique). `project`/`procurement` —
+    якоря #A (Ф2k): заказ — проектное исполнение закупки-плана. Смена проекта у заказа
+    со связанными приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный отказ
+    (сперва отвязать приходы). Оба поля NOT NULL → `None` отклоняем.
     """
     _require_unlocked(purchase, PURCHASE_LOCKED)
     _set_author(purchase, user)
@@ -2126,17 +2167,22 @@ def update_purchase(purchase, date=None, note=None, user=_UNSET, project=_UNSET,
     if date is not None:
         purchase.date = date or None
         fields.append('date')
-    if note is not None:
-        purchase.note = note.strip()
-        fields.append('note')
+    if code is not _UNSET:
+        require_unique_code(models.Purchase, code, purchase.pk)
+        purchase.code = (code or '').strip() or None
+        fields.append('code')
+    if description is not None:
+        purchase.description = description.strip()
+        fields.append('description')
     if fields:
         purchase.save(update_fields=fields)
     return purchase
 
 
-def update_transfer(transfer, number=None, date=None, contractor=_UNSET, user=_UNSET,
-                    project=_UNSET):
-    """Правка шапки передачи (№ накладной / дата / заказчик / автор / проект). До «отгружено».
+def update_transfer(transfer, number=None, date=None, code=_UNSET, description=None,
+                    contractor=_UNSET, user=_UNSET, project=_UNSET):
+    """Правка шапки передачи (№ накладной / дата / код / описание / заказчик / автор / проект).
+    До «отгружено».
 
     `contractor` — часовой: не передан → не трогаем; `Counterparty` → выставить;
     `None` → снять получателя (nullable).
@@ -2146,36 +2192,44 @@ def update_transfer(transfer, number=None, date=None, contractor=_UNSET, user=_U
     _require_date(date)
     _set_author(transfer, user)
     _set_project(transfer, project)
+    _set_code(transfer, code)
     if contractor is not _UNSET:
         transfer.contractor = contractor
         transfer.save(update_fields=['contractor'])
-    return _apply(transfer, {'number': number and number.strip(), 'date': date})
+    return _apply(transfer, {'number': number and number.strip(), 'date': date,
+                             'description': None if description is None else description.strip()})
 
 
-def update_writeoff(writeoff, number=None, date=None, reason=None, user=_UNSET,
-                    project=_UNSET):
-    """Правка шапки списания (№ акта / дата / причина / автор / проект). Только черновик."""
+def update_writeoff(writeoff, number=None, date=None, reason=None, code=_UNSET,
+                    description=None, user=_UNSET, project=_UNSET):
+    """Правка шапки списания (№ акта / дата / причина / код / описание / автор / проект). Только черновик."""
     _require_unlocked(writeoff)
     _require_number(number)
     _require_date(date)
     _set_author(writeoff, user)
     _set_project(writeoff, project)
+    _set_code(writeoff, code)
     return _apply(writeoff, {'number': number and number.strip(), 'date': date,
-                             'reason': None if reason is None else reason.strip()})
+                             'reason': None if reason is None else reason.strip(),
+                             'description': None if description is None else description.strip()})
 
 
-def update_requisition(requisition, number=None, date=None, user=_UNSET, project=_UNSET):
-    """Правка шапки требования (№ / дата / автор / проект-получатель). Только черновик (замок)."""
+def update_requisition(requisition, number=None, date=None, code=_UNSET,
+                       description=None, user=_UNSET, project=_UNSET):
+    """Правка шапки требования (№ / дата / код / описание / автор / проект-получатель). Только черновик (замок)."""
     _require_unlocked(requisition)
     _require_number(number)
     _require_date(date)
     _set_author(requisition, user)
     _set_project(requisition, project)
-    return _apply(requisition, {'number': number and number.strip(), 'date': date})
+    _set_code(requisition, code)
+    return _apply(requisition, {'number': number and number.strip(), 'date': date,
+                                'description': None if description is None else description.strip()})
 
 
-def update_relocation(relocation, number=None, date=None, user=_UNSET, project=_UNSET):
-    """Правка шапки перемещения (№ / дата / автор / проект-якорь). Только черновик (замок).
+def update_relocation(relocation, number=None, date=None, code=_UNSET,
+                      description=None, user=_UNSET, project=_UNSET):
+    """Правка шапки перемещения (№ / дата / код / описание / автор / проект-якорь). Только черновик (замок).
 
     Проект — якорь (`_set_project`): у перемещения строки-ходы ссылаются на лоты этого
     же проекта, поэтому сменить его можно лишь у пустого ордера."""
@@ -2184,12 +2238,15 @@ def update_relocation(relocation, number=None, date=None, user=_UNSET, project=_
     _require_date(date)
     _set_author(relocation, user)
     _set_project(relocation, project)
-    return _apply(relocation, {'number': number and number.strip(), 'date': date})
+    _set_code(relocation, code)
+    return _apply(relocation, {'number': number and number.strip(), 'date': date,
+                               'description': None if description is None else description.strip()})
 
 
-def update_kitting(kitting, qty=None, date=None, user=_UNSET, project=_UNSET,
-                   target_item=_UNSET):
-    """Правка шапки комплектации (кол-во образцов / дата / автор / проект / цель). Только «в работе».
+def update_kitting(kitting, qty=None, date=None, code=_UNSET, description=None,
+                   user=_UNSET, project=_UNSET, target_item=_UNSET):
+    """Правка шапки комплектации (кол-во образцов / дата / код / описание / автор / проект / цель).
+    Только «в работе».
 
     Кол-во образцов пересчитывает потребности BOM — правится, пока `wip`. `project`/
     `target_item` — якоря #A (Ф2k): меняются только у пустой комплектации.
@@ -2198,6 +2255,7 @@ def update_kitting(kitting, qty=None, date=None, user=_UNSET, project=_UNSET,
     _set_author(kitting, user)
     _set_project(kitting, project)
     _set_target_item(kitting, target_item)
+    _set_code(kitting, code)
     if qty is not None and qty <= 0:
         raise ValidationError('Количество образцов должно быть положительным.')
     fields = []
@@ -2207,6 +2265,9 @@ def update_kitting(kitting, qty=None, date=None, user=_UNSET, project=_UNSET,
     if date is not None:                 # дата комплектации nullable
         kitting.date = date or None
         fields.append('date')
+    if description is not None:
+        kitting.description = description.strip()
+        fields.append('description')
     if fields:
         kitting.save(update_fields=fields)
     return kitting
@@ -2250,7 +2311,7 @@ def command_deficit():
             row['to_order'] += cov['to_order']
             row['by_project'].append({
                 'project_id': project.id, 'project_code': project.code,
-                'project_name': project.name, 'need': cov['need'],
+                'project_name': project.description, 'need': cov['need'],
                 'have': cov['have'], 'on_order': cov['on_order'],
                 'to_order': cov['to_order'], 'status': cov['status'],
             })
@@ -2287,23 +2348,25 @@ def procurement_cockpit(procurement):
         })
     return {
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
-        'date': procurement.date, 'note': procurement.note,
+        'code': procurement.code, 'description': procurement.description,
+        'date': procurement.date,
         'contractor_id': procurement.contractor_id,          # Ф4: поставщик (Р3)
-        'contractor_name': procurement.contractor.name if procurement.contractor_id else '',
+        'contractor_name': procurement.contractor.description if procurement.contractor_id else '',
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'total_qty': total_qty, 'lines': rows,
     }
 
 
-def create_procurement(user, date=None, note=''):
+def create_procurement(user, date=None, code=None, description=''):
     """Создать закупку-план (черновик) без проекта."""
+    require_unique_code(models.Procurement, code)
     return models.Procurement.objects.create(
         user=user, locked=False,
-        date=date, note=(note or '').strip())
+        date=date, code=code, description=(description or '').strip())
 
 
 PROCUREMENT_LOCKED = (
-    'Строки правятся только в черновике закупки — снимите замок (unpost).')
+    'Строки правятся только в черновике закупки — снимите замок (unlock).')
 
 
 def add_procurement_line(procurement, item, qty):
@@ -2353,13 +2416,14 @@ def unlock_procurement(procurement):
     return procurement
 
 
-def update_procurement(procurement, date=None, note=None, user=_UNSET,
+def update_procurement(procurement, date=None, code=_UNSET, description=None, user=_UNSET,
                        contractor=_UNSET):
-    """Правка шапки закупки-плана (дата / примечание / автор / контрагент). Только в черновике.
+    """Правка шапки закупки-плана (дата / код / описание / автор / контрагент). Только в черновике.
 
-    Дата закупки nullable — пустая строка очищает её в NULL (как заказ).
-    `contractor` — часовой (волна 19, Ф4): не передан → не трогаем; `Counterparty` →
-    выставить; `None` → снять (nullable).
+    Дата закупки nullable — пустая строка очищает её в NULL (как заказ). `code` —
+    часовой `_UNSET` (пустой → NULL, чтобы несколько закупок без кода не конфликтовали
+    по unique). `contractor` — часовой (волна 19, Ф4): не передан → не трогаем;
+    `Counterparty` → выставить; `None` → снять (nullable).
     """
     _require_unlocked(procurement, PROCUREMENT_LOCKED)
     _set_author(procurement, user)
@@ -2367,9 +2431,13 @@ def update_procurement(procurement, date=None, note=None, user=_UNSET,
     if date is not None:
         procurement.date = date or None
         fields.append('date')
-    if note is not None:
-        procurement.note = note.strip()
-        fields.append('note')
+    if code is not _UNSET:
+        require_unique_code(models.Procurement, code, procurement.pk)
+        procurement.code = (code or '').strip() or None
+        fields.append('code')
+    if description is not None:
+        procurement.description = description.strip()
+        fields.append('description')
     if contractor is not _UNSET:
         procurement.contractor = contractor
         fields.append('contractor')
@@ -2513,7 +2581,7 @@ def procurement_pegging(procurement):
             if slot is None:
                 p = models.Project.objects.get(pk=project_id)
                 slot = {'project_id': project_id, 'project_code': p.code,
-                        'project_name': p.name, 'suggest': ZERO, 'pegged': ZERO}
+                        'project_name': p.description, 'suggest': ZERO, 'pegged': ZERO}
                 by_project[project_id] = slot
             slot['pegged'] = qty
         pegged_total = sum((s['pegged'] for s in by_project.values()), ZERO)
@@ -2536,7 +2604,7 @@ def procurement_pegging(procurement):
         fan.append({
             'purchase_id': pu.id, 'locked': pu.locked,
             'project_id': pu.project_id, 'project_code': pu.project.code,
-            'project_name': pu.project.name, 'lines': pu.lines.count(),
+            'project_name': pu.project.description, 'lines': pu.lines.count(),
             'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,
         })
     return {
@@ -2659,20 +2727,21 @@ def inventory_cockpit(inventory):
         })
     return {
         'id': inventory.id, **_author(inventory), 'number': inventory.number, 'date': inventory.date,
-        'note': inventory.note,
+        'code': inventory.code, 'description': inventory.description,
         'project_id': inventory.project_id, 'project_code': inventory.project.code,
-        'project_name': inventory.project.name, 'locked': inventory.locked,
+        'project_name': inventory.project.description, 'locked': inventory.locked,
         'total_cost': total, 'lots': lots,
     }
 
 
-def create_inventory(project, user, number, date=None, note=''):
-    """Создать акт инвентаризации в проект-дом (куда рождаются найденные лоты)."""
+def create_inventory(project, user, number, date=None):
+    """Создать акт инвентаризации в проект-дом (куда рождаются найденные лоты).
+    `code`/`description` (Ф10) заполняются в детальной форме под замком, не при создании."""
     if not (number or '').strip():
         raise ValidationError('Нужен № акта инвентаризации.')
     return models.Inventory.objects.create(
         project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate(), note=(note or '').strip())
+        date=date or timezone.localdate())
 
 
 def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, lot_name='',
@@ -2744,16 +2813,19 @@ def unlock_inventory(inventory):
     return unlock_document(inventory)
 
 
-def update_inventory(inventory, number=None, date=None, note=None, user=_UNSET,
-                     project=_UNSET):
-    """Правка шапки инвентаризации (№ акта / дата / примечание / автор / проект). Только черновик."""
+def update_inventory(inventory, number=None, date=None, code=_UNSET, description=None,
+                     user=_UNSET, project=_UNSET):
+    """Правка шапки инвентаризации (№ акта / дата / код / описание / автор / проект). Только черновик."""
     _require_unlocked(inventory)
     _require_number(number)
     _require_date(date)
     _set_author(inventory, user)
     _set_project(inventory, project)
-    return _apply(inventory, {'number': number and number.strip(), 'date': date,
-                              'note': None if note is None else note.strip()})
+    patch = {'number': number and number.strip(), 'date': date,
+             'description': None if description is None else description.strip()}
+    if code is not _UNSET:
+        patch['code'] = (code or '').strip() or None
+    return _apply(inventory, patch)
 
 
 def written_off_lots():
@@ -3195,27 +3267,27 @@ def rollup_estimated_cost(item):
     return {'estimated_cost': cost, 'updated': updated, 'incomplete': incomplete}
 
 
-def create_project(code, name, budget=None, started=None):
+def create_project(code, description, budget=None, started=None):
     """Создать внешний проект (НИР/контракт) из мини-формы «＋ Новый». Код уникален.
 
     Только `kind=external`: внутренние склады (WHITE/GREY) — синглтоны из сида
     (`Project.clean`), формой «＋ Новый» не заводятся.
     """
     code = (code or '').strip()
-    name = (name or '').strip()
+    description = (description or '').strip()
     if not code:
         raise ValidationError('Нужен код проекта.')
-    if not name:
-        raise ValidationError('Нужно название проекта.')
+    if not description:
+        raise ValidationError('Нужно описание проекта.')
     if models.Project.objects.filter(code=code).exists():
         raise ValidationError(f'Проект с кодом {code} уже есть.')
     return models.Project.objects.create(
-        code=code, name=name, kind=models.Project.Kind.EXTERNAL,
+        code=code, description=description, kind=models.Project.Kind.EXTERNAL,
         budget=budget, started=started or None)
 
 
 def update_project(project, changes):
-    """Правка реквизитов проекта под замком формы (§6): код, название, бюджет, дата начала.
+    """Правка реквизитов проекта под замком формы (§6): код, описание, бюджет, дата начала.
     Статус (закрытие/переоткрытие) — отдельным путём, здесь не трогаем. Код правим всем
     проектам (WAVE14 Ф1): он не PK, переименование безопасно; guard как в update_item."""
     fields = []
@@ -3227,12 +3299,12 @@ def update_project(project, changes):
             raise ValidationError(f'Проект с кодом {code} уже есть.')
         project.code = code
         fields.append('code')
-    if 'name' in changes:
-        name = (changes['name'] or '').strip()
-        if not name:
-            raise ValidationError('Нужно название проекта.')
-        project.name = name
-        fields.append('name')
+    if 'description' in changes:
+        description = (changes['description'] or '').strip()
+        if not description:
+            raise ValidationError('Нужно описание проекта.')
+        project.description = description
+        fields.append('description')
     if 'budget' in changes:
         project.budget = changes['budget']                 # Decimal или None (сброс)
         fields.append('budget')

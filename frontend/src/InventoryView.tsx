@@ -31,7 +31,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, 
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={`Инвентаризация ${c.number}`}
+        code={c.code || `Инвентаризация ${c.number}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name} · {c.date} · сумма {num(c.total_cost)} ₽
@@ -53,9 +53,12 @@ export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, 
         <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateInventory(c.id, { date: v }))}
           validate={v => v.trim().length > 0} /></dd>
-        <dt>Примечание</dt>
-        <dd><CommitInput value={c.note} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateInventory(c.id, { note: v }))} /></dd>
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateInventory(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateInventory(c.id, { description: v }))} /></dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateInventory(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}

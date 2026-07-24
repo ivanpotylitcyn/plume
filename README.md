@@ -40,12 +40,21 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 короче и привычнее для разработки). Здесь — их русские эквиваленты и смысл. Это
 единый язык проекта: на нём говорим в обсуждениях и в интерфейсе.
 
+**Единый интерфейс идентичности (канон, волна 19, Ф10).** У КАЖДОЙ сущности ровно
+пара `code` + `description`: `code` — уникальный короткий ключ-жаргон (напр. Item
+`BGB707…`, проект `ДО`, закупка `Нева ДЗЗ 1`; вводится человеком, авто-фолбэка нет →
+у новоприобретающих поле — `nullable+unique`), `description` — развёрнутое человеческое
+имя. Расползшиеся синонимы (`name`/`label`/`note`) сведены к этой паре; документы несут
+её сверх своих юридических полей (`number`/`date`/`contractor`). Списки, пикеры и шапки
+форм везде показывают одну пару. (Исключение — `Item.design_item_id`: переезд в `code`
+отложен в отдельный заход Ф3b.)
+
 ### Сущности
 
 | English (БД/код) | Русский | Значение и связи |
 |---|---|---|
 | `Item` | Изделие | Единица справочника, **абстракция** (для прибора — конструкторская документация, для покупного — datasheet). Едина для приборов, компонентов и материалов. Ключ `design_item_id` — заказной PN (канон внешней библиотеки Altium); класс — справочник `Category` (FK); ось «производим/покупаем» — `produced` (⟂ классу). «Используется/спящий» — **вычисляемо** (Exists по живым ссылкам; хранимого `active` нет). Может состоять из изделий (рекурсивный состав через `BomLine`). |
-| `Category` | Категория | Класс изделия (конденсатор/микроконтроллер/…), синхронизируемый с библиотекой компонентов: `code` = стем имени CSV-файла. FK-справочник вместо прежнего enum `Item.kind`; несёт рус. `label` и Codicon `icon`. |
+| `Category` | Категория | Класс изделия (конденсатор/микроконтроллер/…), синхронизируемый с библиотекой компонентов: `code` = стем имени CSV-файла. FK-справочник вместо прежнего enum `Item.kind`; несёт рус. `description` (волна 19, Ф10: `label`→`description`; per-категорийный `icon` удалён — различение разрешилось режимами Изделия/Компоненты). |
 | `BomLine` | Строка состава | Одна позиция состава изделия: «изделие-родитель → компонент × количество». |
 | `Lot` | Партия | Главная учётная единица склада — **физическое воплощение** изделия. Хранит цену (`unit_cost`), человеческое название (`lot_name`) и машинный part number (`part_number`). Рождается ровно одним документом-источником, живёт в одном проекте. |
 | `StockLine` | Строка движения | Единая знаковая строка расхода/перемещения существующей партии `(документ, лот, место, ±кол-во)`. Свернула четыре таблицы строк-расхода (комплектация/передача/списание/требование) в одну (волна 13, Ф0); владелец — один FK `document → StockDocument` (дуга схлопнута в Ф2b; вид = `document.kind`). Рождение лотов сюда не входит (born-direct через `Lot.origin`). |
@@ -189,8 +198,7 @@ erDiagram
   CATEGORY {
     int id PK
     string code "стем CSV-файла библиотеки, uniq"
-    string label "рус. название класса"
-    string icon "Codicon"
+    string description "рус. название класса (Ф10: label→description; icon удалён)"
   }
   ITEM {
     int id PK
@@ -212,7 +220,8 @@ erDiagram
   }
   COUNTERPARTY {
     int id PK
-    string name
+    string code "наш ярлык (напр. КОМПЭЛ), uniq, nullable (Ф10)"
+    string description "наименование (Ф10: name→description)"
     string inn
     bool is_supplier "роль: сторона прихода"
     bool is_customer "роль: сторона передачи"
@@ -226,7 +235,7 @@ erDiagram
   LOCATION {
     int id PK
     string code
-    string name
+    string description "Ф10: name→description"
     string kind
   }
   LOT {
@@ -253,7 +262,7 @@ erDiagram
   PROJECT {
     int id PK
     string code
-    string name
+    string description "Ф10: name→description"
     decimal budget "бюджет на материалы"
     string kind "тег-указатель (не типология): внешний | внутр. склад (белые) | внутр. списано (серые)"
     bool locked "замок-веха «проект отработан» (единая ось с ордерами)"
@@ -272,7 +281,8 @@ erDiagram
     int contractor_id FK "поставщик (nullable, SET_NULL)"
     bool locked "единый мягкий замок"
     date date "начало переговоров"
-    string note
+    string code "наш ярлык (напр. Нева ДЗЗ 1), uniq, nullable (Ф10)"
+    string description "развёрнутое имя (Ф10; note удалён)"
   }
   PROCUREMENTLINE {
     int id PK
@@ -287,7 +297,8 @@ erDiagram
     int user_id FK "автор"
     bool locked "единый мягкий замок"
     date date "подписание / оформление"
-    string note
+    string code "наш ярлык, uniq, nullable (Ф10)"
+    string description "развёрнутое имя (Ф10; note удалён)"
   }
   PURCHASELINE {
     int id PK
@@ -302,8 +313,9 @@ erDiagram
     int project_id FK "общий, поднят с 6 детей (Ф2c); реверс project.documents"
     int user_id FK "автор — общий, поднят с 6 детей (Ф2c)"
     date date "общая, поднята (Ф2c); nullable (Kitting-черновик мог быть без даты)"
-    string number "№ документа — общий, поднят (Ф2c); blank у Kitting"
-    string note "примечание — общее, поднято (Ф2c); наполнено у инвентаризации"
+    string number "№ документа (внешний, юридический) — общий, поднят (Ф2c); blank у Kitting"
+    string code "наш ярлык (напр. Нева ДЗЗ 1), uniq, nullable — общий (Ф10)"
+    string description "развёрнутое имя — общее (Ф10; note удалён)"
   }
   RECEIPT {
     int id PK "= StockDocument.id (MTI parent_link)"
@@ -367,8 +379,9 @@ erDiagram
   Ф2e) и все складские документы — `Kitting` / `Transfer` / `Writeoff` / `Requisition` /
   `Inventory` / `Relocation` (+ `Receipt`) с их строками. Все семь — **MTI-наследники
   единого родителя `StockDocument` («Ордер»)**:
-  общая шапка (`kind`-дискриминатор + `locked` + `project`/`user`/`date`/`number`/`note`,
-  поднятые с детей в Ф2c) и единое id-пространство (волна 13, Ф2a); специфика
+  общая шапка (`kind`-дискриминатор + `locked` + `project`/`user`/`date`/`number` +
+  `code`/`description` (волна 19, Ф10), поднятые с детей в Ф2c) и единое id-пространство
+  (волна 13, Ф2a); специфика
   (`contractor`/`purchase`, `target_item`/`qty`, `reason`, `Transfer.contractor`) — на
   детях. Отвечает на «что физически есть и куда движется».
 - **Вложение (`Attachment`) рядом с `User` — оффлайн-факты.** Сканы документов и datasheet'ы

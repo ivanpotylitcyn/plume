@@ -65,13 +65,13 @@ export function DeficitView({ projectId, items, isNew, closed, openItem, openPur
 
   const deviceTotal = data.demands.reduce((s, d) => s + d.qty, 0)
   const unitsTotal = data.components.reduce((s, c) => s + c.need, 0)
-  const name = phead?.name ?? data.project_name
+  const name = phead?.description ?? data.project_name
   const code = phead?.code ?? data.project_code   // после правки кода — из phead (живо)
   return (
     <div>
       <FormHeader
-        name={name}
-        meta={<>{code} · проект</>}
+        code={code}
+        meta={<>{name} · проект</>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
         onDelete={del}
       >
@@ -81,9 +81,9 @@ export function DeficitView({ projectId, items, isNew, closed, openItem, openPur
           <dd><CommitInput value={phead.code} disabled={busy}
             onCommit={v => runP(api.updateProject(projectId, { code: v }))}
             validate={v => v.trim() !== ''} /></dd>
-          <dt>Название</dt>
-          <dd><CommitInput value={phead.name} disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { name: v }))}
+          <dt>Описание</dt>
+          <dd><CommitInput value={phead.description} disabled={busy}
+            onCommit={v => runP(api.updateProject(projectId, { description: v }))}
             validate={v => v.trim() !== ''} /></dd>
           <dt>Бюджет на материалы</dt>
           <dd><CommitInput value={phead.budget != null ? String(phead.budget) : ''} disabled={busy}

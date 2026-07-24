@@ -49,10 +49,10 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
   return (
     <div>
       <FormHeader
-        name={d.name}
+        code={d.code}
         meta={<>
           <span className="ci ci-database" style={{ fontSize: 12, marginRight: 5 }} />
-          {d.code}{d.kind ? ` · ${d.kind}` : ''} · партий {d.stock.length}
+          {d.description}{d.kind ? ` · ${d.kind}` : ''} · партий {d.stock.length}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
         onDelete={del}
@@ -64,12 +64,12 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
               onCommit={v => run(api.updateLocation(d.id, { code: v }))}
               validate={v => v.trim() !== ''} />
           : d.code}</dd>
-        <dt>Название</dt>
+        <dt>Описание</dt>
         <dd>{unlocked
-          ? <CommitInput value={d.name} width={260} disabled={busy}
-              onCommit={v => run(api.updateLocation(d.id, { name: v }))}
+          ? <CommitInput value={d.description} width={260} disabled={busy}
+              onCommit={v => run(api.updateLocation(d.id, { description: v }))}
               validate={v => v.trim() !== ''} />
-          : d.name}</dd>
+          : d.description}</dd>
         <dt>Вид</dt>
         <dd>{unlocked
           ? <CommitInput value={d.kind} width={200} disabled={busy}

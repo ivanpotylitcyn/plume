@@ -234,19 +234,19 @@ export default function App() {
   // (по дате, null — вниз, tiebreak id). Диспетчер открытия — по kind.
   const orderEntries = useMemo<OrderEntry[]>(() => {
     const es: OrderEntry[] = []
-    receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.number,
+    receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.code || r.number,
       name: r.contractor_name, projectCode: r.project_code, locked: r.locked, date: r.date }))
-    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.target_design_item_id,
+    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.code || k.target_design_item_id,
       name: k.target_description, projectCode: k.project_code, locked: k.locked, date: k.date }))
-    transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.number,
+    transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.code || t.number,
       name: t.project_code, projectCode: t.project_code, locked: t.locked, date: t.date }))
-    requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.number,
+    requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.code || r.number,
       name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
-    writeoffs.forEach(w => es.push({ kind: 'writeoff', id: w.id, code: w.number,
+    writeoffs.forEach(w => es.push({ kind: 'writeoff', id: w.id, code: w.code || w.number,
       name: w.reason, projectCode: w.project_code, locked: w.locked, date: w.date }))
-    inventories.forEach(i => es.push({ kind: 'inventory', id: i.id, code: i.number,
-      name: i.note, projectCode: i.project_code, locked: i.locked, date: i.date }))
-    relocations.forEach(r => es.push({ kind: 'relocation', id: r.id, code: r.number,
+    inventories.forEach(i => es.push({ kind: 'inventory', id: i.id, code: i.code || i.number,
+      name: i.description, projectCode: i.project_code, locked: i.locked, date: i.date }))
+    relocations.forEach(r => es.push({ kind: 'relocation', id: r.id, code: r.code || r.number,
       name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
     return es.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id)
   }, [receipts, kittings, transfers, requisitions, writeoffs, inventories, relocations])
@@ -281,27 +281,27 @@ export default function App() {
   // Записи палитры ⌘K: проекты, изделия и документы — по коду/номеру/названию.
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
     const e: PaletteEntry[] = []
-    projects.forEach(p => e.push({ key: `p${p.id}`, code: p.code, name: p.name,
+    projects.forEach(p => e.push({ key: `p${p.id}`, code: p.code, name: p.description,
       kind: 'Проект', open: () => openProject(p.id) }))
     items.forEach(i => e.push({ key: `i${i.id}`, code: i.design_item_id, name: i.description,
       kind: 'Изделие', open: () => openItem(i.id) }))
-    receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.number, name: r.contractor_name,
+    receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.code || r.number, name: r.contractor_name,
       kind: 'Поставка', open: () => openReceipt(r.id) }))
-    transfers.forEach(t => e.push({ key: `t${t.id}`, code: t.number, name: t.project_code,
+    transfers.forEach(t => e.push({ key: `t${t.id}`, code: t.code || t.number, name: t.project_code,
       kind: 'Передача', open: () => openTransfer(t.id) }))
-    writeoffs.forEach(w => e.push({ key: `w${w.id}`, code: w.number, name: w.project_code,
+    writeoffs.forEach(w => e.push({ key: `w${w.id}`, code: w.code || w.number, name: w.project_code,
       kind: 'Списание', open: () => openWriteoff(w.id) }))
-    requisitions.forEach(r => e.push({ key: `q${r.id}`, code: r.number, name: r.project_code,
+    requisitions.forEach(r => e.push({ key: `q${r.id}`, code: r.code || r.number, name: r.project_code,
       kind: 'Требование', open: () => openRequisition(r.id) }))
-    inventories.forEach(i => e.push({ key: `v${i.id}`, code: i.number, name: i.project_code,
+    inventories.forEach(i => e.push({ key: `v${i.id}`, code: i.code || i.number, name: i.project_code,
       kind: 'Инвентаризация', open: () => openInventory(i.id) }))
-    purchases.forEach(p => e.push({ key: `u${p.id}`, code: `Заказ #${p.id}`, name: p.project_code,
+    purchases.forEach(p => e.push({ key: `u${p.id}`, code: p.code || `Заказ #${p.id}`, name: p.project_code,
       kind: 'Заказ', open: () => openPurchase(p.id) }))
-    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.target_design_item_id, name: k.target_description,
+    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.code || k.target_design_item_id, name: k.target_description,
       kind: 'Комплектация', open: () => openKitting(k.id) }))
-    relocations.forEach(r => e.push({ key: `l${r.id}`, code: r.number, name: r.project_code,
+    relocations.forEach(r => e.push({ key: `l${r.id}`, code: r.code || r.number, name: r.project_code,
       kind: 'Перемещение', open: () => openRelocation(r.id) }))
-    locationRows.forEach(l => e.push({ key: `loc${l.id}`, code: l.code, name: l.name,
+    locationRows.forEach(l => e.push({ key: `loc${l.id}`, code: l.code, name: l.description,
       kind: 'Склад', open: () => openLocation(l.id) }))
     return e
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -334,7 +334,7 @@ export default function App() {
             newSel={sel?.kind === 'new-project'} onNew={() => setSel({ kind: 'new-project' })}
             selId={sel?.kind === 'project' ? sel.id : null}
             onSelect={id => setSel({ kind: 'project', id })}
-            rows={[...projects].map(p => ({ id: p.id, code: p.code, name: p.name,
+            rows={[...projects].map(p => ({ id: p.id, code: p.code, name: p.description,
               // Ф1b: замок-проекция (unlock=активный / lock=архивный); цвет=worst-of
               // здоровья проекта (`_project_health`), null → нейтральный.
               glyph: <StatusGlyph locked={p.locked} tone={p.health ? statusTone(p.health) : 'none'}
@@ -349,7 +349,7 @@ export default function App() {
             onSelect={id => setSel({ kind: 'item', id })}
             rows={[...items].filter(i => i.produced)
               .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
-                id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
+                id: i.id, code: i.design_item_id, name: i.description, category: i.category.description,
                 glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'items' &&
@@ -364,7 +364,7 @@ export default function App() {
                 <span className="code">Синхронизация с библиотекой</span>
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
-              id: i.id, code: i.design_item_id, name: i.description, category: i.category.label,
+              id: i.id, code: i.design_item_id, name: i.description, category: i.category.description,
               glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'orders' &&
@@ -377,7 +377,7 @@ export default function App() {
             newSel={sel?.kind === 'new-location'} onNew={() => setSel({ kind: 'new-location' })}
             selId={sel?.kind === 'location' ? sel.id : null}
             onSelect={id => setSel({ kind: 'location', id })}
-            rows={[...locationRows].map(l => ({ id: l.id, code: l.code, name: l.name,
+            rows={[...locationRows].map(l => ({ id: l.id, code: l.code, name: l.description,
               glyph: <span className="ci ci-database" /> }))} />}
 
         {mode === 'purchases' &&
@@ -386,7 +386,7 @@ export default function App() {
             selId={sel?.kind === 'purchase' ? sel.id : null}
             onSelect={id => setSel({ kind: 'purchase', id })}
             rows={[...purchases].reverse().map(p => ({
-              id: p.id, code: `Заказ #${p.id}`, name: p.project_code, projectCode: p.project_code,
+              id: p.id, code: p.code || `Заказ #${p.id}`, name: p.project_code, projectCode: p.project_code,
               // Ф1b: глиф=замок (фиксация), цвет=покрытие лотами (`_purchase_coverage`).
               glyph: <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} />,
             }))} />}
@@ -403,24 +403,19 @@ export default function App() {
                 <span className="code">Командный свод</span>
               </div>}
             rows={[...procurements].reverse().map(p => ({
-              id: p.id, code: `Закупка #${p.id}`, name: p.note,
+              id: p.id, code: p.code || `Закупка #${p.id}`, name: p.description,
               // Ф1b: закупка-план — ось только фиксация, цвет=фиксация (зелёный заперт).
               glyph: <StatusGlyph locked={p.locked} />,
             }))} />}
       </div>
 
       <div className="work">
-        <div className="crumb">
-          <button className="back" disabled={history.length === 0}
-            title="Назад — предыдущая форма (⌥←)"
-            onClick={() => window.history.back()}>‹ Назад</button>
-        </div>
         {sel?.kind === 'project' && (() => {
           const p = projects.find(pr => pr.id === sel.id)
           // Внутренние склады (белый/серый) — экран остатков; внешние — дефицит + закрытие.
           if (p && p.kind !== 'external')
             return <ProjectStockPanel key={sel.id} projectId={sel.id}
-              projectName={p.name} openItem={openItem} />
+              projectName={p.description} openItem={openItem} />
           return <>
             <DeficitView key={`deficit-${sel.id}`} projectId={sel.id} items={items}
               isNew={isFresh('project', sel.id)}
@@ -693,7 +688,7 @@ function NewKitting({ projects, items, onCreated }: {
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>Прибор</dt>
         <dd><select className="lot-sel" value={targetId}
@@ -711,20 +706,22 @@ function NewKitting({ projects, items, onCreated }: {
   )
 }
 
-// Создание нового заказа: проект (+ примечание). Строки добавляются в кокпите.
+// Создание нового заказа: проект (+ код/описание). Строки добавляются в кокпите.
 function NewPurchase({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
   const externalProjects = projects.filter(p => p.kind === 'external')
   const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
-  const [note, setNote] = useState('')
+  const [code, setCode] = useState('')
+  const [description, setDescription] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const create = () => {
     if (!projectId) { setErr('Выберите проект'); return }
     setBusy(true); setErr(null)
-    api.createPurchase({ project_id: projectId, note: note.trim() || undefined })
+    api.createPurchase({ project_id: projectId, code: code.trim() || undefined,
+      description: description.trim() || undefined })
       .then(c => onCreated(c.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -738,11 +735,14 @@ function NewPurchase({ projects, onCreated }: {
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
-        <dt>Примечание</dt>
-        <dd><input className="qty-in" style={{ width: 260 }} value={note}
-          placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
+        <dt>Код</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={code}
+          placeholder="необязательно" onChange={e => setCode(e.target.value)} /></dd>
+        <dt>Описание</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={description}
+          placeholder="необязательно" onChange={e => setDescription(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>
@@ -798,7 +798,7 @@ function NewItem({ onCreated, defaultProduced = false }:
         <dt>Категория</dt>
         <dd><select className="lot-sel" value={categoryId}
           onChange={e => setCategoryId(Number(e.target.value))}>
-          {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
         </select></dd>
         <dt>Производимое</dt>
         <dd><input type="checkbox" checked={produced}
@@ -821,19 +821,19 @@ function NewItem({ onCreated, defaultProduced = false }:
   )
 }
 
-// Создание нового проекта (справочник, канон «＋ Новый»): код + название + бюджет (опц.).
+// Создание нового проекта (справочник, канон «＋ Новый»): код + описание + бюджет (опц.).
 // Только внешний (НИР/контракт); внутренние склады WHITE/GREY — синглтоны из сида.
 function NewProject({ onCreated }: { onCreated: (id: number) => void }) {
   const [code, setCode] = useState('')
-  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
   const [budget, setBudget] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const create = () => {
-    if (!code.trim() || !name.trim()) { setErr('Заполните код и название'); return }
+    if (!code.trim() || !description.trim()) { setErr('Заполните код и описание'); return }
     setBusy(true); setErr(null)
-    api.createProject({ code: code.trim(), name: name.trim(),
+    api.createProject({ code: code.trim(), description: description.trim(),
       budget: budget.trim() ? Number(budget) : undefined })
       .then(p => onCreated(p.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -848,9 +848,9 @@ function NewProject({ onCreated }: { onCreated: (id: number) => void }) {
         <dt>Код</dt>
         <dd><input className="qty-in" style={{ width: 200 }} value={code}
           onChange={e => setCode(e.target.value)} /></dd>
-        <dt>Название</dt>
-        <dd><input className="qty-in" style={{ width: 300 }} value={name}
-          onChange={e => setName(e.target.value)} /></dd>
+        <dt>Описание</dt>
+        <dd><input className="qty-in" style={{ width: 300 }} value={description}
+          onChange={e => setDescription(e.target.value)} /></dd>
         <dt>Бюджет</dt>
         <dd><input className="qty-in" style={{ width: 140 }} value={budget}
           placeholder="необязательно" onChange={e => setBudget(e.target.value)} /></dd>
@@ -866,13 +866,15 @@ function NewProject({ onCreated }: { onCreated: (id: number) => void }) {
 // Создание новой закупки-плана: без проекта (командная высота), только примечание.
 // Строки набираются в кокпите или мостом из командного свода.
 function NewProcurement({ onCreated }: { onCreated: (id: number) => void }) {
-  const [note, setNote] = useState('')
+  const [code, setCode] = useState('')
+  const [description, setDescription] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const create = () => {
     setBusy(true); setErr(null)
-    api.createProcurement({ note: note.trim() || undefined })
+    api.createProcurement({ code: code.trim() || undefined,
+      description: description.trim() || undefined })
       .then(c => onCreated(c.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -883,9 +885,12 @@ function NewProcurement({ onCreated }: { onCreated: (id: number) => void }) {
       <h1 className="title">Новая закупка-план</h1>
       <div className="subtitle">Планирование (командная высота, без проекта) · позиции — в кокпите или из свода</div>
       <dl className="props">
-        <dt>Примечание</dt>
-        <dd><input className="qty-in" style={{ width: 260 }} value={note}
-          placeholder="контрагент / поток…" onChange={e => setNote(e.target.value)} /></dd>
+        <dt>Код</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={code}
+          placeholder="напр. Нева ДЗЗ 1" onChange={e => setCode(e.target.value)} /></dd>
+        <dt>Описание</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={description}
+          placeholder="контрагент / поток…" onChange={e => setDescription(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>
@@ -912,10 +917,10 @@ function NewTransfer({ projects, onCreated }: {
   useEffect(() => { api.counterparties('customer').then(setCustomers) }, [])
 
   const addCustomer = () => {
-    const name = newCustomer.trim()
-    if (!name) return
+    const description = newCustomer.trim()
+    if (!description) return
     setBusy(true); setErr(null)
-    api.createCounterparty({ name, role: 'customer' })
+    api.createCounterparty({ description, role: 'customer' })
       .then(c => { setCustomers(cs => [...cs, c]); setCustomerId(c.id); setNewCustomer('') })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -939,14 +944,14 @@ function NewTransfer({ projects, onCreated }: {
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>Заказчик</dt>
         <dd>
           <select className="lot-sel" value={customerId} disabled={busy}
             onChange={e => setCustomerId(e.target.value ? Number(e.target.value) : '')}>
             <option value="">— не указан —</option>
-            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {customers.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
           </select>
           {' '}
           <input className="qty-in" style={{ width: 160 }} value={newCustomer}
@@ -1001,7 +1006,7 @@ function NewWriteoff({ projects, onCreated }: {
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>№ акта</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={number}
@@ -1049,7 +1054,7 @@ function NewRequisition({ projects, onCreated }: {
         <dt>Получатель</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>№ требования</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={number}
@@ -1077,15 +1082,13 @@ function NewInventory({ projects, onCreated }: {
     projects.find(p => p.kind === 'internal_writeoff')?.id ?? projects[0]?.id ?? '')
   const [number, setNumber] = useState('')
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
-  const [note, setNote] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const create = () => {
     if (!projectId || !number.trim()) { setErr('Заполните проект-дом и № акта'); return }
     setBusy(true); setErr(null)
-    api.createInventory({ project_id: projectId, number: number.trim(), date,
-      note: note.trim() || undefined })
+    api.createInventory({ project_id: projectId, number: number.trim(), date })
       .then(c => onCreated(c.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -1099,7 +1102,7 @@ function NewInventory({ projects, onCreated }: {
         <dt>Проект-дом</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>№ акта</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={number}
@@ -1107,9 +1110,6 @@ function NewInventory({ projects, onCreated }: {
         <dt>Дата</dt>
         <dd><input className="qty-in" style={{ width: 160 }} type="date" value={date}
           onChange={e => setDate(e.target.value)} /></dd>
-        <dt>Примечание</dt>
-        <dd><input className="qty-in" style={{ width: 260 }} value={note}
-          placeholder="необязательно" onChange={e => setNote(e.target.value)} /></dd>
       </dl>
       <div className="kit-actions">
         <button className="btn" disabled={busy} onClick={create}>Создать</button>
@@ -1148,7 +1148,7 @@ function NewRelocation({ projects, onCreated }: {
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(Number(e.target.value))}>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>№ перемещения</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={number}
@@ -1165,19 +1165,19 @@ function NewRelocation({ projects, onCreated }: {
   )
 }
 
-// Создание нового склада (волна 13 Ф4): код + название + вид (свободный текст).
+// Создание нового склада (волна 13 Ф4): код + описание + вид (свободный текст).
 // Что на складе лежит — заполняется движениями (приход/перемещение), не здесь.
 function NewLocation({ onCreated }: { onCreated: (id: number) => void }) {
   const [code, setCode] = useState('')
-  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
   const [kind, setKind] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const create = () => {
-    if (!code.trim() || !name.trim()) { setErr('Заполните код и название'); return }
+    if (!code.trim() || !description.trim()) { setErr('Заполните код и описание'); return }
     setBusy(true); setErr(null)
-    api.createLocation({ code: code.trim(), name: name.trim(), kind: kind.trim() || undefined })
+    api.createLocation({ code: code.trim(), description: description.trim(), kind: kind.trim() || undefined })
       .then(l => onCreated(l.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -1186,14 +1186,14 @@ function NewLocation({ onCreated }: { onCreated: (id: number) => void }) {
   return (
     <div>
       <h1 className="title">Новый склад</h1>
-      <div className="subtitle">Место хранения · код + название · вид свободным текстом</div>
+      <div className="subtitle">Место хранения · код + описание · вид свободным текстом</div>
       <dl className="props">
         <dt>Код</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={code}
           placeholder="напр. 103" onChange={e => setCode(e.target.value)} /></dd>
-        <dt>Название</dt>
-        <dd><input className="qty-in" style={{ width: 260 }} value={name}
-          onChange={e => setName(e.target.value)} /></dd>
+        <dt>Описание</dt>
+        <dd><input className="qty-in" style={{ width: 260 }} value={description}
+          onChange={e => setDescription(e.target.value)} /></dd>
         <dt>Вид</dt>
         <dd><input className="qty-in" style={{ width: 200 }} value={kind}
           placeholder="необязательно" onChange={e => setKind(e.target.value)} /></dd>
@@ -1228,10 +1228,10 @@ function NewReceipt({ projects, onCreated }: {
   }, [])
 
   const addSupplier = () => {
-    const name = newSupplier.trim()
-    if (!name) return
+    const description = newSupplier.trim()
+    if (!description) return
     setBusy(true); setErr(null)
-    api.createCounterparty({ name, role: 'supplier' })
+    api.createCounterparty({ description, role: 'supplier' })
       .then(s => { setSuppliers(ss => [...ss, s]); setSupplierId(s.id); setNewSupplier('') })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -1259,7 +1259,7 @@ function NewReceipt({ projects, onCreated }: {
           <select className="lot-sel" value={supplierId} disabled={busy}
             onChange={e => setSupplierId(e.target.value ? Number(e.target.value) : '')}>
             {suppliers.length === 0 && <option value="">— нет, создайте ниже —</option>}
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.description}</option>)}
           </select>
           {' '}
           <input className="qty-in" style={{ width: 160 }} value={newSupplier}
@@ -1278,7 +1278,7 @@ function NewReceipt({ projects, onCreated }: {
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
           onChange={e => setProjectId(e.target.value ? Number(e.target.value) : '')}>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+          {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
       </dl>
       <div className="kit-actions">

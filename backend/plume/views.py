@@ -78,6 +78,16 @@ def _resolve_procurement(d):
     return models.Procurement.objects.get(pk=d['procurement_id'])
 
 
+def _code_kw(d):
+    """kwargs `code`/`description` для правки шапки документа (волна 19, Ф10).
+    `code` — часовой `_UNSET` (ключа нет → не трогаем; пустой → NULL в движке);
+    `description` — `None` = не трогаем."""
+    return {
+        'code': d['code'] if 'code' in d else engine._UNSET,
+        'description': d['description'] if 'description' in d else None,
+    }
+
+
 def _bad(exc):
     return Response({'detail': str(exc)}, status=http.HTTP_400_BAD_REQUEST)
 
@@ -163,7 +173,7 @@ def logout_view(request):
 
 
 def _project_row(p):
-    return {'id': p.id, 'code': p.code, 'name': p.name, 'kind': p.kind,
+    return {'id': p.id, 'code': p.code, 'description': p.description, 'kind': p.kind,
             'locked': p.locked, 'health': engine.project_health(p)}
 
 
@@ -182,7 +192,7 @@ def project_detail(request, pk):
         return _friendly_delete(engine.delete_project, project)
     if request.method == 'PATCH':
         d = request.data
-        changes = {k: d[k] for k in ('code', 'name', 'started') if k in d}
+        changes = {k: d[k] for k in ('code', 'description', 'started') if k in d}
         if 'budget' in d:
             changes['budget'] = _dec(d['budget'])
         try:
@@ -199,7 +209,7 @@ def projects(request):
         d = request.data
         try:
             p = engine.create_project(
-                d.get('code'), d.get('name'), budget=_dec(d.get('budget')),
+                d.get('code'), d.get('description'), budget=_dec(d.get('budget')),
                 started=d.get('started') or None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
@@ -209,7 +219,7 @@ def projects(request):
 
 
 def _location_row(loc):
-    return {'id': loc.id, 'code': loc.code, 'name': loc.name, 'kind': loc.kind}
+    return {'id': loc.id, 'code': loc.code, 'description': loc.description, 'kind': loc.kind}
 
 
 @api_view(['GET', 'POST'])
@@ -219,7 +229,7 @@ def locations(request):
     if request.method == 'POST':
         d = request.data
         try:
-            loc = engine.create_location(d.get('code'), d.get('name'),
+            loc = engine.create_location(d.get('code'), d.get('description'),
                                          kind=d.get('kind') or '')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
@@ -241,7 +251,7 @@ def location_detail(request, pk):
             engine.update_location(
                 loc,
                 code=d['code'] if 'code' in d else None,
-                name=d['name'] if 'name' in d else None,
+                description=d['description'] if 'description' in d else None,
                 kind=d['kind'] if 'kind' in d else None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
@@ -249,14 +259,13 @@ def location_detail(request, pk):
 
 
 def _category_row(c):
-    return {'id': c.id, 'code': c.code, 'label': c.label, 'icon': c.icon}
+    return {'id': c.id, 'code': c.code, 'description': c.description}
 
 
 def _item_row(i):
     # `id` — PK (для FK-ссылок/мутаций); `design_item_id` — бизнес-ключ (канон
-    # библиотеки, бывш. `code`). Категория — вложенным объектом (label/icon снимают
-    # хардкод-карту на фронте). `produced` — ось «производим/покупаем» (бывш.
-    # `is_manufactured`). Волна 15.
+    # библиотеки, бывш. `code`). Категория — вложенным объектом (`code`+`description`).
+    # `produced` — ось «производим/покупаем» (бывш. `is_manufactured`). Волна 15.
     return {'id': i.id, 'design_item_id': i.design_item_id,
             'description': i.description, 'category': _category_row(i.category),
             'uom': i.uom, 'temperature': i.temperature, 'produced': i.produced,
@@ -453,7 +462,7 @@ def item_unlock(request, pk):
 def _kitting_row(k):
     """Строка списка комплектаций для дерева навигации."""
     return {
-        'id': k.id, 'project_code': k.project.code,
+        'id': k.id, 'code': k.code, 'project_code': k.project.code,
         'target_design_item_id': k.target_item.design_item_id,
         'target_description': k.target_item.description,
         'qty': k.qty, 'locked': k.locked, 'date': k.date,
@@ -493,7 +502,8 @@ def kitting_detail(request, pk):
             engine.update_kitting(
                 k, qty=_dec(d['qty']) if 'qty' in d else None,
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
-                project=_resolve_project(d), target_item=_resolve_item(d, 'target_id'))
+                project=_resolve_project(d), target_item=_resolve_item(d, 'target_id'),
+                **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except models.Item.DoesNotExist:
@@ -565,7 +575,7 @@ def kitting_unlock(request, pk):
 #  Приход / УПД (волна 3 — записываемое ядро) + справочник поставщиков
 # --------------------------------------------------------------------------- #
 def _counterparty_row(c):
-    return {'id': c.id, 'name': c.name, 'inn': c.inn,
+    return {'id': c.id, 'code': c.code, 'description': c.description, 'inn': c.inn,
             'is_supplier': c.is_supplier, 'is_customer': c.is_customer}
 
 
@@ -578,12 +588,17 @@ def counterparties(request):
     (`role`), по умолчанию поставщик (историческая роль сущности).
     """
     if request.method == 'POST':
-        name = (request.data.get('name') or '').strip()
-        if not name:
-            return _bad('Нужно наименование контрагента.')
+        description = (request.data.get('description') or '').strip()
+        if not description:
+            return _bad('Нужно описание контрагента.')
         role = request.data.get('role') or 'supplier'
+        code = (request.data.get('code') or '').strip() or None
+        try:
+            engine.require_unique_code(models.Counterparty, code)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
         c = models.Counterparty.objects.create(
-            name=name, inn=(request.data.get('inn') or '').strip(),
+            code=code, description=description, inn=(request.data.get('inn') or '').strip(),
             is_supplier=(role == 'supplier'), is_customer=(role == 'customer'))
         return Response(_counterparty_row(c), status=http.HTTP_201_CREATED)
     qs = models.Counterparty.objects.all()
@@ -598,8 +613,8 @@ def counterparties(request):
 def _receipt_row(r):
     """Строка списка приходов для дерева навигации."""
     return {
-        'id': r.id, 'number': r.number, 'date': r.date,
-        'contractor_name': r.contractor.name, 'project_code': r.project.code,
+        'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
+        'contractor_name': r.contractor.description, 'project_code': r.project.code,
         'locked': r.locked, 'lines': r.lots.count(),
     }
 
@@ -641,7 +656,7 @@ def receipt_detail(request, pk):
             engine.update_receipt(
                 r, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
-                project=_resolve_project(d))
+                project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except User.DoesNotExist:
@@ -734,8 +749,9 @@ def receipt_link(request, pk):
 def _purchase_row(p):
     """Строка списка заказов для дерева навигации."""
     return {
-        'id': p.id, 'project_code': p.project.code, 'locked': p.locked,
-        'date': p.date, 'note': p.note, 'lines': p.lines.count(),
+        'id': p.id, 'code': p.code, 'description': p.description,
+        'project_code': p.project.code, 'locked': p.locked,
+        'date': p.date, 'lines': p.lines.count(),
         'coverage': engine.purchase_coverage(p),
     }
 
@@ -751,7 +767,8 @@ def purchases(request):
             return _bad(f'Нужен project_id ({e}).')
         p = engine.create_purchase(project, _actor(request),
                                    date=d.get('date') or None,
-                                   note=(d.get('note') or '').strip())
+                                   code=(d.get('code') or '').strip() or None,
+                                   description=(d.get('description') or '').strip())
         return Response(engine.purchase_cockpit(p), status=http.HTTP_201_CREATED)
 
     rows = [_purchase_row(p) for p in models.Purchase.objects
@@ -772,7 +789,9 @@ def purchase_detail(request, pk):
         try:
             engine.update_purchase(
                 p, date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None, user=_resolve_author(d),
+                code=d['code'] if 'code' in d else engine._UNSET,
+                description=d['description'] if 'description' in d else None,
+                user=_resolve_author(d),
                 project=_resolve_project(d), procurement=_resolve_procurement(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
@@ -844,8 +863,8 @@ def project_purchases(request, pk):
     статусу нет, отменённых не существует — отмена = удаление)."""
     project = get_object_or_404(models.Project, pk=pk)
     rows = [
-        {'id': p.id, 'locked': p.locked, 'date': p.date, 'note': p.note,
-         'lines': p.lines.count()}
+        {'id': p.id, 'locked': p.locked, 'date': p.date,
+         'code': p.code, 'description': p.description, 'lines': p.lines.count()}
         for p in project.purchases.order_by('-id')
     ]
     return Response(rows)
@@ -876,7 +895,7 @@ def project_order(request, pk):
 def _transfer_row(t):
     """Строка списка передач для дерева навигации."""
     return {
-        'id': t.id, 'number': t.number, 'date': t.date,
+        'id': t.id, 'code': t.code, 'number': t.number, 'date': t.date,
         'project_code': t.project.code, 'locked': t.locked,
         'lines': t.lines.count(),
     }
@@ -925,7 +944,7 @@ def transfer_detail(request, pk):
             engine.update_transfer(
                 t, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None, contractor=contractor,
-                user=_resolve_author(d), project=_resolve_project(d))
+                user=_resolve_author(d), project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except models.Counterparty.DoesNotExist:
@@ -1007,7 +1026,7 @@ def project_available_lots(request, pk):
 def _relocation_row(r):
     """Строка списка перемещений для смешанного дерева ордеров."""
     return {
-        'id': r.id, 'number': r.number, 'date': r.date,
+        'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
         'project_code': r.project.code, 'locked': r.locked,
         'lines': r.lines.count(),
     }
@@ -1047,7 +1066,7 @@ def relocation_detail(request, pk):
             engine.update_relocation(
                 r, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
-                user=_resolve_author(d), project=_resolve_project(d))
+                user=_resolve_author(d), project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except User.DoesNotExist:
@@ -1137,7 +1156,7 @@ def available_lots(request):
 # ── Списание / Writeoff ──
 def _writeoff_row(w):
     return {
-        'id': w.id, 'number': w.number, 'date': w.date,
+        'id': w.id, 'code': w.code, 'number': w.number, 'date': w.date,
         'project_code': w.project.code, 'reason': w.reason,
         'locked': w.locked, 'lines': w.lines.count(),
     }
@@ -1179,7 +1198,7 @@ def writeoff_detail(request, pk):
                 w, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
                 reason=d['reason'] if 'reason' in d else None, user=_resolve_author(d),
-                project=_resolve_project(d))
+                project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except User.DoesNotExist:
@@ -1243,7 +1262,7 @@ def writeoff_unlock(request, pk):
 # ── Требование / Requisition ──
 def _requisition_row(r):
     return {
-        'id': r.id, 'number': r.number, 'date': r.date,
+        'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
         'project_code': r.project.code, 'locked': r.locked,
         'lines': r.lines.count(),
     }
@@ -1283,7 +1302,7 @@ def requisition_detail(request, pk):
             engine.update_requisition(
                 r, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
-                project=_resolve_project(d))
+                project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except User.DoesNotExist:
@@ -1347,8 +1366,9 @@ def requisition_unlock(request, pk):
 # ── Инвентаризация / Inventory (записываемое ядро, волна 9) ──
 def _inventory_row(i):
     return {
-        'id': i.id, 'number': i.number, 'date': i.date,
-        'project_code': i.project.code, 'note': i.note,
+        'id': i.id, 'code': i.code, 'description': i.description,
+        'number': i.number, 'date': i.date,
+        'project_code': i.project.code,
         'locked': i.locked, 'lines': i.lots.count(),
     }
 
@@ -1362,8 +1382,7 @@ def inventories(request):
             project = models.Project.objects.get(pk=d['project_id'])
             i = engine.create_inventory(
                 project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate(),
-                note=d.get('note') or '')
+                date=d.get('date') or timezone.localdate())
         except (KeyError, models.Project.DoesNotExist) as e:
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
@@ -1388,7 +1407,9 @@ def inventory_detail(request, pk):
             engine.update_inventory(
                 i, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None, user=_resolve_author(d),
+                code=d['code'] if 'code' in d else engine._UNSET,
+                description=d['description'] if 'description' in d else None,
+                user=_resolve_author(d),
                 project=_resolve_project(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
@@ -1572,8 +1593,8 @@ def command_deficit_add(request):
 def _procurement_row(p):
     """Строка списка закупок-планов для дерева навигации."""
     return {
-        'id': p.id, 'locked': p.locked, 'date': p.date, 'note': p.note,
-        'lines': p.lines.count(),
+        'id': p.id, 'code': p.code, 'description': p.description,
+        'locked': p.locked, 'date': p.date, 'lines': p.lines.count(),
     }
 
 
@@ -1584,7 +1605,8 @@ def procurements(request):
         d = request.data
         p = engine.create_procurement(_actor(request),
                                       date=d.get('date') or None,
-                                      note=(d.get('note') or '').strip())
+                                      code=(d.get('code') or '').strip() or None,
+                                      description=(d.get('description') or '').strip())
         return Response(engine.procurement_cockpit(p), status=http.HTTP_201_CREATED)
 
     # только закупки-планы (без 1:1-заглушек проектных заказов, см. engine)
@@ -1611,7 +1633,9 @@ def procurement_detail(request, pk):
                               if cid else None)
             engine.update_procurement(
                 p, date=d['date'] if 'date' in d else None,
-                note=d['note'] if 'note' in d else None, user=_resolve_author(d),
+                code=d['code'] if 'code' in d else engine._UNSET,
+                description=d['description'] if 'description' in d else None,
+                user=_resolve_author(d),
                 contractor=contractor)
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')

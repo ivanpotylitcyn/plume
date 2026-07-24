@@ -76,8 +76,8 @@ class RelocationLineInline(admin.TabularInline):
 # --- справочники ---------------------------------------------------------- #
 @admin.register(models.Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ('code', 'label', 'icon')
-    search_fields = ('code', 'label')
+    list_display = ('code', 'description')
+    search_fields = ('code', 'description')
 
 
 @admin.register(models.Item)
@@ -92,22 +92,22 @@ class ItemAdmin(admin.ModelAdmin):
 
 @admin.register(models.Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'kind', 'locked', 'budget')
+    list_display = ('code', 'description', 'kind', 'locked', 'budget')
     list_filter = ('kind', 'locked')
-    search_fields = ('code', 'name')
+    search_fields = ('code', 'description')
     inlines = [ProjectDemandInline]
 
 
 @admin.register(models.Counterparty)
 class CounterpartyAdmin(admin.ModelAdmin):
-    list_display = ('name', 'inn', 'is_supplier', 'is_customer')
+    list_display = ('code', 'description', 'inn', 'is_supplier', 'is_customer')
     list_filter = ('is_supplier', 'is_customer')
-    search_fields = ('name', 'inn')
+    search_fields = ('code', 'description', 'inn')
 
 
 @admin.register(models.Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'kind')
+    list_display = ('code', 'description', 'kind')
 
 
 # --- закупки -------------------------------------------------------------- #

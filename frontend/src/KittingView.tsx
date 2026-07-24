@@ -35,7 +35,7 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={c.target_description}
+        code={c.code || `Комплектация ${c.target_design_item_id}`}
         meta={<>
           <Glyph status={c.cockpit_status} /> {c.target_design_item_id} · {c.project_code} ·
           {' '}образцов {num(c.qty)} · {kitLabel(c.locked)}
@@ -50,6 +50,12 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateKitting(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
+          onCommit={v => run(api.updateKitting(c.id, { description: v }))} /></dd>
         <dt>Образцов</dt>
         <dd><CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
           onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}

@@ -136,7 +136,7 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
   useEffect(() => { loadProjects().then(setProjects) }, [])
   return (
     <AnchorSelect label="Проект" id={projectId} currentLabel={projectLabel}
-      options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.name}` }))}
+      options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.description}` }))}
       disabled={disabled} onChange={onChange} />
   )
 }
@@ -148,10 +148,10 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
 // личный, режим показа; фиксация ДОКУМЕНТА (Зафиксировать/Расфиксировать) — в данных.
 // У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
 export function FormHeader({
-  name, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete,
+  code, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete,
   download, error, children,
 }: {
-  name: ReactNode
+  code: ReactNode           // первичная идентичность в H1 (волна 19, Ф11: бывш. `name`)
   meta: ReactNode
   unlocked?: boolean
   onToggleLock?: () => void
@@ -173,7 +173,7 @@ export function FormHeader({
       <div className="fhz">
         <div className="form-head">
           <div className="fh-main">
-            <div className="fh-name">{name}</div>
+            <div className="fh-name">{code}</div>
             <div className="fh-meta">{meta}</div>
           </div>
           <div className="fh-right">

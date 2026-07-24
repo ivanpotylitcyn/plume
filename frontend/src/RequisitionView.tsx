@@ -38,7 +38,7 @@ export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onD
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={`Требование ${c.number} → ${c.project_name}`}
+        code={c.code || `Требование ${c.number}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
           получатель {c.project_code} · {c.date} · поставлено {num(c.total_qty)}
@@ -52,6 +52,12 @@ export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onD
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateRequisition(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
+          onCommit={v => run(api.updateRequisition(c.id, { description: v }))} /></dd>
         <dt>№ требования</dt>
         <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateRequisition(c.id, { number: v }))}

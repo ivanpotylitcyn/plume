@@ -35,7 +35,7 @@ export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={`Списание ${c.number}`}
+        code={c.code || `Списание ${c.number}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name} · {c.date}
@@ -50,6 +50,12 @@ export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateWriteoff(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
+          onCommit={v => run(api.updateWriteoff(c.id, { description: v }))} /></dd>
         <dt>№ акта</dt>
         <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoff(c.id, { number: v }))}

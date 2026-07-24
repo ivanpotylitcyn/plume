@@ -31,7 +31,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={c.contractor_name}
+        code={c.code || `УПД ${c.number}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
           УПД {c.number} · {c.date} · {c.project_code} · сумма {num(c.total_cost)} ₽
@@ -46,6 +46,12 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateReceipt(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
+          onCommit={v => run(api.updateReceipt(c.id, { description: v }))} /></dd>
         <dt>№ УПД</dt>
         <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateReceipt(c.id, { number: v }))}

@@ -32,21 +32,21 @@ class Command(BaseCommand):
         user = self._superuser()
         main, sold, white, grey = self._infrastructure()
         supplier = models.Counterparty.objects.create(
-            name='ООО «Поставщик»', inn='7700000000', is_supplier=True)
+            code='ПОСТ', description='ООО «Поставщик»', inn='7700000000', is_supplier=True)
         models.Counterparty.objects.create(
-            name='АО «Заказчик»', inn='7811111111',
+            code='ЗАКАЗ', description='АО «Заказчик»', inn='7811111111',
             is_supplier=False, is_customer=True)
 
         # --- категории: 5 канонических из библиотеки + демо-классы под демо-BOM --- #
-        # 5 библиотечных всплывают через ensure_category (канон label/icon); демо-классы
+        # 5 библиотечных всплывают через ensure_category (канон description); демо-классы
         # (прибор/плата/механика/крепёж/резистор) — синтетические, только для дебага.
         for code in engine.LIBRARY_CATEGORIES:
             engine.ensure_category(code)
-        cat_device = models.Category.objects.create(code='device', label='Приборы', icon='vm')
-        cat_board = models.Category.objects.create(code='board', label='Платы', icon='circuit-board')
-        cat_mech = models.Category.objects.create(code='mechanical', label='Механика', icon='package')
-        cat_fastener = models.Category.objects.create(code='fasteners', label='Крепёж', icon='settings-gear')
-        cat_res = models.Category.objects.create(code='resistors', label='Резисторы', icon='symbol-constant')
+        cat_device = models.Category.objects.create(code='device', description='Приборы')
+        cat_board = models.Category.objects.create(code='board', description='Платы')
+        cat_mech = models.Category.objects.create(code='mechanical', description='Механика')
+        cat_fastener = models.Category.objects.create(code='fasteners', description='Крепёж')
+        cat_res = models.Category.objects.create(code='resistors', description='Резисторы')
 
         # --- справочник изделий + BOM ---------------------------------- #
         device = models.Item.objects.create(
@@ -72,7 +72,7 @@ class Command(BaseCommand):
 
         # --- проект и потребность -------------------------------------- #
         prj = models.Project.objects.create(
-            code='ПРБ-1', name='НИР «Прибор А»', kind=models.Project.Kind.EXTERNAL,
+            code='ПРБ-1', description='НИР «Прибор А»', kind=models.Project.Kind.EXTERNAL,
             budget=200000, started=D(2026, 5, 1))
         models.ProjectDemand.objects.create(project=prj, target_item=device, qty=10)
 
@@ -119,7 +119,7 @@ class Command(BaseCommand):
         # --- КОРПУС-1 на «Собственном складе» (5) — для карты ---------- #
         inv = models.Inventory.objects.create(
             project=white, user=user, number='ИНВ-1', date=D(2026, 6, 3),
-            note='Остаток с прошлого НИР')
+            description='Остаток с прошлого НИР')
         models.Lot.objects.create(item=case, project=white, origin=inv, qty=5,
                                   unit_cost=800, lot_name='Корпус Al (остаток)')
 
@@ -161,13 +161,13 @@ class Command(BaseCommand):
         return user
 
     def _infrastructure(self):
-        main = models.Location.objects.create(code='103', name='Основной склад')
-        sold = models.Location.objects.create(code='105', name='Место пайки',
+        main = models.Location.objects.create(code='103', description='Основной склад')
+        sold = models.Location.objects.create(code='105', description='Место пайки',
                                               kind='workshop')
         white = models.Project.objects.create(
-            code='WHITE', name='Собственный склад',
-            kind=models.Project.Kind.INTERNAL_STOCK, status=models.Project.Status.ACTIVE)
+            code='WHITE', description='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
         grey = models.Project.objects.create(
-            code='GREY', name='Свободные неучтённые',
-            kind=models.Project.Kind.INTERNAL_WRITEOFF, status=models.Project.Status.ACTIVE)
+            code='GREY', description='Свободные неучтённые',
+            kind=models.Project.Kind.INTERNAL_WRITEOFF)
         return main, sold, white, grey

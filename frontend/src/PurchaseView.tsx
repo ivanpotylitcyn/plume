@@ -56,10 +56,11 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   return (
     <div className={unlocked && editable ? '' : 'form-locked'}>
       <FormHeader
-        name={`Заказ #${c.id} · ${c.project_name}`}
+        code={c.code || `Заказ #${c.id}`}
         meta={<>
           <StatusGlyph locked={c.locked} tone={statusTone(coverage)} />
           {c.project_code} · {c.locked ? 'зафиксирован' : 'расфиксирован'}
+          {c.description && <> · {c.description}</>}
           {c.date && <> · {c.date}</>} · заказано {num(c.total_ordered)} · поступило {num(c.total_received)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
@@ -73,12 +74,15 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={240} disabled={!editable || busy}
+          onCommit={v => run(api.updatePurchase(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={240} disabled={!editable || busy}
+          onCommit={v => run(api.updatePurchase(c.id, { description: v }))} /></dd>
         <dt>Дата</dt>
         <dd><CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
           onCommit={v => run(api.updatePurchase(c.id, { date: v }))} /></dd>
-        <dt>Примечание</dt>
-        <dd><CommitInput value={c.note} width={240} disabled={!editable || busy}
-          onCommit={v => run(api.updatePurchase(c.id, { note: v }))} /></dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updatePurchase(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={!editable || busy}

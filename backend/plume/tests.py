@@ -22,10 +22,10 @@ def D(x):
     return Decimal(str(x))
 
 
-def _cat(code='test', label='Тест'):
+def _cat(code='test', description='Тест'):
     """Категория-заглушка для тестов (волна 15: `Item.category` — обязательный FK).
     Класс изделия в движке логику не ветвит, поэтому одной общей категории хватает."""
-    c, _ = models.Category.objects.get_or_create(code=code, defaults={'label': label})
+    c, _ = models.Category.objects.get_or_create(code=code, defaults={'description': description})
     return c
 
 
@@ -41,10 +41,10 @@ def tearDownModule():
 class EngineTestBase(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create(username='t')
-        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.supplier = models.Counterparty.objects.create(name='Поставщик')
+            code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.supplier = models.Counterparty.objects.create(description='Поставщик')
 
     def make_item(self, code, manufactured=False, kind=None):
         # `kind` — исторический хинт (движок по классу не ветвит); категория —
@@ -133,7 +133,7 @@ class RebuildAndStockTests(EngineTestBase):
         w = models.Writeoff.objects.create(project=self.prj, user=self.user,
                                            number='W-1', date='2026-06-01')
         cust = models.Project.objects.create(
-            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         t = models.Transfer.objects.create(project=self.prj, user=self.user,
                                             number='T-1', date='2026-06-01')
         # знаковые строки (− расход) трёх разных документов на один лот
@@ -292,7 +292,7 @@ class ProjectHealthTests(EngineTestBase):
 
     def test_internal_project_none(self):
         white = models.Project.objects.create(
-            code='W', name='Собственный склад', kind=models.Project.Kind.INTERNAL_STOCK)
+            code='W', description='Собственный склад', kind=models.Project.Kind.INTERNAL_STOCK)
         self.assertIsNone(engine.project_health(white))
 
     def test_empty_project_none(self):
@@ -320,7 +320,7 @@ class ProjectHealthTests(EngineTestBase):
 class StockMapTests(EngineTestBase):
     def test_map_across_projects_sorted(self):
         white = models.Project.objects.create(
-            code='WHITE', name='Собственный склад',
+            code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         item = self.make_item('CASE')
         self.receipt_lot(item, self.prj, 12)
@@ -396,7 +396,7 @@ class KittingCockpitTests(EngineTestBase):
         self.assertEqual(len(row['real_lines']), 1)
 
     def test_pierce_rejects_foreign_project_lot(self):
-        other = models.Project.objects.create(code='P2', name='Другой')
+        other = models.Project.objects.create(code='P2', description='Другой')
         lot = self.receipt_lot(self.case, other, 10)
         k = self.make_kitting(qty=1)
         with self.assertRaises(ValidationError):
@@ -694,7 +694,7 @@ class PurchaseCockpitTests(EngineTestBase):
 
     def test_set_receipt_purchase_rejects_foreign_project(self):
         other = models.Project.objects.create(
-            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         p = engine.create_purchase(other, self.user)
         r = models.Receipt.objects.create(
             number='УПД-Х', date='2026-05-01', contractor=self.supplier,
@@ -754,7 +754,7 @@ class TransferCockpitTests(EngineTestBase):
 
     def test_add_line_rejects_foreign_project_lot(self):
         other = models.Project.objects.create(
-            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         t = engine.create_transfer(other, self.user, 'Н-2')
         with self.assertRaises(ValidationError):
             engine.add_transfer_line(t, self.lot, D(1))         # лот чужого проекта
@@ -783,7 +783,7 @@ class TransferCockpitTests(EngineTestBase):
     def test_available_lots_picker(self):
         # ещё один лот проекта + чужой проект + нулевой остаток → в пикере только живой свой
         other = models.Project.objects.create(
-            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         self.receipt_lot(self.device, other, 3)                 # чужой проект
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, self.lot, D(5))             # свой лот в ноль
@@ -858,7 +858,7 @@ class WriteoffCockpitTests(EngineTestBase):
 
     def test_add_line_rejects_foreign_project(self):
         other = models.Project.objects.create(
-            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         w = engine.create_writeoff(other, self.user, 'СП-2')
         with self.assertRaises(ValidationError):
             engine.add_writeoff_line(w, self.lot, D(1))
@@ -894,7 +894,7 @@ class RequisitionCockpitTests(EngineTestBase):
         self.src.part_number = 'ЗН-9'
         self.src.save(update_fields=['unit_cost', 'part_number'])
         self.white = models.Project.objects.create(
-            code='WHITE', name='Собственный склад',
+            code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
 
     def test_add_line_issues_source_and_births_child(self):
@@ -997,7 +997,7 @@ class ProjectClosureTests(EngineTestBase):
 
     def test_internal_project_not_closable(self):
         white = models.Project.objects.create(
-            code='WHITE', name='Собственный склад',
+            code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         c = engine.project_closure(white)
         self.assertFalse(c['is_external'])
@@ -1043,11 +1043,12 @@ class HeaderEditTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.update_receipt(r, number='U-3')
 
-    def test_purchase_note_and_clear_date(self):
-        p = engine.create_purchase(self.prj, self.user, date='2026-05-01', note='x')
-        engine.update_purchase(p, note='новое', date='')     # '' → NULL (nullable)
+    def test_purchase_code_description_and_clear_date(self):
+        p = engine.create_purchase(self.prj, self.user, date='2026-05-01', description='x')
+        engine.update_purchase(p, code='Нева-1', description='новое', date='')  # '' → NULL (nullable)
         p.refresh_from_db()
-        self.assertEqual(p.note, 'новое')
+        self.assertEqual(p.code, 'Нева-1')
+        self.assertEqual(p.description, 'новое')
         self.assertIsNone(p.date)
 
     def test_kitting_qty_rescales_needs(self):
@@ -1069,7 +1070,7 @@ class HeaderEditTests(EngineTestBase):
         engine.update_writeoff(w, number='СП-2', reason='брак')
         w.refresh_from_db()
         self.assertEqual((w.number, w.reason), ('СП-2', 'брак'))
-        white = models.Project.objects.create(code='WHITE', name='Склад',
+        white = models.Project.objects.create(code='WHITE', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         req = engine.create_requisition(white, self.user, 'ТР-1')
         engine.update_requisition(req, number='ТР-2', date='2026-06-01')
@@ -1089,7 +1090,7 @@ class CommandDeficitTests(EngineTestBase):
     def test_rolls_up_by_item_across_projects(self):
         scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 4)
-        prj2 = models.Project.objects.create(code='P2', name='Проект 2',
+        prj2 = models.Project.objects.create(code='P2', description='Проект 2',
                                              kind=models.Project.Kind.EXTERNAL)
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
@@ -1104,7 +1105,7 @@ class CommandDeficitTests(EngineTestBase):
     def test_stock_and_order_no_cross_project_netting(self):
         scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 4)
-        prj2 = models.Project.objects.create(code='P2', name='Проект 2',
+        prj2 = models.Project.objects.create(code='P2', description='Проект 2',
                                              kind=models.Project.Kind.EXTERNAL)
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
@@ -1119,9 +1120,9 @@ class CommandDeficitTests(EngineTestBase):
     def test_closed_and_internal_projects_excluded(self):
         scr = self.make_item('SCR', kind='material')
         dev = self._device_with_screw(scr, 2)
-        closed = models.Project.objects.create(code='PC', name='Закрытый',
+        closed = models.Project.objects.create(code='PC', description='Закрытый',
             kind=models.Project.Kind.EXTERNAL, locked=True)
-        white = models.Project.objects.create(code='WHITE', name='Склад',
+        white = models.Project.objects.create(code='WHITE', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         models.ProjectDemand.objects.create(project=closed, target_item=dev, qty=D(3))
         models.ProjectDemand.objects.create(project=white, target_item=dev, qty=D(3))
@@ -1157,7 +1158,7 @@ class ProcurementCockpitTests(EngineTestBase):
     """Волна 7: записываемый план закупки — строки, замок отправки, мост, xlsx."""
 
     def test_create_and_cockpit_totals(self):
-        p = engine.create_procurement(self.user, note='весна')
+        p = engine.create_procurement(self.user, description='весна')
         engine.add_procurement_line(p, self.make_item('A'), D(10))
         engine.add_procurement_line(p, self.make_item('B'), D(5))
         c = engine.procurement_cockpit(p)
@@ -1165,7 +1166,7 @@ class ProcurementCockpitTests(EngineTestBase):
         self.assertEqual(c['total_qty'], D(15))
         self.assertTrue(c['editable'])
         self.assertFalse(c['locked'])
-        self.assertEqual(c['note'], 'весна')
+        self.assertEqual(c['description'], 'весна')
 
     def test_add_line_rejects_duplicate_and_nonpositive(self):
         p = engine.create_procurement(self.user)
@@ -1231,13 +1232,24 @@ class ProcurementCockpitTests(EngineTestBase):
 
     def test_update_header(self):
         p = engine.create_procurement(self.user)
-        engine.update_procurement(p, date='2026-07-10', note='осень')
+        engine.update_procurement(p, date='2026-07-10', code='ЗАК-1', description='осень')
         p.refresh_from_db()
         self.assertEqual(str(p.date), '2026-07-10')
-        self.assertEqual(p.note, 'осень')
+        self.assertEqual(p.code, 'ЗАК-1')
+        self.assertEqual(p.description, 'осень')
         engine.update_procurement(p, date='')          # пустая строка → NULL
         p.refresh_from_db()
         self.assertIsNone(p.date)
+
+    def test_code_soft_uniqueness(self):
+        # Волна 19, Ф10 (правило Ивана): занятый код ловим дружелюбно (ValidationError),
+        # не IntegrityError/500. Пустой код у нескольких — легально (NULL).
+        engine.update_procurement(engine.create_procurement(self.user), code='ДЗЗ-1')
+        with self.assertRaises(ValidationError):
+            engine.update_procurement(engine.create_procurement(self.user), code='ДЗЗ-1')
+        # два без кода не конфликтуют
+        engine.create_procurement(self.user)
+        engine.create_procurement(self.user)      # не бросает
 
     def test_update_contractor(self):
         # Волна 19, Ф4: контрагент-поставщик у закупки-плана. Часовой `_UNSET`:
@@ -1250,7 +1262,7 @@ class ProcurementCockpitTests(EngineTestBase):
         # проекция кокпита отдаёт контрагента
         cock = engine.procurement_cockpit(p)
         self.assertEqual(cock['contractor_id'], self.supplier.id)
-        self.assertEqual(cock['contractor_name'], self.supplier.name)
+        self.assertEqual(cock['contractor_name'], self.supplier.description)
         # не передан → не трогаем (правка только даты)
         engine.update_procurement(p, date='2026-07-10')
         p.refresh_from_db()
@@ -1289,13 +1301,13 @@ class PeggingTests(EngineTestBase):
     def setUp(self):
         super().setUp()
         self.prj2 = models.Project.objects.create(
-            code='P2', name='Проект 2', kind=models.Project.Kind.EXTERNAL)
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         self.scr = self.make_item('SCR', kind='material')
         dev = self.make_item('DEV', manufactured=True, kind='device')
         models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
-        self.plan = engine.create_procurement(self.user, note='свод')      # need 40 + 20
+        self.plan = engine.create_procurement(self.user, description='свод')   # need 40 + 20
         engine.add_procurement_line(self.plan, self.scr, D(60))
 
     def test_peg_creates_project_purchase_under_plan(self):
@@ -1330,11 +1342,11 @@ class PeggingTests(EngineTestBase):
                                         self.prj, D(1), self.user)
         with self.assertRaises(ValidationError):            # неположительное кол-во
             engine.peg_procurement_line(self.plan, self.scr, self.prj, D(0), self.user)
-        white = models.Project.objects.create(code='WHITE', name='Свой склад',
+        white = models.Project.objects.create(code='WHITE', description='Свой склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         with self.assertRaises(ValidationError):            # не внешний проект
             engine.peg_procurement_line(self.plan, self.scr, white, D(1), self.user)
-        closed = models.Project.objects.create(code='CL', name='Закрыт',
+        closed = models.Project.objects.create(code='CL', description='Закрыт',
             kind=models.Project.Kind.EXTERNAL, locked=True)
         with self.assertRaises(ValidationError):            # не активный проект
             engine.peg_procurement_line(self.plan, self.scr, closed, D(1), self.user)
@@ -1362,11 +1374,11 @@ class ClosureHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+            code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
-        self.sup = models.Counterparty.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj,
             user=get_user_model().objects.first())
@@ -1387,7 +1399,7 @@ class ClosureHttpTests(TestCase):
         self.assertEqual(r.status_code, 201)
         self.assertEqual(float(r.json()['total_qty']), 4.0)
         # чужой проект → 400
-        other = models.Project.objects.create(code='P2', name='П2',
+        other = models.Project.objects.create(code='P2', description='П2',
             kind=models.Project.Kind.EXTERNAL)
         r2 = self.c.post('/api/writeoffs/', {'project_id': other.id, 'number': 'СП-2'},
             content_type='application/json')
@@ -1416,7 +1428,7 @@ class ClosureHttpTests(TestCase):
         self.assertFalse(ro.json()['locked'])
 
     def test_requisition_flow(self):
-        white = models.Project.objects.create(code='WHITE', name='Собственный склад',
+        white = models.Project.objects.create(code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         r = self.c.post('/api/requisitions/', {'project_id': white.id, 'number': 'ТР-1'},
             content_type='application/json')
@@ -1436,7 +1448,7 @@ class ProcurementHttpTests(TestCase):
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+            code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
             category=_cat())
         self.dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
@@ -1462,7 +1474,7 @@ class ProcurementHttpTests(TestCase):
         self.assertEqual(float(cockpit['total_qty']), 40.0)
 
     def test_procurement_crud_lock_and_xlsx(self):
-        r = self.c.post('/api/procurements/', {'note': 'весна'},
+        r = self.c.post('/api/procurements/', {'description': 'весна'},
             content_type='application/json')
         self.assertEqual(r.status_code, 201)
         pid = r.json()['id']
@@ -1493,9 +1505,9 @@ class PeggingHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.prj = models.Project.objects.create(code='P1', name='Проект 1',
+        self.prj = models.Project.objects.create(code='P1', description='Проект 1',
             kind=models.Project.Kind.EXTERNAL)
-        self.prj2 = models.Project.objects.create(code='P2', name='Проект 2',
+        self.prj2 = models.Project.objects.create(code='P2', description='Проект 2',
             kind=models.Project.Kind.EXTERNAL)
         self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
             category=_cat())
@@ -1618,13 +1630,13 @@ class ReferenceCreateHttpTests(TestCase):
         self.assertEqual(dup.status_code, 400)
 
     def test_create_project_http(self):
-        r = self.c.post('/api/projects/', {'code': 'НИР-1', 'name': 'Тема',
+        r = self.c.post('/api/projects/', {'code': 'НИР-1', 'description': 'Тема',
             'budget': '100000'}, content_type='application/json')
         self.assertEqual(r.status_code, 201)
         body = r.json()
         self.assertEqual(body['kind'], 'external')
         self.assertFalse(body['locked'])
-        bad = self.c.post('/api/projects/', {'code': '', 'name': 'X'},
+        bad = self.c.post('/api/projects/', {'code': '', 'description': 'X'},
             content_type='application/json')
         self.assertEqual(bad.status_code, 400)
 
@@ -1637,11 +1649,11 @@ class InventoryCockpitTests(EngineTestBase):
         super().setUp()
         self.item = self.make_item('R100')
         self.grey = models.Project.objects.create(
-            code='GREY', name='Свободные неучтённые',
+            code='GREY', description='Свободные неучтённые',
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
 
     def test_add_lot_births_receipt_movement(self):
-        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1', note='пересчёт')
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         lot = engine.add_inventory_lot(inv, self.item, D(7), unit_cost=D('1.50'),
                                        lot_name='Резистор')
         self.assertEqual(lot.origin_kind, 'inventory')
@@ -1649,12 +1661,13 @@ class InventoryCockpitTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(lot), D(7))       # +RECEIPT
         self.assertTrue(lot.movements.filter(type='RECEIPT', qty=D(7)).exists())
 
-    def test_cockpit_totals_and_note(self):
-        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1', note='пересчёт')
+    def test_cockpit_totals_and_description(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
+        engine.update_inventory(inv, description='пересчёт')
         engine.add_inventory_lot(inv, self.item, D(4), unit_cost=D('2'))
         c = engine.inventory_cockpit(inv)
         self.assertEqual(c['number'], 'ИНВ-1')
-        self.assertEqual(c['note'], 'пересчёт')
+        self.assertEqual(c['description'], 'пересчёт')
         self.assertEqual(c['total_cost'], D(8))                # 4 × 2
         self.assertEqual(c['lots'][0]['live_qty'], D(4))
 
@@ -1717,14 +1730,14 @@ class InventoryHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+            code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.grey = models.Project.objects.create(
-            code='GREY', name='Свободные неучтённые',
+            code='GREY', description='Свободные неучтённые',
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
         self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
-        self.sup = models.Counterparty.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
@@ -1736,7 +1749,7 @@ class InventoryHttpTests(TestCase):
 
     def test_inventory_crud_flow(self):
         r = self.c.post('/api/inventories/', {'project_id': self.prj.id,
-            'number': 'ИНВ-1', 'note': 'пересчёт'}, content_type='application/json')
+            'number': 'ИНВ-1'}, content_type='application/json')
         self.assertEqual(r.status_code, 201)
         iid = r.json()['id']
         # строка = найденная партия (+RECEIPT)
@@ -1752,9 +1765,9 @@ class InventoryHttpTests(TestCase):
             {'item_id': self.item.id, 'qty': 0}, content_type='application/json')
         self.assertEqual(bad.status_code, 400)
         # правка шапки
-        patch = self.c.patch(f'/api/inventories/{iid}/', {'note': 'обновлено'},
+        patch = self.c.patch(f'/api/inventories/{iid}/', {'description': 'обновлено'},
             content_type='application/json')
-        self.assertEqual(patch.json()['note'], 'обновлено')
+        self.assertEqual(patch.json()['description'], 'обновлено')
 
     def test_rematerialize_via_picker(self):
         # списываем часть лота → появляется в пикере ре-материализации
@@ -1783,11 +1796,11 @@ class OrderDeleteHttpTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
+            code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
-        self.sup = models.Counterparty.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
@@ -1842,7 +1855,7 @@ class ProjectBudgetTests(EngineTestBase):
             qty=D(3), unit_cost=D(800))
         engine.rebuild_movements(paid)
         # заём из белого склада → born-лот в prj (origin requisition), цена наследуется
-        white = models.Project.objects.create(code='WHT', name='Склад',
+        white = models.Project.objects.create(code='WHT', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=case, project=white,
             origin=models.Inventory.objects.create(project=white, user=self.user,
@@ -1909,7 +1922,7 @@ class ProjectBudgetTests(EngineTestBase):
             qty=D(1), unit_cost=D(800))
         engine.rebuild_movements(case_lot)
         # RES: заём 2 @ 10 из белого склада
-        white = models.Project.objects.create(code='WHT', name='Склад',
+        white = models.Project.objects.create(code='WHT', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=res, project=white,
             origin=models.Inventory.objects.create(project=white, user=self.user,
@@ -2049,10 +2062,10 @@ class ProjectBudgetHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
-        self.prj = models.Project.objects.create(code='P1', name='Проект 1',
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.prj = models.Project.objects.create(code='P1', description='Проект 1',
             kind=models.Project.Kind.EXTERNAL, budget=D(5000))
-        self.sup = models.Counterparty.objects.create(name='П')
+        self.sup = models.Counterparty.objects.create(description='П')
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
@@ -2134,9 +2147,9 @@ class AttachmentHttpTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create(username='admin', is_superuser=True)
-        self.supplier = models.Counterparty.objects.create(name='П')
+        self.supplier = models.Counterparty.objects.create(description='П')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект', kind=models.Project.Kind.EXTERNAL)
+            code='P1', description='Проект', kind=models.Project.Kind.EXTERNAL)
         self.receipt = models.Receipt.objects.create(
             number='УПД-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
@@ -2200,7 +2213,7 @@ class AuthHttpTests(TestCase):
         self.user = get_user_model().objects.create_user(
             username='ivan', password='s3cret-pass', first_name='Иван')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект', kind=models.Project.Kind.EXTERNAL)
+            code='P1', description='Проект', kind=models.Project.Kind.EXTERNAL)
         self.c = Client()
 
     def test_anonymous_api_is_gated(self):
@@ -2307,12 +2320,12 @@ class ProjectDemandEditTests(EngineTestBase):
     def test_demand_blocked_on_closed_and_internal(self):
         dev = self.make_item('DEV', manufactured=True, kind='device')
         closed = models.Project.objects.create(
-            code='PC', name='Закрытый', kind=models.Project.Kind.EXTERNAL,
+            code='PC', description='Закрытый', kind=models.Project.Kind.EXTERNAL,
             locked=True)
         with self.assertRaises(ValidationError):
             engine.add_project_demand(closed, dev, D(1))
         internal = models.Project.objects.create(
-            code='WH', name='Склад', kind=models.Project.Kind.INTERNAL_STOCK)
+            code='WH', description='Склад', kind=models.Project.Kind.INTERNAL_STOCK)
         with self.assertRaises(ValidationError):
             engine.add_project_demand(internal, dev, D(1))
 
@@ -2380,10 +2393,10 @@ class ItemProjectUpdateTests(EngineTestBase):
         self.assertEqual(it.category_id, cat0)             # категория не тронута
 
     def test_update_project_fields_and_clear_budget(self):
-        engine.update_project(self.prj, {'name': 'Переименован',
+        engine.update_project(self.prj, {'description': 'Переименован',
                                          'budget': D('1000'), 'started': '2026-01-15'})
         self.prj.refresh_from_db()
-        self.assertEqual(self.prj.name, 'Переименован')
+        self.assertEqual(self.prj.description, 'Переименован')
         self.assertEqual(self.prj.budget, D('1000'))
         self.assertEqual(str(self.prj.started), '2026-01-15')
         engine.update_project(self.prj, {'budget': None})
@@ -2392,7 +2405,7 @@ class ItemProjectUpdateTests(EngineTestBase):
 
     def test_update_project_rejects_empty_name(self):
         with self.assertRaises(ValidationError):
-            engine.update_project(self.prj, {'name': '  '})
+            engine.update_project(self.prj, {'description': '  '})
 
     def test_update_project_code_rename_and_guards(self):
         # WAVE14 Ф1: код правится в форме, guard как у изделия (не PK — безопасно).
@@ -2401,7 +2414,7 @@ class ItemProjectUpdateTests(EngineTestBase):
         self.assertEqual(self.prj.code, 'НОВ-КОД')
         with self.assertRaises(ValidationError):               # пустой код
             engine.update_project(self.prj, {'code': '  '})
-        models.Project.objects.create(code='ЗАНЯТО', name='Другой')
+        models.Project.objects.create(code='ЗАНЯТО', description='Другой')
         with self.assertRaises(ValidationError):               # коллизия кода
             engine.update_project(self.prj, {'code': 'ЗАНЯТО'})
 
@@ -2501,7 +2514,7 @@ class Wave13Fase1bTests(EngineTestBase):
 
     def _other_project(self):
         return models.Project.objects.create(
-            code='P9', name='Проект 9', kind=models.Project.Kind.EXTERNAL)
+            code='P9', description='Проект 9', kind=models.Project.Kind.EXTERNAL)
 
     # ── post/unpost round-trip + пустой guard ──
     def test_post_unpost_roundtrip_three_docs(self):
@@ -2791,9 +2804,10 @@ class Wave13Fase2bTests(EngineTestBase):
 
 
 class Wave13Fase2cTests(EngineTestBase):
-    """Волна 13 Ф2c: общие поля `project`/`user`/`date`/`number`/`note` подняты с
-    6 детей в MTI-родителя `StockDocument` (дедуп). Прямой доступ с ребёнка
-    прозрачен через MTI; специфика осталась на детях; реверс — `project.documents`."""
+    """Волна 13 Ф2c: общие поля `project`/`user`/`date`/`number` подняты с 6 детей в
+    MTI-родителя `StockDocument` (дедуп; волна 19 Ф10 добавила туда же `code`/`description`,
+    убрала `note`). Прямой доступ с ребёнка прозрачен через MTI; специфика осталась на
+    детях; реверс — `project.documents`."""
 
     def _one_of_each(self):
         r = models.Receipt.objects.create(
@@ -2804,7 +2818,7 @@ class Wave13Fase2cTests(EngineTestBase):
             user=self.user, qty=D(1), date='2026-05-02')
         inv = models.Inventory.objects.create(
             project=self.prj, user=self.user, number='И-1', date='2026-05-03',
-            note='примечание акта')
+            description='примечание акта')
         req = models.Requisition.objects.create(
             project=self.prj, user=self.user, number='Т-1', date='2026-05-04')
         t = models.Transfer.objects.create(
@@ -2816,16 +2830,16 @@ class Wave13Fase2cTests(EngineTestBase):
                 'requisition': req, 'transfer': t, 'writeoff': w}
 
     def test_common_fields_live_on_parent(self):
-        """`project`/`user`/`date`/`number`/`note` — поля StockDocument, НЕ детей."""
+        """`project`/`user`/`date`/`number`/`code`/`description` — поля StockDocument, НЕ детей."""
         parent = {f.name for f in models.StockDocument._meta.get_fields()}
-        for name in ('project', 'user', 'date', 'number', 'note'):
+        for name in ('project', 'user', 'date', 'number', 'code', 'description'):
             self.assertIn(name, parent)
         # у детей своих копий этих полей больше нет (только своя специфика)
         for child in (models.Receipt, models.Kitting, models.Inventory,
                       models.Requisition, models.Transfer, models.Writeoff):
             own = {f.name for f in child._meta.get_fields()
                    if getattr(f, 'model', None) is child}
-            self.assertFalse({'project', 'user', 'date', 'number', 'note'} & own,
+            self.assertFalse({'project', 'user', 'date', 'number', 'code', 'description'} & own,
                              f'{child.__name__} держит поднятое поле: {own}')
 
     def test_child_specifics_stay(self):
@@ -2944,7 +2958,7 @@ class Wave13Fase2eTests(EngineTestBase):
     def setUp(self):
         super().setUp()
         # self.main (код MAIN) уже есть; добавим второе место — станок пайки.
-        self.sold = models.Location.objects.create(code='105', name='Место пайки')
+        self.sold = models.Location.objects.create(code='105', description='Место пайки')
         self.case = self.make_item('CASE')
         self.lot = self.receipt_lot(self.case, self.prj, 12)   # рождён на self.main
 
@@ -3033,7 +3047,7 @@ class Wave13Fase2eTests(EngineTestBase):
             engine.add_relocation_line(r, self.lot, D(1),
                                        from_location=self.main, to_location=self.main)
         # чужой проект
-        other = models.Project.objects.create(code='P2', name='P2',
+        other = models.Project.objects.create(code='P2', description='P2',
                                                kind=models.Project.Kind.EXTERNAL)
         foreign = self.receipt_lot(self.make_item('X'), other, 5)
         with self.assertRaises(ValidationError):
@@ -3149,7 +3163,7 @@ class Wave13Fase2fTests(EngineTestBase):
         src = engine.add_receipt_lot(self.receipt, self.item, D(10),
                                      lot_name='Исходник', part_number='PN-SRC')
         white = models.Project.objects.create(
-            code='WHITE', name='Собственный склад',
+            code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         req = engine.create_requisition(white, self.user, 'ТР-1')
         engine.add_requisition_line(req, src, D(4))
@@ -3174,11 +3188,11 @@ class Wave13Fase2gTests(EngineTestBase):
             project=self.prj, user=self.user)
         cp = engine.receipt_cockpit(r)
         self.assertEqual(cp['contractor_id'], self.supplier.id)
-        self.assertEqual(cp['contractor_name'], self.supplier.name)
+        self.assertEqual(cp['contractor_name'], self.supplier.description)
 
     def test_create_transfer_with_customer(self):
         cust = models.Counterparty.objects.create(
-            name='Заказчик', is_supplier=False, is_customer=True)
+            description='Заказчик', is_supplier=False, is_customer=True)
         t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=cust)
         self.assertEqual(t.contractor_id, cust.id)
         cp = engine.transfer_cockpit(t)
@@ -3190,7 +3204,7 @@ class Wave13Fase2gTests(EngineTestBase):
         self.assertIsNone(t.contractor_id)
         self.assertEqual(engine.transfer_cockpit(t)['contractor_name'], '')
         cust = models.Counterparty.objects.create(
-            name='Поздний', is_supplier=False, is_customer=True)
+            description='Поздний', is_supplier=False, is_customer=True)
         engine.update_transfer(t, contractor=cust)               # проставить позже
         t.refresh_from_db()
         self.assertEqual(t.contractor_id, cust.id)
@@ -3201,7 +3215,7 @@ class Wave13Fase2gTests(EngineTestBase):
     def test_update_transfer_sentinel_keeps_contractor(self):
         """Часовой `_UNSET`: правка номера/даты не сбрасывает получателя."""
         cust = models.Counterparty.objects.create(
-            name='Стойкий', is_supplier=False, is_customer=True)
+            description='Стойкий', is_supplier=False, is_customer=True)
         t = engine.create_transfer(self.prj, self.user, 'Н-3', contractor=cust)
         engine.update_transfer(t, number='Н-3-ред')              # contractor не передан
         t.refresh_from_db()
@@ -3210,20 +3224,20 @@ class Wave13Fase2gTests(EngineTestBase):
 
     def test_counterparties_endpoint_role_filter(self):
         models.Counterparty.objects.create(
-            name='ТолькоЗаказчик', is_supplier=False, is_customer=True)
+            description='ТолькоЗаказчик', is_supplier=False, is_customer=True)
         c = Client()
         c.force_login(self.user)
         # ?role=supplier — унаследованный поставщик, без заказчика
-        sup_names = {r['name'] for r in c.get('/api/counterparties/?role=supplier').json()}
+        sup_names = {r['description'] for r in c.get('/api/counterparties/?role=supplier').json()}
         self.assertIn('Поставщик', sup_names)
         self.assertNotIn('ТолькоЗаказчик', sup_names)
         # ?role=customer — только заказчик
-        cust_names = {r['name'] for r in c.get('/api/counterparties/?role=customer').json()}
+        cust_names = {r['description'] for r in c.get('/api/counterparties/?role=customer').json()}
         self.assertIn('ТолькоЗаказчик', cust_names)
         self.assertNotIn('Поставщик', cust_names)
         # быстрое создание с ролью
         created = c.post('/api/counterparties/',
-                         {'name': 'Новый', 'role': 'customer'},
+                         {'description': 'Новый', 'role': 'customer'},
                          content_type='application/json').json()
         self.assertTrue(created['is_customer'])
         self.assertFalse(created['is_supplier'])
@@ -3378,7 +3392,7 @@ class Wave13Fase2kTests(EngineTestBase):
     def setUp(self):
         super().setUp()
         self.prj2 = models.Project.objects.create(
-            code='P9', name='Проект 9', kind=models.Project.Kind.EXTERNAL)
+            code='P9', description='Проект 9', kind=models.Project.Kind.EXTERNAL)
 
     # ── project-якорь ──────────────────────────────────────────────────────
     def test_project_changes_on_empty_order(self):
@@ -3517,7 +3531,7 @@ class Wave13Fase3HttpTests(EngineTestBase):
         super().setUp()
         self.user.is_superuser = True
         self.user.save()
-        self.sold = models.Location.objects.create(code='105', name='Место пайки')
+        self.sold = models.Location.objects.create(code='105', description='Место пайки')
         self.item = self.make_item('R100')
         self.lot = self.receipt_lot(self.item, self.prj, 12)  # born @ MAIN
         self.c = Client()
@@ -3569,7 +3583,7 @@ class Wave13Fase3HttpTests(EngineTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_foreign_project_lot_rejected(self):
-        other = models.Project.objects.create(code='P2', name='Проект 2',
+        other = models.Project.objects.create(code='P2', description='Проект 2',
             kind=models.Project.Kind.EXTERNAL)
         foreign = self.receipt_lot(self.item, other, 3)
         rid = self._create()
@@ -3636,7 +3650,7 @@ class Wave13Fase3HttpTests(EngineTestBase):
         self.assertEqual(upd.status_code, 200)
         self.assertEqual(upd.json()['number'], 'ПЕР-9')
         # проект-якорь: у пустого ордера сменить можно
-        other = models.Project.objects.create(code='P3', name='Проект 3',
+        other = models.Project.objects.create(code='P3', description='Проект 3',
             kind=models.Project.Kind.EXTERNAL)
         moved = self.c.patch(f'/api/relocations/{rid}/', {'project_id': other.id},
                             content_type='application/json')
@@ -3651,7 +3665,7 @@ class Wave13Fase4Tests(EngineTestBase):
         super().setUp()
         self.user.is_superuser = True
         self.user.save()
-        self.sold = models.Location.objects.create(code='105', name='Место пайки')
+        self.sold = models.Location.objects.create(code='105', description='Место пайки')
         self.item = self.make_item('R100')
         self.lot = self.receipt_lot(self.item, self.prj, 12)  # born @ MAIN
         self.c = Client()
@@ -3681,9 +3695,9 @@ class Wave13Fase4Tests(EngineTestBase):
             engine.create_location('201', 'Дубль')
 
     def test_update_location_dna_and_duplicate_guard(self):
-        engine.update_location(self.sold, name='Пайка-2', kind='цех')
+        engine.update_location(self.sold, description='Пайка-2', kind='цех')
         self.sold.refresh_from_db()
-        self.assertEqual(self.sold.name, 'Пайка-2')
+        self.assertEqual(self.sold.description, 'Пайка-2')
         self.assertEqual(self.sold.kind, 'цех')
         # код на занятый — дружелюбный отказ
         with self.assertRaises(ValidationError):
@@ -3703,13 +3717,13 @@ class Wave13Fase4Tests(EngineTestBase):
 
     def test_http_create_location(self):
         resp = self.c.post('/api/locations/',
-                          {'code': '301', 'name': 'Резерв'},
+                          {'code': '301', 'description': 'Резерв'},
                           content_type='application/json')
         self.assertEqual(resp.status_code, 201)
         self.assertTrue(models.Location.objects.filter(code='301').exists())
         # дубль кода → 400
         dup = self.c.post('/api/locations/',
-                        {'code': '301', 'name': 'Дубль'},
+                        {'code': '301', 'description': 'Дубль'},
                         content_type='application/json')
         self.assertEqual(dup.status_code, 400)
 
@@ -3751,7 +3765,7 @@ class EntityDeleteTests(EngineTestBase):
 
     # ── Склад ──
     def test_delete_location_free_when_empty(self):
-        loc = models.Location.objects.create(code='EMPTY', name='Пустой склад')
+        loc = models.Location.objects.create(code='EMPTY', description='Пустой склад')
         engine.delete_location(loc)
         self.assertFalse(models.Location.objects.filter(pk=loc.pk).exists())
 
@@ -3801,7 +3815,7 @@ class EntityDeleteTests(EngineTestBase):
     # ── Проект ──
     def test_delete_project_free_when_empty(self):
         prj = models.Project.objects.create(
-            code='EMPTY-PRJ', name='Пустой', kind=models.Project.Kind.EXTERNAL)
+            code='EMPTY-PRJ', description='Пустой', kind=models.Project.Kind.EXTERNAL)
         engine.delete_project(prj)
         self.assertFalse(models.Project.objects.filter(pk=prj.pk).exists())
 
@@ -3818,7 +3832,7 @@ class EntityDeleteTests(EngineTestBase):
 
     def test_delete_project_internal_forbidden(self):
         stock = models.Project.objects.create(
-            code='WHITE', name='Собственный склад',
+            code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         with self.assertRaises(ValidationError):
             engine.delete_project(stock)
@@ -3829,10 +3843,10 @@ class EntityDeleteHttpTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', name='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
-            code='P1', name='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.sup = models.Counterparty.objects.create(name='П')
+            code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
+        self.sup = models.Counterparty.objects.create(description='П')
         self.c = Client()
         self.c.force_login(self.user)
 
@@ -3849,7 +3863,7 @@ class EntityDeleteHttpTests(TestCase):
         self.assertEqual(self.c.delete(f'/api/items/{it2.id}/').status_code, 400)
 
     def test_location_delete_204_and_guard_400(self):
-        loc = models.Location.objects.create(code='EMPTY', name='Пустой')
+        loc = models.Location.objects.create(code='EMPTY', description='Пустой')
         self.assertEqual(self.c.delete(f'/api/locations/{loc.id}/').status_code, 204)
         r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
@@ -3861,7 +3875,7 @@ class EntityDeleteHttpTests(TestCase):
 
     def test_project_delete_204_and_guard_400(self):
         empty = models.Project.objects.create(
-            code='E', name='E', kind=models.Project.Kind.EXTERNAL)
+            code='E', description='E', kind=models.Project.Kind.EXTERNAL)
         self.assertEqual(self.c.delete(f'/api/projects/{empty.id}/').status_code, 204)
         r = models.Receipt.objects.create(number='U-3', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
@@ -4042,7 +4056,7 @@ class LibraryApplyTests(TestCase):
         self.assertFalse(item.produced)                  # импорт → покупное
         self.assertIsNone(item.estimated_cost)           # цена — за Plume
         self.assertEqual(item.category.code, 'sensors')  # категория заведена на лету
-        self.assertEqual(item.category.label, 'Датчики') # канон LIBRARY_CATEGORIES
+        self.assertEqual(item.category.description, 'Датчики') # канон LIBRARY_CATEGORIES
 
     def test_apply_updates_changed(self):
         self._item('S-1', 'sensors', desc='старое', temp='')

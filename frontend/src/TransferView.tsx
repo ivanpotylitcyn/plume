@@ -38,7 +38,7 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={`Накладная ${c.number}`}
+        code={c.code || `Накладная ${c.number}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name}
@@ -54,6 +54,12 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateTransfer(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
+          onCommit={v => run(api.updateTransfer(c.id, { description: v }))} /></dd>
         <dt>№ накладной</dt>
         <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateTransfer(c.id, { number: v }))}
@@ -68,7 +74,7 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
             onChange={e => run(api.updateTransfer(c.id, {
               contractor_id: e.target.value ? Number(e.target.value) : null }))}>
             <option value="">— не указан —</option>
-            {customers.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
+            {customers.map(cp => <option key={cp.id} value={cp.id}>{cp.description}</option>)}
           </select>
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}

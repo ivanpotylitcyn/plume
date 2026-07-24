@@ -67,10 +67,9 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={d.description}
+        code={d.design_item_id}
         meta={<>
-          <span className={`ci ci-${d.category.icon || 'chip'}`} style={{ fontSize: 12, marginRight: 5 }} />
-          {d.design_item_id} · {d.category.label}{d.produced ? ' · производимое' : ''} · {d.uom}
+          {d.category.description}{d.produced ? ' · производимое' : ''} · {d.uom}
           {d.temperature && <> · {d.temperature}</>}
           {' · '}<span className={d.used ? 's-available' : ''}>{d.used ? 'используется' : 'спящий'}</span>
           {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
@@ -97,9 +96,9 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
         <dd>{!locked
           ? <select className="lot-sel" value={d.category.id} disabled={busy}
               onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
-              {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
             </select>
-          : d.category.label}</dd>
+          : d.category.description}</dd>
         <dt>Производимое</dt>
         <dd>{!locked
           ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -296,7 +295,7 @@ function AddComponent({ items, parentId, bom, busy, add }: {
         <div className="typeahead-menu">
           {matches.map(i => (
             <div key={i.id} className="typeahead-item" onClick={() => pick(i)}>
-              <span className={`ci ci-${i.category.icon || 'chip'}`} />
+              <span className="ci ci-chip" />
               <span className="code">{i.design_item_id}</span>
               <span style={{ color: 'var(--fg-dim)' }}>{i.description}</span>
             </div>

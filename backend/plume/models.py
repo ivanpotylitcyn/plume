@@ -82,7 +82,7 @@ class StockDocument(models.Model):
     **Ф2b:** дуги `Lot.origin` (4 FK) / `StockLine.document` (4 FK) схлопнуты в один FK
     на этот PK (реверс — `lots`/`lines`), `Attachment.document` — один FK (владелец теперь
     Item ИЛИ ордер).
-    **Ф2c:** общие поля `project`/`user`/`date`/`number`/`note` подняты сюда с 6 детей
+    **Ф2c:** общие поля `project`/`user`/`date`/`number` подняты сюда с 6 детей
     (дедуп; реверс — `project.documents`/`user.documents`). Специфика осталась на детях:
     `Receipt.contractor`/`purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`,
     `Transfer.contractor` (контрагент-заказчик, Ф2f+).
@@ -126,15 +126,22 @@ class StockDocument(models.Model):
     # purchase/target_item/qty/reason) осталась на детях. `project` строкой ('Project'
     # определён ниже), `user` — settings-строкой. `date` nullable (Kitting-черновик
     # мог быть без даты; строгий per-kind NOT NULL — условная валидация, Ф2c #2).
-    # `number`/`note` blank (Kitting без номера, note только у инвентаризации) — их
-    # видимость по `kind` рулит форма/матрица (Ф2c #7). Реверс-аксессор — `documents`.
+    # `number` blank (Kitting без номера) — его видимость по `kind` рулит форма/матрица.
+    # Реверс-аксессор — `documents`.
+    #
+    # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description` у ВСЕХ
+    # сущностей, включая документы. `code` («Нева ДЗЗ 1») — наш ярлык в списки; `number`
+    # — внешний номер накладной (юридическое поле, заполняем по необходимости);
+    # `description` — развёрнутое имя. `code` вводится человеком (авто-фолбэка нет) →
+    # `null=True, unique=True`. Мёртвое `note` удалено везде (ни разу не пригодилось).
     project = models.ForeignKey('Project', on_delete=models.PROTECT,
                                 related_name='documents', verbose_name='проект')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='documents', verbose_name='автор')
+    code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
+    description = models.CharField('описание', max_length=255, blank=True, default='')
     date = models.DateField('дата', null=True, blank=True)
     number = models.CharField('номер', max_length=64, blank=True, default='')
-    note = models.CharField('примечание', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'ордер'
@@ -168,13 +175,17 @@ class Category(models.Model):
     """Категория изделия — физический класс (конденсатор/микросхема/стабилизатор/…).
     Волна 15: справочник (FK вместо прежнего enum `Item.kind`), синхронизируемый с
     библиотекой компонентов — `code` = стем имени CSV-файла (`capacitors`/`mcu`/…).
-    Классы редактируемы, рост библиотеки = 0 правок схемы; `label`/`icon` отдаются в
-    сериализации Item (снимают хардкод-карту на фронте). Синк делает `get_or_create`
-    по `code` на лету (новый класс всплывает с сырым label, юзер правит)."""
+    Классы редактируемы, рост библиотеки = 0 правок схемы; `description` отдаётся в
+    сериализации Item. Синк делает `get_or_create` по `code` на лету (новый класс
+    всплывает с сырым описанием, юзер правит).
+
+    Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`
+    (`label` → `description`). Поле `icon` (коды Codicon) удалено: per-категорийный
+    глиф отпал (различение разрешилось режимами Изделия/Компоненты), заодно снята
+    протечка темы в API (Ф7)."""
 
     code = models.CharField('код', max_length=64, unique=True)
-    label = models.CharField('название', max_length=128)
-    icon = models.CharField('иконка (Codicon)', max_length=64, blank=True, default='')
+    description = models.CharField('описание', max_length=128)
 
     class Meta:
         verbose_name = 'категория'
@@ -182,7 +193,7 @@ class Category(models.Model):
         ordering = ['code']
 
     def __str__(self):
-        return self.label or self.code
+        return self.description or self.code
 
 
 class Item(models.Model):
@@ -254,7 +265,12 @@ class Counterparty(models.Model):
     только текст в строке накладной.
     """
 
-    name = models.CharField('наименование', max_length=255)
+    # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`
+    # (`name` → `description`, + `code`). `code` вводится человеком (напр. `КОМПЭЛ`),
+    # авто-фолбэка нет → `null=True, unique=True` (в MySQL несколько NULL не конфликтуют,
+    # существующие контрагенты живут с пустым кодом, уникальность стережёт непустые).
+    code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
+    description = models.CharField('описание', max_length=255)
     inn = models.CharField('ИНН', max_length=16, blank=True, default='')
     is_supplier = models.BooleanField('поставщик', default=True)
     is_customer = models.BooleanField('заказчик', default=False)
@@ -262,10 +278,10 @@ class Counterparty(models.Model):
     class Meta:
         verbose_name = 'контрагент'
         verbose_name_plural = 'контрагенты'
-        ordering = ['name']
+        ordering = ['description']
 
     def __str__(self):
-        return self.name
+        return self.description
 
 
 class Location(models.Model):
@@ -275,7 +291,7 @@ class Location(models.Model):
     между ними. Синглтон-заглушка MVP снята (справочник редактируем)."""
 
     code = models.CharField('код', max_length=64, unique=True)
-    name = models.CharField('название', max_length=255)
+    description = models.CharField('описание', max_length=255)
     kind = models.CharField('вид', max_length=32, blank=True, default='')
 
     class Meta:
@@ -284,7 +300,7 @@ class Location(models.Model):
         ordering = ['code']
 
     def __str__(self):
-        return self.name
+        return self.description
 
 
 class Project(models.Model):
@@ -297,7 +313,7 @@ class Project(models.Model):
         INTERNAL_WRITEOFF = 'internal_writeoff', 'Свободные неучтённые (серые)'
 
     code = models.CharField('код', max_length=64, unique=True)
-    name = models.CharField('название', max_length=255)
+    description = models.CharField('описание', max_length=255)
     budget = money(verbose_name='бюджет на материалы', null=True, blank=True)
     kind = models.CharField('вид', max_length=20, choices=Kind.choices,
                             default=Kind.EXTERNAL)
@@ -331,7 +347,7 @@ class Project(models.Model):
                 )
 
     def __str__(self):
-        return f'{self.code} — {self.name}'
+        return f'{self.code} — {self.description}'
 
 
 class ProjectDemand(models.Model):
@@ -363,6 +379,11 @@ class Procurement(models.Model):
     # Подпись («Зафиксирована») — забота представления, живёт во фронте.
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='procurements', verbose_name='автор')
+    # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`
+    # (`code` = «Нева ДЗЗ 1» в списки; вводится человеком → `null=True, unique=True`).
+    # Мёртвое `note` удалено.
+    code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
+    description = models.CharField('описание', max_length=255, blank=True, default='')
     locked = models.BooleanField('зафиксирована', default=False)
     # Контрагент-поставщик (волна 19, Ф4, Р3): закупка = «один поток общения» с
     # поставщиком; отсюда берётся сторона при «Заказ → УПД» (Ф6) и шапка order.xlsx
@@ -372,7 +393,6 @@ class Procurement(models.Model):
                                    blank=True, related_name='procurements',
                                    verbose_name='контрагент')
     date = models.DateField('дата (начало переговоров)', null=True, blank=True)
-    note = models.CharField('примечание', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'закупка (план)'
@@ -409,9 +429,11 @@ class Purchase(models.Model):
                                 related_name='purchases')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='purchases', verbose_name='автор')
+    # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`.
+    code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
+    description = models.CharField('описание', max_length=255, blank=True, default='')
     locked = models.BooleanField('зафиксирован', default=False)
     date = models.DateField('дата (оформление)', null=True, blank=True)
-    note = models.CharField('примечание', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'заказ'
@@ -485,7 +507,7 @@ class Inventory(StockDocument):
 
     KIND = StockDocument.Kind.INVENTORY
 
-    # Все поля (project/user/number/date/note) подняты в StockDocument (Ф2c).
+    # Все поля (project/user/number/date/code/description) подняты в StockDocument (Ф2c/Ф10).
 
     class Meta:
         verbose_name = 'инвентаризация'

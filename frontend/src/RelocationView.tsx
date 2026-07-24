@@ -38,7 +38,7 @@ export function RelocationView({ relocationId, isNew, openItem, onChanged, onDel
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        name={`Перемещение ${c.number}`}
+        code={c.code || `Перемещение ${c.number}`}
         meta={<>
           <StatusGlyph locked={c.locked} />
           {c.project_code} · {c.project_name} · {c.date} · перемещено {num(c.total_qty)}
@@ -52,6 +52,12 @@ export function RelocationView({ relocationId, isNew, openItem, onChanged, onDel
       >
 
       <dl className="props">
+        <dt>Код</dt>
+        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
+          onCommit={v => run(api.updateRelocation(c.id, { code: v }))} /></dd>
+        <dt>Описание</dt>
+        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
+          onCommit={v => run(api.updateRelocation(c.id, { description: v }))} /></dd>
         <dt>№ перемещения</dt>
         <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateRelocation(c.id, { number: v }))}
