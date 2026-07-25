@@ -14,7 +14,7 @@ const ST: Record<LibraryStatus, {
   label: string; cls: string; verb: string; actionable: boolean }> = {
   new:     { label: 'новый',       cls: 's-available', verb: 'создать',  actionable: true },
   changed: { label: 'изменился',   cls: 's-on_order',  verb: 'обновить', actionable: true },
-  refix:   { label: 'к фиксации',  cls: 's-available', verb: 'зафиксировать (совпадает с библиотекой)', actionable: true },
+  mark:    { label: 'пометить',    cls: 's-available', verb: 'пометить библиотечным (совпадает с библиотекой)', actionable: true },
   gone:    { label: 'пропал',      cls: 's-to_order',  verb: 'удалить',  actionable: true },
   orphan:  { label: 'сирота',      cls: '',            verb: 'нет в библиотеке (используется)', actionable: false },
   same:    { label: 'совпадает',   cls: '',            verb: '', actionable: false },
@@ -44,11 +44,10 @@ export function LibraryImportView({ onApplied, openItem }:
     api.libraryDiff(files)
       .then(d => {
         setDiff(d)
-        // Предотметка: добавления, обновления и фиксации — под галочкой сразу
-        // (безопасны, `refix` обратим через unpost); удаления (`gone`, необратимо) —
-        // вручную. Полная сверка, но с защитой.
+        // Предотметка: добавления, обновления и пометки — под галочкой сразу
+        // (безопасны); удаления (`gone`, необратимо) — вручную. Полная сверка с защитой.
         setConfirmed(new Set(d.rows
-          .filter(r => r.status === 'new' || r.status === 'changed' || r.status === 'refix')
+          .filter(r => r.status === 'new' || r.status === 'changed' || r.status === 'mark')
           .map(r => r.design_item_id)))
       })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -78,7 +77,7 @@ export function LibraryImportView({ onApplied, openItem }:
 
   // Свод по статусам + отфильтрованный список строк к показу.
   const counts = useMemo(() => {
-    const c: Record<LibraryStatus, number> = { new: 0, changed: 0, refix: 0, gone: 0, orphan: 0, same: 0 }
+    const c: Record<LibraryStatus, number> = { new: 0, changed: 0, mark: 0, gone: 0, orphan: 0, same: 0 }
     diff?.rows.forEach(r => { c[r.status]++ })
     return c
   }, [diff])
@@ -109,14 +108,14 @@ export function LibraryImportView({ onApplied, openItem }:
       {summary && (
         <div className="section-h" style={{ color: 'var(--st-ok)' }}>
           Применено: создано {summary.created} · обновлено {summary.updated} ·
-          зафиксировано {summary.fixed} · удалено {summary.deleted}
+          помечено {summary.marked} · удалено {summary.deleted}
         </div>
       )}
 
       {diff && <>
         <div className="section-h">Расхождения
           <span className="hint">
-            новых {counts.new} · изменившихся {counts.changed} · к фиксации {counts.refix} ·
+            новых {counts.new} · изменившихся {counts.changed} · к пометке {counts.mark} ·
             пропавших {counts.gone} · сирот {counts.orphan} · совпадений {counts.same}
           </span>
         </div>
@@ -188,8 +187,8 @@ function RowDetail({ row, verb }: { row: LibraryDiffRow; verb: string }) {
     return <>{Object.entries(row.changes).map(([f, ch]) => (
       <div key={f}>{FIELD_RU[f] || f}: <s>{ch!.old || '—'}</s> → <b style={{ color: 'var(--fg)' }}>{ch!.new || '—'}</b></div>
     ))}</>
-  if (row.status === 'refix')
-    return <>расфиксировано → <b style={{ color: 'var(--st-ok)' }}>зафиксировать ✓</b>
+  if (row.status === 'mark')
+    return <>не помечено → <b style={{ color: 'var(--st-ok)' }}>пометить библиотечным ✓</b>
       <span className="kind-chip"> · совпадает с библиотекой</span></>
   if ((row.status === 'gone' || row.status === 'orphan') && row.current)
     return <>{verb}

@@ -51,10 +51,10 @@ class Command(BaseCommand):
         # --- справочник изделий + BOM ---------------------------------- #
         device = models.Item.objects.create(
             design_item_id='ИЗДЕЛИЕ-А', description='Прибор А', category=cat_device,
-            uom='шт', produced=True)
+            uom='шт', native=True)
         board = models.Item.objects.create(
             design_item_id='ПЛАТА-1', description='Плата управления', category=cat_board,
-            uom='шт', produced=True, estimated_cost=1500)
+            uom='шт', native=True, estimated_cost=1500)
         case = models.Item.objects.create(
             design_item_id='КОРПУС-1', description='Корпус алюминиевый', category=cat_mech,
             uom='шт', estimated_cost=800)

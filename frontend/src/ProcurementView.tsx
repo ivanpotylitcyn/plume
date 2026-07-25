@@ -9,7 +9,7 @@ import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { PeggingPanel } from './PeggingPanel'
-import { StatusGlyph, num } from './status'
+import { StatusGlyph, ItemGlyph, num } from './status'
 
 export function ProcurementView({ procurementId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
   procurementId: number; items: ItemRow[]; isNew: boolean
@@ -132,6 +132,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
   return (
     <tr className="row s-available">
       <td>
+        <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} />{' '}
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_design_item_id}</a>
       </td>
       <td style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</td>

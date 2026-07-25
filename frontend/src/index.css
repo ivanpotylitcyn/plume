@@ -102,6 +102,7 @@ body { overflow: hidden; }
 .ci-lock::before         { content: '\ea75'; }  /* контрол шапки: зафиксировать */
 .ci-unlock::before       { content: '\eb74'; }  /* контрол шапки: расфиксировать */
 .ci-file::before         { content: '\ea7b'; }  /* контрол шапки: скачать xlsx */
+.ci-credit-card::before  { content: '\eac9'; }  /* контрол шапки: пересчитать стоимость */
 .ci-arrow-swap::before   { content: '\ebcb'; }
 .ci-table::before        { content: '\ebb7'; }
 .ci-search::before       { content: '\ea6d'; }
@@ -112,13 +113,16 @@ body { overflow: hidden; }
 .ci-chip::before         { content: '\ec19'; }  /* компонент (component) / mcu */
 .ci-beaker::before       { content: '\ea79'; }  /* материал (material) */
 /* волна 17 — иконки режимов (коды сверены с codicon.ttf) */
-.ci-preview::before      { content: '\eb2f'; }  /* Ордера */
+.ci-preview::before      { content: '\eb2f'; }  /* (было: Ордера) */
+.ci-flag::before         { content: '\ec3f'; }  /* Проекты (Ф3a) */
+.ci-notebook::before     { content: '\ebaf'; }  /* Ордера (Ф3a) */
 .ci-law::before          { content: '\eb12'; }  /* Закупки */
 .ci-layers::before       { content: '\ebd2'; }  /* Склады / ось разбора: не заказано */
 .ci-layers-dot::before   { content: '\ebd3'; }  /* ось разбора: заказано, ждём */
 .ci-layers-active::before{ content: '\ebd4'; }  /* ось разбора: на складе */
 /* волна 15 — синк библиотеки + иконки библиотечных категорий (LIBRARY_CATEGORIES) */
-.ci-sync::before            { content: '\ea77'; }  /* синхронизация с библиотекой */
+.ci-sync::before            { content: '\ea77'; }  /* синк: из библиотеки (компонент) */
+.ci-sync-ignored::before    { content: '\eb9f'; }  /* синк: заведено вручную (компонент) */
 .ci-symbol-constant::before { content: '\eb5d'; }  /* конденсаторы */
 .ci-settings::before        { content: '\eb52'; }  /* стабилизаторы */
 .ci-settings-gear::before   { content: '\eb51'; }  /* крепёж (демо-класс) */
@@ -287,14 +291,18 @@ tr.row.s-available { border-left-color: var(--st-ok); }
      ширину донирует «Склад» (60→46, там одно число). Общий шаблон → «Приборы» и
      «Потребность» синхронны. Длинные коды переносятся внутри своей колонки (см.
      .prow .link overflow-wrap), а не наезжают на «Назв.». */
-  grid-template-columns: 18px 190px minmax(140px, 1fr) 96px 124px 46px 88px;
+  /* Ф3a-добор: глиф уехал в ведущую ячейку (`.tree-cell`) — треугольник·глиф·код едут
+     единым блоком, отступая по глубине (UI_GUIDE §7a). Первая колонка = 18+190 = 208. */
+  grid-template-columns: 208px minmax(140px, 1fr) 96px 124px 46px 88px;
   border-left: 2px solid transparent; padding: 3px 0 3px 8px; }
 .prow .pnum { text-align: right; font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; }
-/* Код-ссылка переносится в любом месте (коды без дефисов, напр. BGB707L7ESDE6327XTSA,
-   иначе горизонтально наезжают на соседнюю колонку). min-width:0 — чтобы ужималась
-   внутри flex-ячейки дерева (.tree-cell). */
-.prow .link { overflow-wrap: anywhere; min-width: 0; }
+/* Код-ссылка — ВСЕГДА одной строкой, длинный обрезается многоточием (не переносится).
+   Так строки одной высоты, а глифы идут ровной вертикальной колонкой — сильно помогает
+   при сканировании (правило строк, UI_GUIDE §7). min-width:0 — чтобы ужималась внутри
+   flex-ячейки дерева (.tree-cell) и включился text-overflow, а не наезд на «Назв.». */
+.prow .link { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .prow .name { color: var(--fg-dim); min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prow.s-to_order { border-left-color: var(--st-order); }
@@ -302,8 +310,10 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .prow.s-available { border-left-color: var(--st-ok); }
 .prow--head { color: var(--fg-dim); font-size: 11px; text-transform: none;
   border-bottom: 1px solid var(--border); padding-bottom: 4px; margin: 2px 0; }
-.prow--comp { border-bottom: 1px solid var(--border); }
-.prow--device { margin-top: 6px; }
+/* Тонкая серая полоса-разделитель — у ВСЕХ строк-данных единообразно (правило строк,
+   UI_GUIDE §7a). Раньше её несли только `--comp`; device-строки «Приборов» шли без неё
+   и без общего margin-top (снят) разъезжались с «Потребностью». */
+.prow--comp, .prow--device { border-bottom: 1px solid var(--border); }
 .prow .chev { background: none; border: none; color: var(--fg-dim); cursor: pointer;
   padding: 0; font-size: 12px; line-height: 1; justify-self: start; }
 .prow .chev:hover { color: var(--fg-bright); }
@@ -311,6 +321,7 @@ tr.row.s-available { border-left-color: var(--st-ok); }
    Лист получает spacer вместо шеврона, чтобы коды выравнивались. */
 .prow .tree-cell { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 .prow .tree-cell .chev { flex: 0 0 auto; }
+.prow .tree-cell .ci { flex: 0 0 auto; }   /* глиф не сжимается рядом с ellipsis-кодом */
 .prow .tree-lead { flex: 0 0 auto; width: 12px; }
 .prow .act { text-align: right; }
 

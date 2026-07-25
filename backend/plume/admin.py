@@ -83,8 +83,8 @@ class CategoryAdmin(admin.ModelAdmin):
 @admin.register(models.Item)
 class ItemAdmin(admin.ModelAdmin):
     list_display = ('design_item_id', 'description', 'category', 'uom',
-                    'temperature', 'produced')
-    list_filter = ('category', 'produced')
+                    'temperature', 'native', 'synced', 'locked')
+    list_filter = ('category', 'native', 'synced', 'locked')
     search_fields = ('design_item_id', 'description')
     list_select_related = ('category',)
     inlines = [BomLineInline]

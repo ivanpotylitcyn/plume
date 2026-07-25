@@ -28,7 +28,7 @@ export interface Category {
 export interface ItemRow {
   // `id` — PK (FK-ссылки/мутации); `design_item_id` — бизнес-ключ (канон библиотеки).
   id: number; design_item_id: string; description: string; category: Category
-  uom: string; temperature: string; produced: boolean; used: boolean; locked: boolean
+  uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
 }
 
 // Узел дерева аккордеона прибора (Ф5b): плоский pre-order с `depth`. Лист (покупной)
@@ -36,19 +36,20 @@ export interface ItemRow {
 // = worst-of поддерева. Купить можно только листья → заказ живёт в своде «Потребность».
 export interface DeficitTreeNode {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
-  component_locked: boolean
+  component_native: boolean; component_synced: boolean; component_locked: boolean
   need: number; depth: number; is_leaf: boolean; status: Status
   have?: number; on_order?: number; to_order?: number; available_raw?: number; anomaly?: boolean
 }
 export interface DeficitDemand {
   demand_id: number; target_id: number; target_design_item_id: string; target_description: string
+  target_native: boolean; target_synced: boolean; target_locked: boolean
   qty: number; device: { done: number; wip: number; not_started: number }
   status: Status; badge: Status; tree: DeficitTreeNode[]
 }
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
 export interface DeficitComponent {
   component_id: number; component_design_item_id: string; component_description: string; uom: string
-  component_locked: boolean
+  component_native: boolean; component_synced: boolean; component_locked: boolean
   need: number; have: number; on_order: number; to_order: number
   status: Status; available_raw: number; anomaly: boolean
 }
@@ -84,10 +85,11 @@ export interface ItemShipment {
 }
 export interface ItemDetail {
   id: number; design_item_id: string; description: string; category: Category
-  uom: string; temperature: string; produced: boolean; used: boolean; locked: boolean
+  uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
   estimated_cost: number | null
   bom: { id: number; component_id: number; component_design_item_id: string;
-         component_description: string; component_uom: string; component_locked: boolean;
+         component_description: string; component_uom: string;
+         component_native: boolean; component_synced: boolean; component_locked: boolean;
          qty: number; position: string }[]
   where_used: { parent_id: number; parent_design_item_id: string; parent_description: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
@@ -98,12 +100,13 @@ export interface ItemDetail {
 // ── Синхронизация справочника с библиотекой Altium (волна 15) ──
 // Диф-строка: `status` задаёт действие/флаг; `incoming` — из библиотеки (нет у
 // gone/orphan), `current` — из БД (нет у new), `changes` — что отличается (только changed).
-// `refix` (волна 17) — содержимое совпадает с библиотекой, но изделие ещё draft →
-// подтвердить = зафиксировать (lock_item). Закрывает дыру миграции волны 17.
-export type LibraryStatus = 'new' | 'changed' | 'refix' | 'gone' | 'orphan' | 'same'
+// `mark` (Ф3a, волна 19) — содержимое совпадает с библиотекой, но изделие ещё не
+// помечено библиотечным (`synced=false`) → подтвердить = пометить `synced` (замок не
+// трогаем). Путь бэкфилла после Ф3a: существующие библиотечные метятся первым синком.
+export type LibraryStatus = 'new' | 'changed' | 'mark' | 'gone' | 'orphan' | 'same'
 export interface LibrarySnapshot {
   description: string; temperature: string; category: string
-  produced?: boolean; locked?: boolean
+  native?: boolean; synced?: boolean; locked?: boolean
 }
 export interface LibraryChange { old: string; new: string }
 export interface LibraryDiffRow {
@@ -112,7 +115,7 @@ export interface LibraryDiffRow {
   changes?: Partial<Record<'description' | 'temperature' | 'category', LibraryChange>>
 }
 export interface LibraryDiff { categories: string[]; rows: LibraryDiffRow[] }
-export interface LibraryApplySummary { created: number; updated: number; fixed: number; deleted: number }
+export interface LibraryApplySummary { created: number; updated: number; marked: number; deleted: number }
 // Роллап стоимости: детальный экран изделия + сводка пересчёта.
 export interface RollupResult {
   estimated_cost: number | null; updated: string[]; incomplete: string[]
@@ -348,7 +351,7 @@ export interface CommandDeficitProject {
 }
 export interface CommandDeficitRow {
   item_id: number; item_design_item_id: string; item_description: string; uom: string
-  produced: boolean
+  native: boolean
   need: number; have: number; on_order: number; to_order: number
   status: Status; by_project: CommandDeficitProject[]
 }
@@ -360,6 +363,7 @@ export interface ProcurementRow {
 }
 export interface ProcurementCockpitLine {
   id: number; item_id: number; item_design_item_id: string; item_description: string
+  item_native: boolean; item_synced: boolean; item_locked: boolean
   uom: string; qty: number
 }
 export interface ProcurementCockpit extends Authored {
@@ -498,7 +502,7 @@ export const api = {
   items: () => get<ItemRow[]>('/api/items/'),
   categories: () => get<Category[]>('/api/categories/'),
   createItem: (b: { design_item_id: string; description: string; category_id: number;
-    uom?: string; temperature?: string; produced?: boolean; estimated_cost?: number }) =>
+    uom?: string; temperature?: string; native?: boolean; estimated_cost?: number }) =>
     send<ItemRow>('POST', '/api/items/', b),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
   updateProject: (id: number, b: Partial<{ code: string; description: string; budget: number | null; started: string | null }>) =>
@@ -514,7 +518,7 @@ export const api = {
   budget: (id: number) => get<Budget>(`/api/projects/${id}/budget/`),
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
   updateItem: (id: number, b: Partial<{ design_item_id: string; description: string;
-    category_id: number; uom: string; temperature: string; produced: boolean;
+    category_id: number; uom: string; temperature: string; native: boolean;
     estimated_cost: number | null }>) =>
     send<ItemDetail>('PATCH', `/api/items/${id}/`, b),
   deleteItem: (id: number) => send<void>('DELETE', `/api/items/${id}/`),

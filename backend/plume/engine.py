@@ -444,7 +444,7 @@ def _manufactured_in_progress(item, project):
 
 def item_on_order(item, project):
     """Оранжевый член, обобщённый по типу Item (покупной/производимый)."""
-    if item.produced:
+    if item.native:
         return _manufactured_in_progress(item, project)
     return _purchased_on_order(item, project)
 
@@ -492,14 +492,14 @@ def _best_of(statuses):
 def _explode_demand(item, qty, leaves, incomplete, visiting):
     """Разузловать потребность `item × qty` до покупных листьев (структурно).
 
-    Покупной `item` (`produced=False`) — лист-терминал: копим `qty` в `leaves`.
+    Покупной `item` (`native=False`) — лист-терминал: копим `qty` в `leaves`.
     Производимый узел — рекурсия в детей (`qty × bl.qty`): купить его нельзя, деньги/
     заказ живут на листьях (резисторы/ИС/материалы). Нетинга подсборок здесь НЕТ
     (согласовано В16): покрытие складом/заказом считает `_coverage` на самом листе.
     Производимый узел без BOM оценить нечем → в `incomplete` (вклад 0). Циклы —
     страховка `visiting` (гасит уже `add_bom_line`), как в `_rollup_cost`.
     """
-    if not item.produced:
+    if not item.native:
         leaves[item] = leaves.get(item, ZERO) + qty
         return
     if item.id in visiting:
@@ -537,7 +537,9 @@ def _leaf_row(item, need, project):
         'component_id': item.id,
         'component_design_item_id': item.design_item_id,
         'component_description': item.description,
-        'component_locked': item.locked,       # статус-глиф изделия (волна 17)
+        'component_native': item.native,       # глиф строки по режиму (Ф3a): native→замок,
+        'component_synced': item.synced,        # not native→sync (зел. библ. / оранж. ручной)
+        'component_locked': item.locked,
         'uom': item.uom,
         'available_raw': available,            # сырой остаток (может быть < 0)
         'anomaly': item_has_negative_lot(item, project),
@@ -553,7 +555,7 @@ def _demand_tree(item, qty, project, depth, visiting, out):
     узел — структурная строка (без покрытия, купить нельзя): `need`, `status` = worst-of
     поддерева (где под ним «горит»), дети рекурсией ниже. Цикл — страховка `visiting`.
     Возвращает статус поддерева (для сворачивания цвета вверх)."""
-    if not item.produced:
+    if not item.native:
         row = _leaf_row(item, qty, project)
         row['need'] = qty
         row['depth'] = depth
@@ -567,7 +569,9 @@ def _demand_tree(item, qty, project, depth, visiting, out):
         'component_id': item.id,
         'component_design_item_id': item.design_item_id,
         'component_description': item.description,
-        'component_locked': item.locked,       # статус-глиф изделия (волна 17)
+        'component_native': item.native,       # глиф строки по режиму (Ф3a)
+        'component_synced': item.synced,
+        'component_locked': item.locked,
         'uom': item.uom,
         'need': qty,
         'depth': depth,
@@ -632,6 +636,9 @@ def project_deficit(project, with_tree=True):
             'target_id': target.id,
             'target_design_item_id': target.design_item_id,
             'target_description': target.description,
+            'target_native': target.native,     # глиф строки по режиму (Ф3a): прибор → замок
+            'target_synced': target.synced,
+            'target_locked': target.locked,
             'qty': demand.qty,
             'device': {'done': done, 'wip': wip, 'not_started': not_started},
             # цвет прибора: worst-of листьев (внимание) + бейдж лучшего прогресса
@@ -2301,7 +2308,7 @@ def command_deficit():
             row = acc.setdefault(component.id, {
                 'item_id': component.id, 'item_design_item_id': component.design_item_id,
                 'item_description': component.description, 'uom': component.uom,
-                'produced': component.produced,
+                'native': component.native,
                 'need': ZERO, 'have': ZERO, 'on_order': ZERO, 'to_order': ZERO,
                 'by_project': [],
             })
@@ -2345,6 +2352,8 @@ def procurement_cockpit(procurement):
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_design_item_id': line.item.design_item_id,
             'item_description': line.item.description, 'uom': line.item.uom, 'qty': line.qty,
+            'item_native': line.item.native, 'item_synced': line.item.synced,
+            'item_locked': line.item.locked,   # глиф строки по режиму (Ф3a)
         })
     return {
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
@@ -2881,9 +2890,10 @@ def item_is_used(item):
 
 
 def create_item(design_item_id, description, category_id=None, uom='шт',
-                produced=False, estimated_cost=None, temperature=''):
+                native=False, estimated_cost=None, temperature=''):
     """Создать изделие справочника из мини-формы «＋ Новое». `design_item_id`
-    (заказной PN, канон библиотеки) уникален; категория обязательна (FK-справочник)."""
+    (заказной PN, канон библиотеки) уникален; категория обязательна (FK-справочник).
+    Ручное изделие рождается `synced=False` (руками, не из библиотеки)."""
     design_item_id = (design_item_id or '').strip()
     description = (description or '').strip()
     if not design_item_id:
@@ -2897,7 +2907,7 @@ def create_item(design_item_id, description, category_id=None, uom='шт',
         design_item_id=design_item_id, description=description, category=category,
         uom=(uom or '').strip() or 'шт',
         temperature=(temperature or '').strip(),
-        produced=bool(produced),
+        native=bool(native),
         estimated_cost=estimated_cost)
 
 
@@ -2932,8 +2942,19 @@ def unlock_item(item):
 def update_item(item, changes):
     """Правка свойств изделия под замком формы (§6). `changes` — только присланные
     поля (частичный PATCH). `design_item_id` уникален; категория из справочника
-    (ключ `category_id`); описание непустое. Гейт фиксации: зафиксированное не правят."""
+    (ключ `category_id`); описание непустое.
+
+    Матрица `synced × locked` (Ф3a): зафиксированное (`locked`) — read-only целиком;
+    библиотечное расфиксированное (`synced`) — правится ТОЛЬКО оценочная стоимость
+    (остальные поля приходят из библиотеки, руками не трогаем); ручное расфиксированное
+    — правится всё. `synced` руками не переключается (ставит только синк)."""
     _require_item_unlocked(item)
+    if item.synced:
+        illegal = set(changes) - {'estimated_cost'}
+        if illegal:
+            raise ValidationError(
+                f'Изделие {item.design_item_id} — из библиотеки: правится только '
+                f'оценочная стоимость (остальные поля берутся из библиотеки).')
     fields = []
     if 'design_item_id' in changes:
         v = (changes['design_item_id'] or '').strip()
@@ -2961,9 +2982,9 @@ def update_item(item, changes):
     if 'estimated_cost' in changes:
         item.estimated_cost = changes['estimated_cost']    # Decimal или None (сброс)
         fields.append('estimated_cost')
-    if 'produced' in changes:
-        item.produced = bool(changes['produced'])
-        fields.append('produced')
+    if 'native' in changes:
+        item.native = bool(changes['native'])
+        fields.append('native')
     if fields:
         item.save(update_fields=fields)
     return item
@@ -3084,13 +3105,13 @@ def parse_library(files):
 
 
 # Порядок статусов в диф-вью: сперва требующие действия, потом флаги, потом «совпало».
-_DIFF_ORDER = {'new': 0, 'changed': 1, 'refix': 2, 'gone': 3, 'orphan': 4, 'same': 5}
+_DIFF_ORDER = {'new': 0, 'changed': 1, 'mark': 2, 'gone': 3, 'orphan': 4, 'same': 5}
 
 
 def _library_changes(item, row):
     """Что изменилось у существующего изделия против библиотеки: сравниваем только
     синкаемые поля (`description`/`category`/`temperature`). Категорию — по `code`
-    (стем файла). `estimated_cost`/`uom`/`produced` — собственность Plume, не сверяем."""
+    (стем файла). `estimated_cost`/`uom`/`native` — собственность Plume, не сверяем."""
     changes = {}
     if item.description != row['description']:
         changes['description'] = {'old': item.description, 'new': row['description']}
@@ -3111,7 +3132,8 @@ def _diff_row(status, row, item, changes=None):
     if item is not None:
         out['current'] = {'description': item.description,
                           'temperature': item.temperature, 'category': item.category.code,
-                          'produced': item.produced, 'locked': item.locked}
+                          'native': item.native, 'synced': item.synced,
+                          'locked': item.locked}
     if changes:
         out['changes'] = changes
     return out
@@ -3121,12 +3143,13 @@ def library_diff(parsed):
     """Полная сверка загруженной библиотеки против БД по ключу `design_item_id`.
     `parsed` — из `parse_library`. Возвращает список диф-строк со статусом:
 
-    - `new`     — ключа нет в БД → создать (`produced=false`, зафиксировано);
-    - `changed` — есть, отличается description/category/temperature → обновить (+ замок);
-    - `refix`   — есть, содержимое совпадает, но изделие расфиксировано → зафиксировать
-      (`lock_item`). Закрывает дыру миграции волны 17 (все ушли расфиксированными, а `same` синк
-      не трогал → библиотечные застревали расфиксированными); одноразово на изделие;
-    - `same`    — есть, совпадает И уже зафиксировано → ничего;
+    - `new`     — ключа нет в БД → создать (`native=false`, `synced=true`, `locked=false`);
+    - `changed` — есть, отличается description/category/temperature → обновить
+      (+ пометить `synced`; `locked` не трогаем — решение Ивана 2026-07-24);
+    - `mark`    — есть, содержимое совпадает, но ещё не помечено `synced` → пометить
+      библиотечным (`synced=true`, `locked` не трогаем). Путь бэкфилла после Ф3a: все
+      существующие библиотечные приходят `synced=false` и помечаются первым же синком;
+    - `same`    — есть, совпадает И уже `synced` → ничего;
     - `gone`    — в БД (в одном из загруженных классов), нет в загрузке, не
       используется → кандидат на удаление;
     - `orphan`  — то же, но используется (живые ссылки) → флаг «сирота, нет в
@@ -3147,8 +3170,8 @@ def library_diff(parsed):
         changes = _library_changes(item, row)
         if changes:
             status = 'changed'
-        elif not item.locked:
-            status = 'refix'      # совпадает по содержимому, но черновик → зафиксировать
+        elif not item.synced:
+            status = 'mark'       # совпадает по содержимому, но ещё не помечено библиотечным
         else:
             status = 'same'
         result.append(_diff_row(status, row, item, changes))
@@ -3166,16 +3189,18 @@ def apply_library_diff(parsed, confirmed):
     доверяем присланным клиентом значениям): действие берётся из свежего статуса,
     поля — из `parsed`. Всё в одной транзакции (bulk = всё-или-ничего).
 
-    - `new`     → создать `Item` (`produced=false`, замок, категория `ensure_category`);
-    - `changed` → обновить description/category/temperature (+ замок);
-    - `refix`   → зафиксировать (`lock_item`; содержимое уже совпадает);
+    - `new`     → создать `Item` (`native=false`, `synced=true`, `locked=false`,
+      категория `ensure_category`);
+    - `changed` → обновить description/category/temperature (+ пометить `synced`;
+      `locked` не трогаем);
+    - `mark`    → пометить библиотечным (`synced=true`; `locked` не трогаем);
     - `gone`    → удалить (`delete_item` — guard добьёт, если стало используемым);
     - `orphan`/`same` → no-op даже если ключ подтверждён.
 
-    Возвращает сводку `{created, updated, fixed, deleted}`."""
+    Возвращает сводку `{created, updated, marked, deleted}`."""
     confirmed = set(confirmed or [])
     by_key = {r['design_item_id']: r for r in parsed['rows']}
-    summary = {'created': 0, 'updated': 0, 'fixed': 0, 'deleted': 0}
+    summary = {'created': 0, 'updated': 0, 'marked': 0, 'deleted': 0}
     with transaction.atomic():
         for diff in library_diff(parsed):
             key = diff['design_item_id']
@@ -3184,13 +3209,14 @@ def apply_library_diff(parsed, confirmed):
             status = diff['status']
             if status == 'new':
                 src = by_key[key]
-                # Библиотека = источник правды → изделие рождается зафиксированным
-                # (защищено от ручного дрейфа; волна 17).
+                # Библиотека = источник правды → изделие рождается библиотечным
+                # (`synced`), но НЕ запертым (`locked=false`) — готово под ввод цены
+                # (Ф3a, решение Ивана 2026-07-24). Защита остального — матрицей `synced`.
                 models.Item.objects.create(
                     design_item_id=key, description=src['description'],
                     category=ensure_category(src['category']),
-                    temperature=src['temperature'], produced=False,
-                    locked=True)
+                    temperature=src['temperature'], native=False,
+                    synced=True, locked=False)
                 summary['created'] += 1
             elif status == 'changed':
                 src = by_key[key]
@@ -3198,16 +3224,22 @@ def apply_library_diff(parsed, confirmed):
                 item.description = src['description']
                 item.category = ensure_category(src['category'])
                 item.temperature = src['temperature']
-                # Синк подтверждает библиотечное происхождение → фиксируем (в т.ч.
-                # если изделие было заведено руками и лишь теперь совпало).
-                item.locked = True
+                # Синк подтверждает библиотечное происхождение → метим `synced` и
+                # снимаем стухший замок (инвариант `synced ⟹ not locked`; библиотечное
+                # защищено матрицей «правь только цену», а не фиксацией).
+                item.synced = True
+                item.locked = False
                 item.save(update_fields=['description', 'category', 'temperature',
-                                         'locked'])
+                                         'synced', 'locked'])
                 summary['updated'] += 1
-            elif status == 'refix':
-                # Содержимое уже совпадает — ставим только замок.
-                lock_item(models.Item.objects.get(design_item_id=key))
-                summary['fixed'] += 1
+            elif status == 'mark':
+                # Содержимое совпадает — метим библиотечным и снимаем стухший замок
+                # (инвариант `synced ⟹ not locked`).
+                item = models.Item.objects.get(design_item_id=key)
+                item.synced = True
+                item.locked = False
+                item.save(update_fields=['synced', 'locked'])
+                summary['marked'] += 1
             elif status == 'gone':
                 item = models.Item.objects.get(design_item_id=key)
                 unlock_item(item)          # расфиксировать перед удалением (гейт)
@@ -3227,7 +3259,7 @@ def _rollup_cost(item, cache, visiting, updated, incomplete):
     гасит уже `add_bom_line`)."""
     if item.id in cache:
         return cache[item.id]
-    if not item.produced:
+    if not item.native:
         cost = item.estimated_cost
         if cost is None:
             incomplete.append(item.design_item_id)
@@ -3258,8 +3290,8 @@ def rollup_estimated_cost(item):
     только в вершину (сменили цену листа → обновились и промежуточные платы, и
     прибор). Возвращает `{estimated_cost, updated, incomplete}`: `updated` — какие
     узлы переоценены, `incomplete` — листья/узлы без известной стоимости (учтены
-    как 0, но помечены). Только для `produced` (у покупного оценка — ручная)."""
-    if not item.produced:
+    как 0, но помечены). Только для `native` (у покупного оценка — ручная)."""
+    if not item.native:
         raise ValidationError('Пересчёт стоимости — только для производимого изделия.')
     updated, incomplete = [], []
     with transaction.atomic():

@@ -48,10 +48,10 @@ class EngineTestBase(TestCase):
 
     def make_item(self, code, manufactured=False, kind=None):
         # `kind` — исторический хинт (движок по классу не ветвит); категория —
-        # общая заглушка `_cat()`. `manufactured` → ось `produced` (волна 15).
+        # общая заглушка `_cat()`. `manufactured` → ось `native` (волна 15).
         return models.Item.objects.create(
             design_item_id=code, description=code, category=_cat(),
-            produced=manufactured)
+            native=manufactured)
 
     def receipt_lot(self, item, project, qty, purchase=None):
         r = models.Receipt.objects.create(
@@ -1452,7 +1452,7 @@ class ProcurementHttpTests(TestCase):
         self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
             category=_cat())
         self.dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
-            category=_cat(), produced=True)
+            category=_cat(), native=True)
         models.BomLine.objects.create(parent=self.dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev,
             qty=D(10))
@@ -1512,7 +1512,7 @@ class PeggingHttpTests(TestCase):
         self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
             category=_cat())
         dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
-            category=_cat(), produced=True)
+            category=_cat(), native=True)
         models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
@@ -1563,17 +1563,17 @@ class ReferenceCreateTests(EngineTestBase):
     def test_create_item_defaults_and_fields(self):
         cat = _cat('mcu', 'Микроконтроллеры')
         i = engine.create_item('R100', 'Резистор', category_id=cat.id,
-                               uom='шт', produced=False, estimated_cost=D('1.50'),
+                               uom='шт', native=False, estimated_cost=D('1.50'),
                                temperature='-40-125°C')
         self.assertEqual(i.design_item_id, 'R100')
         self.assertEqual(i.category_id, cat.id)
         self.assertEqual(i.temperature, '-40-125°C')
         self.assertEqual(i.estimated_cost, D('1.50'))
-        # обрезка пробелов; дефолты uom=шт, produced=False
+        # обрезка пробелов; дефолты uom=шт, native=False
         j = engine.create_item(' B1 ', ' Плата ', category_id=cat.id)
         self.assertEqual(j.design_item_id, 'B1')
         self.assertEqual(j.uom, 'шт')
-        self.assertFalse(j.produced)
+        self.assertFalse(j.native)
 
     def test_create_item_rejects_dup_empty_and_bad_category(self):
         cat = _cat()
@@ -1617,7 +1617,7 @@ class ReferenceCreateHttpTests(TestCase):
     def test_create_item_http(self):
         cat = _cat()
         r = self.c.post('/api/items/', {'design_item_id': 'R100', 'description': 'Резистор',
-            'category_id': cat.id, 'produced': False},
+            'category_id': cat.id, 'native': False},
             content_type='application/json')
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.json()['design_item_id'], 'R100')
@@ -2072,7 +2072,7 @@ class ProjectBudgetHttpTests(TestCase):
 
     def test_budget_projection(self):
         device = models.Item.objects.create(design_item_id='DEV', description='DEV',
-            category=_cat(), produced=True)
+            category=_cat(), native=True)
         scr = models.Item.objects.create(design_item_id='SCR', description='SCR',
             category=_cat(), estimated_cost=D(50))
         models.BomLine.objects.create(parent=device, component=scr, qty=D(2))
@@ -2246,7 +2246,7 @@ class AuthHttpTests(TestCase):
         cr = self.c.post('/api/kittings/', {'project_id': self.prj.id,
             'target_item_id': models.Item.objects.create(
                 design_item_id='D1', description='Прибор', category=_cat(),
-                produced=True).id, 'qty': 1},
+                native=True).id, 'qty': 1},
             content_type='application/json')
         self.assertEqual(cr.status_code, 201)
         k = models.Kitting.objects.get(pk=cr.json()['id'])
@@ -2357,14 +2357,14 @@ class ItemProjectUpdateTests(EngineTestBase):
         cat2 = _cat('mcu', 'Микроконтроллеры')
         engine.update_item(it, {'description': 'Новое имя', 'category_id': cat2.id,
                                 'uom': 'кг', 'estimated_cost': D('12.50'),
-                                'temperature': '-40-85°C', 'produced': True})
+                                'temperature': '-40-85°C', 'native': True})
         it.refresh_from_db()
         self.assertEqual(it.description, 'Новое имя')
         self.assertEqual(it.category_id, cat2.id)
         self.assertEqual(it.uom, 'кг')
         self.assertEqual(it.estimated_cost, D('12.50'))
         self.assertEqual(it.temperature, '-40-85°C')
-        self.assertTrue(it.produced)
+        self.assertTrue(it.native)
 
     def test_update_item_estimated_cost_can_clear(self):
         it = self.make_item('X')
@@ -3980,10 +3980,10 @@ class LibraryDiffTests(TestCase):
     def _cat(self, code):
         return engine.ensure_category(code)
 
-    def _item(self, did, cat, desc='desc', temp='', produced=False):
+    def _item(self, did, cat, desc='desc', temp='', native=False):
         return models.Item.objects.create(
             design_item_id=did, description=desc, category=self._cat(cat),
-            temperature=temp, produced=produced)
+            temperature=temp, native=native)
 
     def _diff(self, files):
         return engine.library_diff(engine.parse_library(files))
@@ -3994,7 +3994,7 @@ class LibraryDiffTests(TestCase):
     def test_new_changed_same(self):
         self._item('CAP-1', 'capacitors', desc='старое', temp='-40-85°C')
         c2 = self._item('CAP-2', 'capacitors', desc='совпадает', temp='-55-125°C')
-        c2.locked = True; c2.save()          # совпадает И зафиксировано → same
+        c2.synced = True; c2.save()          # совпадает И уже помечено библиотечным → same
         files = [('capacitors.csv', _lib_csv([
             ('CAP-1', 'новое', '-40-85°C'),     # description изменился
             ('CAP-2', 'совпадает', '-55-125°C'), # без изменений
@@ -4006,12 +4006,12 @@ class LibraryDiffTests(TestCase):
         self.assertEqual(rows['CAP-2']['status'], 'same')
         self.assertEqual(rows['CAP-3']['status'], 'new')
 
-    def test_refix_when_draft_matches_library(self):
-        # Волна 17: содержимое совпадает, но изделие ещё draft → refix (зафиксировать).
-        self._item('CAP-9', 'capacitors', desc='совп', temp='')   # draft по умолчанию
+    def test_mark_when_unsynced_matches_library(self):
+        # Ф3a: содержимое совпадает, но изделие ещё не помечено библиотечным → mark.
+        self._item('CAP-9', 'capacitors', desc='совп', temp='')   # synced=False по умолчанию
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-9', 'совп', '')]))]))
-        self.assertEqual(rows['CAP-9']['status'], 'refix')
-        self.assertFalse(rows['CAP-9']['current']['locked'])
+        self.assertEqual(rows['CAP-9']['status'], 'mark')
+        self.assertFalse(rows['CAP-9']['current']['synced'])
 
     def test_gone_when_unused(self):
         self._item('CAP-OLD', 'capacitors')      # в БД, не в загрузке, не используется
@@ -4020,7 +4020,7 @@ class LibraryDiffTests(TestCase):
 
     def test_orphan_when_used(self):
         used = self._item('CAP-USED', 'capacitors')
-        parent = self._item('DEV', 'capacitors', produced=True)
+        parent = self._item('DEV', 'capacitors', native=True)
         models.BomLine.objects.create(parent=parent, component=used, qty=D(1))
         # DEV тоже в капаситорах и не в загрузке → сам gone/orphan; CAP-USED — orphan.
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
@@ -4042,10 +4042,10 @@ class LibraryDiffTests(TestCase):
 class LibraryApplyTests(TestCase):
     """Волна 15 Ф2: применение подтверждённых строк дифа."""
 
-    def _item(self, did, cat, desc='desc', temp='', produced=False):
+    def _item(self, did, cat, desc='desc', temp='', native=False):
         return models.Item.objects.create(
             design_item_id=did, description=desc, category=engine.ensure_category(cat),
-            temperature=temp, produced=produced)
+            temperature=temp, native=native)
 
     def test_apply_creates_new(self):
         files = [('sensors.csv', _lib_csv([('S-1', 'Датчик', '-40-85°C')]))]
@@ -4053,7 +4053,9 @@ class LibraryApplyTests(TestCase):
         summary = engine.apply_library_diff(parsed, ['S-1'])
         self.assertEqual(summary['created'], 1)
         item = models.Item.objects.get(design_item_id='S-1')
-        self.assertFalse(item.produced)                  # импорт → покупное
+        self.assertFalse(item.native)                  # импорт → покупное
+        self.assertTrue(item.synced)                     # рождается библиотечным
+        self.assertFalse(item.locked)                    # но НЕ запертым — готово под цену
         self.assertIsNone(item.estimated_cost)           # цена — за Plume
         self.assertEqual(item.category.code, 'sensors')  # категория заведена на лету
         self.assertEqual(item.category.description, 'Датчики') # канон LIBRARY_CATEGORIES
@@ -4065,6 +4067,7 @@ class LibraryApplyTests(TestCase):
         item = models.Item.objects.get(design_item_id='S-1')
         self.assertEqual(item.description, 'новое')
         self.assertEqual(item.temperature, '-40-85°C')
+        self.assertTrue(item.synced)                     # синк подтвердил библиотечность
 
     def test_apply_deletes_gone(self):
         self._item('S-OLD', 'sensors')
@@ -4083,28 +4086,30 @@ class LibraryApplyTests(TestCase):
         self.assertFalse(models.Item.objects.filter(design_item_id='S-2').exists())
         self.assertTrue(models.Item.objects.filter(design_item_id='S-OLD').exists())
 
-    def test_apply_refix_posts_matching_draft(self):
-        # Волна 17: совпадающее по содержимому draft-изделие → refix → lock_item.
-        it = self._item('S-1', 'sensors', desc='датчик', temp='')   # draft, совпадает
+    def test_apply_mark_sets_synced(self):
+        # Ф3a: совпадающее по содержимому непомеченное изделие → mark → synced=True,
+        # locked не трогаем (решение Ивана 2026-07-24).
+        it = self._item('S-1', 'sensors', desc='датчик', temp='')   # synced=False, совпадает
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])
-        self.assertEqual(summary['fixed'], 1)
+        self.assertEqual(summary['marked'], 1)
         self.assertEqual(summary['updated'], 0)   # содержимое не трогали
         it.refresh_from_db()
-        self.assertTrue(it.locked)
+        self.assertTrue(it.synced)
+        self.assertFalse(it.locked)               # замок не тронут
 
-    def test_apply_refix_only_confirmed(self):
-        # Не подтверждённый refix — не фиксируется.
+    def test_apply_mark_only_confirmed(self):
+        # Не подтверждённый mark — не помечается.
         it = self._item('S-1', 'sensors', desc='датчик', temp='')
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, [])   # ничего не подтверждаем
-        self.assertEqual(summary['fixed'], 0)
+        self.assertEqual(summary['marked'], 0)
         it.refresh_from_db()
-        self.assertFalse(it.locked)
+        self.assertFalse(it.synced)
 
     def test_orphan_not_deleted_even_if_confirmed(self):
         used = self._item('S-USED', 'sensors')
-        parent = self._item('DEV', 'sensors', produced=True)
+        parent = self._item('DEV', 'sensors', native=True)
         models.BomLine.objects.create(parent=parent, component=used, qty=D(1))
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-USED'])   # подтверждаем сироту
@@ -4120,7 +4125,7 @@ class ItemStatusTests(EngineTestBase):
     def test_manual_item_defaults_draft(self):
         i = engine.create_item('R100', 'Резистор', category_id=_cat().id)
         self.assertFalse(i.locked)
-        self.assertFalse(i.locked)
+        self.assertFalse(i.synced)                # ручное — не из библиотеки
 
     def test_post_unpost_idempotent(self):
         i = self.make_item('R')
@@ -4172,24 +4177,40 @@ class ItemStatusTests(EngineTestBase):
         engine.delete_item(i)
         self.assertFalse(models.Item.objects.filter(pk=i.pk).exists())
 
-    def test_library_new_is_locked(self):
+    def test_library_new_is_synced_unlocked(self):
+        # Ф3a: новое библиотечное — synced=True, но locked=False (готово под цену).
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'Датчик', '')]))])
         engine.apply_library_diff(parsed, ['S-1'])
         item = models.Item.objects.get(design_item_id='S-1')
-        self.assertTrue(item.locked)
+        self.assertTrue(item.synced)
+        self.assertFalse(item.locked)
 
-    def test_library_changed_forces_lock(self):
-        # заведено руками как draft, затем совпало с библиотекой → синк фиксирует
+    def test_library_changed_marks_synced_clears_stale_lock(self):
+        # заведено руками и залочено (наследие волны 17), затем совпало с библиотекой →
+        # синк метит synced И снимает стухший замок (инвариант synced ⟹ not locked)
         models.Item.objects.create(design_item_id='S-1', description='старое',
-                                   category=engine.ensure_category('sensors'))
+                                   category=engine.ensure_category('sensors'), locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
         engine.apply_library_diff(parsed, ['S-1'])
         item = models.Item.objects.get(design_item_id='S-1')
-        self.assertTrue(item.locked)
+        self.assertTrue(item.synced)
+        self.assertFalse(item.locked)             # стухший замок снят
         self.assertEqual(item.description, 'новое')
 
+    def test_library_mark_clears_stale_lock(self):
+        # содержимое совпадает, но изделие залочено со времён волны 17 → mark снимает
+        # замок вместе с пометкой synced (инвариант synced ⟹ not locked)
+        models.Item.objects.create(design_item_id='S-1', description='датчик',
+                                   category=engine.ensure_category('sensors'), locked=True)
+        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
+        summary = engine.apply_library_diff(parsed, ['S-1'])
+        self.assertEqual(summary['marked'], 1)
+        item = models.Item.objects.get(design_item_id='S-1')
+        self.assertTrue(item.synced)
+        self.assertFalse(item.locked)
+
     def test_library_deletes_gone_locked(self):
-        # ушедшее из библиотеки изделие — posted; синк расфиксирует и удалит (гейт не мешает)
+        # ушедшее из библиотеки изделие — зафиксировано; синк расфиксирует и удалит (гейт не мешает)
         gone = models.Item.objects.create(design_item_id='S-OLD', description='ушло',
                                           category=engine.ensure_category('sensors'),
                                           locked=True)
@@ -4237,13 +4258,53 @@ class ItemStatusTests(EngineTestBase):
         self.assertFalse(r.json()['locked'])
 
 
+class ItemAxesTests(EngineTestBase):
+    """Ф3a (волна 19): три оси native/synced/locked — инвариант + матрица правки."""
+
+    def test_synced_implies_not_native_constraint(self):
+        # CheckConstraint: библиотечное (`synced`) не может быть нашим (`native`).
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                models.Item.objects.create(
+                    design_item_id='BAD', description='x', category=_cat(),
+                    synced=True, native=True)
+
+    def test_synced_implies_not_locked_constraint(self):
+        # CheckConstraint: библиотечное (`synced`) не запирается (`locked`) — две оси
+        # защиты взаимоисключающи.
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                models.Item.objects.create(
+                    design_item_id='BAD2', description='x', category=_cat(),
+                    synced=True, locked=True)
+
+    def test_synced_item_edits_price_only(self):
+        # Библиотечное расфиксированное: правится ТОЛЬКО оценочная стоимость.
+        i = self.make_item('R')
+        i.synced = True; i.save()
+        engine.update_item(i, {'estimated_cost': D('1.50')})   # цена — можно
+        i.refresh_from_db()
+        self.assertEqual(i.estimated_cost, D('1.50'))
+        with self.assertRaises(ValidationError):               # прочее — нельзя
+            engine.update_item(i, {'description': 'ручная правка'})
+
+    def test_manual_item_edits_all(self):
+        # Ручное (synced=False) расфиксированное: правится всё.
+        i = self.make_item('R')
+        engine.update_item(i, {'description': 'новое имя', 'estimated_cost': D('2')})
+        i.refresh_from_db()
+        self.assertEqual(i.description, 'новое имя')
+
+
 class RollupCostTests(TestCase):
     """Волна 15 Ф4: рекурсивный роллап оценочной стоимости по BOM."""
 
-    def _item(self, did, produced=False, cost=None):
+    def _item(self, did, native=False, cost=None):
         return models.Item.objects.create(
             design_item_id=did, description=did, category=_cat(),
-            produced=produced, estimated_cost=(D(cost) if cost is not None else None))
+            native=native, estimated_cost=(D(cost) if cost is not None else None))
 
     def _bom(self, parent, component, qty):
         models.BomLine.objects.create(parent=parent, component=component, qty=D(qty))
@@ -4251,8 +4312,8 @@ class RollupCostTests(TestCase):
     def test_recursive_rollup_writes_all_produced(self):
         l1 = self._item('L1', cost=10)
         l2 = self._item('L2', cost=5)
-        board = self._item('BOARD', produced=True)
-        dev = self._item('DEV', produced=True)
+        board = self._item('BOARD', native=True)
+        dev = self._item('DEV', native=True)
         self._bom(board, l1, 2)         # 2×10
         self._bom(board, l2, 3)         # 3×5 → плата 35
         self._bom(dev, board, 1)        # 1×35
@@ -4267,14 +4328,14 @@ class RollupCostTests(TestCase):
 
     def test_incomplete_flags_unknown_leaf(self):
         leaf = self._item('L-NOCOST')                   # покупной без цены
-        dev = self._item('DEV', produced=True)
+        dev = self._item('DEV', native=True)
         self._bom(dev, leaf, 2)
         res = engine.rollup_estimated_cost(dev)
         self.assertEqual(res['estimated_cost'], D(0))   # неизвестное считаем 0
         self.assertIn('L-NOCOST', res['incomplete'])
 
     def test_produced_without_bom_is_incomplete(self):
-        dev = self._item('DEV', produced=True)
+        dev = self._item('DEV', native=True)
         res = engine.rollup_estimated_cost(dev)
         self.assertIn('DEV', res['incomplete'])
         self.assertEqual(res['estimated_cost'], D(0))
@@ -4285,8 +4346,8 @@ class RollupCostTests(TestCase):
             engine.rollup_estimated_cost(leaf)
 
     def test_cycle_guarded(self):
-        a = self._item('A', produced=True)
-        b = self._item('B', produced=True)
+        a = self._item('A', native=True)
+        b = self._item('B', native=True)
         self._bom(a, b, 1)
         models.BomLine.objects.create(parent=b, component=a, qty=D(1))  # цикл в обход guard'а
         with self.assertRaises(ValidationError):
@@ -4320,7 +4381,7 @@ class LibrarySyncHttpTests(TestCase):
         a = self.c.post('/api/library/apply/',
                         {'files': up2, 'confirmed': json.dumps(['CAP-1', 'CAP-OLD'])})
         self.assertEqual(a.status_code, 200)
-        self.assertEqual(a.json(), {'created': 1, 'updated': 0, 'fixed': 0, 'deleted': 1})
+        self.assertEqual(a.json(), {'created': 1, 'updated': 0, 'marked': 0, 'deleted': 1})
         self.assertTrue(models.Item.objects.filter(design_item_id='CAP-1').exists())
         self.assertFalse(models.Item.objects.filter(design_item_id='CAP-OLD').exists())
 
@@ -4329,7 +4390,7 @@ class LibrarySyncHttpTests(TestCase):
         leaf = models.Item.objects.create(design_item_id='L', description='L', category=cat,
                                           estimated_cost=D(7))
         dev = models.Item.objects.create(design_item_id='D', description='D', category=cat,
-                                         produced=True)
+                                         native=True)
         models.BomLine.objects.create(parent=dev, component=leaf, qty=D(3))
         r = self.c.post(f'/api/items/{dev.id}/recalc-cost/')
         self.assertEqual(r.status_code, 200)

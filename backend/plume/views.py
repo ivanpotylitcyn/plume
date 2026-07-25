@@ -265,11 +265,12 @@ def _category_row(c):
 def _item_row(i):
     # `id` — PK (для FK-ссылок/мутаций); `design_item_id` — бизнес-ключ (канон
     # библиотеки, бывш. `code`). Категория — вложенным объектом (`code`+`description`).
-    # `produced` — ось «производим/покупаем» (бывш. `is_manufactured`). Волна 15.
+    # Три оси (Ф3a, волна 19): `native` (наше/покупное, бывш. `produced`), `synced`
+    # (из библиотеки/руками), `locked` (фиксация). `synced ⟹ not native`.
     return {'id': i.id, 'design_item_id': i.design_item_id,
             'description': i.description, 'category': _category_row(i.category),
-            'uom': i.uom, 'temperature': i.temperature, 'produced': i.produced,
-            'locked': i.locked, 'used': engine.item_is_used(i)}
+            'uom': i.uom, 'temperature': i.temperature, 'native': i.native,
+            'synced': i.synced, 'locked': i.locked, 'used': engine.item_is_used(i)}
 
 
 @api_view(['GET'])
@@ -289,7 +290,7 @@ def items(request):
                 category_id=d.get('category_id'),
                 uom=d.get('uom') or 'шт',
                 temperature=d.get('temperature') or '',
-                produced=bool(d.get('produced')),
+                native=bool(d.get('native')),
                 estimated_cost=_dec(d.get('estimated_cost')))
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
@@ -356,7 +357,8 @@ def _item_detail_payload(item):
          'component_design_item_id': bl.component.design_item_id,
          'component_description': bl.component.description,
          'component_uom': bl.component.uom,
-         'component_locked': bl.component.locked,
+         'component_native': bl.component.native, 'component_synced': bl.component.synced,
+         'component_locked': bl.component.locked,   # глиф строки по режиму (Ф3a)
          'qty': bl.qty, 'position': bl.position}
         for bl in item.bom_lines.select_related('component')
     ]
@@ -370,8 +372,8 @@ def _item_detail_payload(item):
     return {
         'id': item.id, 'design_item_id': item.design_item_id,
         'description': item.description, 'category': _category_row(item.category),
-        'uom': item.uom, 'temperature': item.temperature, 'produced': item.produced,
-        'locked': item.locked, 'used': engine.item_is_used(item),
+        'uom': item.uom, 'temperature': item.temperature, 'native': item.native,
+        'synced': item.synced, 'locked': item.locked, 'used': engine.item_is_used(item),
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'shipments': engine.item_shipments(item),
@@ -380,8 +382,9 @@ def _item_detail_payload(item):
 
 # Строковые/булев поля, проходящие в `update_item` как есть (частичный PATCH).
 # `category_id` → FK-справочник, `estimated_cost` — через `_dec` отдельно ниже.
+# `synced` НЕ здесь: переключает только синк библиотеки, не ручной PATCH (Ф3a).
 _ITEM_TEXT_FIELDS = ('design_item_id', 'description', 'uom', 'temperature',
-                     'produced', 'category_id')
+                     'native', 'category_id')
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])

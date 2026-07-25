@@ -198,19 +198,31 @@ class Category(models.Model):
 
 class Item(models.Model):
     """Изделие — единица справочника (абстракция: КД/datasheet). Едина для
-    приборов, компонентов и материалов. Класс — `category` (FK-справочник); ось
-    «производим/покупаем» — `produced` (⟂ category, волна 15).
+    приборов, компонентов и материалов. Класс — `category` (FK-справочник).
+
+    Три ортогональных бул-оси (волна 19, Ф3a), каждая — самостоятельный смысл:
+    - `native`  — наше авторское / внешнее покупное (замена `produced`, волна 15).
+      Делит справочник на режимы «Изделия» (native) / «Компоненты» (not native);
+      прилагательное-свойство, ⟂ category.
+    - `synced`  — из библиотеки компонентов / заведено руками. Ставит СИНК, руками
+      не снять. У библиотечного правится только цена (см. `update_item`).
+    - `locked`  — ФИКСАЦИЯ (та же ось, что у `StockDocument`): форма read-only,
+      мутации гейтятся в движке. Слабее, чем у документов: только заморозка, без
+      арифметики. Библиотечное (`synced`) **не запирается** (свои две оси защиты
+      взаимоисключающи — см. второй инвариант): новое рождается `locked=False`, а
+      синк, помечая существующее `synced`, снимает стухший замок.
+
+    Инварианты (`CheckConstraint` ниже):
+    - `synced ⟹ not native` (библиотека = библиотека *компонентов*; наше производимое
+      в неё не попадает);
+    - `synced ⟹ not locked` (библиотечное защищено матрицей «правь только цену», а не
+      замком; две оси защиты взаимоисключающи, «библиотечный+зафиксирован» — невозможен).
 
     Ключ `design_item_id` — канон внешней библиотеки компонентов (колонка `Design
     Item Id` = заказной PN); осознанно НЕ `item_id`, чтобы не столкнуться с Django
-    FK-PK аксессором `item_id` в рукописном JSON-API (JOURNAL 2026-07-12)."""
+    FK-PK аксессором `item_id` в рукописном JSON-API (JOURNAL 2026-07-12).
+    Переезд `design_item_id → code` — отдельной сессией (Ф3b)."""
 
-    # Персистентный замок (волна 17) — та же ось `locked`, что у `StockDocument`.
-    # `locked=True` = ФИКСАЦИЯ: форма read-only (свойства + BOM), мутации гейтятся
-    # в движке (защита от ручного дрейфа). Проявляется слабее, чем у документов:
-    # только заморозка, без арифметики (у заказа замок ещё и включает счёт
-    # «заказано»). Синк библиотеки ставит `locked=True` (библиотека = источник
-    # правды); заведённые руками изделия — `False`.
     design_item_id = models.CharField('изделие', max_length=128, unique=True)
     description = models.CharField('описание', max_length=255)
     category = models.ForeignKey(Category, on_delete=models.PROTECT,
@@ -219,13 +231,22 @@ class Item(models.Model):
     temperature = models.CharField('температурный диапазон', max_length=64,
                                    blank=True, default='')
     estimated_cost = money(verbose_name='оценочная стоимость', null=True, blank=True)
-    produced = models.BooleanField('производимое', default=False)
+    native = models.BooleanField('производимое', default=False)
+    synced = models.BooleanField('из библиотеки', default=False)
     locked = models.BooleanField('зафиксировано', default=False)
 
     class Meta:
         verbose_name = 'изделие'
         verbose_name_plural = 'изделия'
         ordering = ['design_item_id']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(synced=False) | models.Q(native=False),
+                name='item_synced_implies_not_native'),
+            models.CheckConstraint(
+                condition=models.Q(synced=False) | models.Q(locked=False),
+                name='item_synced_implies_not_locked'),
+        ]
 
     def __str__(self):
         return f'{self.design_item_id} — {self.description}'

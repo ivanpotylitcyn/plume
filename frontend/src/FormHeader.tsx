@@ -149,7 +149,7 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
 // У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
 export function FormHeader({
   code, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete,
-  download, error, children,
+  download, action, error, children,
 }: {
   code: ReactNode           // первичная идентичность в H1 (волна 19, Ф11: бывш. `name`)
   meta: ReactNode
@@ -162,6 +162,9 @@ export function FormHeader({
   onDelete?: () => void      // удалить документ (только расфиксированный; под замком корзины нет)
   download?: { href: string; title?: string }  // скачать (xlsx) — в слоте корзины, но
                              // только у ЗАФИКСИРОВАННОГО (слоты не сталкиваются с корзиной)
+  action?: { onClick: () => void; label: string; icon: string; title?: string; disabled?: boolean }
+                             // доп. действие формы в правой колонке (напр. «Пересчитать
+                             // стоимость» у изделия) — чтобы кнопки не болтались между шапкой и телом
   error?: string | null
   children?: ReactNode       // блок свойств (.props) — входит в зону шапки, чтобы корзина
                              // села у её НИЖНЕЙ границы (§5: слоты разнесены по вертикали)
@@ -203,6 +206,14 @@ export function FormHeader({
                   </button>
                 )}
               </>
+            )}
+            {/* Доп. действие — ПОД контролами замка/фиксации (низ правой колонки). */}
+            {action && (
+              <button className="fh-ctl" onClick={action.onClick} disabled={action.disabled}
+                title={action.title ?? action.label}>
+                <span className="lbl">{action.label}</span>
+                <span className={'ci ' + action.icon} />
+              </button>
             )}
           </div>
         </div>

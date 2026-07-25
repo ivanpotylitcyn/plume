@@ -4,7 +4,7 @@
 // Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num, StatusGlyph } from './status'
+import { num, ItemGlyph } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
@@ -56,64 +56,75 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
   if (!d) return <div className="empty">Загрузка…</div>
 
   // Состав правим у производимых (или если он уже задан) — у покупных BOM нет.
-  const composable = d.produced || d.bom.length > 0
+  const composable = d.native || d.bom.length > 0
 
   // Фиксация (волна 17) — ровно как у StockDocument (см. ReceiptView): `d.locked` =
   // изделие зафиксировано (форма read-only, бэк гейтит мутации), чип вместо замка.
   // `locked` = фиксация ИЛИ закрытый личный мягкий замок → всё в форме read-only.
   const fixed = d.locked
   const locked = fixed || !unlocked
+  // Матрица synced×locked (Ф3a): библиотечное (`synced`) расфиксированное — правится
+  // ТОЛЬКО оценочная стоимость; остальные поля приходят из библиотеки (read-only).
+  // `metaLocked` запирает «библиотечные» свойства; Оценка гейтится обычным `locked`.
+  const metaLocked = locked || d.synced
 
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
         code={d.design_item_id}
         meta={<>
-          {d.category.description}{d.produced ? ' · производимое' : ''} · {d.uom}
+          {d.category.description}{d.native ? ' · производимое' : ''} · {d.uom}
+          {!d.native && <> · {d.synced ? 'библиотечное' : 'ручное'}</>}
+          {d.synced && !locked && <span className="sub"> (правится только цена)</span>}
           {d.temperature && <> · {d.temperature}</>}
           {' · '}<span className={d.used ? 's-available' : ''}>{d.used ? 'используется' : 'спящий'}</span>
           {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
         </>}
         unlocked={unlocked} onToggleLock={toggle} error={err}
         fixed={fixed}
+        onFixate={d.native ? () => run(api.lockItem(d.id)) : undefined}
+        fixateTitle="Зафиксировать: заморозить состав (BOM) и свойства изделия"
         onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
         onDelete={del}
+        action={d.native ? { onClick: recalc, label: 'Пересчитать', icon: 'ci-credit-card',
+          title: 'Пересчитать стоимость: оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев',
+          disabled: busy } : undefined}
       >
       <dl className="props">
         <dt>Изделие</dt>
-        <dd>{!locked
+        <dd>{!metaLocked
           ? <CommitInput value={d.design_item_id} width={160} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { design_item_id: v }))}
               validate={v => v.trim() !== ''} />
           : d.design_item_id}</dd>
         <dt>Описание</dt>
-        <dd>{!locked
+        <dd>{!metaLocked
           ? <CommitInput value={d.description} width={260} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { description: v }))}
               validate={v => v.trim() !== ''} />
           : d.description}</dd>
         <dt>Категория</dt>
-        <dd>{!locked
+        <dd>{!metaLocked
           ? <select className="lot-sel" value={d.category.id} disabled={busy}
               onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
               {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
             </select>
           : d.category.description}</dd>
         <dt>Производимое</dt>
-        <dd>{!locked
+        <dd>{!metaLocked
           ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={d.produced} disabled={busy}
-                onChange={e => run(api.updateItem(d.id, { produced: e.target.checked }))} />
-              {d.produced ? 'да' : 'нет'}
+              <input type="checkbox" checked={d.native} disabled={busy}
+                onChange={e => run(api.updateItem(d.id, { native: e.target.checked }))} />
+              {d.native ? 'да' : 'нет'}
             </label>
-          : (d.produced ? 'да' : 'нет')}</dd>
+          : (d.native ? 'да' : 'нет')}</dd>
         <dt>Температурный диапазон</dt>
-        <dd>{!locked
+        <dd>{!metaLocked
           ? <CommitInput value={d.temperature} width={160} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
           : (d.temperature || '—')}</dd>
         <dt>Ед. изм.</dt>
-        <dd>{!locked
+        <dd>{!metaLocked
           ? <CommitInput value={d.uom} width={80} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
           : d.uom}</dd>
@@ -127,23 +138,21 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
       </dl>
       </FormHeader>
 
-      {/* Хот-фикс волны 17 (по запросу пользователей): ручной фиксации из вью НЕТ —
-          кнопка «Зафиксировать» убрана намеренно. `posted` изделие можно расфиксировать
-          (чип → onUnfix) и править, но обратно зафиксировать — только повторным синком
-          с библиотекой (`refix`). Так библиотечные (зафиксированные) и «ручные» изделия
-          чётко разделены; производимые с BOM в библиотеке не бывают → всегда расфиксированы.
-          Бэкенд `post_item`/эндпойнт живы (их зовёт синк), просто не вызываются из вью. */}
+      {/* Фиксация Изделия вернулась в шапку (единый контрол, как у закупок/документов):
+          «Зафиксировать»/«Расфиксировать» через onFixate/onUnfix FormHeader — только у
+          Изделий (native). У Компонентов кнопки фиксации нет: их замок из UI недостижим,
+          синк держит их расфиксированными (инвариант `synced ⟹ not locked`). Правка
+          библиотечного (synced) — только цена (матрица `metaLocked`); `synced` руками не
+          снять. Кнопка «Пересчитать стоимость» переехала в правую колонку шапки (action);
+          здесь остаётся только сводка результата после клика. */}
 
-      {d.produced && <div className="kit-actions" style={{ marginBottom: 4 }}>
-        <button className="btn sm" disabled={busy} onClick={recalc}
-          title="оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев">
-          Пересчитать стоимость</button>
-        {rollup && <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>
+      {d.native && rollup && <div className="kit-actions" style={{ marginBottom: 4 }}>
+        <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>
           оценка {rollup.estimated_cost != null ? `${rollup.estimated_cost} ₽` : '—'} ·
           переоценено узлов {rollup.updated.length}
           {rollup.incomplete.length > 0 &&
             <span className="anomaly"> · без цены: {rollup.incomplete.join(', ')}</span>}
-        </span>}
+        </span>
       </div>}
 
       <div className="section-h">Где применяется
@@ -172,7 +181,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
               <th style={{ textAlign: 'right' }}>Кол-во</th>{!locked && <th />}</tr></thead>
             <tbody>{d.bom.map(b => (
               <tr key={b.id} className="row">
-                <td><StatusGlyph locked={b.component_locked} /></td>
+                <td><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
                 <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_design_item_id}</a></td>
                 <td style={{ color: 'var(--fg-dim)' }}>
                   <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>

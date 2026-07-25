@@ -19,22 +19,22 @@ import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm, type OrderKind } from './OrderForm'
 import { LocationView } from './LocationView'
-import { StatusGlyph, statusTone } from './status'
+import { StatusGlyph, SyncGlyph, statusTone } from './status'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
 // создания — единые. Procurement/Purchase — вне (лотов не трогают).
 // Волна 17: справочник изделий разделён на два режима. `items` — «Компоненты» (весь
 // справочник, фильтр по категории, синк с библиотекой; оставлен как есть). `products`
-// — «Изделия»: только производимые (`produced=True`), без фильтра категорий и синка;
-// NewItem там по умолчанию `produced=True` (снимает боль ручного выбора типа).
+// — «Изделия»: только производимые (`native=True`), без фильтра категорий и синка;
+// NewItem там по умолчанию `native=True` (снимает боль ручного выбора типа).
 type Mode = 'projects' | 'products' | 'items' | 'orders' | 'locations' | 'procurements' | 'purchases'
 type Sel =
   | { kind: 'project'; id: number }
   | { kind: 'new-project' }
   | { kind: 'item'; id: number }
   | { kind: 'new-item' }
-  | { kind: 'new-product' }        // новое изделие из режима «Изделия» (produced=True)
+  | { kind: 'new-product' }        // новое изделие из режима «Изделия» (native=True)
   | { kind: 'library-sync' }
   | { kind: 'kitting'; id: number }
   | { kind: 'receipt'; id: number }
@@ -347,7 +347,7 @@ export default function App() {
             newSel={sel?.kind === 'new-product'} onNew={() => setSel({ kind: 'new-product' })}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
-            rows={[...items].filter(i => i.produced)
+            rows={[...items].filter(i => i.native)
               .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
                 id: i.id, code: i.design_item_id, name: i.description, category: i.category.description,
                 glyph: <StatusGlyph locked={i.locked} /> }))} />}
@@ -365,7 +365,7 @@ export default function App() {
               </div>}
             rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
               id: i.id, code: i.design_item_id, name: i.description, category: i.category.description,
-              glyph: <StatusGlyph locked={i.locked} /> }))} />}
+              glyph: <SyncGlyph synced={i.synced} /> }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
@@ -435,10 +435,10 @@ export default function App() {
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); setJustCreated({ kind: 'item', id }); openItem(id) }} />}
-        {/* Новое изделие из режима «Изделия»: produced=True по умолчанию; после создания
+        {/* Новое изделие из режима «Изделия»: native=True по умолчанию; после создания
             остаёмся в этом режиме (openItem увёл бы в «Компоненты»). */}
         {sel?.kind === 'new-product' &&
-          <NewItem defaultProduced onCreated={id => { reloadItems(); setJustCreated({ kind: 'item', id }); setMode('products'); setSel({ kind: 'item', id }) }} />}
+          <NewItem defaultNative onCreated={id => { reloadItems(); setJustCreated({ kind: 'item', id }); setMode('products'); setSel({ kind: 'item', id }) }} />}
         {sel?.kind === 'library-sync' &&
           <LibraryImportView onApplied={reloadItems} openItem={openItem} />}
         {/* Ф2i: единый вход detail-формы «Ордера» вместо шести условных веток. */}
@@ -489,12 +489,12 @@ export default function App() {
 // Панель режимов (§2): Codicons, монохром. Порядок = поток жизненного цикла изделия
 // (планирование → исполнение → приёмка → сборка → выбытие → сверка).
 const MODES: { mode: Mode; icon: string; title: string }[] = [
-  { mode: 'projects',     icon: 'project',       title: 'Проекты — дефицит, панель проекта' },
+  { mode: 'projects',     icon: 'flag',          title: 'Проекты — дефицит, панель проекта' },
   { mode: 'products',     icon: 'rocket',        title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
-  { mode: 'items',        icon: 'circuit-board', title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
+  { mode: 'items',        icon: 'chip',          title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
   { mode: 'procurements', icon: 'law',           title: 'Закупки — командный свод, order.xlsx' },
   { mode: 'purchases',    icon: 'package',       title: 'Заказы — обязательства поставщику' },
-  { mode: 'orders',       icon: 'preview',       title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
+  { mode: 'orders',       icon: 'notebook',      title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
   { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },
 ]
 
@@ -663,7 +663,7 @@ function NewKitting({ projects, items, onCreated }: {
   projects: ProjectRow[]; items: ItemRow[]; onCreated: (id: number) => void
 }) {
   const externalProjects = projects.filter(p => p.kind === 'external')
-  const targets = items.filter(i => i.produced)
+  const targets = items.filter(i => i.native)
   const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
   const [targetId, setTargetId] = useState<number | ''>(targets[0]?.id ?? '')
   const [qty, setQty] = useState('1')
@@ -754,14 +754,14 @@ function NewPurchase({ projects, onCreated }: {
 
 // Создание нового изделия (справочник, канон «＋ Новое»): артикул + название + вид +
 // производимое + ед.изм. + оценочная стоимость (опц.). BOM правится отдельно.
-function NewItem({ onCreated, defaultProduced = false }:
-  { onCreated: (id: number) => void; defaultProduced?: boolean }) {
+function NewItem({ onCreated, defaultNative = false }:
+  { onCreated: (id: number) => void; defaultNative?: boolean }) {
   const [designItemId, setDesignItemId] = useState('')
   const [description, setDescription] = useState('')
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryId, setCategoryId] = useState<number | ''>('')
   const [temperature, setTemperature] = useState('')
-  const [produced, setProduced] = useState(defaultProduced)   // режим «Изделия» → True
+  const [native, setNative] = useState(defaultNative)   // режим «Изделия» → True
   const [uom, setUom] = useState('шт')
   const [cost, setCost] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -778,7 +778,7 @@ function NewItem({ onCreated, defaultProduced = false }:
     setBusy(true); setErr(null)
     api.createItem({ design_item_id: designItemId.trim(), description: description.trim(),
       category_id: categoryId, uom: uom.trim() || 'шт', temperature: temperature.trim(),
-      produced, estimated_cost: cost.trim() ? Number(cost) : undefined })
+      native, estimated_cost: cost.trim() ? Number(cost) : undefined })
       .then(i => onCreated(i.id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -801,8 +801,8 @@ function NewItem({ onCreated, defaultProduced = false }:
           {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
         </select></dd>
         <dt>Производимое</dt>
-        <dd><input type="checkbox" checked={produced}
-          onChange={e => setProduced(e.target.checked)} /> <span className="sub">делаем сами (цель комплектации)</span></dd>
+        <dd><input type="checkbox" checked={native}
+          onChange={e => setNative(e.target.checked)} /> <span className="sub">делаем сами (цель комплектации)</span></dd>
         <dt>Температурный диапазон</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={temperature}
           placeholder="напр. -40-125°C" onChange={e => setTemperature(e.target.value)} /></dd>

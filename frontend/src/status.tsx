@@ -16,6 +16,29 @@ export function StatusGlyph({ locked, tone = 'fix', title }: {
     title={title ?? (locked ? 'зафиксировано' : 'расфиксировано')} />
 }
 
+// Глиф оси СИНКА (Ф3a, волна 19) — для КОМПОНЕНТОВ (`native=false`). Ровно один глиф
+// по режиму: у компонентов показываем синк (у изделий — замок, `StatusGlyph`).
+// `synced=true` (из библиотеки) → codicon `sync` зелёный; `false` (ручной) →
+// `sync-ignored` оранжевый («внимание: не из библиотеки», важно при сборке закупки).
+export function SyncGlyph({ synced, title }: { synced: boolean; title?: string }) {
+  return <span
+    className={`ci sg ci-${synced ? 'sync' : 'sync-ignored'} ${synced ? 'sg-ok' : 'sg-wip'}`}
+    title={title ?? (synced ? 'из библиотеки' : 'заведено вручную')} />
+}
+
+// Глиф строки Item по режиму (Ф3a): РОВНО ОДИН. `native` → замок (`StatusGlyph`, ось
+// фиксации); `not native` → sync (`SyncGlyph`). Раскатан во ВСЕ списки, где встречается
+// изделие/компонент: справочник, BOM, дерево дефицита, потребность, закупка. Так глиф
+// «перетекает» с сущностью одинаково везде.
+export function ItemGlyph({ native, synced, locked, tone, title }: {
+  native: boolean; synced: boolean; locked: boolean
+  tone?: 'fix' | 'ok' | 'wip' | 'order' | 'none'; title?: string
+}) {
+  return native
+    ? <StatusGlyph locked={locked} tone={tone} title={title} />
+    : <SyncGlyph synced={synced} title={title} />
+}
+
 export const GLYPH: Record<Status, string> = {
   to_order: '▲',     // красный — дефицит, нужна работа
   on_order: '●',     // оранжевый — заказано/делается, ждём

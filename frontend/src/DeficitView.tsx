@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectDetail } from './api'
-import { LayerSeg, money, num, StatusGlyph } from './status'
+import { LayerSeg, money, num, ItemGlyph } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 
@@ -180,8 +180,7 @@ function Stat({ label, value, tone, dim }: {
 function CompHead() {
   return (
     <div className="prow prow--head">
-      <span />
-      <span>Компонент</span>
+      <span className="tree-cell">Компонент</span>
       <span>Назв.</span>
       <span className="pnum">Надо</span>
       <span>Разбор</span>
@@ -203,9 +202,12 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
   return (
     <>
       <div className={`prow prow--device s-${d.status}`}>
-        <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
-          onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
-        <a className="link" onClick={() => openItem(d.target_id)}>{d.target_design_item_id}</a>
+        <span className="tree-cell">
+          <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
+            onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
+          <ItemGlyph native={d.target_native} synced={d.target_synced} locked={d.target_locked} />
+          <a className="link" onClick={() => openItem(d.target_id)}>{d.target_design_item_id}</a>
+        </span>
         <span className="name">{d.target_description}</span>
         <span className="pnum">
           {editable
@@ -228,7 +230,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
       </div>
       {open && (d.tree.length === 0
         ? <div className="prow prow--comp" style={{ color: 'var(--fg-dim)' }}>
-            <span /><span style={{ gridColumn: '2 / -1' }}>Состав пуст — задайте BOM прибора.</span>
+            <span style={{ gridColumn: '1 / -1' }}>Состав пуст — задайте BOM прибора.</span>
           </div>
         : <DeviceTree tree={d.tree} openItem={openItem} />)}
     </>
@@ -271,15 +273,15 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   n: DeficitTreeNode; hasChildren: boolean; expanded: boolean
   onToggle: () => void; openItem: (id: number) => void
 }) {
-  const indent = n.depth * 18
+  const indent = (n.depth + 1) * 18   // +1: дерево живёт под строкой прибора-цели (стаж-ступень)
   return (
     <div className={`prow prow--comp s-${n.status}`}>
-      <span><StatusGlyph locked={n.component_locked} /></span>
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
               onClick={onToggle}>{expanded ? '▾' : '▸'}</button>
           : <span className="tree-lead" />}
+        <ItemGlyph native={n.component_native} synced={n.component_synced} locked={n.component_locked} />
         <a className="link" onClick={() => openItem(n.component_id)}>{n.component_design_item_id}</a>
       </span>
       <span className="name">{n.component_description}</span>
@@ -310,8 +312,10 @@ function CompRow({ ln, busy, openItem, order }: {
 }) {
   return (
     <div className={`prow prow--comp s-${ln.status}`}>
-      <span><StatusGlyph locked={ln.component_locked} /></span>
-      <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
+      <span className="tree-cell">
+        <ItemGlyph native={ln.component_native} synced={ln.component_synced} locked={ln.component_locked} />
+        <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
+      </span>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)} {ln.uom}</span>
       <span>
@@ -339,7 +343,7 @@ function AddDevice({ items, demands, busy, add }: {
   add: (targetItemId: number, qty: number) => void
 }) {
   const taken = new Set(demands.map(d => d.target_id))
-  const options = items.filter(i => i.produced && !taken.has(i.id))
+  const options = items.filter(i => i.native && !taken.has(i.id))
   const [targetId, setTargetId] = useState<number | ''>('')
   const [qty, setQty] = useState('1')
   useEffect(() => { setTargetId(options[0]?.id ?? '') }, [options.map(o => o.id).join()])
