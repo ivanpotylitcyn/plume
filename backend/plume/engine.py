@@ -324,7 +324,7 @@ def location_stock(location):
         rows.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
             'part_number': lot.part_number, 'lot_name': lot.lot_name,
-            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': r['q'],
             'project_id': lot.project_id, 'project_code': lot.project.code,
             'project_name': lot.project.description,
@@ -503,11 +503,11 @@ def _explode_demand(item, qty, leaves, incomplete, visiting):
         leaves[item] = leaves.get(item, ZERO) + qty
         return
     if item.id in visiting:
-        raise ValidationError(f'Цикл в составе: {item.design_item_id}.')
+        raise ValidationError(f'Цикл в составе: {item.code}.')
     visiting.add(item.id)
     lines = list(item.bom_lines.select_related('component'))
     if not lines:
-        incomplete.append(item.design_item_id)
+        incomplete.append(item.code)
     for bl in lines:
         _explode_demand(bl.component, qty * bl.qty, leaves, incomplete, visiting)
     visiting.discard(item.id)
@@ -535,7 +535,7 @@ def _leaf_row(item, need, project):
     cov = _coverage(need, available, item_on_order(item, project))
     cov.update({
         'component_id': item.id,
-        'component_design_item_id': item.design_item_id,
+        'component_code': item.code,
         'component_description': item.description,
         'component_native': item.native,       # глиф строки по режиму (Ф3a): native→замок,
         'component_synced': item.synced,        # not native→sync (зел. библ. / оранж. ручной)
@@ -563,11 +563,11 @@ def _demand_tree(item, qty, project, depth, visiting, out):
         out.append(row)
         return row['status']
     if item.id in visiting:
-        raise ValidationError(f'Цикл в составе: {item.design_item_id}.')
+        raise ValidationError(f'Цикл в составе: {item.code}.')
     visiting.add(item.id)
     row = {
         'component_id': item.id,
-        'component_design_item_id': item.design_item_id,
+        'component_code': item.code,
         'component_description': item.description,
         'component_native': item.native,       # глиф строки по режиму (Ф3a)
         'component_synced': item.synced,
@@ -634,7 +634,7 @@ def project_deficit(project, with_tree=True):
         demands.append({
             'demand_id': demand.id,
             'target_id': target.id,
-            'target_design_item_id': target.design_item_id,
+            'target_code': target.code,
             'target_description': target.description,
             'target_native': target.native,     # глиф строки по режиму (Ф3a): прибор → замок
             'target_synced': target.synced,
@@ -650,7 +650,7 @@ def project_deficit(project, with_tree=True):
     # Сводная таблица по листьям (полная покупная картина проекта, всегда видна).
     components = [_leaf_row(leaf, need, project) for leaf, need in need_by_leaf.items()]
     # «Горит вперёд»: сначала ▲ к заказу, затем ● в пути, затем ✓; внутри — по коду.
-    components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_design_item_id']))
+    components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_code']))
 
     return {
         'project_id': project.id,
@@ -740,7 +740,7 @@ def _project_estimate(project):
         if remaining <= 0:
             continue
         if leaf.estimated_cost is None:
-            unestimated.append(leaf.design_item_id)
+            unestimated.append(leaf.code)
             continue
         estimate += remaining * leaf.estimated_cost
     return estimate, unestimated
@@ -841,7 +841,7 @@ def stock_map(item):
     rows.sort(key=lambda r: (kind_rank.get(r['project_kind'], 1), r['project_code']))
     return {
         'item_id': item.id,
-        'item_design_item_id': item.design_item_id,
+        'item_code': item.code,
         'item_description': item.description,
         'uom': item.uom,
         'rows': rows,
@@ -895,7 +895,7 @@ def kitting_cockpit(kitting):
             pierced += mag
             real_lines.append({
                 'id': kl.id, 'lot_id': kl.lot_id,
-                'lot_label': f'#{kl.lot_id} {kl.lot.lot_name or component.design_item_id}',
+                'lot_label': f'#{kl.lot_id} {kl.lot.lot_name or component.code}',
                 'qty': mag, 'date': kl.date,
             })
         remaining = max(ZERO, need - pierced)
@@ -910,7 +910,7 @@ def kitting_cockpit(kitting):
             }
             statuses.append(cov['status'])
         rows.append({
-            'component_id': component.id, 'component_design_item_id': component.design_item_id,
+            'component_id': component.id, 'component_code': component.code,
             'component_description': component.description, 'uom': component.uom,
             'need': need, 'pierced': pierced, 'remaining': remaining,
             'real_lines': real_lines, 'ghost': ghost,
@@ -924,7 +924,7 @@ def kitting_cockpit(kitting):
         'id': kitting.id, **_author(kitting), 'locked': kitting.locked,
         'code': kitting.code, 'description': kitting.description,
         'project_id': project.id, 'project_code': project.code,
-        'target_id': target.id, 'target_design_item_id': target.design_item_id,
+        'target_id': target.id, 'target_code': target.code,
         'target_description': target.description, 'uom': target.uom,
         'qty': kitting.qty, 'date': kitting.date,
         'cockpit_status': _worst_of(statuses),   # worst-of призрачных строк
@@ -1039,7 +1039,7 @@ def receipt_cockpit(receipt):
     for lot in receipt.lots.select_related('item').order_by('id'):
         total += lot.qty * lot.unit_cost
         lots.append({
-            'id': lot.id, 'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
@@ -1201,7 +1201,7 @@ def purchase_cockpit(purchase):
             st = 'to_order'       # ▲ ждём поставки
         statuses.append(st)
         rows.append({
-            'id': line.id, 'item_id': line.item_id, 'item_design_item_id': line.item.design_item_id,
+            'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom,
             'qty': line.qty, 'received': received, 'remaining': remaining,
             'status': st,
@@ -1235,7 +1235,7 @@ def add_purchase_line(purchase, item, qty):
         raise ValidationError('Количество заказа должно быть положительным.')
     if purchase.lines.filter(item=item).exists():
         raise ValidationError(
-            f'Изделие {item.design_item_id} уже в заказе — правьте существующую строку.')
+            f'Изделие {item.code} уже в заказе — правьте существующую строку.')
     return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
 
 
@@ -1327,12 +1327,12 @@ def project_available_lots(project):
     """
     result = []
     for lot in (models.Lot.objects.filter(project=project)
-                .select_related('item').order_by('item__design_item_id', 'id')):
+                .select_related('item').order_by('item__code', 'id')):
         live = lot_live_qty(lot)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
+                'item_code': lot.item.code, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
                 'part_number': lot.part_number,
                 'lot_name': lot.lot_name,
@@ -1342,7 +1342,7 @@ def project_available_lots(project):
 
 def _lot_label(lot):
     """Человекочитаемая метка лота для накладной/строки (название / PN / артикул)."""
-    tail = lot.lot_name or lot.part_number or lot.item.design_item_id
+    tail = lot.lot_name or lot.part_number or lot.item.code
     return f'#{lot.id} {tail}'
 
 
@@ -1370,7 +1370,7 @@ def transfer_cockpit(transfer):
         lines.append({
             'id': line.id, 'lot_id': lot.id,
             'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'display_name': line.display_name,
             'lot_live_qty': lot_live_qty(lot),   # остаток источника после отгрузки
@@ -1522,12 +1522,12 @@ def all_available_lots():
     """
     result = []
     for lot in (models.Lot.objects.select_related('item', 'project')
-                .order_by('project__code', 'item__design_item_id', 'id')):
+                .order_by('project__code', 'item__code', 'id')):
         live = lot_live_qty(lot)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
+                'item_code': lot.item.code, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
                 'project_id': lot.project_id, 'project_code': lot.project.code,
                 'part_number': lot.part_number,
@@ -1552,7 +1552,7 @@ def writeoff_cockpit(writeoff):
         total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'lot_live_qty': lot_live_qty(lot),
             'lot_name': lot.lot_name,
@@ -1654,7 +1654,7 @@ def requisition_cockpit(requisition):
         lines.append({
             'id': line.id, 'source_lot_id': src.id, 'lot_label': _lot_label(src),
             'source_project_code': src.project.code,
-            'item_id': src.item_id, 'item_design_item_id': src.item.design_item_id,
+            'item_id': src.item_id, 'item_code': src.item.code,
             'item_description': src.item.description, 'uom': src.item.uom,
             'qty': mag, 'source_live_qty': lot_live_qty(src),
             'born_lot_id': born.id if born else None,
@@ -1781,7 +1781,7 @@ def relocation_cockpit(relocation):
         total_qty += mag
         moves.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': mag,
             'from_location_id': src.location_id if src else None,
             'from_location': src.location.code if src else '',
@@ -1883,12 +1883,12 @@ def relocation_source_lots(project):
     местам хранения (`lot_locations`): пикер видит, где лот лежит и сколько."""
     result = []
     for lot in (models.Lot.objects.filter(project=project)
-                .select_related('item').order_by('item__design_item_id', 'id')):
+                .select_related('item').order_by('item__code', 'id')):
         live = lot_live_qty(lot)
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
+                'item_code': lot.item.code, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live,
                 'part_number': lot.part_number,
                 'lot_name': lot.lot_name,
@@ -1909,13 +1909,13 @@ def project_closure(project):
     residuals = []
     positive = ZERO
     anomaly_count = 0
-    for lot in project.lots.select_related('item').order_by('item__design_item_id', 'id'):
+    for lot in project.lots.select_related('item').order_by('item__code', 'id'):
         live = lot_live_qty(lot)
         if live == 0:
             continue
         residuals.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'live_qty': live, 'anomaly': live < 0,
         })
@@ -2306,7 +2306,7 @@ def command_deficit():
             cov = _coverage(need, item_available(component, project),
                             item_on_order(component, project))
             row = acc.setdefault(component.id, {
-                'item_id': component.id, 'item_design_item_id': component.design_item_id,
+                'item_id': component.id, 'item_code': component.code,
                 'item_description': component.description, 'uom': component.uom,
                 'native': component.native,
                 'need': ZERO, 'have': ZERO, 'on_order': ZERO, 'to_order': ZERO,
@@ -2333,7 +2333,7 @@ def command_deficit():
             row['status'] = 'available'
         rows.append(row)
     # худшее наверх (красное просит внимания), потом по артикулу
-    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['item_design_item_id']))
+    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['item_code']))
     return {'rows': rows}
 
 
@@ -2350,7 +2350,7 @@ def procurement_cockpit(procurement):
     for line in procurement.lines.select_related('item').order_by('id'):
         total_qty += line.qty
         rows.append({
-            'id': line.id, 'item_id': line.item_id, 'item_design_item_id': line.item.design_item_id,
+            'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom, 'qty': line.qty,
             'item_native': line.item.native, 'item_synced': line.item.synced,
             'item_locked': line.item.locked,   # глиф строки по режиму (Ф3a)
@@ -2385,7 +2385,7 @@ def add_procurement_line(procurement, item, qty):
         raise ValidationError('Количество закупки должно быть положительным.')
     if procurement.lines.filter(item=item).exists():
         raise ValidationError(
-            f'Изделие {item.design_item_id} уже в закупке — правьте существующую строку.')
+            f'Изделие {item.code} уже в закупке — правьте существующую строку.')
     return models.ProcurementLine.objects.create(
         procurement=procurement, item=item, qty=qty)
 
@@ -2530,7 +2530,7 @@ def procurement_xlsx(procurement):
     for cell in ws[1]:
         cell.font = Font(bold=True)
     for line in procurement.lines.select_related('item').order_by('id'):
-        ws.append([line.item.design_item_id, line.item.description, float(line.qty), line.item.uom])
+        ws.append([line.item.code, line.item.description, float(line.qty), line.item.uom])
     widths = [22, 48, 12, 8]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[chr(64 + i)].width = width
@@ -2602,7 +2602,7 @@ def procurement_pegging(procurement):
             st = 'on_order'
         rows.append({
             'line_id': line.id, 'item_id': line.item_id,
-            'item_design_item_id': line.item.design_item_id, 'item_description': line.item.description,
+            'item_code': line.item.code, 'item_description': line.item.description,
             'uom': line.item.uom, 'qty': line.qty,
             'pegged': pegged_total, 'remaining': line.qty - pegged_total, 'status': st,
             'by_project': sorted(by_project.values(), key=lambda s: s['project_code']),
@@ -2650,7 +2650,7 @@ def peg_procurement_line(procurement, item, project, qty, user):
         raise ValidationError('Количество должно быть положительным.')
     if not procurement.lines.filter(item=item).exists():
         raise ValidationError(
-            f'Изделие {item.design_item_id} не в плане закупки — сначала добавьте строку плана.')
+            f'Изделие {item.code} не в плане закупки — сначала добавьте строку плана.')
     if project.kind != models.Project.Kind.EXTERNAL:
         raise ValidationError('Пегать можно только на внешний проект (НИР/контракт).')
     if project.locked:
@@ -2725,7 +2725,7 @@ def inventory_cockpit(inventory):
         total += lot.qty * lot.unit_cost
         pred = lot.predecessor
         lots.append({
-            'id': lot.id, 'item_id': lot.item_id, 'item_design_item_id': lot.item.design_item_id,
+            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
@@ -2849,13 +2849,13 @@ def written_off_lots():
     wo = models.StockDocument.Kind.WRITEOFF
     for lot in (models.Lot.objects.filter(stock_lines__document__kind=wo).distinct()
                 .select_related('item', 'project').order_by('project__code',
-                                                            'item__design_item_id', 'id')):
+                                                            'item__code', 'id')):
         # qty знаковый (− расход) → магнитуда списанного = −Σ
         written = -(lot.stock_lines.filter(document__kind=wo)
                     .aggregate(s=Sum('qty'))['s'] or ZERO)
         result.append({
             'lot_id': lot.id, 'item_id': lot.item_id,
-            'item_design_item_id': lot.item.design_item_id, 'item_description': lot.item.description,
+            'item_code': lot.item.code, 'item_description': lot.item.description,
             'uom': lot.item.uom, 'written_qty': written,
             'project_code': lot.project.code, 'unit_cost': lot.unit_cost,
             'lot_name': lot.lot_name, 'part_number': lot.part_number,
@@ -2889,22 +2889,21 @@ def item_is_used(item):
             or models.ProcurementLine.objects.filter(item=item).exists())
 
 
-def create_item(design_item_id, description, category_id=None, uom='шт',
+def create_item(code, description, category_id=None, uom='шт',
                 native=False, estimated_cost=None, temperature=''):
-    """Создать изделие справочника из мини-формы «＋ Новое». `design_item_id`
-    (заказной PN, канон библиотеки) уникален; категория обязательна (FK-справочник).
-    Ручное изделие рождается `synced=False` (руками, не из библиотеки)."""
-    design_item_id = (design_item_id or '').strip()
+    """Создать изделие справочника из мини-формы «＋ Новое». `code` (заказной PN,
+    канон библиотеки — колонка CSV «Design Item Id») уникален; категория обязательна
+    (FK-справочник). Ручное изделие рождается `synced=False` (руками, не из библиотеки)."""
+    code = (code or '').strip()
     description = (description or '').strip()
-    if not design_item_id:
-        raise ValidationError('Нужно изделие (Design Item Id).')
+    if not code:
+        raise ValidationError('Нужен код изделия.')
     if not description:
         raise ValidationError('Нужно описание изделия.')
-    if models.Item.objects.filter(design_item_id=design_item_id).exists():
-        raise ValidationError(f'Изделие {design_item_id} уже есть.')
+    require_unique_code(models.Item, code)
     category = _resolve_category(category_id)
     return models.Item.objects.create(
-        design_item_id=design_item_id, description=description, category=category,
+        code=code, description=description, category=category,
         uom=(uom or '').strip() or 'шт',
         temperature=(temperature or '').strip(),
         native=bool(native),
@@ -2918,7 +2917,7 @@ def _require_item_unlocked(item):
     UI. Синк библиотеки правит в обход (свои прямые ORM-операции)."""
     if item.locked:
         raise ValidationError(
-            f'Изделие {item.design_item_id} зафиксировано — сперва расфиксируйте.')
+            f'Изделие {item.code} зафиксировано — сперва расфиксируйте.')
 
 
 def lock_item(item):
@@ -2941,7 +2940,7 @@ def unlock_item(item):
 
 def update_item(item, changes):
     """Правка свойств изделия под замком формы (§6). `changes` — только присланные
-    поля (частичный PATCH). `design_item_id` уникален; категория из справочника
+    поля (частичный PATCH). `code` уникален; категория из справочника
     (ключ `category_id`); описание непустое.
 
     Матрица `synced × locked` (Ф3a): зафиксированное (`locked`) — read-only целиком;
@@ -2953,17 +2952,16 @@ def update_item(item, changes):
         illegal = set(changes) - {'estimated_cost'}
         if illegal:
             raise ValidationError(
-                f'Изделие {item.design_item_id} — из библиотеки: правится только '
+                f'Изделие {item.code} — из библиотеки: правится только '
                 f'оценочная стоимость (остальные поля берутся из библиотеки).')
     fields = []
-    if 'design_item_id' in changes:
-        v = (changes['design_item_id'] or '').strip()
+    if 'code' in changes:
+        v = (changes['code'] or '').strip()
         if not v:
-            raise ValidationError('Нужно изделие (Design Item Id).')
-        if models.Item.objects.filter(design_item_id=v).exclude(pk=item.pk).exists():
-            raise ValidationError(f'Изделие {v} уже есть.')
-        item.design_item_id = v
-        fields.append('design_item_id')
+            raise ValidationError('Нужен код изделия.')
+        require_unique_code(models.Item, v, item.pk)
+        item.code = v
+        fields.append('code')
     if 'description' in changes:
         v = (changes['description'] or '').strip()
         if not v:
@@ -3026,7 +3024,7 @@ def delete_item(item):
 # --------------------------------------------------------------------------- #
 # Внешняя библиотека — источник правды по покупным изделиям. Форма грузит её
 # CSV-таблицы (мульти-файл = вся библиотека за раз); движок парсит → диф против БД
-# по ключу `design_item_id` → применение подтверждённых строк. Цену библиотека не
+# по ключу `code` → применение подтверждённых строк. Цену библиотека не
 # хранит (`estimated_cost` — собственность Plume, синк её не трогает).
 LIBRARY_ENCODING = 'cp1251'      # CP1251, разделитель ';' без экранирования, LF
 LIBRARY_KEY_COL = 'Design Item Id'
@@ -3044,7 +3042,7 @@ def parse_library_file(filename, raw):
     """Разобрать один CSV библиотеки → (category_code, [row...]). `raw` — bytes
     (CP1251). Заголовок = эталон: нужные колонки ищем по имени (терпимо к порядку),
     отсутствие любой из трёх — ошибка. Строки нормализуем в
-    `{design_item_id, description, temperature, category}`; дубль ключа в файле,
+    `{code, description, temperature, category}`; дубль ключа в файле,
     пустой ключ или недобор колонок — человеческий отказ (не молчим)."""
     category = _category_code_from_filename(filename)
     if not category:
@@ -3075,7 +3073,7 @@ def parse_library_file(filename, raw):
         if key in seen:
             raise ValidationError(f'{filename}: дубль Design Item Id «{key}».')
         seen.add(key)
-        rows.append({'design_item_id': key, 'description': rec[di].strip(),
+        rows.append({'code': key, 'description': rec[di].strip(),
                      'temperature': rec[ti].strip(), 'category': category})
     return category, rows
 
@@ -3083,7 +3081,7 @@ def parse_library_file(filename, raw):
 def parse_library(files):
     """Разобрать мульти-файл загрузку. `files` — список `(filename, raw_bytes)`.
     Возвращает `{'categories': [code...], 'rows': [row...]}`. Одна категория дважды
-    или один `design_item_id` в двух файлах — ошибка (в библиотеке ключ глобально
+    или один `code` в двух файлах — ошибка (в библиотеке ключ глобально
     уникален). Категории нужны для scoping «пропавших» (сверяем только загруженные
     классы)."""
     if not files:
@@ -3095,7 +3093,7 @@ def parse_library(files):
             raise ValidationError(f'Категория «{cat}» пришла дважды (файл {filename}).')
         categories.append(cat)
         for r in file_rows:
-            key = r['design_item_id']
+            key = r['code']
             if key in owner:
                 raise ValidationError(
                     f'Design Item Id «{key}» есть в двух файлах ({owner[key]} и {cat}).')
@@ -3124,7 +3122,7 @@ def _library_changes(item, row):
 
 def _diff_row(status, row, item, changes=None):
     out = {'status': status,
-           'design_item_id': (row or {}).get('design_item_id') or item.design_item_id,
+           'code': (row or {}).get('code') or item.code,
            'item_id': item.id if item else None}
     if row is not None:
         out['incoming'] = {'description': row['description'],
@@ -3140,7 +3138,7 @@ def _diff_row(status, row, item, changes=None):
 
 
 def library_diff(parsed):
-    """Полная сверка загруженной библиотеки против БД по ключу `design_item_id`.
+    """Полная сверка загруженной библиотеки против БД по ключу `code`.
     `parsed` — из `parse_library`. Возвращает список диф-строк со статусом:
 
     - `new`     — ключа нет в БД → создать (`native=false`, `synced=true`, `locked=false`);
@@ -3157,9 +3155,9 @@ def library_diff(parsed):
 
     Scoping «пропавших» — по категории: изделие из класса, которого нет среди
     загруженных файлов, не считается пропавшим (его библиотеку просто не грузили)."""
-    by_key = {r['design_item_id']: r for r in parsed['rows']}
+    by_key = {r['code']: r for r in parsed['rows']}
     categories = set(parsed['categories'])
-    existing = {i.design_item_id: i
+    existing = {i.code: i
                 for i in models.Item.objects.select_related('category')}
     result = []
     for key, row in by_key.items():
@@ -3179,13 +3177,13 @@ def library_diff(parsed):
         if key in by_key or item.category.code not in categories:
             continue
         result.append(_diff_row('orphan' if item_is_used(item) else 'gone', None, item))
-    result.sort(key=lambda d: (_DIFF_ORDER[d['status']], d['design_item_id']))
+    result.sort(key=lambda d: (_DIFF_ORDER[d['status']], d['code']))
     return result
 
 
 def apply_library_diff(parsed, confirmed):
     """Применить подтверждённые строки дифа. `confirmed` — множество
-    `design_item_id`, отмеченных галочкой. Диф пересчитываем здесь заново (не
+    `code`, отмеченных галочкой. Диф пересчитываем здесь заново (не
     доверяем присланным клиентом значениям): действие берётся из свежего статуса,
     поля — из `parsed`. Всё в одной транзакции (bulk = всё-или-ничего).
 
@@ -3199,11 +3197,11 @@ def apply_library_diff(parsed, confirmed):
 
     Возвращает сводку `{created, updated, marked, deleted}`."""
     confirmed = set(confirmed or [])
-    by_key = {r['design_item_id']: r for r in parsed['rows']}
+    by_key = {r['code']: r for r in parsed['rows']}
     summary = {'created': 0, 'updated': 0, 'marked': 0, 'deleted': 0}
     with transaction.atomic():
         for diff in library_diff(parsed):
-            key = diff['design_item_id']
+            key = diff['code']
             if key not in confirmed:
                 continue
             status = diff['status']
@@ -3213,14 +3211,14 @@ def apply_library_diff(parsed, confirmed):
                 # (`synced`), но НЕ запертым (`locked=false`) — готово под ввод цены
                 # (Ф3a, решение Ивана 2026-07-24). Защита остального — матрицей `synced`.
                 models.Item.objects.create(
-                    design_item_id=key, description=src['description'],
+                    code=key, description=src['description'],
                     category=ensure_category(src['category']),
                     temperature=src['temperature'], native=False,
                     synced=True, locked=False)
                 summary['created'] += 1
             elif status == 'changed':
                 src = by_key[key]
-                item = models.Item.objects.get(design_item_id=key)
+                item = models.Item.objects.get(code=key)
                 item.description = src['description']
                 item.category = ensure_category(src['category'])
                 item.temperature = src['temperature']
@@ -3235,13 +3233,13 @@ def apply_library_diff(parsed, confirmed):
             elif status == 'mark':
                 # Содержимое совпадает — метим библиотечным и снимаем стухший замок
                 # (инвариант `synced ⟹ not locked`).
-                item = models.Item.objects.get(design_item_id=key)
+                item = models.Item.objects.get(code=key)
                 item.synced = True
                 item.locked = False
                 item.save(update_fields=['synced', 'locked'])
                 summary['marked'] += 1
             elif status == 'gone':
-                item = models.Item.objects.get(design_item_id=key)
+                item = models.Item.objects.get(code=key)
                 unlock_item(item)          # расфиксировать перед удалением (гейт)
                 delete_item(item)
                 summary['deleted'] += 1
@@ -3262,15 +3260,15 @@ def _rollup_cost(item, cache, visiting, updated, incomplete):
     if not item.native:
         cost = item.estimated_cost
         if cost is None:
-            incomplete.append(item.design_item_id)
+            incomplete.append(item.code)
         cache[item.id] = cost
         return cost
     if item.id in visiting:
-        raise ValidationError(f'Цикл в составе: {item.design_item_id}.')
+        raise ValidationError(f'Цикл в составе: {item.code}.')
     visiting.add(item.id)
     lines = list(item.bom_lines.select_related('component'))
     if not lines:
-        incomplete.append(item.design_item_id)   # производимый без состава — оценить нечем
+        incomplete.append(item.code)   # производимый без состава — оценить нечем
     total = ZERO
     for bl in lines:
         c = _rollup_cost(bl.component, cache, visiting, updated, incomplete)
@@ -3279,7 +3277,7 @@ def _rollup_cost(item, cache, visiting, updated, incomplete):
     if item.estimated_cost != total:
         item.estimated_cost = total
         item.save(update_fields=['estimated_cost'])
-        updated.append(item.design_item_id)
+        updated.append(item.code)
     cache[item.id] = total
     return total
 
@@ -3385,7 +3383,7 @@ def add_project_demand(project, item, qty):
     if qty is None or qty <= ZERO:
         raise ValidationError('Кол-во приборов должно быть больше нуля.')
     if models.ProjectDemand.objects.filter(project=project, target_item=item).exists():
-        raise ValidationError(f'Прибор {item.design_item_id} уже в потребности проекта.')
+        raise ValidationError(f'Прибор {item.code} уже в потребности проекта.')
     return models.ProjectDemand.objects.create(
         project=project, target_item=item, qty=qty)
 
@@ -3433,9 +3431,9 @@ def add_bom_line(parent, component, qty, position=''):
     if component.id == parent.id:
         raise ValidationError('Изделие не может входить само в себя.')
     if models.BomLine.objects.filter(parent=parent, component=component).exists():
-        raise ValidationError(f'Компонент {component.design_item_id} уже в составе.')
+        raise ValidationError(f'Компонент {component.code} уже в составе.')
     if _bom_would_cycle(parent, component):
-        raise ValidationError(f'Цикл в составе: {component.design_item_id} уже содержит {parent.design_item_id}.')
+        raise ValidationError(f'Цикл в составе: {component.code} уже содержит {parent.code}.')
     return models.BomLine.objects.create(
         parent=parent, component=component, qty=qty,
         position=(position or '').strip())

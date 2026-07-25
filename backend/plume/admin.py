@@ -82,10 +82,10 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(models.Item)
 class ItemAdmin(admin.ModelAdmin):
-    list_display = ('design_item_id', 'description', 'category', 'uom',
+    list_display = ('code', 'description', 'category', 'uom',
                     'temperature', 'native', 'synced', 'locked')
     list_filter = ('category', 'native', 'synced', 'locked')
-    search_fields = ('design_item_id', 'description')
+    search_fields = ('code', 'description')
     list_select_related = ('category',)
     inlines = [BomLineInline]
 
@@ -206,7 +206,7 @@ class LotAdmin(admin.ModelAdmin):
     list_display = ('id', 'item', 'project', 'origin_kind', 'unit_cost',
                     'part_number', 'lot_name')
     list_filter = ('project',)
-    search_fields = ('item__design_item_id', 'part_number', 'lot_name')
+    search_fields = ('item__code', 'part_number', 'lot_name')
 
 
 @admin.register(models.StockMovement)

@@ -48,7 +48,7 @@ export function LibraryImportView({ onApplied, openItem }:
         // (безопасны); удаления (`gone`, необратимо) — вручную. Полная сверка с защитой.
         setConfirmed(new Set(d.rows
           .filter(r => r.status === 'new' || r.status === 'changed' || r.status === 'mark')
-          .map(r => r.design_item_id)))
+          .map(r => r.code)))
       })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -71,7 +71,7 @@ export function LibraryImportView({ onApplied, openItem }:
   // Массовое переключение по статусу (или сразу все действия): отметить/снять весь блок.
   const bulk = (rows: LibraryDiffRow[], on: boolean) => setConfirmed(prev => {
     const next = new Set(prev)
-    for (const r of rows) on ? next.add(r.design_item_id) : next.delete(r.design_item_id)
+    for (const r of rows) on ? next.add(r.code) : next.delete(r.code)
     return next
   })
 
@@ -85,7 +85,7 @@ export function LibraryImportView({ onApplied, openItem }:
     (diff?.rows ?? []).filter(r => showSame || r.status !== 'same'), [diff, showSame])
   const actionable = useMemo(() =>
     (diff?.rows ?? []).filter(r => ST[r.status].actionable), [diff])
-  const allActionableOn = actionable.length > 0 && actionable.every(r => confirmed.has(r.design_item_id))
+  const allActionableOn = actionable.length > 0 && actionable.every(r => confirmed.has(r.code))
 
   return (
     <div>
@@ -144,19 +144,19 @@ export function LibraryImportView({ onApplied, openItem }:
               </tr></thead>
               <tbody>{shown.map(r => {
                 const m = ST[r.status]
-                const checked = confirmed.has(r.design_item_id)
+                const checked = confirmed.has(r.code)
                 return (
-                  <tr key={r.design_item_id} className={'row ' + m.cls}>
+                  <tr key={r.code} className={'row ' + m.cls}>
                     <td style={{ textAlign: 'center' }}>
                       {m.actionable
                         ? <input type="checkbox" checked={checked} disabled={busy}
-                            onChange={() => toggle(r.design_item_id)} />
+                            onChange={() => toggle(r.code)} />
                         : <span style={{ color: 'var(--fg-dim)' }}>—</span>}
                     </td>
                     <td className="kind-chip">{m.label}</td>
                     <td>{r.item_id
-                      ? <a className="link" onClick={() => openItem(r.item_id!)}>{r.design_item_id}</a>
-                      : r.design_item_id}</td>
+                      ? <a className="link" onClick={() => openItem(r.item_id!)}>{r.code}</a>
+                      : r.code}</td>
                     <td style={{ color: 'var(--fg-dim)' }}><RowDetail row={r} verb={m.verb} /></td>
                   </tr>)
               })}</tbody>

@@ -263,11 +263,12 @@ def _category_row(c):
 
 
 def _item_row(i):
-    # `id` — PK (для FK-ссылок/мутаций); `design_item_id` — бизнес-ключ (канон
-    # библиотеки, бывш. `code`). Категория — вложенным объектом (`code`+`description`).
+    # `id` — PK (для FK-ссылок/мутаций); `code` — бизнес-ключ (канон библиотеки,
+    # бывш. `design_item_id`, Ф3b). Категория — вложенным объектом (свои
+    # `code`+`description`; вложенность разводит два кода, коллизии ключей нет).
     # Три оси (Ф3a, волна 19): `native` (наше/покупное, бывш. `produced`), `synced`
     # (из библиотеки/руками), `locked` (фиксация). `synced ⟹ not native`.
-    return {'id': i.id, 'design_item_id': i.design_item_id,
+    return {'id': i.id, 'code': i.code,
             'description': i.description, 'category': _category_row(i.category),
             'uom': i.uom, 'temperature': i.temperature, 'native': i.native,
             'synced': i.synced, 'locked': i.locked, 'used': engine.item_is_used(i)}
@@ -286,7 +287,7 @@ def items(request):
         d = request.data
         try:
             i = engine.create_item(
-                d.get('design_item_id'), d.get('description'),
+                d.get('code'), d.get('description'),
                 category_id=d.get('category_id'),
                 uom=d.get('uom') or 'шт',
                 temperature=d.get('temperature') or '',
@@ -348,13 +349,13 @@ def project_budget(request, pk):
 def _item_detail_payload(item):
     """Проекция экрана изделия: свойства + окружение из связей (where-used, лоты)."""
     where_used = [
-        {'parent_id': bl.parent_id, 'parent_design_item_id': bl.parent.design_item_id,
+        {'parent_id': bl.parent_id, 'parent_code': bl.parent.code,
          'parent_description': bl.parent.description, 'qty': bl.qty}
         for bl in item.used_in.select_related('parent')
     ]
     bom = [
         {'id': bl.id, 'component_id': bl.component_id,
-         'component_design_item_id': bl.component.design_item_id,
+         'component_code': bl.component.code,
          'component_description': bl.component.description,
          'component_uom': bl.component.uom,
          'component_native': bl.component.native, 'component_synced': bl.component.synced,
@@ -370,7 +371,7 @@ def _item_detail_payload(item):
         for lot in item.lots.select_related('project', 'origin')
     ]
     return {
-        'id': item.id, 'design_item_id': item.design_item_id,
+        'id': item.id, 'code': item.code,
         'description': item.description, 'category': _category_row(item.category),
         'uom': item.uom, 'temperature': item.temperature, 'native': item.native,
         'synced': item.synced, 'locked': item.locked, 'used': engine.item_is_used(item),
@@ -383,7 +384,7 @@ def _item_detail_payload(item):
 # Строковые/булев поля, проходящие в `update_item` как есть (частичный PATCH).
 # `category_id` → FK-справочник, `estimated_cost` — через `_dec` отдельно ниже.
 # `synced` НЕ здесь: переключает только синк библиотеки, не ручной PATCH (Ф3a).
-_ITEM_TEXT_FIELDS = ('design_item_id', 'description', 'uom', 'temperature',
+_ITEM_TEXT_FIELDS = ('code', 'description', 'uom', 'temperature',
                      'native', 'category_id')
 
 
@@ -466,7 +467,7 @@ def _kitting_row(k):
     """Строка списка комплектаций для дерева навигации."""
     return {
         'id': k.id, 'code': k.code, 'project_code': k.project.code,
-        'target_design_item_id': k.target_item.design_item_id,
+        'target_code': k.target_item.code,
         'target_description': k.target_item.description,
         'qty': k.qty, 'locked': k.locked, 'date': k.date,
     }
@@ -1844,7 +1845,7 @@ def library_diff(request):
 @api_view(['POST'])
 def library_apply(request):
     """Применить подтверждённые строки дифа. Форма шлёт те же файлы + `confirmed`
-    (JSON-список `design_item_id` с отмеченными галочками). Диф пересчитывается на
+    (JSON-список `code` с отмеченными галочками). Диф пересчитывается на
     сервере (не доверяем значениям клиента), применяются только подтверждённые."""
     raw = request.data.get('confirmed') or '[]'
     try:

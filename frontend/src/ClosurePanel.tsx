@@ -98,7 +98,7 @@ function ResidualRow({ r, projectId, busy, openItem, run }: {
         <span className="pn">{r.lot_label}</span>
       </td>
       <td>
-        <a className="link" onClick={() => openItem(r.item_id)}>{r.item_design_item_id}</a>{' '}
+        <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a>{' '}
         <span style={{ color: 'var(--fg-dim)' }}>{r.item_description}</span>
       </td>
       <td className="num">

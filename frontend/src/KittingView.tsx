@@ -35,9 +35,9 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        code={c.code || `Комплектация ${c.target_design_item_id}`}
+        code={c.code || `Комплектация ${c.target_code}`}
         meta={<>
-          <Glyph status={c.cockpit_status} /> {c.target_design_item_id} · {c.project_code} ·
+          <Glyph status={c.cockpit_status} /> {c.target_code} · {c.project_code} ·
           {' '}образцов {num(c.qty)} · {kitLabel(c.locked)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
@@ -67,8 +67,8 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
           onChange={id => run(api.updateKitting(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { project_id: id }))} />
-        <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_design_item_id}
-          options={items.map(i => ({ id: i.id, label: `${i.design_item_id} — ${i.description}` }))}
+        <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
+          options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.description}` }))}
           disabled={locked || busy}
           onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
       </dl>
@@ -105,7 +105,7 @@ function Component({ row, cockpit, wip, busy, openItem, run }: {
       <div className="kit-comp-h">
         <Glyph status={status} />
         <span className="name">
-          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_design_item_id}</a>
+          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a>
           {' '}<span style={{ color: 'var(--fg-dim)' }}>{row.component_description}</span>
         </span>
         <span className="triple">надо {num(row.need)} {row.uom} · пробито {num(row.pierced)}

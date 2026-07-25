@@ -54,7 +54,7 @@ export function ProjectStockPanel({ projectId, projectName, openItem }: {
                     <span className="pn">#{l.lot_id}{l.lot_name ? ` ${l.lot_name}` : ''}</span>
                   </td>
                   <td>
-                    <a className="link" onClick={() => openItem(l.item_id)}>{l.item_design_item_id}</a>{' '}
+                    <a className="link" onClick={() => openItem(l.item_id)}>{l.item_code}</a>{' '}
                     <span style={{ color: 'var(--fg-dim)' }}>{l.item_description}</span>
                   </td>
                   <td style={{ color: 'var(--fg-dim)' }}>{ORIGIN_LABEL[l.origin] ?? l.origin}</td>

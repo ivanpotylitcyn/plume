@@ -98,7 +98,7 @@ function LineRow({ r, editable, busy, procurementId, run }: {
       <tr className={`row s-${r.status}`}>
         <td>
           <Glyph status={r.status} />{' '}
-          <span className="code">{r.item_design_item_id}</span>{' '}
+          <span className="code">{r.item_code}</span>{' '}
           <span style={{ color: 'var(--fg-dim)' }}>{r.item_description}</span>
         </td>
         <td className="num">{num(r.qty)} {r.uom}</td>

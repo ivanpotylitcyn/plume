@@ -26,8 +26,8 @@ export interface Category {
   id: number; code: string; description: string
 }
 export interface ItemRow {
-  // `id` — PK (FK-ссылки/мутации); `design_item_id` — бизнес-ключ (канон библиотеки).
-  id: number; design_item_id: string; description: string; category: Category
+  // `id` — PK (FK-ссылки/мутации); `code` — бизнес-ключ (канон библиотеки).
+  id: number; code: string; description: string; category: Category
   uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
 }
 
@@ -35,20 +35,20 @@ export interface ItemRow {
 // несёт покрытие; узел-подсборка (`is_leaf=false`) — структурный (без покрытия), статус
 // = worst-of поддерева. Купить можно только листья → заказ живёт в своде «Потребность».
 export interface DeficitTreeNode {
-  component_id: number; component_design_item_id: string; component_description: string; uom: string
+  component_id: number; component_code: string; component_description: string; uom: string
   component_native: boolean; component_synced: boolean; component_locked: boolean
   need: number; depth: number; is_leaf: boolean; status: Status
   have?: number; on_order?: number; to_order?: number; available_raw?: number; anomaly?: boolean
 }
 export interface DeficitDemand {
-  demand_id: number; target_id: number; target_design_item_id: string; target_description: string
+  demand_id: number; target_id: number; target_code: string; target_description: string
   target_native: boolean; target_synced: boolean; target_locked: boolean
   qty: number; device: { done: number; wip: number; not_started: number }
   status: Status; badge: Status; tree: DeficitTreeNode[]
 }
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
 export interface DeficitComponent {
-  component_id: number; component_design_item_id: string; component_description: string; uom: string
+  component_id: number; component_code: string; component_description: string; uom: string
   component_native: boolean; component_synced: boolean; component_locked: boolean
   need: number; have: number; on_order: number; to_order: number
   status: Status; available_raw: number; anomaly: boolean
@@ -75,7 +75,7 @@ export interface StockMapRow {
   project_kind: string; available: number
 }
 export interface StockMap {
-  item_id: number; item_design_item_id: string; item_description: string; uom: string
+  item_id: number; item_code: string; item_description: string; uom: string
   rows: StockMapRow[]
 }
 export interface ItemShipment {
@@ -84,14 +84,14 @@ export interface ItemShipment {
   lot_name: string
 }
 export interface ItemDetail {
-  id: number; design_item_id: string; description: string; category: Category
+  id: number; code: string; description: string; category: Category
   uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
   estimated_cost: number | null
-  bom: { id: number; component_id: number; component_design_item_id: string;
+  bom: { id: number; component_id: number; component_code: string;
          component_description: string; component_uom: string;
          component_native: boolean; component_synced: boolean; component_locked: boolean;
          qty: number; position: string }[]
-  where_used: { parent_id: number; parent_design_item_id: string; parent_description: string; qty: number }[]
+  where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
           live_qty: number; unit_cost: number; part_number: string; lot_name: string }[]
   shipments: ItemShipment[]
@@ -110,7 +110,7 @@ export interface LibrarySnapshot {
 }
 export interface LibraryChange { old: string; new: string }
 export interface LibraryDiffRow {
-  status: LibraryStatus; design_item_id: string; item_id: number | null
+  status: LibraryStatus; code: string; item_id: number | null
   incoming?: LibrarySnapshot; current?: LibrarySnapshot
   changes?: Partial<Record<'description' | 'temperature' | 'category', LibraryChange>>
 }
@@ -125,7 +125,7 @@ export type ItemDetailWithRollup = ItemDetail & { rollup: RollupResult }
 // ── Кокпит комплектации (волна 2 — записываемое ядро) ──
 export interface KittingRow {
   id: number; code: string | null; project_code: string
-  target_design_item_id: string; target_description: string
+  target_code: string; target_description: string
   qty: number; locked: boolean; date: string | null
 }
 export interface CandidateLot {
@@ -140,7 +140,7 @@ export interface Ghost {
   candidate_lots: CandidateLot[]
 }
 export interface CockpitRow {
-  component_id: number; component_design_item_id: string; component_description: string; uom: string
+  component_id: number; component_code: string; component_description: string; uom: string
   need: number; pierced: number; remaining: number
   real_lines: RealLine[]; ghost: Ghost | null
 }
@@ -150,7 +150,7 @@ export interface BornLot {
 export interface Cockpit extends Authored {
   id: number; locked: boolean; code: string | null; description: string
   project_id: number; project_code: string
-  target_id: number; target_design_item_id: string; target_description: string; uom: string
+  target_id: number; target_code: string; target_description: string; uom: string
   qty: number; date: string | null; cockpit_status: Status
   rows: CockpitRow[]; born_lots: BornLot[]
 }
@@ -167,7 +167,7 @@ export interface ReceiptRow {
   project_code: string; locked: boolean; lines: number
 }
 export interface ReceiptLot {
-  id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  id: number; item_id: number; item_code: string; item_description: string; uom: string
   qty: number; live_qty: number; unit_cost: number; lot_name: string
   part_number: string; consumed: boolean
 }
@@ -188,7 +188,7 @@ export interface PurchaseRow {
   coverage: Status   // Ф1b: покрытие лотами для цвета в списке
 }
 export interface PurchaseCockpitLine {
-  id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  id: number; item_id: number; item_code: string; item_description: string; uom: string
   qty: number; received: number; remaining: number; status: Status
 }
 export interface PurchaseReceiptRow {
@@ -213,11 +213,11 @@ export interface TransferRow {
   locked: boolean; lines: number
 }
 export interface AvailableLot {
-  lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
   live_qty: number; origin: string; part_number: string; lot_name: string
 }
 export interface TransferCockpitLine {
-  id: number; lot_id: number; lot_label: string; item_id: number; item_design_item_id: string
+  id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
   item_description: string; uom: string; qty: number; display_name: string
   lot_live_qty: number; lot_name: string
 }
@@ -235,7 +235,7 @@ export interface WriteoffRow {
   reason: string; locked: boolean; lines: number
 }
 export interface WriteoffCockpitLine {
-  id: number; lot_id: number; lot_label: string; item_id: number; item_design_item_id: string
+  id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
   item_description: string; uom: string; qty: number; lot_live_qty: number
   lot_name: string
 }
@@ -252,13 +252,13 @@ export interface RequisitionRow {
   locked: boolean; lines: number
 }
 export interface AllAvailableLot {
-  lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
   live_qty: number; origin: string; project_id: number; project_code: string
   part_number: string; lot_name: string
 }
 export interface RequisitionCockpitLine {
   id: number; source_lot_id: number; lot_label: string; source_project_code: string
-  item_id: number; item_design_item_id: string; item_description: string; uom: string
+  item_id: number; item_code: string; item_description: string; uom: string
   qty: number; source_live_qty: number; born_lot_id: number | null
   lot_name: string
 }
@@ -273,7 +273,7 @@ export interface RequisitionCockpit extends Authored {
 export interface LocationRow { id: number; code: string; description: string; kind: string }
 export interface LocationStockLot {
   lot_id: number; lot_label: string; part_number: string; lot_name: string
-  item_id: number; item_design_item_id: string; item_description: string; uom: string; qty: number
+  item_id: number; item_code: string; item_description: string; uom: string; qty: number
   project_id: number; project_code: string; project_name: string
 }
 export interface LocationCockpit {
@@ -287,7 +287,7 @@ export interface RelocationRow {
   locked: boolean; lines: number
 }
 export interface RelocationMove {
-  lot_id: number; lot_label: string; item_id: number; item_design_item_id: string
+  lot_id: number; lot_label: string; item_id: number; item_code: string
   item_description: string; uom: string; qty: number
   from_location_id: number | null; from_location: string
   to_location_id: number | null; to_location: string
@@ -303,7 +303,7 @@ export interface LotLocation {
   location_id: number; code: string; description: string; qty: number
 }
 export interface RelocationSourceLot {
-  lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
   live_qty: number; part_number: string; lot_name: string
   by_location: LotLocation[]
 }
@@ -315,7 +315,7 @@ export interface InventoryRow {
   locked: boolean; lines: number
 }
 export interface InventoryCockpitLot {
-  id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  id: number; item_id: number; item_code: string; item_description: string; uom: string
   qty: number; live_qty: number; unit_cost: number; lot_name: string
   part_number: string; predecessor_id: number | null; predecessor_label: string
   consumed: boolean
@@ -327,14 +327,14 @@ export interface InventoryCockpit extends Authored {
   locked: boolean; total_cost: number; lots: InventoryCockpitLot[]
 }
 export interface WrittenOffLot {
-  lot_id: number; item_id: number; item_design_item_id: string; item_description: string; uom: string
+  lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
   written_qty: number; project_code: string; unit_cost: number
   lot_name: string; part_number: string
 }
 
 // ── Панель закрытия проекта (волна 6) ──
 export interface ResidualLot {
-  lot_id: number; lot_label: string; item_id: number; item_design_item_id: string
+  lot_id: number; lot_label: string; item_id: number; item_code: string
   item_description: string; uom: string; live_qty: number; anomaly: boolean
 }
 export interface ProjectClosure {
@@ -350,7 +350,7 @@ export interface CommandDeficitProject {
   need: number; have: number; on_order: number; to_order: number; status: Status
 }
 export interface CommandDeficitRow {
-  item_id: number; item_design_item_id: string; item_description: string; uom: string
+  item_id: number; item_code: string; item_description: string; uom: string
   native: boolean
   need: number; have: number; on_order: number; to_order: number
   status: Status; by_project: CommandDeficitProject[]
@@ -362,7 +362,7 @@ export interface ProcurementRow {
   code: string | null; description: string; lines: number
 }
 export interface ProcurementCockpitLine {
-  id: number; item_id: number; item_design_item_id: string; item_description: string
+  id: number; item_id: number; item_code: string; item_description: string
   item_native: boolean; item_synced: boolean; item_locked: boolean
   uom: string; qty: number
 }
@@ -379,7 +379,7 @@ export interface PeggingProject {
   suggest: number; pegged: number
 }
 export interface PeggingRow {
-  line_id: number; item_id: number; item_design_item_id: string; item_description: string
+  line_id: number; item_id: number; item_code: string; item_description: string
   uom: string; qty: number; pegged: number; remaining: number; status: Status
   by_project: PeggingProject[]
 }
@@ -501,7 +501,7 @@ export const api = {
     send<ProjectRow>('POST', '/api/projects/', b),
   items: () => get<ItemRow[]>('/api/items/'),
   categories: () => get<Category[]>('/api/categories/'),
-  createItem: (b: { design_item_id: string; description: string; category_id: number;
+  createItem: (b: { code: string; description: string; category_id: number;
     uom?: string; temperature?: string; native?: boolean; estimated_cost?: number }) =>
     send<ItemRow>('POST', '/api/items/', b),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
@@ -517,7 +517,7 @@ export const api = {
     send<Deficit>('DELETE', `/api/project-demands/${demandId}/`),
   budget: (id: number) => get<Budget>(`/api/projects/${id}/budget/`),
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
-  updateItem: (id: number, b: Partial<{ design_item_id: string; description: string;
+  updateItem: (id: number, b: Partial<{ code: string; description: string;
     category_id: number; uom: string; temperature: string; native: boolean;
     estimated_cost: number | null }>) =>
     send<ItemDetail>('PATCH', `/api/items/${id}/`, b),
@@ -538,7 +538,7 @@ export const api = {
 
   // ── Синхронизация с библиотекой Altium (волна 15) ──
   // diff — загрузить CSV, получить диф без записи; apply — те же файлы + список
-  // подтверждённых `design_item_id` (сервер пересчитывает диф заново).
+  // подтверждённых `code` (сервер пересчитывает диф заново).
   libraryDiff: (files: File[]) =>
     uploadMulti<LibraryDiff>('/api/library/diff/', files),
   libraryApply: (files: File[], confirmed: string[]) =>

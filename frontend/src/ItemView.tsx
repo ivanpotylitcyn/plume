@@ -71,7 +71,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
   return (
     <div className={unlocked && !fixed ? '' : 'form-locked'}>
       <FormHeader
-        code={d.design_item_id}
+        code={d.code}
         meta={<>
           {d.category.description}{d.native ? ' · производимое' : ''} · {d.uom}
           {!d.native && <> · {d.synced ? 'библиотечное' : 'ручное'}</>}
@@ -91,12 +91,12 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
           disabled: busy } : undefined}
       >
       <dl className="props">
-        <dt>Изделие</dt>
+        <dt>Код</dt>
         <dd>{!metaLocked
-          ? <CommitInput value={d.design_item_id} width={160} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { design_item_id: v }))}
+          ? <CommitInput value={d.code} width={160} disabled={busy}
+              onCommit={v => run(api.updateItem(d.id, { code: v }))}
               validate={v => v.trim() !== ''} />
-          : d.design_item_id}</dd>
+          : d.code}</dd>
         <dt>Описание</dt>
         <dd>{!metaLocked
           ? <CommitInput value={d.description} width={260} disabled={busy}
@@ -164,7 +164,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
               <th style={{ textAlign: 'right' }}>Кол-во</th></tr></thead>
             <tbody>{d.where_used.map(w => (
               <tr key={w.parent_id} className="row">
-                <td><a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_design_item_id}</a></td>
+                <td><a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
                 <td style={{ color: 'var(--fg-dim)' }}>{w.parent_description}</td>
                 <td className="num">{num(w.qty)}</td>
               </tr>))}</tbody>
@@ -182,7 +182,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
             <tbody>{d.bom.map(b => (
               <tr key={b.id} className="row">
                 <td><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
-                <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_design_item_id}</a></td>
+                <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
                 <td style={{ color: 'var(--fg-dim)' }}>
                   <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
                 <td className="num">
@@ -272,11 +272,11 @@ function AddComponent({ items, parentId, bom, busy, add }: {
     const s = q.trim().toLowerCase()
     if (!s) return []
     return options.filter(i =>
-      i.design_item_id.toLowerCase().includes(s) || i.description.toLowerCase().includes(s)
+      i.code.toLowerCase().includes(s) || i.description.toLowerCase().includes(s)
     ).slice(0, 20)
   }, [options, q])
 
-  const pick = (i: ItemRow) => { setComponentId(i.id); setQ(`${i.design_item_id} — ${i.description}`) }
+  const pick = (i: ItemRow) => { setComponentId(i.id); setQ(`${i.code} — ${i.description}`) }
 
   const submit = () => {
     const n = Number(qty)
@@ -305,7 +305,7 @@ function AddComponent({ items, parentId, bom, busy, add }: {
           {matches.map(i => (
             <div key={i.id} className="typeahead-item" onClick={() => pick(i)}>
               <span className="ci ci-chip" />
-              <span className="code">{i.design_item_id}</span>
+              <span className="code">{i.code}</span>
               <span style={{ color: 'var(--fg-dim)' }}>{i.description}</span>
             </div>
           ))}

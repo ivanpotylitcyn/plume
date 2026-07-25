@@ -50,12 +50,12 @@ class EngineTestBase(TestCase):
         # `kind` — исторический хинт (движок по классу не ветвит); категория —
         # общая заглушка `_cat()`. `manufactured` → ось `native` (волна 15).
         return models.Item.objects.create(
-            design_item_id=code, description=code, category=_cat(),
+            code=code, description=code, category=_cat(),
             native=manufactured)
 
     def receipt_lot(self, item, project, qty, purchase=None):
         r = models.Receipt.objects.create(
-            number=f'UPD-{item.design_item_id}-{qty}', date='2026-05-01', contractor=self.supplier,
+            number=f'UPD-{item.code}-{qty}', date='2026-05-01', contractor=self.supplier,
             project=project, user=self.user, purchase=purchase)
         lot = models.Lot.objects.create(item=item, project=project, origin=r, qty=D(qty))
         engine.rebuild_movements(lot)
@@ -234,7 +234,7 @@ class DeficitTests(EngineTestBase):
         dm = d['demands'][0]
         self.assertEqual(dm['status'], 'to_order')   # worst-of (SCR ▲)
         # аккордеон-дерево: CASE/SCR — прямые покупные листья прибора (depth 0)
-        lines = {ln['component_design_item_id']: ln for ln in dm['tree']}
+        lines = {ln['component_code']: ln for ln in dm['tree']}
         self.assertEqual(lines['CASE']['status'], 'available')
         self.assertEqual(lines['CASE']['have'], D(10))
         self.assertTrue(lines['CASE']['is_leaf'])
@@ -365,7 +365,7 @@ class KittingCockpitTests(EngineTestBase):
         # склад пуст → обе призрачные строки красные (▲ to_order)
         k = self.make_kitting(qty=2)
         c = engine.kitting_cockpit(k)
-        rows = {r['component_design_item_id']: r for r in c['rows']}
+        rows = {r['component_code']: r for r in c['rows']}
         self.assertEqual(rows['CASE']['need'], D(2))     # 1×2
         self.assertEqual(rows['RES']['need'], D(4))      # 2×2
         self.assertEqual(rows['CASE']['pierced'], D(0))
@@ -377,7 +377,7 @@ class KittingCockpitTests(EngineTestBase):
         self.receipt_lot(self.case, self.prj, 10)
         k = self.make_kitting(qty=2)
         c = engine.kitting_cockpit(k)
-        row = {r['component_design_item_id']: r for r in c['rows']}['CASE']
+        row = {r['component_code']: r for r in c['rows']}['CASE']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
         self.assertEqual(row['ghost']['candidate_lots'][0]['live_qty'], D(10))
@@ -389,7 +389,7 @@ class KittingCockpitTests(EngineTestBase):
         # лот просел на 2 (ISSUE), строка BOM закрыта
         self.assertEqual(engine.lot_live_qty(lot), D(8))
         c = engine.kitting_cockpit(k)
-        row = {r['component_design_item_id']: r for r in c['rows']}['CASE']
+        row = {r['component_code']: r for r in c['rows']}['CASE']
         self.assertEqual(row['pierced'], D(2))
         self.assertEqual(row['remaining'], D(0))
         self.assertIsNone(row['ghost'])          # покрыто — призрака нет
@@ -578,7 +578,7 @@ class ReceiptCockpitTests(EngineTestBase):
                                           user=self.user, qty=D(1),
                                           locked=False)
         c = engine.kitting_cockpit(k)
-        row = {r['component_design_item_id']: r for r in c['rows']}['R']
+        row = {r['component_code']: r for r in c['rows']}['R']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
 
@@ -1082,7 +1082,7 @@ class CommandDeficitTests(EngineTestBase):
     """Волна 7: командный свод — Σ проектных дефицитов по Item, без перенеттинга."""
 
     def _device_with_screw(self, screw, qty_per, suffix=''):
-        dev = self.make_item(f'DEV{screw.design_item_id}{suffix}', manufactured=True,
+        dev = self.make_item(f'DEV{screw.code}{suffix}', manufactured=True,
                              kind='device')
         models.BomLine.objects.create(parent=dev, component=screw, qty=D(qty_per))
         return dev
@@ -1095,7 +1095,7 @@ class CommandDeficitTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
 
-        rows = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}
+        rows = {r['item_code']: r for r in engine.command_deficit()['rows']}
         row = rows['SCR']
         self.assertEqual(row['need'], D(60))         # 40 + 20
         self.assertEqual(row['to_order'], D(60))     # склада/заказов нет
@@ -1112,7 +1112,7 @@ class CommandDeficitTests(EngineTestBase):
         # склад лежит только в P1 (10 шт) — НЕ должен гасить нужду P2
         self.receipt_lot(scr, self.prj, 10)
 
-        row = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}['SCR']
+        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
         self.assertEqual(row['have'], D(10))          # только P1 покрыт
         self.assertEqual(row['to_order'], D(50))      # 30 (P1) + 20 (P2), не 40
         self.assertEqual(row['need'], D(60))
@@ -1137,7 +1137,7 @@ class CommandDeficitTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev_a, qty=D(2))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev_b, qty=D(2))
 
-        row = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}['SCR']
+        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
         self.assertEqual(row['need'], D(14))          # 2×4 + 2×3
         self.assertEqual(len(row['by_project']), 1)   # агрегат по проекту
 
@@ -1150,7 +1150,7 @@ class CommandDeficitTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
         self.receipt_lot(green, self.prj, 100)        # GRN покрыт ✓, RED красный ▲
 
-        codes = [r['item_design_item_id'] for r in engine.command_deficit()['rows']]
+        codes = [r['item_code'] for r in engine.command_deficit()['rows']]
         self.assertEqual(codes, ['RED', 'GRN'])       # красное наверх
 
 
@@ -1377,7 +1377,7 @@ class ClosureHttpTests(TestCase):
         self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
+        self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj,
@@ -1449,9 +1449,9 @@ class ProcurementHttpTests(TestCase):
         get_user_model().objects.create(username='admin', is_superuser=True)
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
+        self.scr = models.Item.objects.create(code='SCR', description='Винт',
             category=_cat())
-        self.dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
+        self.dev = models.Item.objects.create(code='DEV', description='Прибор',
             category=_cat(), native=True)
         models.BomLine.objects.create(parent=self.dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev,
@@ -1463,7 +1463,7 @@ class ProcurementHttpTests(TestCase):
     def test_command_deficit_and_bridge(self):
         svod = self.c.get('/api/command-deficit/')
         self.assertEqual(svod.status_code, 200)
-        rows = {r['item_design_item_id']: r for r in svod.json()['rows']}
+        rows = {r['item_code']: r for r in svod.json()['rows']}
         self.assertEqual(float(rows['SCR']['to_order']), 40.0)
         # мост «свод → закупка» создаёт черновик
         add = self.c.post('/api/command-deficit/add-to-procurement/',
@@ -1509,9 +1509,9 @@ class PeggingHttpTests(TestCase):
             kind=models.Project.Kind.EXTERNAL)
         self.prj2 = models.Project.objects.create(code='P2', description='Проект 2',
             kind=models.Project.Kind.EXTERNAL)
-        self.scr = models.Item.objects.create(design_item_id='SCR', description='Винт',
+        self.scr = models.Item.objects.create(code='SCR', description='Винт',
             category=_cat())
-        dev = models.Item.objects.create(design_item_id='DEV', description='Прибор',
+        dev = models.Item.objects.create(code='DEV', description='Прибор',
             category=_cat(), native=True)
         models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
@@ -1527,7 +1527,7 @@ class PeggingHttpTests(TestCase):
         peg = self.c.get(f'/api/procurements/{self.pid}/pegging/')
         self.assertEqual(peg.status_code, 200)
         row = peg.json()['rows'][0]
-        self.assertEqual(row['item_design_item_id'], 'SCR')
+        self.assertEqual(row['item_code'], 'SCR')
         self.assertEqual(float(row['pegged']), 0.0)
         self.assertEqual(len(row['by_project']), 2)             # наводка по двум проектам
         auto = self.c.post(f'/api/procurements/{self.pid}/autopeg/')
@@ -1544,7 +1544,7 @@ class PeggingHttpTests(TestCase):
         self.assertEqual(peg.status_code, 200)
         self.assertEqual(float(peg.json()['rows'][0]['pegged']), 25.0)
         # item не в плане → 400
-        x = models.Item.objects.create(design_item_id='X', description='X', category=_cat())
+        x = models.Item.objects.create(code='X', description='X', category=_cat())
         bad = self.c.post(f'/api/procurements/{self.pid}/peg/',
             {'item_id': x.id, 'project_id': self.prj.id, 'qty': 1},
             content_type='application/json')
@@ -1565,21 +1565,24 @@ class ReferenceCreateTests(EngineTestBase):
         i = engine.create_item('R100', 'Резистор', category_id=cat.id,
                                uom='шт', native=False, estimated_cost=D('1.50'),
                                temperature='-40-125°C')
-        self.assertEqual(i.design_item_id, 'R100')
+        self.assertEqual(i.code, 'R100')
         self.assertEqual(i.category_id, cat.id)
         self.assertEqual(i.temperature, '-40-125°C')
         self.assertEqual(i.estimated_cost, D('1.50'))
         # обрезка пробелов; дефолты uom=шт, native=False
         j = engine.create_item(' B1 ', ' Плата ', category_id=cat.id)
-        self.assertEqual(j.design_item_id, 'B1')
+        self.assertEqual(j.code, 'B1')
         self.assertEqual(j.uom, 'шт')
         self.assertFalse(j.native)
 
     def test_create_item_rejects_dup_empty_and_bad_category(self):
         cat = _cat()
         engine.create_item('R100', 'Резистор', category_id=cat.id)
-        with self.assertRaises(ValidationError):
+        # Ф3b: дубль кода ловит ОБЩИЙ `require_unique_code` (тот же, что у закупок/
+        # заказов/документов с Ф10) — своей реализации у Item больше нет.
+        with self.assertRaises(ValidationError) as ctx:
             engine.create_item('R100', 'Дубль', category_id=cat.id)   # дубль ключа
+        self.assertIn('уже занят', ctx.exception.messages[0])
         with self.assertRaises(ValidationError):
             engine.create_item('', 'Без ключа', category_id=cat.id)
         with self.assertRaises(ValidationError):
@@ -1616,16 +1619,16 @@ class ReferenceCreateHttpTests(TestCase):
 
     def test_create_item_http(self):
         cat = _cat()
-        r = self.c.post('/api/items/', {'design_item_id': 'R100', 'description': 'Резистор',
+        r = self.c.post('/api/items/', {'code': 'R100', 'description': 'Резистор',
             'category_id': cat.id, 'native': False},
             content_type='application/json')
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.json()['design_item_id'], 'R100')
+        self.assertEqual(r.json()['code'], 'R100')
         # появляется в списке
         lst = self.c.get('/api/items/').json()
-        self.assertTrue(any(i['design_item_id'] == 'R100' for i in lst))
+        self.assertTrue(any(i['code'] == 'R100' for i in lst))
         # дубль → 400
-        dup = self.c.post('/api/items/', {'design_item_id': 'R100', 'description': 'Дубль',
+        dup = self.c.post('/api/items/', {'code': 'R100', 'description': 'Дубль',
             'category_id': cat.id}, content_type='application/json')
         self.assertEqual(dup.status_code, 400)
 
@@ -1736,7 +1739,7 @@ class InventoryHttpTests(TestCase):
         self.grey = models.Project.objects.create(
             code='GREY', description='Свободные неучтённые',
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
-        self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
+        self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
@@ -1799,7 +1802,7 @@ class OrderDeleteHttpTests(TestCase):
         self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
-        self.item = models.Item.objects.create(design_item_id='R100', description='R100', category=_cat())
+        self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
@@ -1978,7 +1981,7 @@ class MultiLevelDemandTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         leaves, incomplete = engine.project_leaf_demand(self.prj)
         # только листья A/B, узел SUB не в потребности; кол-во перемножено сквозь дерево
-        self.assertEqual({i.design_item_id: q for i, q in leaves.items()},
+        self.assertEqual({i.code: q for i, q in leaves.items()},
                          {'A': D(50), 'B': D(60)})
         self.assertEqual(incomplete, [])
 
@@ -1986,13 +1989,13 @@ class MultiLevelDemandTests(EngineTestBase):
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         d = engine.project_deficit(self.prj)
-        comps = {c['component_design_item_id']: c for c in d['components']}
+        comps = {c['component_code']: c for c in d['components']}
         self.assertEqual(set(comps), {'A', 'B'})     # свод: SUB не просочился (купить нельзя)
         self.assertEqual(comps['A']['need'], D(50))
         self.assertEqual(comps['B']['need'], D(60))
         # аккордеон — ДЕРЕВО BOM (Ф5b): виден узел SUB + вложенные листья + прямой A.
         # Ключ (код, глубина): A на depth1 (под SUB) и depth0 (прямой) — разные строки.
-        tree = {(n['component_design_item_id'], n['depth']): n
+        tree = {(n['component_code'], n['depth']): n
                 for n in d['demands'][0]['tree']}
         self.assertEqual(set(tree), {('SUB', 0), ('A', 1), ('B', 1), ('A', 0)})
         self.assertFalse(tree[('SUB', 0)]['is_leaf'])   # SUB — узел, не лист
@@ -2014,7 +2017,7 @@ class MultiLevelDemandTests(EngineTestBase):
     def test_command_deficit_explodes_to_leaves(self):
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
-        rows = {r['item_design_item_id']: r for r in engine.command_deficit()['rows']}
+        rows = {r['item_code']: r for r in engine.command_deficit()['rows']}
         self.assertEqual(set(rows), {'A', 'B'})
         self.assertEqual(rows['A']['need'], D(5))
         self.assertEqual(rows['B']['need'], D(6))
@@ -2024,7 +2027,7 @@ class MultiLevelDemandTests(EngineTestBase):
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
         self.receipt_lot(a, self.prj, 100)   # лист A покрыт, лист B — нет
-        tree = {(n['component_design_item_id'], n['depth']): n
+        tree = {(n['component_code'], n['depth']): n
                 for n in engine.project_deficit(self.prj)['demands'][0]['tree']}
         self.assertEqual(tree[('A', 1)]['status'], 'available')   # ✓ покрыт
         self.assertEqual(tree[('B', 1)]['status'], 'to_order')    # ▲ надо купить
@@ -2048,7 +2051,7 @@ class MultiLevelDemandTests(EngineTestBase):
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         self.receipt_lot(a, self.prj, 20)                # A: склад 20 из нужных 50
-        comps = {c['component_design_item_id']: c
+        comps = {c['component_code']: c
                  for c in engine.project_deficit(self.prj)['components']}
         self.assertEqual(comps['A']['need'], D(50))
         self.assertEqual(comps['A']['have'], D(20))
@@ -2071,9 +2074,9 @@ class ProjectBudgetHttpTests(TestCase):
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_budget_projection(self):
-        device = models.Item.objects.create(design_item_id='DEV', description='DEV',
+        device = models.Item.objects.create(code='DEV', description='DEV',
             category=_cat(), native=True)
-        scr = models.Item.objects.create(design_item_id='SCR', description='SCR',
+        scr = models.Item.objects.create(code='SCR', description='SCR',
             category=_cat(), estimated_cost=D(50))
         models.BomLine.objects.create(parent=device, component=scr, qty=D(2))
         models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(10))
@@ -2245,7 +2248,7 @@ class AuthHttpTests(TestCase):
         self.assertEqual(me.status_code, 200)
         cr = self.c.post('/api/kittings/', {'project_id': self.prj.id,
             'target_item_id': models.Item.objects.create(
-                design_item_id='D1', description='Прибор', category=_cat(),
+                code='D1', description='Прибор', category=_cat(),
                 native=True).id, 'qty': 1},
             content_type='application/json')
         self.assertEqual(cr.status_code, 201)
@@ -2341,11 +2344,11 @@ class ProjectDemandEditTests(EngineTestBase):
         engine.add_project_demand(self.prj, dev1, D(5))   # R: 10
         engine.add_project_demand(self.prj, dev2, D(4))   # R: 12 → всего 22
         out = engine.project_deficit(self.prj)
-        agg = {c['component_design_item_id']: c for c in out['components']}
+        agg = {c['component_code']: c for c in out['components']}
         self.assertEqual(agg['R']['need'], D(22))
         self.assertEqual(agg['C']['need'], D(5))
         # Сортировка «горит вперёд»: одинаковый статус (всё к заказу) → по коду.
-        codes = [c['component_design_item_id'] for c in out['components']]
+        codes = [c['component_code'] for c in out['components']]
         self.assertEqual(codes, ['C', 'R'])
 
 
@@ -2377,7 +2380,7 @@ class ItemProjectUpdateTests(EngineTestBase):
         self.make_item('A')
         it = self.make_item('B')
         with self.assertRaises(ValidationError):
-            engine.update_item(it, {'design_item_id': 'A'})  # дубль ключа
+            engine.update_item(it, {'code': 'A'})  # дубль ключа
         with self.assertRaises(ValidationError):
             engine.update_item(it, {'description': '   '})   # пустое описание
         with self.assertRaises(ValidationError):
@@ -3851,11 +3854,11 @@ class EntityDeleteHttpTests(TestCase):
         self.c.force_login(self.user)
 
     def test_item_delete_204_and_guard_400(self):
-        it = models.Item.objects.create(design_item_id='FREE', description='FREE', category=_cat())
+        it = models.Item.objects.create(code='FREE', description='FREE', category=_cat())
         self.assertEqual(self.c.delete(f'/api/items/{it.id}/').status_code, 204)
         self.assertFalse(models.Item.objects.filter(pk=it.pk).exists())
         # с лотом → 400
-        it2 = models.Item.objects.create(design_item_id='WL', description='WL', category=_cat())
+        it2 = models.Item.objects.create(code='WL', description='WL', category=_cat())
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=it2, project=self.prj, origin=r, qty=D(1))
@@ -3868,7 +3871,7 @@ class EntityDeleteHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(
-            item=models.Item.objects.create(design_item_id='M', description='M', category=_cat()),
+            item=models.Item.objects.create(code='M', description='M', category=_cat()),
             project=self.prj, origin=r, qty=D(1))
         engine.rebuild_movements(lot)               # движение на MAIN
         self.assertEqual(self.c.delete(f'/api/locations/{self.main.id}/').status_code, 400)
@@ -3880,7 +3883,7 @@ class EntityDeleteHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-3', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(
-            item=models.Item.objects.create(design_item_id='Q', description='Q', category=_cat()),
+            item=models.Item.objects.create(code='Q', description='Q', category=_cat()),
             project=self.prj, origin=r, qty=D(1))
         engine.rebuild_movements(lot)
         self.assertEqual(self.c.delete(f'/api/projects/{self.prj.id}/').status_code, 400)
@@ -3903,7 +3906,7 @@ _LIB_HEADER = ['Design Item Id', 'Comment', 'Description', 'Footprint Path',
 
 
 def _lib_csv(items):
-    """CP1251-байты CSV библиотеки из списка `(design_item_id, description, temperature)`.
+    """CP1251-байты CSV библиотеки из списка `(code, description, temperature)`.
     Разделитель `;`, финальный LF (как в реальных выгрузках Altium)."""
     lines = [';'.join(_LIB_HEADER)]
     for did, desc, temp in items:
@@ -3920,7 +3923,7 @@ class LibraryParseTests(TestCase):
         cat, rows = engine.parse_library_file('csv/capacitors.csv', raw)
         self.assertEqual(cat, 'capacitors')
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0], {'design_item_id': 'CAP-1', 'description': 'Конденсатор 1',
+        self.assertEqual(rows[0], {'code': 'CAP-1', 'description': 'Конденсатор 1',
                                    'temperature': '-55-125°C', 'category': 'capacitors'})
 
     def test_trailing_blank_line_skipped(self):
@@ -3982,14 +3985,14 @@ class LibraryDiffTests(TestCase):
 
     def _item(self, did, cat, desc='desc', temp='', native=False):
         return models.Item.objects.create(
-            design_item_id=did, description=desc, category=self._cat(cat),
+            code=did, description=desc, category=self._cat(cat),
             temperature=temp, native=native)
 
     def _diff(self, files):
         return engine.library_diff(engine.parse_library(files))
 
     def _by_key(self, rows):
-        return {r['design_item_id']: r for r in rows}
+        return {r['code']: r for r in rows}
 
     def test_new_changed_same(self):
         self._item('CAP-1', 'capacitors', desc='старое', temp='-40-85°C')
@@ -4044,7 +4047,7 @@ class LibraryApplyTests(TestCase):
 
     def _item(self, did, cat, desc='desc', temp='', native=False):
         return models.Item.objects.create(
-            design_item_id=did, description=desc, category=engine.ensure_category(cat),
+            code=did, description=desc, category=engine.ensure_category(cat),
             temperature=temp, native=native)
 
     def test_apply_creates_new(self):
@@ -4052,7 +4055,7 @@ class LibraryApplyTests(TestCase):
         parsed = engine.parse_library(files)
         summary = engine.apply_library_diff(parsed, ['S-1'])
         self.assertEqual(summary['created'], 1)
-        item = models.Item.objects.get(design_item_id='S-1')
+        item = models.Item.objects.get(code='S-1')
         self.assertFalse(item.native)                  # импорт → покупное
         self.assertTrue(item.synced)                     # рождается библиотечным
         self.assertFalse(item.locked)                    # но НЕ запертым — готово под цену
@@ -4064,7 +4067,7 @@ class LibraryApplyTests(TestCase):
         self._item('S-1', 'sensors', desc='старое', temp='')
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
         engine.apply_library_diff(parsed, ['S-1'])
-        item = models.Item.objects.get(design_item_id='S-1')
+        item = models.Item.objects.get(code='S-1')
         self.assertEqual(item.description, 'новое')
         self.assertEqual(item.temperature, '-40-85°C')
         self.assertTrue(item.synced)                     # синк подтвердил библиотечность
@@ -4074,7 +4077,7 @@ class LibraryApplyTests(TestCase):
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-OLD'])
         self.assertEqual(summary['deleted'], 1)
-        self.assertFalse(models.Item.objects.filter(design_item_id='S-OLD').exists())
+        self.assertFalse(models.Item.objects.filter(code='S-OLD').exists())
 
     def test_apply_only_confirmed(self):
         self._item('S-OLD', 'sensors')                   # gone, НЕ подтверждаем
@@ -4082,9 +4085,9 @@ class LibraryApplyTests(TestCase):
             ('S-1', 'новый A', ''), ('S-2', 'новый B', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])   # только S-1
         self.assertEqual(summary['created'], 1)
-        self.assertTrue(models.Item.objects.filter(design_item_id='S-1').exists())
-        self.assertFalse(models.Item.objects.filter(design_item_id='S-2').exists())
-        self.assertTrue(models.Item.objects.filter(design_item_id='S-OLD').exists())
+        self.assertTrue(models.Item.objects.filter(code='S-1').exists())
+        self.assertFalse(models.Item.objects.filter(code='S-2').exists())
+        self.assertTrue(models.Item.objects.filter(code='S-OLD').exists())
 
     def test_apply_mark_sets_synced(self):
         # Ф3a: совпадающее по содержимому непомеченное изделие → mark → synced=True,
@@ -4114,7 +4117,7 @@ class LibraryApplyTests(TestCase):
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-USED'])   # подтверждаем сироту
         self.assertEqual(summary['deleted'], 0)          # orphan — не действие
-        self.assertTrue(models.Item.objects.filter(design_item_id='S-USED').exists())
+        self.assertTrue(models.Item.objects.filter(code='S-USED').exists())
 
 
 class ItemStatusTests(EngineTestBase):
@@ -4181,18 +4184,18 @@ class ItemStatusTests(EngineTestBase):
         # Ф3a: новое библиотечное — synced=True, но locked=False (готово под цену).
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'Датчик', '')]))])
         engine.apply_library_diff(parsed, ['S-1'])
-        item = models.Item.objects.get(design_item_id='S-1')
+        item = models.Item.objects.get(code='S-1')
         self.assertTrue(item.synced)
         self.assertFalse(item.locked)
 
     def test_library_changed_marks_synced_clears_stale_lock(self):
         # заведено руками и залочено (наследие волны 17), затем совпало с библиотекой →
         # синк метит synced И снимает стухший замок (инвариант synced ⟹ not locked)
-        models.Item.objects.create(design_item_id='S-1', description='старое',
+        models.Item.objects.create(code='S-1', description='старое',
                                    category=engine.ensure_category('sensors'), locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
         engine.apply_library_diff(parsed, ['S-1'])
-        item = models.Item.objects.get(design_item_id='S-1')
+        item = models.Item.objects.get(code='S-1')
         self.assertTrue(item.synced)
         self.assertFalse(item.locked)             # стухший замок снят
         self.assertEqual(item.description, 'новое')
@@ -4200,18 +4203,18 @@ class ItemStatusTests(EngineTestBase):
     def test_library_mark_clears_stale_lock(self):
         # содержимое совпадает, но изделие залочено со времён волны 17 → mark снимает
         # замок вместе с пометкой synced (инвариант synced ⟹ not locked)
-        models.Item.objects.create(design_item_id='S-1', description='датчик',
+        models.Item.objects.create(code='S-1', description='датчик',
                                    category=engine.ensure_category('sensors'), locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])
         self.assertEqual(summary['marked'], 1)
-        item = models.Item.objects.get(design_item_id='S-1')
+        item = models.Item.objects.get(code='S-1')
         self.assertTrue(item.synced)
         self.assertFalse(item.locked)
 
     def test_library_deletes_gone_locked(self):
         # ушедшее из библиотеки изделие — зафиксировано; синк расфиксирует и удалит (гейт не мешает)
-        gone = models.Item.objects.create(design_item_id='S-OLD', description='ушло',
+        gone = models.Item.objects.create(code='S-OLD', description='ушло',
                                           category=engine.ensure_category('sensors'),
                                           locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
@@ -4267,7 +4270,7 @@ class ItemAxesTests(EngineTestBase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 models.Item.objects.create(
-                    design_item_id='BAD', description='x', category=_cat(),
+                    code='BAD', description='x', category=_cat(),
                     synced=True, native=True)
 
     def test_synced_implies_not_locked_constraint(self):
@@ -4277,7 +4280,7 @@ class ItemAxesTests(EngineTestBase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 models.Item.objects.create(
-                    design_item_id='BAD2', description='x', category=_cat(),
+                    code='BAD2', description='x', category=_cat(),
                     synced=True, locked=True)
 
     def test_synced_item_edits_price_only(self):
@@ -4303,7 +4306,7 @@ class RollupCostTests(TestCase):
 
     def _item(self, did, native=False, cost=None):
         return models.Item.objects.create(
-            design_item_id=did, description=did, category=_cat(),
+            code=did, description=did, category=_cat(),
             native=native, estimated_cost=(D(cost) if cost is not None else None))
 
     def _bom(self, parent, component, qty):
@@ -4366,14 +4369,14 @@ class LibrarySyncHttpTests(TestCase):
         return SimpleUploadedFile(name, _lib_csv(items), content_type='text/csv')
 
     def test_diff_then_apply(self):
-        models.Item.objects.create(design_item_id='CAP-OLD', description='старьё',
+        models.Item.objects.create(code='CAP-OLD', description='старьё',
                                    category=engine.ensure_category('capacitors'))
         up = self._upload('capacitors.csv', [('CAP-1', 'Конденсатор', '-55-125°C')])
         r = self.c.post('/api/library/diff/', {'files': up})
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body['categories'], ['capacitors'])
-        by = {row['design_item_id']: row for row in body['rows']}
+        by = {row['code']: row for row in body['rows']}
         self.assertEqual(by['CAP-1']['status'], 'new')
         self.assertEqual(by['CAP-OLD']['status'], 'gone')
         # применяем: заводим новый, старый удаляем
@@ -4382,14 +4385,14 @@ class LibrarySyncHttpTests(TestCase):
                         {'files': up2, 'confirmed': json.dumps(['CAP-1', 'CAP-OLD'])})
         self.assertEqual(a.status_code, 200)
         self.assertEqual(a.json(), {'created': 1, 'updated': 0, 'marked': 0, 'deleted': 1})
-        self.assertTrue(models.Item.objects.filter(design_item_id='CAP-1').exists())
-        self.assertFalse(models.Item.objects.filter(design_item_id='CAP-OLD').exists())
+        self.assertTrue(models.Item.objects.filter(code='CAP-1').exists())
+        self.assertFalse(models.Item.objects.filter(code='CAP-OLD').exists())
 
     def test_recalc_cost_endpoint(self):
         cat = _cat()
-        leaf = models.Item.objects.create(design_item_id='L', description='L', category=cat,
+        leaf = models.Item.objects.create(code='L', description='L', category=cat,
                                           estimated_cost=D(7))
-        dev = models.Item.objects.create(design_item_id='D', description='D', category=cat,
+        dev = models.Item.objects.create(code='D', description='D', category=cat,
                                          native=True)
         models.BomLine.objects.create(parent=dev, component=leaf, qty=D(3))
         r = self.c.post(f'/api/items/{dev.id}/recalc-cost/')
@@ -4401,7 +4404,7 @@ class LibrarySyncHttpTests(TestCase):
         self.assertEqual(dev.estimated_cost, D(21))
 
     def test_recalc_cost_rejects_non_produced(self):
-        item = models.Item.objects.create(design_item_id='P', description='P',
+        item = models.Item.objects.create(code='P', description='P',
                                           category=_cat(), estimated_cost=D(5))
         r = self.c.post(f'/api/items/{item.id}/recalc-cost/')
         self.assertEqual(r.status_code, 400)

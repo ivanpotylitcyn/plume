@@ -236,7 +236,7 @@ export default function App() {
     const es: OrderEntry[] = []
     receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.code || r.number,
       name: r.contractor_name, projectCode: r.project_code, locked: r.locked, date: r.date }))
-    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.code || k.target_design_item_id,
+    kittings.forEach(k => es.push({ kind: 'kitting', id: k.id, code: k.code || k.target_code,
       name: k.target_description, projectCode: k.project_code, locked: k.locked, date: k.date }))
     transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.code || t.number,
       name: t.project_code, projectCode: t.project_code, locked: t.locked, date: t.date }))
@@ -283,7 +283,7 @@ export default function App() {
     const e: PaletteEntry[] = []
     projects.forEach(p => e.push({ key: `p${p.id}`, code: p.code, name: p.description,
       kind: 'Проект', open: () => openProject(p.id) }))
-    items.forEach(i => e.push({ key: `i${i.id}`, code: i.design_item_id, name: i.description,
+    items.forEach(i => e.push({ key: `i${i.id}`, code: i.code, name: i.description,
       kind: 'Изделие', open: () => openItem(i.id) }))
     receipts.forEach(r => e.push({ key: `r${r.id}`, code: r.code || r.number, name: r.contractor_name,
       kind: 'Поставка', open: () => openReceipt(r.id) }))
@@ -297,7 +297,7 @@ export default function App() {
       kind: 'Инвентаризация', open: () => openInventory(i.id) }))
     purchases.forEach(p => e.push({ key: `u${p.id}`, code: p.code || `Заказ #${p.id}`, name: p.project_code,
       kind: 'Заказ', open: () => openPurchase(p.id) }))
-    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.code || k.target_design_item_id, name: k.target_description,
+    kittings.forEach(k => e.push({ key: `k${k.id}`, code: k.code || k.target_code, name: k.target_description,
       kind: 'Комплектация', open: () => openKitting(k.id) }))
     relocations.forEach(r => e.push({ key: `l${r.id}`, code: r.code || r.number, name: r.project_code,
       kind: 'Перемещение', open: () => openRelocation(r.id) }))
@@ -348,8 +348,8 @@ export default function App() {
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
             rows={[...items].filter(i => i.native)
-              .sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
-                id: i.id, code: i.design_item_id, name: i.description, category: i.category.description,
+              .sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
+                id: i.id, code: i.code, name: i.description, category: i.category.description,
                 glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'items' &&
@@ -363,8 +363,8 @@ export default function App() {
                 <span className="ci ci-sync" />
                 <span className="code">Синхронизация с библиотекой</span>
               </div>}
-            rows={[...items].sort((a, b) => a.design_item_id.localeCompare(b.design_item_id)).map(i => ({
-              id: i.id, code: i.design_item_id, name: i.description, category: i.category.description,
+            rows={[...items].sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
+              id: i.id, code: i.code, name: i.description, category: i.category.description,
               glyph: <SyncGlyph synced={i.synced} /> }))} />}
 
         {mode === 'orders' &&
@@ -693,7 +693,7 @@ function NewKitting({ projects, items, onCreated }: {
         <dt>Прибор</dt>
         <dd><select className="lot-sel" value={targetId}
           onChange={e => setTargetId(Number(e.target.value))}>
-          {targets.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
+          {targets.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
         </select></dd>
         <dt>Образцов</dt>
         <dd><input className="qty-in" value={qty} onChange={e => setQty(e.target.value)} /></dd>
@@ -752,11 +752,11 @@ function NewPurchase({ projects, onCreated }: {
   )
 }
 
-// Создание нового изделия (справочник, канон «＋ Новое»): артикул + название + вид +
+// Создание нового изделия (справочник, канон «＋ Новое»): код + описание + вид +
 // производимое + ед.изм. + оценочная стоимость (опц.). BOM правится отдельно.
 function NewItem({ onCreated, defaultNative = false }:
   { onCreated: (id: number) => void; defaultNative?: boolean }) {
-  const [designItemId, setDesignItemId] = useState('')
+  const [code, setCode] = useState('')
   const [description, setDescription] = useState('')
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryId, setCategoryId] = useState<number | ''>('')
@@ -773,10 +773,10 @@ function NewItem({ onCreated, defaultNative = false }:
   }, [])
 
   const create = () => {
-    if (!designItemId.trim() || !description.trim()) { setErr('Заполните изделие и описание'); return }
+    if (!code.trim() || !description.trim()) { setErr('Заполните код и описание'); return }
     if (!categoryId) { setErr('Выберите категорию'); return }
     setBusy(true); setErr(null)
-    api.createItem({ design_item_id: designItemId.trim(), description: description.trim(),
+    api.createItem({ code: code.trim(), description: description.trim(),
       category_id: categoryId, uom: uom.trim() || 'шт', temperature: temperature.trim(),
       native, estimated_cost: cost.trim() ? Number(cost) : undefined })
       .then(i => onCreated(i.id))
@@ -787,11 +787,11 @@ function NewItem({ onCreated, defaultNative = false }:
   return (
     <div>
       <h1 className="title">Новое изделие</h1>
-      <div className="subtitle">Справочник · изделие (Design Item Id) + описание + категория · состав (BOM) правится отдельно</div>
+      <div className="subtitle">Справочник · код (Design Item Id библиотеки) + описание + категория · состав (BOM) правится отдельно</div>
       <dl className="props">
-        <dt>Изделие</dt>
-        <dd><input className="qty-in" style={{ width: 200 }} value={designItemId}
-          onChange={e => setDesignItemId(e.target.value)} /></dd>
+        <dt>Код</dt>
+        <dd><input className="qty-in" style={{ width: 200 }} value={code}
+          onChange={e => setCode(e.target.value)} /></dd>
         <dt>Описание</dt>
         <dd><input className="qty-in" style={{ width: 300 }} value={description}
           onChange={e => setDescription(e.target.value)} /></dd>

@@ -94,7 +94,7 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
                   <span className="pn">{l.lot_label}</span>
                 </td>
                 <td>
-                  <a className="link" onClick={() => openItem(l.item_id)}>{l.item_design_item_id}</a>{' '}
+                  <a className="link" onClick={() => openItem(l.item_id)}>{l.item_code}</a>{' '}
                   <span style={{ color: 'var(--fg-dim)' }}>{l.item_description}</span>
                 </td>
                 <td>{l.project_code}{' '}

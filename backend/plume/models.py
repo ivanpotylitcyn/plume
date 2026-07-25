@@ -218,12 +218,13 @@ class Item(models.Model):
     - `synced ⟹ not locked` (библиотечное защищено матрицей «правь только цену», а не
       замком; две оси защиты взаимоисключающи, «библиотечный+зафиксирован» — невозможен).
 
-    Ключ `design_item_id` — канон внешней библиотеки компонентов (колонка `Design
-    Item Id` = заказной PN); осознанно НЕ `item_id`, чтобы не столкнуться с Django
-    FK-PK аксессором `item_id` в рукописном JSON-API (JOURNAL 2026-07-12).
-    Переезд `design_item_id → code` — отдельной сессией (Ф3b)."""
+    Ключ `code` — единый интерфейс идентичности всех сущностей (волна 19: `code` +
+    `description`). Значение = канон внешней библиотеки компонентов (колонка
+    `Design Item Id` = заказной PN). Прежнее имя поля `design_item_id` (Ф3b,
+    2026-07-25) брали, чтобы не столкнуться с Django FK-PK аксессором `item_id`
+    в рукописном JSON-API (JOURNAL 2026-07-12); `code` этой коллизии не создаёт."""
 
-    design_item_id = models.CharField('изделие', max_length=128, unique=True)
+    code = models.CharField('код', max_length=128, unique=True)
     description = models.CharField('описание', max_length=255)
     category = models.ForeignKey(Category, on_delete=models.PROTECT,
                                  related_name='items', verbose_name='категория')
@@ -238,7 +239,7 @@ class Item(models.Model):
     class Meta:
         verbose_name = 'изделие'
         verbose_name_plural = 'изделия'
-        ordering = ['design_item_id']
+        ordering = ['code']
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(synced=False) | models.Q(native=False),
@@ -249,7 +250,7 @@ class Item(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.design_item_id} — {self.description}'
+        return f'{self.code} — {self.description}'
 
 
 class BomLine(models.Model):
@@ -271,7 +272,7 @@ class BomLine(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.parent.design_item_id} ⊃ {self.component.design_item_id} ×{self.qty}'
+        return f'{self.parent.code} ⊃ {self.component.code} ×{self.qty}'
 
 
 class Counterparty(models.Model):
@@ -385,7 +386,7 @@ class ProjectDemand(models.Model):
         verbose_name_plural = 'потребности проектов'
 
     def __str__(self):
-        return f'{self.project.code}: {self.target_item.design_item_id} ×{self.qty}'
+        return f'{self.project.code}: {self.target_item.code} ×{self.qty}'
 
 
 # --------------------------------------------------------------------------- #
@@ -434,7 +435,7 @@ class ProcurementLine(models.Model):
         verbose_name_plural = 'строки закупки'
 
     def __str__(self):
-        return f'{self.item.design_item_id} ×{self.qty}'
+        return f'{self.item.code} ×{self.qty}'
 
 
 class Purchase(models.Model):
@@ -480,7 +481,7 @@ class PurchaseLine(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.item.design_item_id} ×{self.qty}'
+        return f'{self.item.code} ×{self.qty}'
 
 
 # --------------------------------------------------------------------------- #
@@ -519,7 +520,7 @@ class Kitting(StockDocument):
         verbose_name_plural = 'комплектации'
 
     def __str__(self):
-        return (f'Комплектация #{self.pk} {self.target_item.design_item_id}'
+        return (f'Комплектация #{self.pk} {self.target_item.code}'
                 + (' 🔒' if self.locked else ''))
 
 
@@ -576,7 +577,7 @@ class Lot(models.Model):
     # `lot_name` — человеческий (имена из УПД + заводские №); `part_number` —
     # строгий машинный (MPN с datasheet / децимальный номер; для станка
     # автомонтажа). PN живёт на `Lot`, а не на `Item`: упаковка/исполнение
-    # варьируются от поставки; `Item.design_item_id` — абстрактный артикул.
+    # варьируются от поставки; `Item.code` — абстрактный артикул.
     lot_name = models.CharField('название партии', max_length=255,
                                 blank=True, default='')
     part_number = models.CharField('part number', max_length=128,
@@ -602,7 +603,7 @@ class Lot(models.Model):
             )
 
     def __str__(self):
-        return f'Lot#{self.pk} {self.item.design_item_id} ({self.project.code})'
+        return f'Lot#{self.pk} {self.item.code} ({self.project.code})'
 
 
 class StockMovement(models.Model):

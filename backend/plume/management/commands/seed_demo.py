@@ -50,19 +50,19 @@ class Command(BaseCommand):
 
         # --- справочник изделий + BOM ---------------------------------- #
         device = models.Item.objects.create(
-            design_item_id='ИЗДЕЛИЕ-А', description='Прибор А', category=cat_device,
+            code='ИЗДЕЛИЕ-А', description='Прибор А', category=cat_device,
             uom='шт', native=True)
         board = models.Item.objects.create(
-            design_item_id='ПЛАТА-1', description='Плата управления', category=cat_board,
+            code='ПЛАТА-1', description='Плата управления', category=cat_board,
             uom='шт', native=True, estimated_cost=1500)
         case = models.Item.objects.create(
-            design_item_id='КОРПУС-1', description='Корпус алюминиевый', category=cat_mech,
+            code='КОРПУС-1', description='Корпус алюминиевый', category=cat_mech,
             uom='шт', estimated_cost=800)
         screw = models.Item.objects.create(
-            design_item_id='ВИНТ-М3', description='Винт М3×8', category=cat_fastener,
+            code='ВИНТ-М3', description='Винт М3×8', category=cat_fastener,
             uom='шт', estimated_cost=2)
         res = models.Item.objects.create(
-            design_item_id='РЕЗ-10К', description='Резистор 10 кОм', category=cat_res,
+            code='РЕЗ-10К', description='Резистор 10 кОм', category=cat_res,
             uom='шт', estimated_cost=1)
 
         models.BomLine.objects.create(parent=device, component=board, qty=1)

@@ -122,7 +122,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
         <span className="pn">{ln.lot_label}</span>
       </td>
       <td>
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_design_item_id}</a>{' '}
+        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a>{' '}
         <span style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</span>
       </td>
       <td className="num">
@@ -174,7 +174,7 @@ function GhostRow({ transferId, lots, busy, run }: {
           <option value="">＋ партия…</option>
           {lots.map(l => (
             <option key={l.lot_id} value={l.lot_id}>
-              #{l.lot_id} {l.item_design_item_id}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
+              #{l.lot_id} {l.item_code}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
             </option>
           ))}
         </select>

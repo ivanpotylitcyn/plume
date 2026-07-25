@@ -112,7 +112,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
         <span className="pn">{m.lot_label}</span>
       </td>
       <td>
-        <a className="link" onClick={() => openItem(m.item_id)}>{m.item_design_item_id}</a>{' '}
+        <a className="link" onClick={() => openItem(m.item_id)}>{m.item_code}</a>{' '}
         <span style={{ color: 'var(--fg-dim)' }}>{m.item_description}</span>
       </td>
       <td className="num">
@@ -186,7 +186,7 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
           <option value="">＋ лот…</option>
           {lots.map(l => (
             <option key={l.lot_id} value={l.lot_id}>
-              #{l.lot_id} {l.item_design_item_id}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
+              #{l.lot_id} {l.item_code}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
             </option>
           ))}
         </select>

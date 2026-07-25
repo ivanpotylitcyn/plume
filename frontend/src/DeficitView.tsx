@@ -206,7 +206,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
           <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
             onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
           <ItemGlyph native={d.target_native} synced={d.target_synced} locked={d.target_locked} />
-          <a className="link" onClick={() => openItem(d.target_id)}>{d.target_design_item_id}</a>
+          <a className="link" onClick={() => openItem(d.target_id)}>{d.target_code}</a>
         </span>
         <span className="name">{d.target_description}</span>
         <span className="pnum">
@@ -225,7 +225,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
         <span className="act">
           {editable &&
             <button className="x" title="убрать прибор из потребности" disabled={busy}
-              onClick={() => { if (confirm(`Убрать ${d.target_design_item_id} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
+              onClick={() => { if (confirm(`Убрать ${d.target_code} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
         </span>
       </div>
       {open && (d.tree.length === 0
@@ -282,7 +282,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
               onClick={onToggle}>{expanded ? '▾' : '▸'}</button>
           : <span className="tree-lead" />}
         <ItemGlyph native={n.component_native} synced={n.component_synced} locked={n.component_locked} />
-        <a className="link" onClick={() => openItem(n.component_id)}>{n.component_design_item_id}</a>
+        <a className="link" onClick={() => openItem(n.component_id)}>{n.component_code}</a>
       </span>
       <span className="name">{n.component_description}</span>
       <span className="pnum">{num(n.need)} {n.uom}</span>
@@ -314,7 +314,7 @@ function CompRow({ ln, busy, openItem, order }: {
     <div className={`prow prow--comp s-${ln.status}`}>
       <span className="tree-cell">
         <ItemGlyph native={ln.component_native} synced={ln.component_synced} locked={ln.component_locked} />
-        <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_design_item_id}</a>
+        <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_code}</a>
       </span>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)} {ln.uom}</span>
@@ -362,7 +362,7 @@ function AddDevice({ items, demands, busy, add }: {
       <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ прибор</span>
       <select className="lot-sel" value={targetId} disabled={busy}
         onChange={e => setTargetId(Number(e.target.value))}>
-        {options.map(i => <option key={i.id} value={i.id}>{i.design_item_id} — {i.description}</option>)}
+        {options.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
       </select>
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}
