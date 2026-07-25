@@ -400,17 +400,34 @@ tr.row.ghost .glyph { opacity: 1; }
 .lot-sel:focus { outline: none; border-color: var(--accent); }
 .lot-sel:disabled { opacity: .5; }
 
-/* Ф3 (волна 16): type-ahead выпадашка выбора компонента в составе (BOM). */
-.typeahead-menu { position: absolute; z-index: 20; margin-top: 2px; min-width: 320px;
+/* Ф3 (волна 16): type-ahead выпадашка выбора компонента в составе (BOM).
+   Ф2 (волна 19): та же выпадашка — знак единого пикера (`Picker.tsx`) во всех формах. */
+/* Ширина меню — «сколько нужно, но не во весь экран»: правая граница всегда видна и
+   не прижата к краю окна. Длинное описание обрезается многоточием в своей колонке
+   (§7a), `code` не жмётся никогда. Отступ от края = зазору между колонками (8px) —
+   иначе глиф визуально «отлипает» от кода. */
+.typeahead-menu { position: absolute; z-index: 20; margin-top: 2px;
+  min-width: 320px; max-width: min(680px, calc(100vw - 64px));
   max-height: 240px; overflow-y: auto; background: var(--bg-widget);
   border: 1px solid var(--border-strong); border-radius: 4px;
   box-shadow: 0 6px 20px #00000055; }
-.typeahead-item { display: flex; align-items: center; gap: 8px; padding: 3px 12px;
+.typeahead-item { display: flex; align-items: center; gap: 8px; padding: 3px 8px;
   cursor: pointer; white-space: nowrap; font-size: 12px; }
-.typeahead-item:hover { background: var(--bg-hover); }
-.typeahead-item .code { color: var(--fg); font-family: var(--font-mono);
+.typeahead-item:hover, .typeahead-item.active { background: var(--bg-hover); }
+.typeahead-item .code { flex: 0 0 auto; color: var(--fg); font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; }
+.typeahead-item .dim { color: var(--fg-dim); }
+/* Всё, что не глиф и не код, — текстовая колонка: жмётся и обрезается многоточием. */
+.typeahead-item > span:not(.code):not(.ci) { min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; }
 .typeahead-item .ci { flex: 0 0 auto; font-size: 13px; color: var(--fg-dim); }
+
+/* Обёртка пикера: даёт меню точку отсчёта, поэтому он одинаково работает и в ячейке
+   таблицы (призрачная строка), и в `dd` формы. */
+.picker { position: relative; display: inline-block; }
+.picker-empty { position: absolute; z-index: 20; margin-top: 2px; white-space: nowrap;
+  padding: 3px 12px; font-size: 12px; color: var(--fg-dim); background: var(--bg-widget);
+  border: 1px solid var(--border-strong); border-radius: 4px; }
 
 .x { background: none; border: none; color: var(--fg-dim); cursor: pointer;
   font-size: 15px; line-height: 1; padding: 0 4px; }

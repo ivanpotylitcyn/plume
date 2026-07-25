@@ -9,6 +9,7 @@ import { api, type ItemRow, type ProcurementRow, type PurchaseCockpit,
 import { CommitInput } from './ReceiptView'
 import { AnchorSelect, AuthorField, FormHeader, ProjectField, useFormLock } from './FormHeader'
 import { Glyph, StatusGlyph, statusTone, num } from './status'
+import { ItemPicker } from './Picker'
 
 export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, onChanged, onDeleted }: {
   purchaseId: number; items: ItemRow[]; isNew: boolean
@@ -183,11 +184,8 @@ function GhostRow({ purchaseId, items, busy, run }: {
   return (
     <tr className="row ghost">
       <td>
-        <select className="lot-sel" value={itemId} disabled={busy}
-          onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
-        </select>
+        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
+          width={240} placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"

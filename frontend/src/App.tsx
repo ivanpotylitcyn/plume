@@ -20,6 +20,7 @@ import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm, type OrderKind } from './OrderForm'
 import { LocationView } from './LocationView'
 import { StatusGlyph, SyncGlyph, statusTone } from './status'
+import { CounterpartyPicker, ItemPicker } from './Picker'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
@@ -665,7 +666,9 @@ function NewKitting({ projects, items, onCreated }: {
   const externalProjects = projects.filter(p => p.kind === 'external')
   const targets = items.filter(i => i.native)
   const [projectId, setProjectId] = useState<number | ''>(externalProjects[0]?.id ?? '')
-  const [targetId, setTargetId] = useState<number | ''>(targets[0]?.id ?? '')
+  // Ф2 (волна 19): прибор выбирают явно — автоподстановки первого нет (комплектация
+  // не того прибора рождает партию, которую потом разбирать документами).
+  const [targetId, setTargetId] = useState<number | ''>('')
   const [qty, setQty] = useState('1')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -691,10 +694,9 @@ function NewKitting({ projects, items, onCreated }: {
           {externalProjects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.description}</option>)}
         </select></dd>
         <dt>Прибор</dt>
-        <dd><select className="lot-sel" value={targetId}
-          onChange={e => setTargetId(Number(e.target.value))}>
-          {targets.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
-        </select></dd>
+        <dd><ItemPicker items={targets} value={targetId} onPick={setTargetId}
+          disabled={busy} width={240}
+          notFound="ничего не найдено — прибор должен быть изделием (не компонентом)." /></dd>
         <dt>Образцов</dt>
         <dd><input className="qty-in" value={qty} onChange={e => setQty(e.target.value)} /></dd>
       </dl>
@@ -948,11 +950,9 @@ function NewTransfer({ projects, onCreated }: {
         </select></dd>
         <dt>Заказчик</dt>
         <dd>
-          <select className="lot-sel" value={customerId} disabled={busy}
-            onChange={e => setCustomerId(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">— не указан —</option>
-            {customers.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
-          </select>
+          <CounterpartyPicker counterparties={customers} value={customerId} width={200}
+            disabled={busy} placeholder="— не указан —" onPick={setCustomerId}
+            onClear={() => setCustomerId('')} />
           {' '}
           <input className="qty-in" style={{ width: 160 }} value={newCustomer}
             placeholder="новый заказчик…" disabled={busy}
@@ -1220,12 +1220,9 @@ function NewReceipt({ projects, onCreated }: {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    api.counterparties('supplier').then(ss => {
-      setSuppliers(ss)
-      setSupplierId(s => s || (ss[0]?.id ?? ''))
-    })
-  }, [])
+  // Ф2 (волна 19): поставщика выбирают явно — молчаливого первого больше нет
+  // (УПД — юридический документ, «не тот поставщик» дороже лишнего клика).
+  useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
 
   const addSupplier = () => {
     const description = newSupplier.trim()
@@ -1256,11 +1253,9 @@ function NewReceipt({ projects, onCreated }: {
       <dl className="props">
         <dt>Поставщик</dt>
         <dd>
-          <select className="lot-sel" value={supplierId} disabled={busy}
-            onChange={e => setSupplierId(e.target.value ? Number(e.target.value) : '')}>
-            {suppliers.length === 0 && <option value="">— нет, создайте ниже —</option>}
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.description}</option>)}
-          </select>
+          <CounterpartyPicker counterparties={suppliers} value={supplierId} width={200}
+            disabled={busy} onPick={setSupplierId} onClear={() => setSupplierId('')}
+            placeholder={suppliers.length ? 'код или название…' : '— нет, создайте рядом —'} />
           {' '}
           <input className="qty-in" style={{ width: 160 }} value={newSupplier}
             placeholder="новый поставщик…" disabled={busy}

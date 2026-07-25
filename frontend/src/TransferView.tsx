@@ -10,6 +10,7 @@ import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
+import { CounterpartyPicker } from './Picker'
 
 export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted }: {
   transferId: number
@@ -70,12 +71,10 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
           validate={v => v.trim().length > 0} /></dd>
         <dt>Заказчик</dt>
         <dd>
-          <select className="lot-sel" value={c.contractor_id ?? ''} disabled={locked || busy}
-            onChange={e => run(api.updateTransfer(c.id, {
-              contractor_id: e.target.value ? Number(e.target.value) : null }))}>
-            <option value="">— не указан —</option>
-            {customers.map(cp => <option key={cp.id} value={cp.id}>{cp.description}</option>)}
-          </select>
+          <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
+            disabled={locked || busy} width={240} placeholder="— не указан —"
+            onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
+            onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))} />
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
           onChange={id => run(api.updateTransfer(c.id, { user_id: id }))} />

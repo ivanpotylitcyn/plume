@@ -9,6 +9,7 @@ import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, useFormLock } from './FormHeader'
 import { PeggingPanel } from './PeggingPanel'
+import { CounterpartyPicker, ItemPicker } from './Picker'
 import { StatusGlyph, ItemGlyph, num } from './status'
 
 export function ProcurementView({ procurementId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
@@ -88,12 +89,10 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
           onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></dd>
         <dt>Контрагент</dt>
         <dd>
-          <select className="lot-sel" value={c.contractor_id ?? ''} disabled={!editable || busy}
-            onChange={e => run(api.updateProcurement(c.id, {
-              contractor_id: e.target.value ? Number(e.target.value) : null }))}>
-            <option value="">— не указан —</option>
-            {suppliers.map(cp => <option key={cp.id} value={cp.id}>{cp.description}</option>)}
-          </select>
+          <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+            disabled={!editable || busy} width={240} placeholder="— не указан —"
+            onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
+            onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))} />
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
@@ -170,11 +169,8 @@ function GhostRow({ procurementId, items, busy, run }: {
   return (
     <tr className="row ghost">
       <td colSpan={2}>
-        <select className="lot-sel" value={itemId} disabled={busy}
-          onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
-        </select>
+        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
+          width={240} placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
 import { num, ItemGlyph } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
+import { ItemPicker } from './Picker'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
 
@@ -253,9 +254,9 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
 
 // Добавить компонент в состав: пикер изделий (кроме самого и уже добавленных) + кол-во.
 // Циклы/дубли ловит бэкенд — здесь только базовый отсев для чистого списка.
-// Ф3 (волна 16): вместо большого <select> со всеми изделиями — type-ahead.
-// Вводишь код/название → список кандидатов сокращается → выбираешь. Отсев самого
-// изделия и уже добавленных остаётся. Пока компонент не выбран — кнопка заблокирована.
+// Ф3 (волна 16) сделала здесь первый type-ahead; Ф2 (волна 19) вынесла его в общий
+// `ItemPicker` — этот блок стал тонкой обёрткой: отсев кандидатов + кол-во + кнопка.
+// Пока компонент не выбран — кнопка заблокирована.
 function AddComponent({ items, parentId, bom, busy, add }: {
   items: ItemRow[]; parentId: number; bom: ItemDetail['bom']; busy: boolean
   add: (componentId: number, qty: number) => void
@@ -264,55 +265,29 @@ function AddComponent({ items, parentId, bom, busy, add }: {
     const taken = new Set(bom.map(b => b.component_id))
     return items.filter(i => i.id !== parentId && !taken.has(i.id))
   }, [items, parentId, bom])
-  const [q, setQ] = useState('')
   const [componentId, setComponentId] = useState<number | ''>('')
   const [qty, setQty] = useState('1')
-
-  const matches = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    if (!s) return []
-    return options.filter(i =>
-      i.code.toLowerCase().includes(s) || i.description.toLowerCase().includes(s)
-    ).slice(0, 20)
-  }, [options, q])
-
-  const pick = (i: ItemRow) => { setComponentId(i.id); setQ(`${i.code} — ${i.description}`) }
 
   const submit = () => {
     const n = Number(qty)
     if (!componentId || !(n > 0)) return
     add(componentId, n)
-    setComponentId(''); setQ('')
+    setComponentId('')
   }
 
   if (options.length === 0)
     return <div className="kit-actions" style={{ marginTop: 10, color: 'var(--fg-dim)', fontSize: 12 }}>
       ＋ компонент: нет доступных изделий.</div>
   return (
-    <div style={{ marginTop: 10, position: 'relative' }}>
-      <div className="kit-actions">
-        <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ компонент</span>
-        <input className="lot-sel" value={q} disabled={busy} placeholder="код или название…"
-          onChange={e => { setQ(e.target.value); setComponentId('') }}
-          onKeyDown={e => { if (e.key === 'Enter' && componentId) submit() }} />
-        <input className="qty-in" value={qty} disabled={busy}
-          onChange={e => setQty(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && componentId) submit() }} />
-        <button className="btn sm" disabled={busy || !componentId} onClick={submit}>добавить</button>
-      </div>
-      {componentId === '' && matches.length > 0 &&
-        <div className="typeahead-menu">
-          {matches.map(i => (
-            <div key={i.id} className="typeahead-item" onClick={() => pick(i)}>
-              <span className="ci ci-chip" />
-              <span className="code">{i.code}</span>
-              <span style={{ color: 'var(--fg-dim)' }}>{i.description}</span>
-            </div>
-          ))}
-        </div>}
-      {componentId === '' && q.trim() && matches.length === 0 &&
-        <div style={{ color: 'var(--fg-dim)', fontSize: 12, marginTop: 4 }}>
-          ничего не найдено — компонент должен быть в справочнике изделий.</div>}
+    <div className="kit-actions" style={{ marginTop: 10 }}>
+      <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ компонент</span>
+      <ItemPicker items={options} value={componentId} onPick={setComponentId}
+        disabled={busy} width={240} onEnter={submit}
+        notFound="ничего не найдено — компонент должен быть в справочнике изделий." />
+      <input className="qty-in" value={qty} disabled={busy}
+        onChange={e => setQty(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && componentId) submit() }} />
+      <button className="btn sm" disabled={busy || !componentId} onClick={submit}>добавить</button>
     </div>
   )
 }

@@ -8,6 +8,7 @@ import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { ItemPicker, PurchasePicker } from './Picker'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
   receiptId: number; items: ItemRow[]; isNew: boolean
@@ -69,14 +70,10 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
 
       <div className="kit-actions">
         <span className="hint">Заказ (закрывает):</span>
-        <select className="lot-sel" value={c.purchase_id ?? ''} disabled={locked || busy}
-          onChange={e => run(api.linkReceiptPurchase(
-            c.id, e.target.value ? Number(e.target.value) : null))}>
-          <option value="">— не связан —</option>
-          {purchases.map(p => (
-            <option key={p.id} value={p.id}>Заказ #{p.id}{p.locked ? ' · зафиксирован' : ''} · {p.lines} стр.</option>
-          ))}
-        </select>
+        <PurchasePicker purchases={purchases} value={c.purchase_id ?? ''}
+          disabled={locked || busy}
+          onPick={id => run(api.linkReceiptPurchase(c.id, id))}
+          onClear={() => run(api.linkReceiptPurchase(c.id, null))} />
         {c.purchase_id &&
           <a className="link" onClick={() => openPurchase(c.purchase_id!)}>открыть заказ ›</a>}
       </div>
@@ -173,11 +170,8 @@ function GhostRow({ receiptId, items, busy, run }: {
   return (
     <tr className="row ghost">
       <td>
-        <select className="lot-sel" value={itemId} disabled={busy}
-          onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
-        </select>
+        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
+          width={200} placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"

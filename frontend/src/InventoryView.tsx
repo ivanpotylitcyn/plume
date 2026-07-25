@@ -11,6 +11,7 @@ import { StatusGlyph, num } from './status'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
+import { ItemPicker } from './Picker'
 
 export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, onDeleted }: {
   inventoryId: number; items: ItemRow[]; isNew: boolean
@@ -166,11 +167,8 @@ function GhostRow({ inventoryId, items, busy, run }: {
   return (
     <tr className="row ghost">
       <td>
-        <select className="lot-sel" value={itemId} disabled={busy}
-          onChange={e => setItemId(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">＋ изделие…</option>
-          {items.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
-        </select>
+        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
+          width={200} placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"

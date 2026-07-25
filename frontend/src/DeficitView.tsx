@@ -8,6 +8,7 @@ import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDema
 import { LayerSeg, money, num, ItemGlyph } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
+import { ItemPicker } from './Picker'
 
 export function DeficitView({ projectId, items, isNew, closed, openItem, openPurchase, onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean; closed: boolean
@@ -344,14 +345,16 @@ function AddDevice({ items, demands, busy, add }: {
 }) {
   const taken = new Set(demands.map(d => d.target_id))
   const options = items.filter(i => i.native && !taken.has(i.id))
+  // Ф2 (волна 19): автовыбора первого прибора нет — выбор прибора всегда явный
+  // (молчаливый первый вариант был источником ошибочных строк потребности).
   const [targetId, setTargetId] = useState<number | ''>('')
   const [qty, setQty] = useState('1')
-  useEffect(() => { setTargetId(options[0]?.id ?? '') }, [options.map(o => o.id).join()])
 
   const submit = () => {
     const n = Number(qty)
     if (!targetId || !(n > 0)) return
     add(targetId, n)
+    setTargetId('')
   }
 
   if (options.length === 0)
@@ -360,14 +363,13 @@ function AddDevice({ items, demands, busy, add }: {
   return (
     <div className="kit-actions" style={{ marginTop: 10 }}>
       <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ прибор</span>
-      <select className="lot-sel" value={targetId} disabled={busy}
-        onChange={e => setTargetId(Number(e.target.value))}>
-        {options.map(i => <option key={i.id} value={i.id}>{i.code} — {i.description}</option>)}
-      </select>
+      <ItemPicker items={options} value={targetId} onPick={setTargetId} disabled={busy}
+        width={240} onEnter={submit}
+        notFound="ничего не найдено — прибор должен быть изделием (не компонентом)." />
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') submit() }} />
-      <button className="btn sm" disabled={busy} onClick={submit}>добавить</button>
+      <button className="btn sm" disabled={busy || !targetId} onClick={submit}>добавить</button>
     </div>
   )
 }
