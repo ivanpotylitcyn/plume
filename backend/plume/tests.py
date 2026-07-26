@@ -2147,11 +2147,51 @@ class AttachmentTests(EngineTestBase):
         self.assertEqual(rows[0]['url'], f'/api/attachments/{a2.id}/download/')
 
     def test_unknown_owner_type_rejected(self):
-        # purchase/procurement НЕ владельцы вложений (нет FK в модели)
+        # Волна 19, Ф12b: владельцев стало шесть, но список закрытый — склад и
+        # категория в него намеренно не входят.
         with self.assertRaises(ValidationError):
-            engine.resolve_attachment_owner('purchase', 1)
+            engine.resolve_attachment_owner('location', 1)
         with self.assertRaises(ValidationError):
             engine.attachments_for('bogus', 1)
+
+    def test_non_order_owners_hold_own_field(self):
+        """Волна 19, Ф12b: проект/закупка/заказ/контрагент держат СВОЁ поле (в MTI не
+        входят, в `document` не схлопываются); дуга по-прежнему из ровно одного."""
+        proc = models.Procurement.objects.create(user=self.user)
+        purch = models.Purchase.objects.create(procurement=proc, project=self.prj,
+                                               user=self.user)
+        owners = {'project': self.prj, 'procurement': proc, 'purchase': purch,
+                  'counterparty': self.supplier}
+        for owner_type, owner in owners.items():
+            with self.subTest(owner_type):
+                att = engine.add_attachment(owner_type, owner,
+                                            self._file(f'{owner_type}.pdf'), self.user)
+                self.assertEqual(getattr(att, f'{owner_type}_id'), owner.pk)
+                others = set(models.ATTACHMENT_OWNER_FIELDS) - {owner_type}
+                for f in others:
+                    self.assertIsNone(getattr(att, f'{f}_id'))
+                rows = engine.attachments_for(owner_type, owner.pk)
+                self.assertEqual([r['id'] for r in rows], [att.id])
+
+    def test_owner_delete_sweeps_files(self):
+        """Каскад БД унёс бы строку, оставив файл на диске сиротой — владельцы
+        подметают за собой так же, как ордер и изделие."""
+        proc = models.Procurement.objects.create(user=self.user)
+        purch = models.Purchase.objects.create(procurement=proc, project=self.prj,
+                                               user=self.user)
+        prj = models.Project.objects.create(code='P-DEL', description='На снос',
+                                            kind=models.Project.Kind.EXTERNAL)
+        cases = [('purchase', purch, engine.delete_purchase),
+                 ('procurement', proc, engine.delete_procurement),
+                 ('project', prj, engine.delete_project)]
+        for owner_type, owner, delete in cases:       # заказ раньше закупки (PROTECT)
+            with self.subTest(owner_type):
+                att = engine.add_attachment(owner_type, owner,
+                                            self._file(f'{owner_type}.pdf'), self.user)
+                path = att.file.path
+                delete(owner)
+                self.assertFalse(models.Attachment.objects.filter(pk=att.id).exists())
+                self.assertFalse(os.path.exists(path))
 
     def test_oversize_rejected(self):
         big = SimpleUploadedFile('big.bin', b'x' * 10, content_type='application/octet-stream')
@@ -2238,7 +2278,13 @@ class AttachmentHttpTests(TestCase):
 
     def test_bad_owner_type(self):
         up = SimpleUploadedFile('x.pdf', b'x', content_type='application/pdf')
-        r = self.c.post('/api/attachments/purchase/1/', {'file': up})
+        r = self.c.post('/api/attachments/location/1/', {'file': up})
+        self.assertEqual(r.status_code, 400)
+
+    def test_owner_not_found(self):
+        """Тип известен (волна 19, Ф12b), а записи нет — тоже 400, но по другой причине."""
+        up = SimpleUploadedFile('x.pdf', b'x', content_type='application/pdf')
+        r = self.c.post('/api/attachments/purchase/999/', {'file': up})
         self.assertEqual(r.status_code, 400)
 
     def test_missing_file(self):
@@ -2804,9 +2850,10 @@ class Wave13Fase2bTests(EngineTestBase):
         self.assertEqual(issue.source_type, models.StockDocument.Kind.WRITEOFF)
         self.assertEqual(issue.source_id, w.pk)
 
-    def test_attachment_owner_two_way_arc(self):
-        """Владелец вложения — Item ИЛИ ордер: 'receipt' → `document`, 'item' → `item`;
-        API-строки owner_type те же; ровно один задан (Check жив, но двухпутный)."""
+    def test_attachment_owner_arc_through_mti(self):
+        """Шесть видов ордера схлопнуты в один FK `document`, остальные владельцы держат
+        своё поле: 'receipt' → `document`, 'item' → `item`; API-строки owner_type те же;
+        ровно один задан (Check жив, теперь на шесть путей — волна 19, Ф12b)."""
         r = models.Receipt.objects.create(
             number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
@@ -2825,6 +2872,9 @@ class Wave13Fase2bTests(EngineTestBase):
         field_names = {f.name for f in models.Attachment._meta.get_fields()}
         self.assertFalse({'transfer', 'kitting', 'inventory', 'writeoff',
                           'requisition'} & field_names)
+        # не-ордерные владельцы, наоборот, поля имеют (Ф12b)
+        self.assertLessEqual({'project', 'procurement', 'purchase', 'counterparty'},
+                             field_names)
         self.assertIn('attachment_exactly_one_owner',
                       self._constraint_names(models.Attachment))
 

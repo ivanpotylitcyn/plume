@@ -49,9 +49,14 @@ def _validate_exactly_one(instance, fields, label):
 # exclusive-arc наборы FK (модульные — нужны и в Meta-констрейнтах, и в методах).
 # Волна 13, Ф2b: дуги `Lot.origin` (4 FK) и `StockLine.document` (4 FK) СХЛОПНУТЫ в
 # один FK на MTI-родителя `StockDocument` (id-пространство унифицировано в Ф2a) —
-# их exclusive-arc наборы и Check умерли. У `Attachment` владельца два (Item — не
-# ордер — не поднимается в MTI), поэтому дуга остаётся, но всего из двух полей.
-ATTACHMENT_OWNER_FIELDS = ('item', 'document')
+# их exclusive-arc наборы и Check умерли. У `Attachment` дуга остаётся: ордера
+# схлопнуты в `document`, но всё остальное в MTI не входит и держит своё поле.
+# Волна 19, Ф12b: файлы нужны не только изделию и ордеру — проекту (ТЗ, договор),
+# закупке/заказу (бланк запроса, счёт, КП) и контрагенту («карточка предприятия»:
+# сегодня она болтается по чатам). `Location`/`Category` намеренно НЕ владельцы —
+# заведём, когда заболит (решение Ивана 2026-07-26).
+ATTACHMENT_OWNER_FIELDS = ('item', 'document', 'project', 'procurement',
+                           'purchase', 'counterparty')
 
 
 # --------------------------------------------------------------------------- #
@@ -751,14 +756,24 @@ class Attachment(models.Model):
     uploaded_at = models.DateTimeField('загружено', auto_now_add=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='attachments', verbose_name='загрузил')
-    # владелец (exclusive arc из двух): изделие ИЛИ ордер. Волна 13, Ф2b схлопнула
-    # 6 документных FK в один `document` → `StockDocument` (MTI-родитель); `item`
-    # остаётся — изделие не ордер, в MTI не входит.
+    # владелец (exclusive arc, ровно один из шести): изделие, ордер, проект, закупка,
+    # заказ или контрагент. Волна 13, Ф2b схлопнула 6 документных FK в один
+    # `document` → `StockDocument` (MTI-родитель); остальные в MTI не входят и держат
+    # своё поле. Все владельцы — `CASCADE`: вложение без владельца не существует
+    # (физический файл при удалении владельца снимает движок, `delete_attachment`).
     item = models.ForeignKey(Item, on_delete=models.CASCADE, null=True, blank=True,
                              related_name='attachments')
     document = models.ForeignKey(StockDocument, on_delete=models.CASCADE, null=True,
                                  blank=True, related_name='attachments',
                                  verbose_name='ордер-владелец')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, null=True,
+                                blank=True, related_name='attachments')
+    procurement = models.ForeignKey(Procurement, on_delete=models.CASCADE, null=True,
+                                    blank=True, related_name='attachments')
+    purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, null=True,
+                                 blank=True, related_name='attachments')
+    counterparty = models.ForeignKey(Counterparty, on_delete=models.CASCADE, null=True,
+                                     blank=True, related_name='attachments')
 
     class Meta:
         verbose_name = 'вложение'

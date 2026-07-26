@@ -1291,6 +1291,8 @@ def delete_purchase(purchase):
             'Заказ утверждён — сперва верните его в черновик (снимите замок), затем удаляйте.')
     if purchase.receipts.exists():
         raise ValidationError('К заказу привязаны поставки (приход) — удаление заблокировано.')
+    for att in purchase.attachments.all():         # физические файлы (каскад их сиротит)
+        delete_attachment(att)
     try:
         purchase.delete()                          # каскад: строки заказа
     except ProtectedError:
@@ -2486,6 +2488,8 @@ def delete_procurement(procurement):
             'Закупка утверждена — сперва верните её в черновик (снимите замок), затем удаляйте.')
     if procurement.purchases.exists():
         raise ValidationError('К закупке привязаны заказы — удаление заблокировано.')
+    for att in procurement.attachments.all():      # физические файлы (каскад их сиротит)
+        delete_attachment(att)
     try:
         procurement.delete()                       # каскад: строки закупки
     except ProtectedError:
@@ -3382,6 +3386,8 @@ def delete_project(project):
         raise ValidationError('К проекту привязаны заказы — удаление заблокировано.')
     if project.demands.exists():
         raise ValidationError('В проекте есть потребности (приборы) — сперва уберите их.')
+    for att in project.attachments.all():          # физические файлы (каскад их сиротит)
+        delete_attachment(att)
     try:
         project.delete()
     except ProtectedError:
@@ -3498,12 +3504,24 @@ ATTACHMENT_OWNER_MODELS = {
     'kitting': models.Kitting, 'inventory': models.Inventory,
     'writeoff': models.Writeoff, 'requisition': models.Requisition,
     'relocation': models.Relocation,
+    # Волна 19, Ф12b: не-ордерные владельцы. Вид ордера остаётся именем в API
+    # (`receipt`/`transfer`/…) и ложится в общее поле `document`; у этих —
+    # своё поле, имя типа = имя поля.
+    'project': models.Project, 'procurement': models.Procurement,
+    'purchase': models.Purchase, 'counterparty': models.Counterparty,
+}
+
+# Имя типа в API → поле-владелец в `Attachment`. Совпадают у всех, кроме шести
+# видов ордера: они схлопнуты в один FK `document` (волна 13, Ф2b).
+_ATTACHMENT_OWNER_FIELD_BY_TYPE = {
+    t: (t if t in models.ATTACHMENT_OWNER_FIELDS else 'document')
+    for t in ATTACHMENT_OWNER_MODELS
 }
 
 
 def _attachment_owner_field(owner_type):
-    """Поле-владелец под owner_type: 'item' → item; вид ордера → document."""
-    return 'item' if owner_type == 'item' else 'document'
+    """Поле-владелец под owner_type: 'project' → project; вид ордера → document."""
+    return _ATTACHMENT_OWNER_FIELD_BY_TYPE[owner_type]
 
 
 def resolve_attachment_owner(owner_type, owner_id):
@@ -3559,12 +3577,13 @@ def attachments_for(owner_type, owner_id):
     """Список вложений владельца (свежие сверху)."""
     if owner_type not in ATTACHMENT_OWNER_MODELS:
         raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
-    if owner_type == 'item':
-        flt = {'item_id': owner_id}
-    else:
+    field = _attachment_owner_field(owner_type)
+    if field == 'document':
         # id ордеров глобально уникален (Ф2a) → document_id однозначен; фильтр по
         # kind сохраняет прежнюю строгость (несовпадение вида → пусто).
         flt = {'document_id': owner_id, 'document__kind': owner_type}
+    else:
+        flt = {f'{field}_id': owner_id}
     qs = (models.Attachment.objects.filter(**flt)
           .select_related('user').order_by('-id'))
     return [attachment_row(a) for a in qs]

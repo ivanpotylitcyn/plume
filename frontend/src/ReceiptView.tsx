@@ -213,7 +213,7 @@ function GhostRow({ receiptId, items, busy, run }: {
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      {/* Ед. изм. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
+      {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
       <td className="uom" />
       <td className="num">
         <input className="qty-in" value={cost} disabled={busy} placeholder="0"
