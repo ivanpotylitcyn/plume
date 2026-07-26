@@ -1,13 +1,13 @@
-// Витрина волны 5: кокпит передачи / Transfer (записываемое ядро).
+// Витрина волны 5: форма передачи / Transfer (записываемое ядро).
 // Отгрузка готового железа заказчику по накладной. Строка передачи = отдаём
 // партию проекта (`−ISSUE`); добавление/правка/удаление автосейвом. Мягкого
 // замка нет (у Transfer нет поля статуса) — правимо всегда; guard корректности —
 // «лот не потреблён ниже» на бэке. Отображаемое имя строки печатается в накладной.
 import { useEffect, useState } from 'react'
-import { api, type AvailableLot, type CounterpartyRow, type TransferCockpit,
-  type TransferCockpitLine } from './api'
+import { api, type AvailableLot, type CounterpartyRow, type TransferForm,
+  type TransferFormLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 import { CounterpartyPicker } from './Picker'
@@ -23,7 +23,7 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
   const [customers, setCustomers] = useState<CounterpartyRow[]>([])
   useEffect(() => { api.counterparties('customer').then(setCustomers) }, [])
 
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     transferId, api.transfer, {
       onChanged, onDeleted,
       onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
@@ -110,8 +110,8 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
 
 // Реальная строка передачи (лот): автосейв кол-ва/имени, удаление (коррекция).
 function LineRow({ ln, locked, busy, openItem, run }: {
-  ln: TransferCockpitLine; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<TransferCockpit>) => void
+  ln: TransferFormLine; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<TransferForm>) => void
 }) {
   const negative = ln.lot_live_qty < 0   // переотдали — источник в минусе
   return (
@@ -149,7 +149,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
 // Призрачная строка: выбрать отдаваемую партию проекта (пикер live>0) + кол-во.
 function GhostRow({ transferId, lots, busy, run }: {
   transferId: number; lots: AvailableLot[]; busy: boolean
-  run: (p: Promise<TransferCockpit>) => void
+  run: (p: Promise<TransferForm>) => void
 }) {
   const [lotId, setLotId] = useState<number | ''>('')
   const [qty, setQty] = useState('')

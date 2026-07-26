@@ -1,13 +1,13 @@
-// Витрина волны 3: кокпит прихода / УПД (записываемое ядро).
+// Витрина волны 3: форма прихода / УПД (записываемое ядро).
 // Строки УПД = лоты (в модели отдельной ReceiptLine нет): изделие + кол-во +
 // цена + название, автосейв по blur/Enter. Добавление строки = рождение партии
 // (+RECEIPT). Замок «сверено со сканом» (approved) делает форму read-only.
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptCockpit,
+import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptForm,
   type ReceiptLot } from './api'
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
-import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { ItemPicker, PurchasePicker } from './Picker'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
@@ -16,7 +16,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   onChanged: () => void; onDeleted: () => void
 }) {
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     receiptId, api.receipt, {
       onChanged, onDeleted,
       onLoad: c => { api.projectPurchases(c.project_id).then(setPurchases) },
@@ -105,7 +105,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
 // Реальная строка УПД (лот): автосейв кол-ва/цены/названия, удаление до замка.
 function LotRow({ lot, locked, busy, openItem, run }: {
   lot: ReceiptLot; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<ReceiptCockpit>) => void
+  openItem: (id: number) => void; run: (p: Promise<ReceiptForm>) => void
 }) {
   const short = lot.live_qty !== lot.qty   // просел под пайку/расход
   return (
@@ -147,7 +147,7 @@ function LotRow({ lot, locked, busy, openItem, run }: {
 // Призрачная строка: добавить строку УПД (рождается партия).
 function GhostRow({ receiptId, items, busy, run }: {
   receiptId: number; items: ItemRow[]; busy: boolean
-  run: (p: Promise<ReceiptCockpit>) => void
+  run: (p: Promise<ReceiptForm>) => void
 }) {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
@@ -202,7 +202,7 @@ function GhostRow({ receiptId, items, busy, run }: {
 }
 
 // Автосейв текстового/числового поля: коммит по blur / Enter (без кнопки).
-// Переиспуемый компонент (кокпиты прихода/заказа).
+// Переиспуемый компонент (формы прихода/заказа).
 export function CommitInput({ value, onCommit, disabled, width = 60, validate, type }: {
   value: string; onCommit: (v: string) => void; disabled?: boolean
   width?: number; validate?: (v: string) => boolean; type?: string

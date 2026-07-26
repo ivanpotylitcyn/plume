@@ -1,13 +1,13 @@
-// Витрина волны 6: кокпит списания / Writeoff (записываемое ядро).
+// Витрина волны 6: форма списания / Writeoff (записываемое ядро).
 // Списание — чистое выбытие партии из проекта (`−ISSUE`, серый путь): born-лота
 // нет, лот покидает учёт. Строка = списываем свою партию; добавление/правка/
 // удаление автосейвом. Замка нет (у Writeoff нет поля статуса) — правимо всегда;
 // корректность — «списываем только своё» + пересписание в минус информативно (▲).
 import { useState } from 'react'
-import { api, type AvailableLot, type WriteoffCockpit,
-  type WriteoffCockpitLine } from './api'
+import { api, type AvailableLot, type WriteoffForm,
+  type WriteoffFormLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -19,7 +19,7 @@ export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted
   onDeleted: () => void
 }) {
   const [lots, setLots] = useState<AvailableLot[]>([])
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     writeoffId, api.writeoff, {
       onChanged, onDeleted,
       onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
@@ -99,8 +99,8 @@ export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted
 
 // Реальная строка списания (лот): автосейв кол-ва, удаление (коррекция).
 function LineRow({ ln, locked, busy, openItem, run }: {
-  ln: WriteoffCockpitLine; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<WriteoffCockpit>) => void
+  ln: WriteoffFormLine; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<WriteoffForm>) => void
 }) {
   const negative = ln.lot_live_qty < 0   // пересписали — источник в минусе
   return (
@@ -134,7 +134,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
 // Призрачная строка: выбрать списываемую партию проекта (пикер live>0) + кол-во.
 function GhostRow({ writeoffId, lots, busy, run }: {
   writeoffId: number; lots: AvailableLot[]; busy: boolean
-  run: (p: Promise<WriteoffCockpit>) => void
+  run: (p: Promise<WriteoffForm>) => void
 }) {
   const [lotId, setLotId] = useState<number | ''>('')
   const [qty, setQty] = useState('')

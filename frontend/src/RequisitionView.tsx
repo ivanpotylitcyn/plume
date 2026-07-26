@@ -1,14 +1,14 @@
-// Витрина волны 6: кокпит требования / Requisition (записываемое ядро).
+// Витрина волны 6: форма требования / Requisition (записываемое ядро).
 // Отпочкование: строка тянет из лота-источника (`−ISSUE`) и рождает лот-потомок
 // в проекте-получателе (`+RECEIPT`, наследует item/цену/провенанс). Источник — из
 // любого проекта (постановка своего на баланс → белый, заём у соседнего B→A).
 // Замка нет — правимо всегда; корректность — источник ≠ получатель, один лот = одна
 // строка, потомок не потреблён ниже (guard на бэке).
 import { useState } from 'react'
-import { api, type AllAvailableLot, type RequisitionCockpit,
-  type RequisitionCockpitLine } from './api'
+import { api, type AllAvailableLot, type RequisitionForm,
+  type RequisitionFormLine } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -20,7 +20,7 @@ export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onD
   onDeleted: () => void
 }) {
   const [lots, setLots] = useState<AllAvailableLot[]>([])
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     requisitionId, api.requisition, {
       onChanged, onDeleted,
       onLoad: () => { api.allAvailableLots().then(setLots) },
@@ -99,8 +99,8 @@ export function RequisitionView({ requisitionId, isNew, openItem, onChanged, onD
 
 // Реальная строка требования: автосейв кол-ва (синхронит источник и потомок), удаление.
 function LineRow({ ln, locked, busy, openItem, run }: {
-  ln: RequisitionCockpitLine; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<RequisitionCockpit>) => void
+  ln: RequisitionFormLine; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<RequisitionForm>) => void
 }) {
   const negative = ln.source_live_qty < 0
   return (
@@ -135,7 +135,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
 // Призрачная строка: выбрать лот-источник (сквозной пикер, кроме получателя) + кол-во.
 function GhostRow({ requisitionId, lots, busy, run }: {
   requisitionId: number; lots: AllAvailableLot[]; busy: boolean
-  run: (p: Promise<RequisitionCockpit>) => void
+  run: (p: Promise<RequisitionForm>) => void
 }) {
   const [lotId, setLotId] = useState<number | ''>('')
   const [qty, setQty] = useState('')

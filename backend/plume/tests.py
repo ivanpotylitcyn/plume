@@ -343,8 +343,8 @@ class StockMapTests(EngineTestBase):
         self.assertEqual(m['rows'], [])
 
 
-class KittingCockpitTests(EngineTestBase):
-    """Волна 2: кокпит комплектации — призрачные строки, пайка, закрытие."""
+class KittingFormTests(EngineTestBase):
+    """Волна 2: форма комплектации — призрачные строки, пайка, закрытие."""
 
     def setUp(self):
         super().setUp()
@@ -364,19 +364,19 @@ class KittingCockpitTests(EngineTestBase):
     def test_ghost_rows_before_piercing(self):
         # склад пуст → обе призрачные строки красные (▲ to_order)
         k = self.make_kitting(qty=2)
-        c = engine.kitting_cockpit(k)
+        c = engine.kitting_form(k)
         rows = {r['component_code']: r for r in c['rows']}
         self.assertEqual(rows['CASE']['need'], D(2))     # 1×2
         self.assertEqual(rows['RES']['need'], D(4))      # 2×2
         self.assertEqual(rows['CASE']['pierced'], D(0))
         self.assertEqual(rows['CASE']['ghost']['status'], 'to_order')
-        self.assertEqual(c['cockpit_status'], 'to_order')
+        self.assertEqual(c['worst_status'], 'to_order')
 
     def test_ghost_available_when_stock_exists(self):
         # есть лот корпуса → призрачная строка зелёная + лот-кандидат
         self.receipt_lot(self.case, self.prj, 10)
         k = self.make_kitting(qty=2)
-        c = engine.kitting_cockpit(k)
+        c = engine.kitting_form(k)
         row = {r['component_code']: r for r in c['rows']}['CASE']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
@@ -388,7 +388,7 @@ class KittingCockpitTests(EngineTestBase):
         engine.add_kitting_line(k, self.case, lot, D(2))
         # лот просел на 2 (ISSUE), строка BOM закрыта
         self.assertEqual(engine.lot_live_qty(lot), D(8))
-        c = engine.kitting_cockpit(k)
+        c = engine.kitting_form(k)
         row = {r['component_code']: r for r in c['rows']}['CASE']
         self.assertEqual(row['pierced'], D(2))
         self.assertEqual(row['remaining'], D(0))
@@ -473,8 +473,8 @@ class KittingCockpitTests(EngineTestBase):
             engine.unlock_kitting(k)
 
 
-class ReceiptCockpitTests(EngineTestBase):
-    """Волна 3: кокпит прихода — строки-лоты УПД, рождение +RECEIPT, замок."""
+class ReceiptFormTests(EngineTestBase):
+    """Волна 3: форма прихода — строки-лоты УПД, рождение +RECEIPT, замок."""
 
     def make_receipt(self, approved=False):
         return models.Receipt.objects.create(
@@ -493,11 +493,11 @@ class ReceiptCockpitTests(EngineTestBase):
         self.assertEqual(mv.type, models.StockMovement.Type.RECEIPT)
         self.assertEqual(mv.qty, D(12))
 
-    def test_cockpit_shows_lines_and_total(self):
+    def test_form_shows_lines_and_total(self):
         r = self.make_receipt()
         engine.add_receipt_lot(r, self.make_item('A'), D(2), unit_cost=D(100))
         engine.add_receipt_lot(r, self.make_item('B'), D(3), unit_cost=D(10))
-        c = engine.receipt_cockpit(r)
+        c = engine.receipt_form(r)
         self.assertEqual(len(c['lots']), 2)
         self.assertEqual(c['total_cost'], D(230))        # 2×100 + 3×10
         self.assertFalse(c['locked'])
@@ -567,8 +567,8 @@ class ReceiptCockpitTests(EngineTestBase):
         engine.update_receipt_lot(lot, qty=D(9))       # снова можно
         self.assertEqual(engine.lot_live_qty(lot), D(9))
 
-    def test_received_lot_feeds_kitting_cockpit(self):
-        # приход РЕЗ → лот сразу виден кокпиту комплектации как кандидат
+    def test_received_lot_feeds_kitting_form(self):
+        # приход РЕЗ → лот сразу виден форме комплектации как кандидат
         r = self.make_receipt()
         comp = self.make_item('R')
         engine.add_receipt_lot(r, comp, D(50))
@@ -577,14 +577,14 @@ class ReceiptCockpitTests(EngineTestBase):
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           locked=False)
-        c = engine.kitting_cockpit(k)
+        c = engine.kitting_form(k)
         row = {r['component_code']: r for r in c['rows']}['R']
         self.assertEqual(row['ghost']['status'], 'available')
         self.assertEqual(len(row['ghost']['candidate_lots']), 1)
 
 
-class PurchaseCockpitTests(EngineTestBase):
-    """Волна 4: кокпит заказа — строки-обязательства, замок отправки, гашение
+class PurchaseFormTests(EngineTestBase):
+    """Волна 4: форма заказа — строки-обязательства, замок отправки, гашение
     приходом, мост «дефицит → заказ»."""
 
     def test_create_purchase_autocreates_procurement(self):
@@ -593,11 +593,11 @@ class PurchaseCockpitTests(EngineTestBase):
         self.assertIsNotNone(p.procurement_id)          # авто-родитель
         self.assertEqual(p.project_id, self.prj.id)
 
-    def test_add_line_and_cockpit_totals(self):
+    def test_add_line_and_form_totals(self):
         p = engine.create_purchase(self.prj, self.user)
         engine.add_purchase_line(p, self.make_item('A'), D(10))
         engine.add_purchase_line(p, self.make_item('B'), D(5))
-        c = engine.purchase_cockpit(p)
+        c = engine.purchase_form(p)
         self.assertEqual(len(c['rows']), 2)
         self.assertEqual(c['total_ordered'], D(15))
         self.assertEqual(c['total_received'], D(0))
@@ -680,7 +680,7 @@ class PurchaseCockpitTests(EngineTestBase):
         # приход 15, связанный с заказом → поступило 15, «заказано» 25
         self.receipt_lot(item, self.prj, 15, purchase=p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(25))
-        c = engine.purchase_cockpit(p)
+        c = engine.purchase_form(p)
         row = c['rows'][0]
         self.assertEqual(row['received'], D(15))
         self.assertEqual(row['remaining'], D(25))
@@ -689,7 +689,7 @@ class PurchaseCockpitTests(EngineTestBase):
         # добираем остаток → строка закрыта (✓), «заказано» 0
         self.receipt_lot(item, self.prj, 25, purchase=p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
-        row = engine.purchase_cockpit(p)['rows'][0]
+        row = engine.purchase_form(p)['rows'][0]
         self.assertEqual(row['status'], 'available')
 
     def test_set_receipt_purchase_rejects_foreign_project(self):
@@ -704,16 +704,16 @@ class PurchaseCockpitTests(EngineTestBase):
 
     def test_deficit_bridge_creates_and_increments_line(self):
         item = self.make_item('SCR', kind='material')
-        p1 = engine.add_to_project_order(self.prj, item, D(15), self.user)
+        p1 = engine.add_to_project_purchase(self.prj, item, D(15), self.user)
         self.assertEqual(p1.lines.get(item=item).qty, D(15))
         # повтор той же позиции — инкремент в том же черновике
-        p2 = engine.add_to_project_order(self.prj, item, D(10), self.user)
+        p2 = engine.add_to_project_purchase(self.prj, item, D(10), self.user)
         self.assertEqual(p1.id, p2.id)
         self.assertEqual(p2.lines.get(item=item).qty, D(25))
 
 
-class TransferCockpitTests(EngineTestBase):
-    """Волна 5: кокпит передачи — отгрузка партии заказчику (`−ISSUE`), пикер
+class TransferFormTests(EngineTestBase):
+    """Волна 5: форма передачи — отгрузка партии заказчику (`−ISSUE`), пикер
     отдаваемых лотов, guard чужого проекта, коррекция строк."""
 
     def setUp(self):
@@ -729,10 +729,10 @@ class TransferCockpitTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(self.lot), D(3))   # 5 − 2
         self.assertTrue(self.lot.movements.filter(type='ISSUE', qty=D(-2)).exists())
 
-    def test_cockpit_totals_and_live(self):
+    def test_form_totals_and_live(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, self.lot, D(2), display_name='Прибор зав.№7')
-        c = engine.transfer_cockpit(t)
+        c = engine.transfer_form(t)
         self.assertEqual(c['number'], 'Н-1')
         self.assertEqual(c['total_qty'], D(2))
         self.assertEqual(len(c['lines']), 1)
@@ -795,7 +795,7 @@ class TransferCockpitTests(EngineTestBase):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         line = engine.add_transfer_line(t, self.lot, D(2))
         engine.lock_transfer(t)
-        self.assertTrue(engine.transfer_cockpit(t)['locked'])
+        self.assertTrue(engine.transfer_form(t)['locked'])
         with self.assertRaises(ValidationError):
             engine.update_transfer_line(line, qty=D(1))
         with self.assertRaises(ValidationError):
@@ -813,7 +813,7 @@ class TransferCockpitTests(EngineTestBase):
         line = engine.add_transfer_line(t, self.lot, D(2))
         engine.lock_transfer(t)
         engine.unlock_transfer(t)
-        self.assertFalse(engine.transfer_cockpit(t)['locked'])
+        self.assertFalse(engine.transfer_form(t)['locked'])
         engine.update_transfer_line(line, qty=D(3))            # снова можно
         self.assertEqual(engine.lot_live_qty(self.lot), D(2))
 
@@ -828,7 +828,7 @@ class TransferCockpitTests(EngineTestBase):
         self.assertFalse(rows[0]['locked'])
 
 
-class WriteoffCockpitTests(EngineTestBase):
+class WriteoffFormTests(EngineTestBase):
     """Волна 6: списание — чистый `−ISSUE` из проекта (серый путь), guard чужого
     проекта, коррекция строк, пересписание в минус (не клампим)."""
 
@@ -843,10 +843,10 @@ class WriteoffCockpitTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(self.lot), D(6))
         self.assertTrue(self.lot.movements.filter(type='ISSUE', qty=D(-4)).exists())
 
-    def test_cockpit_totals(self):
+    def test_form_totals(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='брак')
         engine.add_writeoff_line(w, self.lot, D(4))
-        c = engine.writeoff_cockpit(w)
+        c = engine.writeoff_form(w)
         self.assertEqual(c['number'], 'СП-1')
         self.assertEqual(c['reason'], 'брак')
         self.assertEqual(c['total_qty'], D(4))
@@ -882,7 +882,7 @@ class WriteoffCockpitTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(self.lot), D(10))
 
 
-class RequisitionCockpitTests(EngineTestBase):
+class RequisitionFormTests(EngineTestBase):
     """Волна 6: требование/отпочкование — `−ISSUE` источника + рождение
     лота-потомка (`+RECEIPT`) у получателя с наследованием цены/провенанса."""
 
@@ -909,10 +909,10 @@ class RequisitionCockpitTests(EngineTestBase):
         self.assertEqual(born.predecessor_id, self.src.id)      # генеалогия
         self.assertEqual(engine.lot_live_qty(born), D(4))       # +RECEIPT у потомка
 
-    def test_cockpit_shows_source_and_born(self):
+    def test_form_shows_source_and_born(self):
         req = engine.create_requisition(self.white, self.user, 'ТР-1')
         engine.add_requisition_line(req, self.src, D(4))
-        c = engine.requisition_cockpit(req)
+        c = engine.requisition_form(req)
         self.assertEqual(c['total_qty'], D(4))
         row = c['lines'][0]
         self.assertEqual(row['source_project_code'], self.prj.code)
@@ -1014,7 +1014,7 @@ class ProjectClosureTests(EngineTestBase):
 
 
 class HeaderEditTests(EngineTestBase):
-    """Волна 6 (докрутка): правка шапки кокпитов — номер/дата/мягкие поля,
+    """Волна 6 (докрутка): правка шапки форм — номер/дата/мягкие поля,
     read-only под замком, nullable-дата очищается."""
 
     def test_transfer_header_edit_and_lock(self):
@@ -1058,9 +1058,9 @@ class HeaderEditTests(EngineTestBase):
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
             user=self.user, qty=D(1), locked=False)
-        self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(2))
+        self.assertEqual(engine.kitting_form(k)['rows'][0]['need'], D(2))
         engine.update_kitting(k, qty=D(3))
-        self.assertEqual(engine.kitting_cockpit(k)['rows'][0]['need'], D(6))
+        self.assertEqual(engine.kitting_form(k)['rows'][0]['need'], D(6))
         engine.lock_kitting(k)
         with self.assertRaises(ValidationError):
             engine.update_kitting(k, qty=D(4))               # не wip — нельзя
@@ -1154,14 +1154,14 @@ class CommandDeficitTests(EngineTestBase):
         self.assertEqual(codes, ['RED', 'GRN'])       # красное наверх
 
 
-class ProcurementCockpitTests(EngineTestBase):
+class ProcurementFormTests(EngineTestBase):
     """Волна 7: записываемый план закупки — строки, замок отправки, мост, xlsx."""
 
-    def test_create_and_cockpit_totals(self):
+    def test_create_and_form_totals(self):
         p = engine.create_procurement(self.user, description='весна')
         engine.add_procurement_line(p, self.make_item('A'), D(10))
         engine.add_procurement_line(p, self.make_item('B'), D(5))
-        c = engine.procurement_cockpit(p)
+        c = engine.procurement_form(p)
         self.assertEqual(len(c['lines']), 2)
         self.assertEqual(c['total_qty'], D(15))
         self.assertTrue(c['editable'])
@@ -1259,8 +1259,8 @@ class ProcurementCockpitTests(EngineTestBase):
         engine.update_procurement(p, contractor=self.supplier)
         p.refresh_from_db()
         self.assertEqual(p.contractor_id, self.supplier.id)
-        # проекция кокпита отдаёт контрагента
-        cock = engine.procurement_cockpit(p)
+        # проекция формы отдаёт контрагента
+        cock = engine.procurement_form(p)
         self.assertEqual(cock['contractor_id'], self.supplier.id)
         self.assertEqual(cock['contractor_name'], self.supplier.description)
         # не передан → не трогаем (правка только даты)
@@ -1271,7 +1271,7 @@ class ProcurementCockpitTests(EngineTestBase):
         engine.update_procurement(p, contractor=None)
         p.refresh_from_db()
         self.assertIsNone(p.contractor_id)
-        self.assertEqual(engine.procurement_cockpit(p)['contractor_name'], '')
+        self.assertEqual(engine.procurement_form(p)['contractor_name'], '')
 
     def test_contractor_set_null_on_counterparty_delete(self):
         # SET_NULL: удаление контрагента не роняет план-закупку — поле опустевает.
@@ -1470,8 +1470,8 @@ class ProcurementHttpTests(TestCase):
             {'item_id': self.scr.id, 'qty': 40}, content_type='application/json')
         self.assertEqual(add.status_code, 201)
         pid = add.json()['procurement_id']
-        cockpit = self.c.get(f'/api/procurements/{pid}/').json()
-        self.assertEqual(float(cockpit['total_qty']), 40.0)
+        form = self.c.get(f'/api/procurements/{pid}/').json()
+        self.assertEqual(float(form['total_qty']), 40.0)
 
     def test_procurement_crud_lock_and_xlsx(self):
         r = self.c.post('/api/procurements/', {'description': 'весна'},
@@ -1644,7 +1644,7 @@ class ReferenceCreateHttpTests(TestCase):
         self.assertEqual(bad.status_code, 400)
 
 
-class InventoryCockpitTests(EngineTestBase):
+class InventoryFormTests(EngineTestBase):
     """Волна 9: инвентаризация — рождение «найденных» партий (`+RECEIPT`, 4-й
     origin) + серая ре-материализация списанного лота с наследованием провенанса."""
 
@@ -1664,11 +1664,11 @@ class InventoryCockpitTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(lot), D(7))       # +RECEIPT
         self.assertTrue(lot.movements.filter(type='RECEIPT', qty=D(7)).exists())
 
-    def test_cockpit_totals_and_description(self):
+    def test_form_totals_and_description(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         engine.update_inventory(inv, description='пересчёт')
         engine.add_inventory_lot(inv, self.item, D(4), unit_cost=D('2'))
-        c = engine.inventory_cockpit(inv)
+        c = engine.inventory_form(inv)
         self.assertEqual(c['number'], 'ИНВ-1')
         self.assertEqual(c['description'], 'пересчёт')
         self.assertEqual(c['total_cost'], D(8))                # 4 × 2
@@ -1723,7 +1723,7 @@ class InventoryCockpitTests(EngineTestBase):
         self.assertEqual(born.predecessor_id, src.id)
         self.assertEqual(born.unit_cost, D('2.50'))
         self.assertEqual(engine.lot_live_qty(born), D(6))
-        c = engine.inventory_cockpit(inv)
+        c = engine.inventory_form(inv)
         self.assertEqual(c['lots'][0]['predecessor_id'], src.id)
         self.assertTrue(c['lots'][0]['predecessor_label'])
 
@@ -2501,13 +2501,13 @@ class UnifiedLockTests(EngineTestBase):
             engine.add_transfer_line(t, dlot, D(1))
 
     def test_kitting_lock_projection(self):
-        """До фронт-среза (Ф1b) кокпит отдаёт исторические `wip`/`closed`."""
+        """До фронт-среза (Ф1b) форма отдаёт исторические `wip`/`closed`."""
         k = models.Kitting.objects.create(
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
             user=self.user, qty=D(1))
-        self.assertFalse(engine.kitting_cockpit(k)['locked'])
+        self.assertFalse(engine.kitting_form(k)['locked'])
         engine.lock_kitting(k)
-        self.assertTrue(engine.kitting_cockpit(k)['locked'])
+        self.assertTrue(engine.kitting_form(k)['locked'])
 
 
 class Wave13Fase1bTests(EngineTestBase):
@@ -2528,7 +2528,7 @@ class Wave13Fase1bTests(EngineTestBase):
         engine.add_writeoff_line(w, lot, D(3))
         engine.lock_writeoff(w); w.refresh_from_db()
         self.assertTrue(w.locked)
-        self.assertTrue(engine.writeoff_cockpit(w)['locked'])
+        self.assertTrue(engine.writeoff_form(w)['locked'])
         engine.unlock_writeoff(w); w.refresh_from_db()
         self.assertFalse(w.locked)
         # инвентаризация
@@ -2536,7 +2536,7 @@ class Wave13Fase1bTests(EngineTestBase):
         engine.add_inventory_lot(inv, self.make_item('B'), D(4))
         engine.lock_inventory(inv); inv.refresh_from_db()
         self.assertTrue(inv.locked)
-        self.assertTrue(engine.inventory_cockpit(inv)['locked'])
+        self.assertTrue(engine.inventory_form(inv)['locked'])
         engine.unlock_inventory(inv); inv.refresh_from_db()
         self.assertFalse(inv.locked)
         # требование
@@ -2545,7 +2545,7 @@ class Wave13Fase1bTests(EngineTestBase):
         engine.add_requisition_line(req, src, D(2))
         engine.lock_requisition(req); req.refresh_from_db()
         self.assertTrue(req.locked)
-        self.assertTrue(engine.requisition_cockpit(req)['locked'])
+        self.assertTrue(engine.requisition_form(req)['locked'])
         engine.unlock_requisition(req); req.refresh_from_db()
         self.assertFalse(req.locked)
 
@@ -2996,7 +2996,7 @@ class Wave13Fase2eTests(EngineTestBase):
         at_sold = engine.available_lots(self.case, self.prj, self.sold)
         self.assertEqual(at_main[0]['live_qty'], D(8))
         self.assertEqual(at_sold[0]['live_qty'], D(4))
-        # без локации — тотал (байт-в-байт со старым контрактом кокпита)
+        # без локации — тотал (байт-в-байт со старым контрактом формы)
         self.assertEqual(engine.available_lots(self.case, self.prj)[0]['live_qty'], D(12))
 
     def test_stock_map_by_location(self):
@@ -3030,9 +3030,9 @@ class Wave13Fase2eTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(12))
         self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(0))
 
-    def test_cockpit_move(self):
+    def test_form_move(self):
         r = self._reloc_move(4)
-        cp = engine.relocation_cockpit(r)
+        cp = engine.relocation_form(r)
         self.assertEqual(cp['total_qty'], D(4))
         self.assertEqual(len(cp['moves']), 1)
         m = cp['moves'][0]
@@ -3116,7 +3116,7 @@ class Wave13Fase2eTests(EngineTestBase):
 class Wave13Fase2fTests(EngineTestBase):
     """Волна 13 Ф2f: два идентификатора партии — `lot_name` (человеческий) и
     `part_number` (машинный, MPN/децимальный). Пришли на смену `received_name`/
-    `serial_number`; писатели/кокпиты/метка разводят их независимо."""
+    `serial_number`; писатели/формы/метка разводят их независимо."""
 
     def setUp(self):
         super().setUp()
@@ -3135,7 +3135,7 @@ class Wave13Fase2fTests(EngineTestBase):
                                      part_number='RES-10K-0805')
         self.assertEqual(lot.lot_name, 'Резистор 10к')
         self.assertEqual(lot.part_number, 'RES-10K-0805')
-        row = engine.receipt_cockpit(self.receipt)['lots'][0]
+        row = engine.receipt_form(self.receipt)['lots'][0]
         self.assertEqual(row['lot_name'], 'Резистор 10к')
         self.assertEqual(row['part_number'], 'RES-10K-0805')
 
@@ -3185,11 +3185,11 @@ class Wave13Fase2gTests(EngineTestBase):
         self.assertTrue(self.supplier.is_supplier)
         self.assertFalse(self.supplier.is_customer)
 
-    def test_receipt_cockpit_emits_contractor(self):
+    def test_receipt_form_emits_contractor(self):
         r = models.Receipt.objects.create(
             number='U-g', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        cp = engine.receipt_cockpit(r)
+        cp = engine.receipt_form(r)
         self.assertEqual(cp['contractor_id'], self.supplier.id)
         self.assertEqual(cp['contractor_name'], self.supplier.description)
 
@@ -3198,14 +3198,14 @@ class Wave13Fase2gTests(EngineTestBase):
             description='Заказчик', is_supplier=False, is_customer=True)
         t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=cust)
         self.assertEqual(t.contractor_id, cust.id)
-        cp = engine.transfer_cockpit(t)
+        cp = engine.transfer_form(t)
         self.assertEqual(cp['contractor_id'], cust.id)
         self.assertEqual(cp['contractor_name'], 'Заказчик')
 
     def test_transfer_contractor_optional_and_settable(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-2')   # без получателя
         self.assertIsNone(t.contractor_id)
-        self.assertEqual(engine.transfer_cockpit(t)['contractor_name'], '')
+        self.assertEqual(engine.transfer_form(t)['contractor_name'], '')
         cust = models.Counterparty.objects.create(
             description='Поздний', is_supplier=False, is_customer=True)
         engine.update_transfer(t, contractor=cust)               # проставить позже
@@ -3299,7 +3299,7 @@ class Wave13Fase2hTests(EngineTestBase):
 
 class Wave13Fase2jTests(EngineTestBase):
     """Волна 13 Ф2j: авторство `user` редактируемо под замком на всех ордерах
-    (+ Purchase/Procurement). Кокпиты несут `user_id`/`user_name`; `update_*`
+    (+ Purchase/Procurement). Формы несут `user_id`/`user_name`; `update_*`
     принимают `user=_UNSET` (часовой), гейтятся замком; `/api/users/` — пикер."""
 
     def setUp(self):
@@ -3308,19 +3308,19 @@ class Wave13Fase2jTests(EngineTestBase):
         self.author2 = get_user_model().objects.create(
             username='ivan', first_name='Иван', last_name='Пэ')
 
-    def test_cockpit_emits_author(self):
+    def test_form_emits_author(self):
         r = models.Receipt.objects.create(
             number='U-j', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.author2)
-        cp = engine.receipt_cockpit(r)
+        cp = engine.receipt_form(r)
         self.assertEqual(cp['user_id'], self.author2.id)
         self.assertEqual(cp['user_name'], 'Иван Пэ')       # get_full_name()
 
     def test_purchase_and_procurement_carry_author(self):
         p = engine.create_purchase(self.prj, self.author2)
-        self.assertEqual(engine.purchase_cockpit(p)['user_id'], self.author2.id)
+        self.assertEqual(engine.purchase_form(p)['user_id'], self.author2.id)
         proc = engine.create_procurement(self.author2)
-        self.assertEqual(engine.procurement_cockpit(proc)['user_id'], self.author2.id)
+        self.assertEqual(engine.procurement_form(proc)['user_id'], self.author2.id)
 
     def test_update_changes_author(self):
         r = models.Receipt.objects.create(
@@ -3493,7 +3493,7 @@ class Wave13Fase2kTests(EngineTestBase):
         engine.update_purchase(p, procurement=proc2)
         p.refresh_from_db()
         self.assertEqual(p.procurement_id, proc2.id)
-        self.assertEqual(engine.purchase_cockpit(p)['procurement_id'], proc2.id)
+        self.assertEqual(engine.purchase_form(p)['procurement_id'], proc2.id)
 
     # ── HTTP-срез ──────────────────────────────────────────────────────────
     def test_patch_project_id_http(self):
@@ -3706,7 +3706,7 @@ class Wave13Fase4Tests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.update_location(self.sold, code='MAIN')
 
-    def test_http_location_cockpit_and_patch(self):
+    def test_http_location_form_and_patch(self):
         resp = self.c.get(f'/api/locations/{self.main.id}/')
         self.assertEqual(resp.status_code, 200)
         body = resp.json()

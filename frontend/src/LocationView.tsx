@@ -4,7 +4,7 @@
 // с проектом-владельцем (проект — свойство лота). Удаления нет — склад с
 // движениями бережём.
 import { useEffect, useState } from 'react'
-import { api, type LocationCockpit } from './api'
+import { api, type LocationForm } from './api'
 import { num } from './status'
 import { FormHeader, useFormLock } from './FormHeader'
 import { CommitInput } from './ReceiptView'
@@ -16,7 +16,7 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
   onChanged?: () => void
   onDeleted?: () => void
 }) {
-  const [d, setD] = useState<LocationCockpit | null>(null)
+  const [d, setD] = useState<LocationForm | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const { unlocked, toggle } = useFormLock(locationId, isNew)   // §5: существующее — в просмотре
@@ -26,7 +26,7 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
     api.location(locationId).then(setD).catch(e => setErr(String(e)))
   }, [locationId])
 
-  const run = (p: Promise<LocationCockpit>) => {
+  const run = (p: Promise<LocationForm>) => {
     setBusy(true); setErr(null)
     p.then(next => { setD(next); onChanged?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))

@@ -4,7 +4,7 @@
 // открывает его. Раскрытие строки показывает разбивку по проектам (откуда нужда).
 import { useEffect, useState } from 'react'
 import { api, type CommandDeficit, type CommandDeficitRow } from './api'
-import { GLYPH, Segment, num } from './status'
+import { Chevron, GLYPH, Segment, num } from './status'
 
 export function CommandDeficitView({ openItem, openProcurement }: {
   openItem: (id: number) => void
@@ -83,7 +83,7 @@ function Row({ r, busy, openItem, toProcurement }: {
           <Segment status="to_order" value={r.to_order} />
           {r.by_project.length > 1 &&
             <button className="x" title="разбивка по проектам"
-              onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>}
+              onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>}
         </td>
         <td className="num">{r.to_order > 0 ? num(r.to_order) : '—'}</td>
         <td style={{ textAlign: 'right' }}>

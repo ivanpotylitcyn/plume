@@ -1,11 +1,11 @@
 // Волна 8 — панель pegging: нарезка плана-закупки (Procurement) на проектные заказы.
 // По каждой строке плана — распределение по проектам (наводка из командного свода +
 // фактически пегнутое) с ручным пегом/снятием; «разрезать по проектам» (autopeg) кладёт
-// по наводке в один клик. Внизу — веер проектных заказов со ссылками в их кокпиты.
+// по наводке в один клик. Внизу — веер проектных заказов со ссылками в их формы.
 // Пег рождает проектный Purchase под этим планом-родителем (ломает 1:1-заглушку).
 import { useEffect, useState } from 'react'
 import { api, type Pegging, type PeggingRow, type PeggingProject } from './api'
-import { Glyph, StatusGlyph, num } from './status'
+import { Chevron, Glyph, StatusGlyph, num } from './status'
 
 export function PeggingPanel({ procurementId, rev, openPurchase }: {
   procurementId: number; rev: number; openPurchase: (id: number) => void
@@ -108,7 +108,7 @@ function LineRow({ r, editable, busy, procurementId, run }: {
         </td>
         <td>
           <button className="x" title="распределение по проектам"
-            onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
+            onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           {r.by_project.length === 0 &&
             <span className="sub" style={{ marginLeft: 6 }}>нет нужды по проектам</span>}
         </td>

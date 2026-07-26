@@ -1,15 +1,15 @@
-// Витрина волны 9: кокпит инвентаризации (записываемое ядро, 4-й origin партии).
+// Витрина волны 9: форма инвентаризации (записываемое ядро, 4-й origin партии).
 // Строки акта = лоты (отдельной InventoryLine в модели нет): изделие + кол-во +
 // цена + название, автосейв по blur/Enter. Добавление строки = рождение «найденной»
 // партии (+RECEIPT). Замка нет — правимо всегда; guard'ы держат корректность.
 // Payoff волны — серая ре-материализация: пикер «из списанных» рождает лот-потомок
 // с provenance (predecessor → списанный, наследование item/цены/названия/зав.№).
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type InventoryCockpit, type InventoryCockpitLot,
+import { api, type ItemRow, type InventoryForm, type InventoryFormLot,
   type WrittenOffLot } from './api'
-import { StatusGlyph, num } from './status'
+import { Chevron, StatusGlyph, num } from './status'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { AttachmentPanel } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
 
@@ -17,7 +17,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, 
   inventoryId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; onChanged: () => void; onDeleted: () => void
 }) {
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     inventoryId, api.inventory, {
       onChanged, onDeleted,
       remove: api.deleteInventory,
@@ -95,8 +95,8 @@ export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, 
 
 // Реальная строка акта (найденный лот): автосейв кол-ва/цены/названия, удаление.
 function LotRow({ lot, locked, busy, openItem, run }: {
-  lot: InventoryCockpitLot; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<InventoryCockpit>) => void
+  lot: InventoryFormLot; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<InventoryForm>) => void
 }) {
   const short = lot.live_qty !== lot.qty   // просел под последующий расход
   return (
@@ -144,7 +144,7 @@ function LotRow({ lot, locked, busy, openItem, run }: {
 // Призрачная строка: добавить найденную партию-излишек (без provenance).
 function GhostRow({ inventoryId, items, busy, run }: {
   inventoryId: number; items: ItemRow[]; busy: boolean
-  run: (p: Promise<InventoryCockpit>) => void
+  run: (p: Promise<InventoryForm>) => void
 }) {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
@@ -202,7 +202,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
 // Панель «из списанных»: серая ре-материализация — вернуть найденный физически
 // списанный (серый) остаток на баланс. Порождает лот-потомок с provenance.
 function RematerializePanel({ inventoryId, busy, run }: {
-  inventoryId: number; busy: boolean; run: (p: Promise<InventoryCockpit>) => void
+  inventoryId: number; busy: boolean; run: (p: Promise<InventoryForm>) => void
 }) {
   const [lots, setLots] = useState<WrittenOffLot[]>([])
   const [open, setOpen] = useState(false)
@@ -218,7 +218,7 @@ function RematerializePanel({ inventoryId, busy, run }: {
   return (
     <div className="closure">
       <h2 className="section-h" onClick={() => setOpen(o => !o)} style={{ cursor: 'pointer' }}>
-        {open ? '▾' : '▸'} Ре-материализация из списанных (серый путь → на баланс)
+        <Chevron open={open} /> Ре-материализация из списанных (серый путь → на баланс)
       </h2>
       {open && (lots.length === 0
         ? <div className="empty">Списанных лотов нет.</div>

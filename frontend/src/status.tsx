@@ -16,6 +16,14 @@ export function StatusGlyph({ locked, tone = 'fix', title }: {
     title={title ?? (locked ? 'зафиксировано' : 'расфиксировано')} />
 }
 
+// Раскрыватель аккордеона — ЕДИНЫЙ везде (волна 19, полировка 2026-07-26): codicon
+// `chevron-right` (свёрнуто) / `chevron-down` (раскрыто) вместо текстовых ▸/▾. По §7a
+// раскрыватель — первый символ строки, поэтому форма у него одна на весь продукт.
+// Размер — компаундом `.ci.chv` (как у `.sg`): базовые 18px разорвали бы высоту строк.
+export function Chevron({ open }: { open: boolean }) {
+  return <span className={`ci chv ci-chevron-${open ? 'down' : 'right'}`} />
+}
+
 // Глиф оси СИНКА (Ф3a, волна 19) — для КОМПОНЕНТОВ (`native=false`). Ровно один глиф
 // по режиму: у компонентов показываем синк (у изделий — замок, `StatusGlyph`).
 // `synced=true` (из библиотеки) → codicon `sync` зелёный; `false` (ручной) →

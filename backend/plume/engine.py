@@ -10,25 +10,25 @@
   1 уровень BOM, тройной разбор ✓/●/▲, worst-of цвет.
 - `stock_map(item)` — карта остатков Item по всем складам-проектам (north-star).
 
-Волна 2 (записываемое ядро + кокпит Kitting):
-- `kitting_cockpit(kitting)` — проекция кокпита сборки: BOM 1 уровень, реальные
+Волна 2 (записываемое ядро + форма Kitting):
+- `kitting_form(kitting)` — проекция формы сборки: BOM 1 уровень, реальные
   (пробитые) строки + призрачные строки, покрашенные по доступности + лоты-кандидаты.
 - `lock_kitting` / `unlock_kitting` — рождение/снятие лота-прибора (мягкий замок).
 
 Волна 3 (записываемый приход / УПД):
-- `receipt_cockpit(receipt)` — проекция кокпита прихода: строки-лоты УПД (в модели
+- `receipt_form(receipt)` — проекция формы прихода: строки-лоты УПД (в модели
   отдельной ReceiptLine нет — строки прихода это его лоты) + живой остаток + сумма.
 - `add/update/remove_receipt_lot`, `lock/unlock_receipt` — рождение лотов
   (`+RECEIPT`) и мягкий замок «сверено со сканом».
 
 Волна 4 (записываемый заказ / Purchase + связь с приходом):
-- `purchase_cockpit(purchase)` — шапка + строки (заказано/поступило/остаток) + приходы;
+- `purchase_form(purchase)` — шапка + строки (заказано/поступило/остаток) + приходы;
   `create_purchase`, `add/update/remove_purchase_line`, `send/unsend/cancel/restore_purchase`.
 - `set_receipt_purchase(receipt, purchase)` — связь `Receipt↔Purchase` (гашение заказа).
-- `add_to_project_order(...)` — мост «дефицит → заказ» (оживляет член «заказано»).
+- `add_to_project_purchase(...)` — мост «дефицит → заказ» (оживляет член «заказано»).
 
 Волна 5 (записываемая передача / Transfer — отгрузка заказчику):
-- `transfer_cockpit(transfer)` — шапка накладной + строки-лоты (отдаём партию заказчику,
+- `transfer_form(transfer)` — шапка накладной + строки-лоты (отдаём партию заказчику,
   `−ISSUE`) + живой остаток источника + итог; `project_available_lots(project)` — пикер
   отдаваемых лотов (live>0). `create_transfer`, `add/update/remove_transfer_line`.
 - Мягкий замок «отгружено» (единый `locked`, волна 13 Ф1):
@@ -37,8 +37,8 @@
   изделия для его экрана (замыкает петлю `комплектация → передача`).
 
 Волна 6 (закрытие проекта — сведение остатков в 0 + мягкий замок):
-- `writeoff_cockpit` / `create_writeoff` / `add|update|remove_writeoff_line` — списание
-  (`−ISSUE`, лот покидает учёт; серый путь). `requisition_cockpit` / `create_requisition`
+- `writeoff_form` / `create_writeoff` / `add|update|remove_writeoff_line` — списание
+  (`−ISSUE`, лот покидает учёт; серый путь). `requisition_form` / `create_requisition`
   / `add|update|remove_requisition_line` — требование/отпочкование (`−ISSUE` источника +
   рождение лота-потомка в проекте-получателе, `+RECEIPT`; белый путь / заём).
 - `project_closure(project)` — панель сведения остаточных лотов (live≠0) в 0 +
@@ -48,7 +48,7 @@
 Волна 7 (планирование закупок — командный свод + записываемый Procurement):
 - `command_deficit()` — свод по оси Item через все активные внешние проекты
   (`Σ` проектных дефицитов, без перенеттинга между проектами). Витрина.
-- `procurement_cockpit` / `create_procurement` / `add|update|remove_procurement_line`
+- `procurement_form` / `create_procurement` / `add|update|remove_procurement_line`
   / `send|unsend|cancel|restore_procurement` — записываемый план закупки (без проекта,
   маркер командной высоты; мягкий замок `locked`). Нарезка на `Purchase` — волна 8.
 - `add_to_procurement(...)` — мост «свод → закупка»; `procurement_xlsx(...)` — `order.xlsx`.
@@ -72,7 +72,7 @@
   location)` / `available_lots(…, location)` (опциональный фильтр, по умолчанию — тотал,
   байт-в-байт), `lot_locations(lot)` — разбивка по местам; `stock_map` несёт аддитивный
   `by_location`.
-- Перемещение (`Relocation`): `create_relocation` / `relocation_cockpit` / `add|update|
+- Перемещение (`Relocation`): `create_relocation` / `relocation_form` / `add|update|
   remove_relocation_line` (пара знаковых `StockLine` `−q`@источник/`+q`@приёмник на ход,
   тотал лота сохранён) / `post|unlock_relocation` / `relocation_source_lots` (пикер с
   разбивкой по местам). HTTP/React — следующим заходом («вьюхи потом»).
@@ -332,7 +332,7 @@ def location_stock(location):
     return rows
 
 
-def location_cockpit(location):
+def location_form(location):
     """Проекция экрана склада: ДНК (код/описание/вид) + что на нём лежит."""
     return {
         'id': location.id, 'code': location.code, 'description': location.description,
@@ -849,14 +849,14 @@ def stock_map(item):
 
 
 # --------------------------------------------------------------------------- #
-#  Кокпит комплектации (волна 2): реальные строки + призрачные строки
+#  Форма комплектации (волна 2): реальные строки + призрачные строки
 # --------------------------------------------------------------------------- #
 def available_lots(item, project, location=None):
     """Лоты item в проекте с живым остатком > 0 — кандидаты под пайку.
 
     Волна 13, Ф2e: опциональный `location` сужает до лотов с остатком > 0 **в этом
     месте хранения** (пикер под конкретную локацию). По умолчанию — как раньше
-    (остаток по всем локациям), контракт кокпита комплектации байт-в-байт.
+    (остаток по всем локациям), контракт формы комплектации байт-в-байт.
     """
     result = []
     for lot in models.Lot.objects.filter(item=item, project=project).select_related('item'):
@@ -870,8 +870,8 @@ def available_lots(item, project, location=None):
     return result
 
 
-def kitting_cockpit(kitting):
-    """Проекция кокпита сборки (1 уровень BOM целевого прибора).
+def kitting_form(kitting):
+    """Проекция формы сборки (1 уровень BOM целевого прибора).
 
     Каждая строка BOM: `надо = bom.qty × kitting.qty`, пробитые `KittingLine`
     (реальные зелёные строки) и остаток → **призрачная строка**, покрашенная по
@@ -927,14 +927,14 @@ def kitting_cockpit(kitting):
         'target_id': target.id, 'target_code': target.code,
         'target_description': target.description, 'uom': target.uom,
         'qty': kitting.qty, 'date': kitting.date,
-        'cockpit_status': _worst_of(statuses),   # worst-of призрачных строк
+        'worst_status': _worst_of(statuses),   # worst-of призрачных строк
         'rows': rows,
         'born_lots': born_lots,   # рождённые лоты-приборы (после закрытия)
     }
 
 
 # --------------------------------------------------------------------------- #
-#  Мутации кокпита (единый источник правил + пересборка проекции склада)
+#  Мутации формы (единый источник правил + пересборка проекции склада)
 # --------------------------------------------------------------------------- #
 def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
     """Пайка: промоушн призрачной строки в реальную `KittingLine` + `-ISSUE`."""
@@ -1015,7 +1015,7 @@ def unlock_kitting(kitting):
 
 
 # --------------------------------------------------------------------------- #
-#  Кокпит прихода / УПД (волна 3): строки-лоты, рождение +RECEIPT, мягкий замок
+#  Форма прихода / УПД (волна 3): строки-лоты, рождение +RECEIPT, мягкий замок
 # --------------------------------------------------------------------------- #
 def _lot_consumed_downstream(lot):
     """Потреблён ли лот ниже: расход/пайка/передача/списание/отпочкование/успех.
@@ -1027,8 +1027,8 @@ def _lot_consumed_downstream(lot):
             or lot.stock_lines.exists())
 
 
-def receipt_cockpit(receipt):
-    """Проекция кокпита прихода: шапка УПД + строки-лоты (каждая строка = Lot).
+def receipt_form(receipt):
+    """Проекция формы прихода: шапка УПД + строки-лоты (каждая строка = Lot).
 
     В модели отдельной `ReceiptLine` нет — строки прихода это его лоты. Каждый лот
     показывает рождённое кол-во, живой остаток (просел ли под пайку), цену и
@@ -1152,7 +1152,7 @@ def set_receipt_purchase(receipt, purchase):
 
 
 # --------------------------------------------------------------------------- #
-#  Кокпит заказа / Purchase (волна 4): строки-обязательства + гашение приходом
+#  Форма заказа / Purchase (волна 4): строки-обязательства + гашение приходом
 # --------------------------------------------------------------------------- #
 def _solo_procurement(user):
     """Тонкий расфиксированный `Procurement` под одиночный проектный заказ.
@@ -1175,10 +1175,10 @@ def create_purchase(project, user, date=None, code=None, description=''):
         locked=False, date=date, code=code, description=description or '')
 
 
-def purchase_cockpit(purchase):
-    """Проекция кокпита заказа: шапка + строки (заказано/поступило/остаток) + приходы.
+def purchase_form(purchase):
+    """Проекция формы заказа: шапка + строки (заказано/поступило/остаток) + приходы.
 
-    Закрытость строки красится тем же словарём ✓/●/▲, что дефицит/кокпиты:
+    Закрытость строки красится тем же словарём ✓/●/▲, что дефицит/формы:
     получено полностью → ✓ (available), частично → ● (on_order), ничего → ▲ (to_order).
     Статусы `partial`/`received` не храним — это вычисляемая закрытость. Ничего не
     хранит (чистая проекция).
@@ -1219,7 +1219,7 @@ def purchase_cockpit(purchase):
         'code': purchase.code, 'description': purchase.description,
         'date': purchase.date,
         'editable': editable,                       # строки правятся только пока не зафиксировано
-        'cockpit_status': _worst_of(statuses),      # worst-of закрытости строк
+        'worst_status': _worst_of(statuses),      # worst-of закрытости строк
         'total_ordered': total_ordered, 'total_received': total_received,
         'rows': rows, 'receipts': receipts,
     }
@@ -1294,12 +1294,12 @@ def delete_purchase(purchase):
         raise ValidationError('Заказ связан с другими записями — удаление заблокировано.')
 
 
-def add_to_project_order(project, item, qty, user):
+def add_to_project_purchase(project, item, qty, user):
     """Мост «дефицит → заказ»: положить позицию в расфиксированный заказ проекта.
 
     Находит последний черновик-заказ проекта (или создаёт новый с авто-`Procurement`)
     и добавляет строку; если строка item уже есть — инкрементит её `qty`. Возвращает
-    заказ (UI ведёт в кокпит). Оживляет ▲-член «заказано» дашборда дефицита.
+    заказ (UI ведёт в форму). Оживляет ▲-член «заказано» дашборда дефицита.
     """
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
@@ -1317,7 +1317,7 @@ def add_to_project_order(project, item, qty, user):
 
 
 # --------------------------------------------------------------------------- #
-#  Кокпит передачи / Transfer (волна 5): отдаём партию заказчику (−ISSUE)
+#  Форма передачи / Transfer (волна 5): отдаём партию заказчику (−ISSUE)
 # --------------------------------------------------------------------------- #
 def project_available_lots(project):
     """Лоты проекта с живым остатком > 0 — кандидаты на отгрузку заказчику.
@@ -1347,7 +1347,7 @@ def _lot_label(lot):
 
 
 def _author(doc):
-    """Автор документа для проекции кокпита (Ф2j): id + человеческое имя (для
+    """Автор документа для проекции формы (Ф2j): id + человеческое имя (для
     пикера авторства в шапке формы). `user` NOT NULL на всех ордерах/закупках."""
     u = doc.user
     if u is None:                        # страховка на легаси-строки
@@ -1355,8 +1355,8 @@ def _author(doc):
     return {'user_id': u.id, 'user_name': u.get_full_name() or u.get_username()}
 
 
-def transfer_cockpit(transfer):
-    """Проекция кокпита передачи: шапка накладной + строки-лоты + итог.
+def transfer_form(transfer):
+    """Проекция формы передачи: шапка накладной + строки-лоты + итог.
 
     Каждая строка отдаёт партию заказчику (`−ISSUE`); показываем живой остаток
     источника (просел ли под передачу, не ушёл ли в минус). Ничего не хранит.
@@ -1411,10 +1411,10 @@ def item_shipments(item):
 
 
 def create_transfer(project, user, number, date=None, contractor=None):
-    """Создать передачу (накладную) проекта. Строки добавляются в кокпите.
+    """Создать передачу (накладную) проекта. Строки добавляются в форме.
 
     `Transfer.date` не nullable — пустую дату замыкаем на сегодня. `contractor` —
-    контрагент-заказчик (опционален: получатель может быть проставлен позже в кокпите).
+    контрагент-заказчик (опционален: получатель может быть проставлен позже в форме).
     """
     if not (number or '').strip():
         raise ValidationError('Нужен № накладной.')
@@ -1537,8 +1537,8 @@ def all_available_lots():
 
 
 # ── Списание / Writeoff (серый путь: чистый −ISSUE, лот покидает учёт) ──
-def writeoff_cockpit(writeoff):
-    """Проекция кокпита списания: шапка акта + строки-лоты (`−ISSUE`) + итог.
+def writeoff_form(writeoff):
+    """Проекция формы списания: шапка акта + строки-лоты (`−ISSUE`) + итог.
 
     Списание — чистое выбытие из проекта (born-лота нет, `Writeoff` не origin);
     «в серый склад» — конвенция учёта, ре-материализация серых остатков — актом
@@ -1568,7 +1568,7 @@ def writeoff_cockpit(writeoff):
 
 
 def create_writeoff(project, user, number, date=None, reason=''):
-    """Создать акт списания проекта. Строки добавляются в кокпите."""
+    """Создать акт списания проекта. Строки добавляются в форме."""
     if not (number or '').strip():
         raise ValidationError('Нужен № акта списания.')
     return models.Writeoff.objects.create(
@@ -1635,8 +1635,8 @@ def _requisition_born_lot(requisition, source_lot):
                                    item=source_lot.item).first()
 
 
-def requisition_cockpit(requisition):
-    """Проекция кокпита требования: шапка (проект-получатель) + строки + итог.
+def requisition_form(requisition):
+    """Проекция формы требования: шапка (проект-получатель) + строки + итог.
 
     Каждая строка тянет из лота-источника (`−ISSUE`) и рождает лот-потомок в
     проекте-получателе (`+RECEIPT`, наследует item/цену/провенанс через
@@ -1761,8 +1761,8 @@ def _relocation_pair(relocation, lot):
     return src, dst
 
 
-def relocation_cockpit(relocation):
-    """Проекция кокпита перемещения: шапка + ходы (лот, откуда→куда, кол-во) + итог.
+def relocation_form(relocation):
+    """Проекция формы перемещения: шапка + ходы (лот, откуда→куда, кол-во) + итог.
 
     Каждый ход — пара строк (`−q`@источник, `+q`@приёмник, волна 13 Ф2e). Показываем
     остаток лота в источнике и приёмнике (пары `(лот,локация)`) — куда и сколько ушло.
@@ -2013,9 +2013,9 @@ def requisition_lot(project, lot, qty, user, dest_kind=None):
 
 
 # --------------------------------------------------------------------------- #
-#  Правка шапки кокпитов (сквозная, все документы): номер/дата/мягкие поля
+#  Правка шапки форм (сквозная, все документы): номер/дата/мягкие поля
 # --------------------------------------------------------------------------- #
-# Инлайн-правка несруктурных полей шапки прямо в кокпите (автосейв по полю,
+# Инлайн-правка несруктурных полей шапки прямо в форме (автосейв по полю,
 # read-only под замком). Структурные якоря (проект/поставщик — дом лотов) не
 # трогаем: их смена переселяет лоты, это отдельная операция, не инлайн.
 def _apply(instance, updates):
@@ -2337,8 +2337,8 @@ def command_deficit():
     return {'rows': rows}
 
 
-def procurement_cockpit(procurement):
-    """Проекция кокпита закупки-плана: шапка + строки (`item`, `qty`) + итог.
+def procurement_form(procurement):
+    """Проекция формы закупки-плана: шапка + строки (`item`, `qty`) + итог.
 
     `Procurement` в волне 7 — самостоятельный план без проекта (маркер командной
     высоты); нарезка на проектные `Purchase` (pegging) — волна 8. Мягкий замок
@@ -2491,7 +2491,7 @@ def add_to_procurement(item, qty, user):
 
     Находит последний черновик-план (или создаёт) и добавляет строку; если строка
     item уже есть — инкрементит `qty` (как «дефицит → заказ»). Возвращает закупку
-    (UI ведёт в кокпит). Заглушки проектных заказов не трогаем (см. `_plan_procurements`).
+    (UI ведёт в форму). Заглушки проектных заказов не трогаем (см. `_plan_procurements`).
     """
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
@@ -2566,7 +2566,7 @@ def procurement_pegging(procurement):
     (`remaining`), статус ✓/●/▲ (полностью/частично/не разложено) и разбивка по проектам
     с **наводкой** из командного свода (`command_deficit` — сколько проекту ещё докупить
     по этому Item) плюс фактически пегнутым. Внизу — веер проектных `Purchase` под этим
-    планом (навигация в их кокпиты). Read-only проекция; правит peg/unpeg/autopeg.
+    планом (навигация в их формы). Read-only проекция; правит peg/unpeg/autopeg.
     """
     # Пеггинг правится всегда (волна 19, Ф1): единственным стопором была отмена, а
     # её больше нет. Замок плана пеггинг НЕ гейтит — он правит не строки
@@ -2711,8 +2711,8 @@ def autopeg_procurement(procurement, user):
 # `Lot.origin` (Ф2b) и знает `rebuild_movements` — волна добавила записываемую надстройку.
 # Замка нет (у модели нет поля-статуса, как у Writeoff/Requisition): правимо всегда,
 # корректность держат guard'ы + PROTECT.
-def inventory_cockpit(inventory):
-    """Проекция кокпита инвентаризации: шапка акта + строки-лоты (`+RECEIPT`) + итог.
+def inventory_form(inventory):
+    """Проекция формы инвентаризации: шапка акта + строки-лоты (`+RECEIPT`) + итог.
 
     Каждая строка — рождённый актом лот («найденная» партия): кол-во, живой остаток
     (просел ли под последующий расход), цена/название, зав.№ и провенанс

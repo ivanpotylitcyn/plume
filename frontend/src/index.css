@@ -102,7 +102,6 @@ body { overflow: hidden; }
 .ci-lock::before         { content: '\ea75'; }  /* контрол шапки: зафиксировать */
 .ci-unlock::before       { content: '\eb74'; }  /* контрол шапки: расфиксировать */
 .ci-file::before         { content: '\ea7b'; }  /* контрол шапки: скачать xlsx */
-.ci-credit-card::before  { content: '\eac9'; }  /* контрол шапки: пересчитать стоимость */
 .ci-arrow-swap::before   { content: '\ebcb'; }
 .ci-table::before        { content: '\ebb7'; }
 .ci-search::before       { content: '\ea6d'; }
@@ -120,6 +119,10 @@ body { overflow: hidden; }
 .ci-layers::before       { content: '\ebd2'; }  /* Склады / ось разбора: не заказано */
 .ci-layers-dot::before   { content: '\ebd3'; }  /* ось разбора: заказано, ждём */
 .ci-layers-active::before{ content: '\ebd4'; }  /* ось разбора: на складе */
+/* раскрыватель аккордеона (везде вместо ▸/▾) + переоценка изделия */
+.ci-chevron-right::before   { content: '\eab6'; }  /* строка свёрнута */
+.ci-chevron-down::before    { content: '\eab4'; }  /* строка раскрыта */
+.ci-symbol-operator::before { content: '\eb64'; }  /* «Переоценить» (Σ по BOM) */
 /* волна 15 — синк библиотеки + иконки библиотечных категорий (LIBRARY_CATEGORIES) */
 .ci-sync::before            { content: '\ea77'; }  /* синк: из библиотеки (компонент) */
 .ci-sync-ignored::before    { content: '\eb9f'; }  /* синк: заведено вручную (компонент) */
@@ -337,6 +340,8 @@ tr.row.s-available { border-left-color: var(--st-ok); }
    .ci=18px разъедет в таблицах/строках); tone-класс красит. Компаунд `.ci.sg-*`
    (0,2,0) бьёт `.tree-item .ci` по порядку — глиф в списке красится тоном, не dim. */
 .ci.sg { font-size: 13px; vertical-align: -2px; }
+/* раскрыватель строки (Chevron): тот же приём, что у .sg — базовые 18px рвут высоту строк */
+.ci.chv { font-size: 13px; vertical-align: -2px; }
 .ci.sg-ok    { color: var(--st-ok); }
 .ci.sg-wip   { color: var(--st-wip); }
 .ci.sg-order { color: var(--st-order); }
@@ -367,7 +372,7 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 a.link { color: var(--link); cursor: pointer; text-decoration: none; }
 a.link:hover { text-decoration: underline; }
 
-/* ---- кокпиты / действия ---- */
+/* ---- формы / действия ---- */
 .kit-actions { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; flex-wrap: wrap; }
 .btn { background: var(--bg-side); color: var(--fg); border: 1px solid var(--border-strong);
   padding: 4px 12px; border-radius: 3px; cursor: pointer; font-family: var(--font-base);

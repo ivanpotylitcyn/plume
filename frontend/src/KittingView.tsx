@@ -1,11 +1,11 @@
-// Витрина волны 2: кокпит комплектации (записываемое ядро).
+// Витрина волны 2: форма комплектации (записываемое ядро).
 // BOM целевого прибора (1 уровень): реальные (пробитые) строки — зелёные,
 // автосейв qty; остаток → призрачная строка, покрашенная по доступности, с
 // пикером лота. Пайка = промоушн призрака в реальную KittingLine (+ ISSUE).
 import { useEffect, useState } from 'react'
-import { api, type Cockpit, type CockpitRow, type ItemRow } from './api'
+import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
 import { CommitInput } from './ReceiptView'
-import { AnchorSelect, AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AnchorSelect, AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { Glyph, Segment, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -19,7 +19,7 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
   // Справочник изделий — для якоря «целевое изделие» (Ф2k). Загружаем один раз.
   const [items, setItems] = useState<ItemRow[]>([])
   useEffect(() => { api.items().then(setItems) }, [])
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     kittingId, api.kitting, {
       onChanged, onDeleted,
       remove: api.deleteKitting,
@@ -37,7 +37,7 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
       <FormHeader
         code={c.code || `Комплектация ${c.target_code}`}
         meta={<>
-          <Glyph status={c.cockpit_status} /> {c.target_code} · {c.project_code} ·
+          <Glyph status={c.worst_status} /> {c.target_code} · {c.project_code} ·
           {' '}образцов {num(c.qty)} · {kitLabel(c.locked)}
         </>}
         unlocked={unlocked} onToggleLock={toggle}
@@ -85,7 +85,7 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
       )}
 
       {c.rows.map(row => (
-        <Component key={row.component_id} row={row} cockpit={c} wip={!locked} busy={busy}
+        <Component key={row.component_id} row={row} form={c} wip={!locked} busy={busy}
           openItem={openItem} run={run} />
       ))}
 
@@ -94,9 +94,9 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
   )
 }
 
-function Component({ row, cockpit, wip, busy, openItem, run }: {
-  row: CockpitRow; cockpit: Cockpit; wip: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<Cockpit>) => void
+function Component({ row, form, wip, busy, openItem, run }: {
+  row: KittingFormRow; form: KittingForm; wip: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<KittingForm>) => void
 }) {
   const g = row.ghost
   const status = g ? g.status : 'available'
@@ -130,7 +130,7 @@ function Component({ row, cockpit, wip, busy, openItem, run }: {
             </tr>
           ))}
           {wip && g && (
-            <GhostRow row={row} ghost={g} cockpit={cockpit} busy={busy} run={run} />
+            <GhostRow row={row} ghost={g} form={form} busy={busy} run={run} />
           )}
         </tbody>
       </table>
@@ -139,9 +139,9 @@ function Component({ row, cockpit, wip, busy, openItem, run }: {
 }
 
 // Призрачная строка: пайка (промоушн призрака в реальную KittingLine).
-function GhostRow({ row, ghost, cockpit, busy, run }: {
-  row: CockpitRow; ghost: NonNullable<CockpitRow['ghost']>; cockpit: Cockpit
-  busy: boolean; run: (p: Promise<Cockpit>) => void
+function GhostRow({ row, ghost, form, busy, run }: {
+  row: KittingFormRow; ghost: NonNullable<KittingFormRow['ghost']>; form: KittingForm
+  busy: boolean; run: (p: Promise<KittingForm>) => void
 }) {
   const lots = ghost.candidate_lots
   const [lotId, setLotId] = useState<number | ''>(lots[0]?.lot_id ?? '')
@@ -151,7 +151,7 @@ function GhostRow({ row, ghost, cockpit, busy, run }: {
   const pierce = () => {
     const n = Number(qty)
     if (!lotId || !(n > 0)) return
-    run(api.pierce(cockpit.id, { component_id: row.component_id, lot_id: lotId, qty: n }))
+    run(api.pierce(form.id, { component_id: row.component_id, lot_id: lotId, qty: n }))
   }
 
   return (

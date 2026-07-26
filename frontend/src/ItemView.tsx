@@ -87,7 +87,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
         fixateTitle="Зафиксировать: заморозить состав (BOM) и свойства изделия"
         onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
         onDelete={del}
-        action={d.native ? { onClick: recalc, label: 'Пересчитать', icon: 'ci-credit-card',
+        action={d.native ? { onClick: recalc, label: 'Переоценить', icon: 'ci-symbol-operator',
           title: 'Пересчитать стоимость: оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев',
           disabled: busy } : undefined}
       >

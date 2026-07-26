@@ -1,10 +1,10 @@
-// Витрина волны 7: кокпит закупки-плана (Procurement) — записываемое ядро.
+// Витрина волны 7: форма закупки-плана (Procurement) — записываемое ядро.
 // Самостоятельный план без проекта (маркер командной высоты). Строки (item + qty,
 // автосейв, пока расфиксирована). Замок делает строки read-only.
 // Кнопка выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type ProcurementCockpit, type ProcurementCockpitLine,
+import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
   type CounterpartyRow } from './api'
 import { CommitInput } from './ReceiptView'
 import { AuthorField, FormHeader, useFormLock } from './FormHeader'
@@ -17,7 +17,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
   openItem: (id: number) => void; openPurchase: (id: number) => void; onChanged: () => void
   onDeleted?: () => void
 }) {
-  const [c, setC] = useState<ProcurementCockpit | null>(null)
+  const [c, setC] = useState<ProcurementForm | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)     // растёт на мутациях — освежает панель pegging
@@ -32,7 +32,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
     api.procurement(procurementId).then(setC).catch(e => setErr(String(e)))
   }, [procurementId])
 
-  const run = (p: Promise<ProcurementCockpit>) => {
+  const run = (p: Promise<ProcurementForm>) => {
     setBusy(true); setErr(null)
     p.then(next => { setC(next); setRev(n => n + 1); onChanged() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -125,8 +125,8 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
 
 // Строка плана: изделие + кол-во (автосейв, пока расфиксировано).
 function LineRow({ ln, editable, busy, openItem, run }: {
-  ln: ProcurementCockpitLine; editable: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<ProcurementCockpit>) => void
+  ln: ProcurementFormLine; editable: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<ProcurementForm>) => void
 }) {
   return (
     <tr className="row s-available">
@@ -154,7 +154,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
 // Призрачная строка: добавить позицию в план (только пока расфиксировано).
 function GhostRow({ procurementId, items, busy, run }: {
   procurementId: number; items: ItemRow[]; busy: boolean
-  run: (p: Promise<ProcurementCockpit>) => void
+  run: (p: Promise<ProcurementForm>) => void
 }) {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')

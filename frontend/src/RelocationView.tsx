@@ -1,13 +1,13 @@
-// Витрина волны 13 Ф3: кокпит перемещения / Relocation (записываемое ядро).
+// Витрина волны 13 Ф3: форма перемещения / Relocation (записываемое ядро).
 // Ход = целый лот проекта переезжает из места-источника в место-приёмник (пара
 // знаковых `StockLine` `−q`/`+q` на бэке, тотал лота сохранён). Комплектовщик
 // собирает перемещение из живых лотов; автосейв кол-ва/мест; мягкий замок как
 // у прочих ордеров (draft ⇄ posted).
 import { useEffect, useState } from 'react'
-import { api, type LocationRow, type RelocationCockpit, type RelocationMove,
+import { api, type LocationRow, type RelocationForm, type RelocationMove,
   type RelocationSourceLot } from './api'
 import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderCockpit } from './FormHeader'
+import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
 import { StatusGlyph, num } from './status'
 import { AttachmentPanel } from './AttachmentPanel'
 
@@ -22,7 +22,7 @@ export function RelocationView({ relocationId, isNew, openItem, onChanged, onDel
   const [locs, setLocs] = useState<LocationRow[]>([])
   useEffect(() => { api.locations().then(setLocs) }, [])
 
-  const { c, err, busy, unlocked, toggle, run, del } = useOrderCockpit(
+  const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     relocationId, api.relocation, {
       onChanged, onDeleted,
       onLoad: c => { api.relocationSourceLots(c.id).then(setLots) },
@@ -102,7 +102,7 @@ export function RelocationView({ relocationId, isNew, openItem, onChanged, onDel
 function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
   m: RelocationMove; relocationId: number; locs: LocationRow[]
   locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<RelocationCockpit>) => void
+  openItem: (id: number) => void; run: (p: Promise<RelocationForm>) => void
 }) {
   const negative = m.from_live_qty < 0   // источник в минусе — переместили больше, чем лежало
   return (
@@ -152,7 +152,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
 // пикер прячет (guard на бэке всё равно отклонит дубль).
 function GhostRow({ relocationId, lots, locs, busy, run }: {
   relocationId: number; lots: RelocationSourceLot[]; locs: LocationRow[]
-  busy: boolean; run: (p: Promise<RelocationCockpit>) => void
+  busy: boolean; run: (p: Promise<RelocationForm>) => void
 }) {
   const [lotId, setLotId] = useState<number | ''>('')
   const [from, setFrom] = useState<number | ''>('')

@@ -19,12 +19,12 @@ export function useFormLock(id: number, isNew = false) {
   return { unlocked, toggle: () => setUnlocked(v => !v), setUnlocked }
 }
 
-// Единая оболочка кокпита ордера (Ф2i): свод боилерплейта, одинакового у всех шести
-// detail-вьюх «Ордера» — загрузка кокпита по id, обёртка мутации `run` (ответ сервера
+// Единая оболочка формы ордера (Ф2i): свод боилерплейта, одинакового у всех шести
+// detail-вьюх «Ордера» — загрузка формы по id, обёртка мутации `run` (ответ сервера
 // → в стейт + обновить фид), дружелюбное удаление `del` (confirm + guard бэка), замок
-// формы и строка ошибки. Специфика вида (тело кокпита, выражение `fixed`, side-load
+// формы и строка ошибки. Специфика вида (тело формы, выражение `fixed`, side-load
 // пикеров) остаётся во вьюхе; сюда она входит колбэками `cb`.
-export function useOrderCockpit<C extends { id: number }>(
+export function useOrderForm<C extends { id: number }>(
   id: number,
   load: (id: number) => Promise<C>,
   cb: {

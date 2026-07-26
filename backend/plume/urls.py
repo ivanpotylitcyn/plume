@@ -1,6 +1,6 @@
 """API-маршруты приложения plume.
 
-Волна 1 — read-only проекции движка. Волна 2 — записываемый кокпит комплектации.
+Волна 1 — read-only проекции движка. Волна 2 — записываемый форма комплектации.
 """
 from django.urls import path
 
@@ -20,7 +20,7 @@ urlpatterns = [
     path('project-demands/<int:pk>/', views.project_demand_detail, name='project-demand'),
     path('projects/<int:pk>/budget/', views.project_budget, name='project-budget'),
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
-    path('projects/<int:pk>/order/', views.project_order, name='project-order'),
+    path('projects/<int:pk>/add-to-purchase/', views.project_add_to_purchase, name='project-add-to-purchase'),
     path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),
     # закрытие проекта (волна 6): панель сведения остатков + мосты + мягкий замок
     path('projects/<int:pk>/closure/', views.project_closure, name='project-closure'),
@@ -42,7 +42,7 @@ urlpatterns = [
     path('library/diff/', views.library_diff, name='library-diff'),
     path('library/apply/', views.library_apply, name='library-apply'),
     path('bom-lines/<int:pk>/', views.bom_line_detail, name='bom-line'),
-    # кокпит комплектации (записываемое ядро)
+    # форма комплектации (записываемое ядро)
     path('kittings/', views.kittings, name='kittings'),
     path('kittings/<int:pk>/', views.kitting_detail, name='kitting-detail'),
     path('kittings/<int:pk>/lines/', views.kitting_lines, name='kitting-lines'),

@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectDetail } from './api'
-import { LayerSeg, money, num, ItemGlyph } from './status'
+import { Chevron, LayerSeg, money, num, ItemGlyph } from './status'
 import { CommitInput } from './ReceiptView'
 import { FormHeader, useFormLock } from './FormHeader'
 import { ItemPicker } from './Picker'
@@ -55,7 +55,7 @@ export function DeficitView({ projectId, items, isNew, closed, openItem, openPur
   // Мост «дефицит → заказ»: положить ▲-позицию в расфиксированный заказ проекта и открыть его.
   const order = (itemId: number, qty: number) => {
     setBusy(true)
-    api.addToOrder(projectId, { item_id: itemId, qty })
+    api.addToPurchase(projectId, { item_id: itemId, qty })
       .then(r => openPurchase(r.purchase_id))
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -205,7 +205,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
       <div className={`prow prow--device s-${d.status}`}>
         <span className="tree-cell">
           <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
-            onClick={() => setOpen(o => !o)}>{open ? '▾' : '▸'}</button>
+            onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           <ItemGlyph native={d.target_native} synced={d.target_synced} locked={d.target_locked} />
           <a className="link" onClick={() => openItem(d.target_id)}>{d.target_code}</a>
         </span>
@@ -280,7 +280,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
-              onClick={onToggle}>{expanded ? '▾' : '▸'}</button>
+              onClick={onToggle}><Chevron open={expanded} /></button>
           : <span className="tree-lead" />}
         <ItemGlyph native={n.component_native} synced={n.component_synced} locked={n.component_locked} />
         <a className="link" onClick={() => openItem(n.component_id)}>{n.component_code}</a>

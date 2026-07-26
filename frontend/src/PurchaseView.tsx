@@ -1,11 +1,11 @@
-// Витрина волны 4: кокпит заказа (Purchase) — записываемое ядро.
+// Витрина волны 4: форма заказа (Purchase) — записываемое ядро.
 // Строки-обязательства: заказано (автосейв, пока расфиксировано), поступило по связанным
 // приходам (Receipt.purchase), остаток. Закрытость строки красится тем же словарём
 // ✓/●/▲. Мягкий замок = утверждение (draft→posted): строки read-only, заказ считается
 // в члене «заказано» дашборда дефицита. Отмены нет — отмена = удаление (волна 19, Р1).
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type ProcurementRow, type PurchaseCockpit,
-  type PurchaseCockpitLine, type Status } from './api'
+import { api, type ItemRow, type ProcurementRow, type PurchaseForm,
+  type PurchaseFormLine, type Status } from './api'
 import { CommitInput } from './ReceiptView'
 import { AnchorSelect, AuthorField, FormHeader, ProjectField, useFormLock } from './FormHeader'
 import { Glyph, StatusGlyph, statusTone, num } from './status'
@@ -16,7 +16,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   openItem: (id: number) => void; openReceipt: (id: number) => void
   onChanged: () => void; onDeleted?: () => void
 }) {
-  const [c, setC] = useState<PurchaseCockpit | null>(null)
+  const [c, setC] = useState<PurchaseForm | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
@@ -28,7 +28,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   }, [purchaseId])
   useEffect(() => { api.procurements().then(setProcs) }, [])
 
-  const run = (p: Promise<PurchaseCockpit>) => {
+  const run = (p: Promise<PurchaseForm>) => {
     setBusy(true); setErr(null)
     p.then(next => { setC(next); onChanged() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -137,8 +137,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
 
 // Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
 function LineRow({ ln, editable, busy, openItem, run }: {
-  ln: PurchaseCockpitLine; editable: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<PurchaseCockpit>) => void
+  ln: PurchaseFormLine; editable: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<PurchaseForm>) => void
 }) {
   return (
     <tr className={`row s-${ln.status}`}>
@@ -169,7 +169,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
 // Призрачная строка: добавить позицию в заказ (только пока расфиксировано).
 function GhostRow({ purchaseId, items, busy, run }: {
   purchaseId: number; items: ItemRow[]; busy: boolean
-  run: (p: Promise<PurchaseCockpit>) => void
+  run: (p: Promise<PurchaseForm>) => void
 }) {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')

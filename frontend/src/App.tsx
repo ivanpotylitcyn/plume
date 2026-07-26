@@ -632,7 +632,7 @@ function OrderList({ entries, selKey, onSelect, onNew, newSel }: {
 }
 
 // Единая форма создания ордера: селектор типа наверху рулит полями — под ним
-// показывается кокпит-специфичная форма создания (те же New*, что и раньше). Их
+// показывается вид-специфичная форма создания (те же New*, что и раньше). Их
 // собственный заголовок служит подписью формы.
 function NewOrder({ projects, items, afterCreate }: {
   projects: ProjectRow[]; items: ItemRow[]
@@ -708,7 +708,7 @@ function NewKitting({ projects, items, onCreated }: {
   )
 }
 
-// Создание нового заказа: проект (+ код/описание). Строки добавляются в кокпите.
+// Создание нового заказа: проект (+ код/описание). Строки добавляются в форме.
 function NewPurchase({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
@@ -732,7 +732,7 @@ function NewPurchase({ projects, onCreated }: {
   return (
     <div>
       <h1 className="title">Новый заказ</h1>
-      <div className="subtitle">Проект-исполнение · строки добавляются в кокпите заказа</div>
+      <div className="subtitle">Проект-исполнение · строки добавляются в форме заказа</div>
       <dl className="props">
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
@@ -866,7 +866,7 @@ function NewProject({ onCreated }: { onCreated: (id: number) => void }) {
 }
 
 // Создание новой закупки-плана: без проекта (командная высота), только примечание.
-// Строки набираются в кокпите или мостом из командного свода.
+// Строки набираются в форме или мостом из командного свода.
 function NewProcurement({ onCreated }: { onCreated: (id: number) => void }) {
   const [code, setCode] = useState('')
   const [description, setDescription] = useState('')
@@ -885,7 +885,7 @@ function NewProcurement({ onCreated }: { onCreated: (id: number) => void }) {
   return (
     <div>
       <h1 className="title">Новая закупка-план</h1>
-      <div className="subtitle">Планирование (командная высота, без проекта) · позиции — в кокпите или из свода</div>
+      <div className="subtitle">Планирование (командная высота, без проекта) · позиции — в форме или из свода</div>
       <dl className="props">
         <dt>Код</dt>
         <dd><input className="qty-in" style={{ width: 260 }} value={code}
@@ -902,7 +902,7 @@ function NewProcurement({ onCreated }: { onCreated: (id: number) => void }) {
   )
 }
 
-// Создание новой передачи (накладной): проект + № + дата. Строки — в кокпите.
+// Создание новой передачи (накладной): проект + № + дата. Строки — в форме.
 function NewTransfer({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
@@ -941,7 +941,7 @@ function NewTransfer({ projects, onCreated }: {
   return (
     <div>
       <h1 className="title">Новая передача</h1>
-      <div className="subtitle">Отгрузка заказчику · проект + № накладной · строки в кокпите</div>
+      <div className="subtitle">Отгрузка заказчику · проект + № накладной · строки в форме</div>
       <dl className="props">
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
@@ -976,7 +976,7 @@ function NewTransfer({ projects, onCreated }: {
   )
 }
 
-// Создание нового списания: проект + № акта + дата + причина. Строки — в кокпите.
+// Создание нового списания: проект + № акта + дата + причина. Строки — в форме.
 function NewWriteoff({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
@@ -1001,7 +1001,7 @@ function NewWriteoff({ projects, onCreated }: {
   return (
     <div>
       <h1 className="title">Новое списание</h1>
-      <div className="subtitle">Выбытие из проекта (серый путь) · проект + № акта · строки в кокпите</div>
+      <div className="subtitle">Выбытие из проекта (серый путь) · проект + № акта · строки в форме</div>
       <dl className="props">
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}
@@ -1026,7 +1026,7 @@ function NewWriteoff({ projects, onCreated }: {
   )
 }
 
-// Создание нового требования: проект-получатель + № + дата. Источники — в кокпите.
+// Создание нового требования: проект-получатель + № + дата. Источники — в форме.
 function NewRequisition({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
@@ -1049,7 +1049,7 @@ function NewRequisition({ projects, onCreated }: {
   return (
     <div>
       <h1 className="title">Новое требование</h1>
-      <div className="subtitle">Отпочкование в получатель · проект-получатель + № · источники в кокпите</div>
+      <div className="subtitle">Отпочкование в получатель · проект-получатель + № · источники в форме</div>
       <dl className="props">
         <dt>Получатель</dt>
         <dd><select className="lot-sel" value={projectId}
@@ -1072,7 +1072,7 @@ function NewRequisition({ projects, onCreated }: {
 }
 
 // Создание новой инвентаризации: проект-дом + № акта + дата + примечание.
-// Найденные партии рождаются в кокпите (излишки + ре-материализация серого).
+// Найденные партии рождаются в форме (излишки + ре-материализация серого).
 // По умолчанию — GREY «Свободные неучтённые» (флагман — ре-материализация), но
 // излишек можно завести и в реальном проекте.
 function NewInventory({ projects, onCreated }: {
@@ -1097,7 +1097,7 @@ function NewInventory({ projects, onCreated }: {
   return (
     <div>
       <h1 className="title">Новая инвентаризация</h1>
-      <div className="subtitle">Рождение найденных партий · проект-дом + № акта · строки в кокпите</div>
+      <div className="subtitle">Рождение найденных партий · проект-дом + № акта · строки в форме</div>
       <dl className="props">
         <dt>Проект-дом</dt>
         <dd><select className="lot-sel" value={projectId}
@@ -1120,7 +1120,7 @@ function NewInventory({ projects, onCreated }: {
 }
 
 // Создание нового перемещения (волна 13 Ф3): проект + № + дата. Ходы (лот · откуда
-// → куда) собираются в кокпите. Перемещение двигает лоты внутри проекта по местам.
+// → куда) собираются в форме. Перемещение двигает лоты внутри проекта по местам.
 function NewRelocation({ projects, onCreated }: {
   projects: ProjectRow[]; onCreated: (id: number) => void
 }) {
@@ -1143,7 +1143,7 @@ function NewRelocation({ projects, onCreated }: {
   return (
     <div>
       <h1 className="title">Новое перемещение</h1>
-      <div className="subtitle">Ход лота между местами хранения · проект + № · ходы в кокпите</div>
+      <div className="subtitle">Ход лота между местами хранения · проект + № · ходы в форме</div>
       <dl className="props">
         <dt>Проект</dt>
         <dd><select className="lot-sel" value={projectId}

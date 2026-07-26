@@ -1,7 +1,7 @@
 """API движка plume.
 
 Волна 1 — read-only проекции (дефицит, карта остатков, экран изделия).
-Волна 2 — записываемое ядро: кокпит комплектации (пайка = промоушн призрачной
+Волна 2 — записываемое ядро: форма комплектации (пайка = промоушн призрачной
 строки в `KittingLine`, автосейв qty, закрытие/переоткрытие). Правила мутаций
 живут в `engine.py`; вьюхи только разбирают запрос и маппят ошибки в 400.
 Волна 3 — приход/УПД (рождение лотов, замок). Волна 4 — заказ (Purchase) +
@@ -255,7 +255,7 @@ def location_detail(request, pk):
                 kind=d['kind'] if 'kind' in d else None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.location_cockpit(loc))
+    return Response(engine.location_form(loc))
 
 
 def _category_row(c):
@@ -461,7 +461,7 @@ def item_unlock(request, pk):
 
 
 # --------------------------------------------------------------------------- #
-#  Кокпит комплектации (волна 2 — записываемое ядро)
+#  Форма комплектации (волна 2 — записываемое ядро)
 # --------------------------------------------------------------------------- #
 def _kitting_row(k):
     """Строка списка комплектаций для дерева навигации."""
@@ -486,7 +486,7 @@ def kittings(request):
                 qty=d.get('qty') or 1, date=timezone.localdate())
         except (KeyError, models.Project.DoesNotExist, models.Item.DoesNotExist) as e:
             return _bad(f'Нужны project_id и target_item_id ({e}).')
-        return Response(engine.kitting_cockpit(k), status=http.HTTP_201_CREATED)
+        return Response(engine.kitting_form(k), status=http.HTTP_201_CREATED)
 
     rows = [_kitting_row(k) for k in models.Kitting.objects
             .select_related('project', 'target_item').order_by('-id')]
@@ -495,8 +495,8 @@ def kittings(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def kitting_detail(request, pk):
-    """Кокпит комплектации: BOM 1 уровень, реальные + призрачные строки.
-    PATCH — правка шапки (кол-во образцов / дата) прямо в кокпите. DELETE — удаление."""
+    """Форма комплектации: BOM 1 уровень, реальные + призрачные строки.
+    PATCH — правка шапки (кол-во образцов / дата) прямо в форме. DELETE — удаление."""
     k = get_object_or_404(models.Kitting, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(k)
@@ -516,7 +516,7 @@ def kitting_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.kitting_cockpit(k))
+    return Response(engine.kitting_form(k))
 
 
 @api_view(['POST'])
@@ -533,7 +533,7 @@ def kitting_lines(request, pk):
         return _bad(f'Нужны component_id, lot_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.kitting_cockpit(k), status=http.HTTP_201_CREATED)
+    return Response(engine.kitting_form(k), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -550,7 +550,7 @@ def kitting_line_detail(request, pk):
             engine.update_kitting_line(line, _dec(request.data.get('qty')))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.kitting_cockpit(kitting))
+    return Response(engine.kitting_form(kitting))
 
 
 @api_view(['POST'])
@@ -561,7 +561,7 @@ def kitting_lock(request, pk):
         engine.lock_kitting(k)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.kitting_cockpit(k))
+    return Response(engine.kitting_form(k))
 
 
 @api_view(['POST'])
@@ -572,7 +572,7 @@ def kitting_unlock(request, pk):
         engine.unlock_kitting(k)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.kitting_cockpit(k))
+    return Response(engine.kitting_form(k))
 
 
 # --------------------------------------------------------------------------- #
@@ -640,7 +640,7 @@ def receipts(request):
         except (KeyError, models.Counterparty.DoesNotExist,
                 models.Project.DoesNotExist) as e:
             return _bad(f'Нужны contractor_id, project_id, number ({e}).')
-        return Response(engine.receipt_cockpit(r), status=http.HTTP_201_CREATED)
+        return Response(engine.receipt_form(r), status=http.HTTP_201_CREATED)
 
     rows = [_receipt_row(r) for r in models.Receipt.objects
             .select_related('contractor', 'project').order_by('-id')]
@@ -649,8 +649,8 @@ def receipts(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def receipt_detail(request, pk):
-    """Кокпит прихода: строки-лоты УПД + живой остаток + сумма.
-    PATCH — правка шапки (№ УПД / дата) прямо в кокпите. DELETE — удаление."""
+    """Форма прихода: строки-лоты УПД + живой остаток + сумма.
+    PATCH — правка шапки (№ УПД / дата) прямо в форме. DELETE — удаление."""
     r = get_object_or_404(models.Receipt, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(r)
@@ -667,7 +667,7 @@ def receipt_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.receipt_cockpit(r))
+    return Response(engine.receipt_form(r))
 
 
 @api_view(['POST'])
@@ -686,7 +686,7 @@ def receipt_lots(request, pk):
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.receipt_cockpit(r), status=http.HTTP_201_CREATED)
+    return Response(engine.receipt_form(r), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -710,7 +710,7 @@ def receipt_lot_detail(request, pk):
                 part_number=d['part_number'] if 'part_number' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.receipt_cockpit(receipt))
+    return Response(engine.receipt_form(receipt))
 
 
 @api_view(['POST'])
@@ -721,7 +721,7 @@ def receipt_lock(request, pk):
         engine.lock_receipt(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.receipt_cockpit(r))
+    return Response(engine.receipt_form(r))
 
 
 @api_view(['POST'])
@@ -729,7 +729,7 @@ def receipt_unlock(request, pk):
     """Снять замок — снова разрешить правку."""
     r = get_object_or_404(models.Receipt, pk=pk)
     engine.unlock_receipt(r)
-    return Response(engine.receipt_cockpit(r))
+    return Response(engine.receipt_form(r))
 
 
 @api_view(['POST'])
@@ -744,7 +744,7 @@ def receipt_link(request, pk):
         return _bad('Заказ не найден.')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.receipt_cockpit(r))
+    return Response(engine.receipt_form(r))
 
 
 # --------------------------------------------------------------------------- #
@@ -773,7 +773,7 @@ def purchases(request):
                                    date=d.get('date') or None,
                                    code=(d.get('code') or '').strip() or None,
                                    description=(d.get('description') or '').strip())
-        return Response(engine.purchase_cockpit(p), status=http.HTTP_201_CREATED)
+        return Response(engine.purchase_form(p), status=http.HTTP_201_CREATED)
 
     rows = [_purchase_row(p) for p in models.Purchase.objects
             .select_related('project').order_by('-id')]
@@ -782,8 +782,8 @@ def purchases(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def purchase_detail(request, pk):
-    """Кокпит заказа: строки (заказано/поступило/остаток) + связанные приходы.
-    PATCH — правка шапки (дата / примечание) прямо в кокпите.
+    """Форма заказа: строки (заказано/поступило/остаток) + связанные приходы.
+    PATCH — правка шапки (дата / примечание) прямо в форме.
     DELETE — удаление заказа (WAVE14 Ф2) под замком; friendly-guard (приход/отправка)."""
     p = get_object_or_404(models.Purchase, pk=pk)
     if request.method == 'DELETE':
@@ -805,7 +805,7 @@ def purchase_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.purchase_cockpit(p))
+    return Response(engine.purchase_form(p))
 
 
 @api_view(['POST'])
@@ -820,7 +820,7 @@ def purchase_lines(request, pk):
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.purchase_cockpit(p), status=http.HTTP_201_CREATED)
+    return Response(engine.purchase_form(p), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -836,7 +836,7 @@ def purchase_line_detail(request, pk):
             engine.update_purchase_line(line, _dec(request.data.get('qty')))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.purchase_cockpit(purchase))
+    return Response(engine.purchase_form(purchase))
 
 
 def _purchase_transition(request, pk, fn):
@@ -846,7 +846,7 @@ def _purchase_transition(request, pk, fn):
         fn(p)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.purchase_cockpit(p))
+    return Response(engine.purchase_form(p))
 
 
 @api_view(['POST'])
@@ -875,16 +875,16 @@ def project_purchases(request, pk):
 
 
 @api_view(['POST'])
-def project_order(request, pk):
+def project_add_to_purchase(request, pk):
     """Мост «дефицит → заказ»: положить позицию в draft-заказ проекта.
 
-    Возвращает id заказа (UI ведёт в кокпит). Оживляет ▲-член «заказано» дефицита.
+    Возвращает id заказа (UI ведёт в форму). Оживляет ▲-член «заказано» дефицита.
     """
     project = get_object_or_404(models.Project, pk=pk)
     d = request.data
     try:
         item = models.Item.objects.get(pk=d['item_id'])
-        p = engine.add_to_project_order(project, item, _dec(d.get('qty')),
+        p = engine.add_to_project_purchase(project, item, _dec(d.get('qty')),
                                         _actor(request))
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны item_id, qty ({e}).')
@@ -923,7 +923,7 @@ def transfers(request):
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.transfer_cockpit(t), status=http.HTTP_201_CREATED)
+        return Response(engine.transfer_form(t), status=http.HTTP_201_CREATED)
 
     rows = [_transfer_row(t) for t in models.Transfer.objects
             .select_related('project', 'contractor').order_by('-id')]
@@ -932,8 +932,8 @@ def transfers(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def transfer_detail(request, pk):
-    """Кокпит передачи: строки-лоты накладной + живой остаток источника + итог.
-    PATCH — правка шапки (№ накладной / дата) прямо в кокпите. DELETE — удаление."""
+    """Форма передачи: строки-лоты накладной + живой остаток источника + итог.
+    PATCH — правка шапки (№ накладной / дата) прямо в форме. DELETE — удаление."""
     t = get_object_or_404(models.Transfer, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(t)
@@ -957,7 +957,7 @@ def transfer_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.transfer_cockpit(t))
+    return Response(engine.transfer_form(t))
 
 
 @api_view(['POST'])
@@ -973,7 +973,7 @@ def transfer_lines(request, pk):
         return _bad(f'Нужны lot_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.transfer_cockpit(t), status=http.HTTP_201_CREATED)
+    return Response(engine.transfer_form(t), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -994,7 +994,7 @@ def transfer_line_detail(request, pk):
                 display_name=d['display_name'] if 'display_name' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.transfer_cockpit(transfer))
+    return Response(engine.transfer_form(transfer))
 
 
 @api_view(['POST'])
@@ -1005,7 +1005,7 @@ def transfer_lock(request, pk):
         engine.lock_transfer(t)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.transfer_cockpit(t))
+    return Response(engine.transfer_form(t))
 
 
 @api_view(['POST'])
@@ -1013,7 +1013,7 @@ def transfer_unlock(request, pk):
     """Снять замок — снова разрешить правку накладной."""
     t = get_object_or_404(models.Transfer, pk=pk)
     engine.unlock_transfer(t)
-    return Response(engine.transfer_cockpit(t))
+    return Response(engine.transfer_form(t))
 
 
 @api_view(['GET'])
@@ -1050,7 +1050,7 @@ def relocations(request):
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.relocation_cockpit(r), status=http.HTTP_201_CREATED)
+        return Response(engine.relocation_form(r), status=http.HTTP_201_CREATED)
 
     rows = [_relocation_row(r) for r in models.Relocation.objects
             .select_related('project').order_by('-id')]
@@ -1059,7 +1059,7 @@ def relocations(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def relocation_detail(request, pk):
-    """Кокпит перемещения: ходы (лот, откуда→куда, кол-во) + остатки по местам.
+    """Форма перемещения: ходы (лот, откуда→куда, кол-во) + остатки по местам.
     PATCH — правка шапки (№ / дата / автор / проект-якорь). DELETE — удаление."""
     r = get_object_or_404(models.Relocation, pk=pk)
     if request.method == 'DELETE':
@@ -1077,7 +1077,7 @@ def relocation_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.relocation_cockpit(r))
+    return Response(engine.relocation_form(r))
 
 
 @api_view(['POST'])
@@ -1095,7 +1095,7 @@ def relocation_lines(request, pk):
         return _bad(f'Нужны lot_id, qty, from_location_id, to_location_id ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.relocation_cockpit(r), status=http.HTTP_201_CREATED)
+    return Response(engine.relocation_form(r), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1119,7 +1119,7 @@ def relocation_line_detail(request, pk, lot_pk):
         return _bad('Место хранения не найдено.')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.relocation_cockpit(r))
+    return Response(engine.relocation_form(r))
 
 
 @api_view(['POST'])
@@ -1130,7 +1130,7 @@ def relocation_lock(request, pk):
         engine.lock_relocation(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.relocation_cockpit(r))
+    return Response(engine.relocation_form(r))
 
 
 @api_view(['POST'])
@@ -1138,7 +1138,7 @@ def relocation_unlock(request, pk):
     """Снять замок перемещения — снова разрешить правку."""
     r = get_object_or_404(models.Relocation, pk=pk)
     engine.unlock_relocation(r)
-    return Response(engine.relocation_cockpit(r))
+    return Response(engine.relocation_form(r))
 
 
 @api_view(['GET'])
@@ -1181,7 +1181,7 @@ def writeoffs(request):
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.writeoff_cockpit(w), status=http.HTTP_201_CREATED)
+        return Response(engine.writeoff_form(w), status=http.HTTP_201_CREATED)
 
     rows = [_writeoff_row(w) for w in models.Writeoff.objects
             .select_related('project').order_by('-id')]
@@ -1190,8 +1190,8 @@ def writeoffs(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def writeoff_detail(request, pk):
-    """Кокпит списания: строки-лоты (`−ISSUE`) + живой остаток источника + итог.
-    PATCH — правка шапки (№ акта / дата / причина) прямо в кокпите. DELETE — удаление."""
+    """Форма списания: строки-лоты (`−ISSUE`) + живой остаток источника + итог.
+    PATCH — правка шапки (№ акта / дата / причина) прямо в форме. DELETE — удаление."""
     w = get_object_or_404(models.Writeoff, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(w)
@@ -1209,7 +1209,7 @@ def writeoff_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.writeoff_cockpit(w))
+    return Response(engine.writeoff_form(w))
 
 
 @api_view(['POST'])
@@ -1224,7 +1224,7 @@ def writeoff_lines(request, pk):
         return _bad(f'Нужны lot_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.writeoff_cockpit(w), status=http.HTTP_201_CREATED)
+    return Response(engine.writeoff_form(w), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1241,7 +1241,7 @@ def writeoff_line_detail(request, pk):
             engine.update_writeoff_line(line, _dec(request.data.get('qty')))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.writeoff_cockpit(writeoff))
+    return Response(engine.writeoff_form(writeoff))
 
 
 @api_view(['POST'])
@@ -1252,7 +1252,7 @@ def writeoff_lock(request, pk):
         engine.lock_writeoff(w)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.writeoff_cockpit(w))
+    return Response(engine.writeoff_form(w))
 
 
 @api_view(['POST'])
@@ -1260,7 +1260,7 @@ def writeoff_unlock(request, pk):
     """Снять замок списания — снова разрешить правку."""
     w = get_object_or_404(models.Writeoff, pk=pk)
     engine.unlock_writeoff(w)
-    return Response(engine.writeoff_cockpit(w))
+    return Response(engine.writeoff_form(w))
 
 
 # ── Требование / Requisition ──
@@ -1286,7 +1286,7 @@ def requisitions(request):
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.requisition_cockpit(r), status=http.HTTP_201_CREATED)
+        return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
 
     rows = [_requisition_row(r) for r in models.Requisition.objects
             .select_related('project').order_by('-id')]
@@ -1295,8 +1295,8 @@ def requisitions(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def requisition_detail(request, pk):
-    """Кокпит требования: строки (источник → потомок) + живой остаток источника.
-    PATCH — правка шапки (№ / дата) прямо в кокпите. DELETE — удаление."""
+    """Форма требования: строки (источник → потомок) + живой остаток источника.
+    PATCH — правка шапки (№ / дата) прямо в форме. DELETE — удаление."""
     r = get_object_or_404(models.Requisition, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(r)
@@ -1313,7 +1313,7 @@ def requisition_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_cockpit(r))
+    return Response(engine.requisition_form(r))
 
 
 @api_view(['POST'])
@@ -1328,7 +1328,7 @@ def requisition_lines(request, pk):
         return _bad(f'Нужны source_lot_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_cockpit(r), status=http.HTTP_201_CREATED)
+    return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1345,7 +1345,7 @@ def requisition_line_detail(request, pk):
             engine.update_requisition_line(line, _dec(request.data.get('qty')))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_cockpit(requisition))
+    return Response(engine.requisition_form(requisition))
 
 
 @api_view(['POST'])
@@ -1356,7 +1356,7 @@ def requisition_lock(request, pk):
         engine.lock_requisition(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_cockpit(r))
+    return Response(engine.requisition_form(r))
 
 
 @api_view(['POST'])
@@ -1364,7 +1364,7 @@ def requisition_unlock(request, pk):
     """Снять замок требования — снова разрешить правку."""
     r = get_object_or_404(models.Requisition, pk=pk)
     engine.unlock_requisition(r)
-    return Response(engine.requisition_cockpit(r))
+    return Response(engine.requisition_form(r))
 
 
 # ── Инвентаризация / Inventory (записываемое ядро, волна 9) ──
@@ -1391,7 +1391,7 @@ def inventories(request):
             return _bad(f'Нужны project_id, number ({e}).')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.inventory_cockpit(i), status=http.HTTP_201_CREATED)
+        return Response(engine.inventory_form(i), status=http.HTTP_201_CREATED)
 
     rows = [_inventory_row(i) for i in models.Inventory.objects
             .select_related('project').order_by('-id')]
@@ -1400,8 +1400,8 @@ def inventories(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def inventory_detail(request, pk):
-    """Кокпит инвентаризации: строки-лоты (`+RECEIPT`) + провенанс + итог.
-    PATCH — правка шапки (№ акта / дата / примечание) прямо в кокпите. DELETE — удаление."""
+    """Форма инвентаризации: строки-лоты (`+RECEIPT`) + провенанс + итог.
+    PATCH — правка шапки (№ акта / дата / примечание) прямо в форме. DELETE — удаление."""
     i = get_object_or_404(models.Inventory, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(i)
@@ -1421,7 +1421,7 @@ def inventory_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.inventory_cockpit(i))
+    return Response(engine.inventory_form(i))
 
 
 @api_view(['POST'])
@@ -1456,7 +1456,7 @@ def inventory_lots(request, pk):
         return _bad(f'Нужны item_id (или predecessor_id), qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.inventory_cockpit(i), status=http.HTTP_201_CREATED)
+    return Response(engine.inventory_form(i), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1480,7 +1480,7 @@ def inventory_lot_detail(request, pk):
                 part_number=d['part_number'] if 'part_number' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.inventory_cockpit(inventory))
+    return Response(engine.inventory_form(inventory))
 
 
 @api_view(['POST'])
@@ -1491,7 +1491,7 @@ def inventory_lock(request, pk):
         engine.lock_inventory(i)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.inventory_cockpit(i))
+    return Response(engine.inventory_form(i))
 
 
 @api_view(['POST'])
@@ -1499,7 +1499,7 @@ def inventory_unlock(request, pk):
     """Снять замок инвентаризации — снова разрешить правку."""
     i = get_object_or_404(models.Inventory, pk=pk)
     engine.unlock_inventory(i)
-    return Response(engine.inventory_cockpit(i))
+    return Response(engine.inventory_form(i))
 
 
 @api_view(['GET'])
@@ -1581,7 +1581,7 @@ def command_deficit(request):
 def command_deficit_add(request):
     """Мост «свод → закупка»: положить позицию в draft-`Procurement` (создаст при нужде).
 
-    Возвращает id закупки (UI ведёт в кокпит плана).
+    Возвращает id закупки (UI ведёт в форму плана).
     """
     d = request.data
     try:
@@ -1611,7 +1611,7 @@ def procurements(request):
                                       date=d.get('date') or None,
                                       code=(d.get('code') or '').strip() or None,
                                       description=(d.get('description') or '').strip())
-        return Response(engine.procurement_cockpit(p), status=http.HTTP_201_CREATED)
+        return Response(engine.procurement_form(p), status=http.HTTP_201_CREATED)
 
     # только закупки-планы (без 1:1-заглушек проектных заказов, см. engine)
     rows = [_procurement_row(p)
@@ -1621,8 +1621,8 @@ def procurements(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def procurement_detail(request, pk):
-    """Кокпит закупки-плана: строки (item, qty) + итог.
-    PATCH — правка шапки (дата / примечание) прямо в кокпите.
+    """Форма закупки-плана: строки (item, qty) + итог.
+    PATCH — правка шапки (дата / примечание) прямо в форме.
     DELETE — удаление закупки (WAVE14 Ф2) под замком; friendly-guard (заказы/отправка)."""
     p = get_object_or_404(models.Procurement, pk=pk)
     if request.method == 'DELETE':
@@ -1647,7 +1647,7 @@ def procurement_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_cockpit(p))
+    return Response(engine.procurement_form(p))
 
 
 @api_view(['POST'])
@@ -1662,7 +1662,7 @@ def procurement_lines(request, pk):
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_cockpit(p), status=http.HTTP_201_CREATED)
+    return Response(engine.procurement_form(p), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1678,7 +1678,7 @@ def procurement_line_detail(request, pk):
             engine.update_procurement_line(line, _dec(request.data.get('qty')))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_cockpit(procurement))
+    return Response(engine.procurement_form(procurement))
 
 
 def _procurement_transition(request, pk, fn):
@@ -1688,7 +1688,7 @@ def _procurement_transition(request, pk, fn):
         fn(p)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_cockpit(p))
+    return Response(engine.procurement_form(p))
 
 
 @api_view(['POST'])
