@@ -40,8 +40,18 @@
   заказ везде `purchase` (`addToOrder` → `addToPurchase`, `add_to_project_order` →
   `add_to_project_purchase`, `views.project_order` → `project_add_to_purchase`,
   маршрут `projects/<pk>/order/` → `add-to-purchase/`). Не тронуты `to_order`/`on_order`
-  (ось покрытия, не имя сущности) и `order.xlsx` (внешний контракт, файл уходит
-  контрагентам). Правило записано в `UI_GUIDE` §1.
+  (ось покрытия, не имя сущности). Правило записано в `UI_GUIDE` §1.
+- **`order.xlsx` вычищен тоже — правка Ивана по ходу сессии.** Сперва я оставил его как
+  «внешний контракт, файл уходит контрагентам»; Иван поправил: файла с таким именем
+  больше нет, кнопка в UI сократилась до «Скачать», а **файл называется кодом сущности**.
+  Сделано: маршрут `procurements/<pk>/order.xlsx` → `procurements/<pk>/xlsx/`, вьюха
+  `procurement_order_xlsx` → `procurement_xlsx` (с `engine.procurement_xlsx` не
+  сталкивается — вызов модуль-квалифицированный), клиент `orderXlsxUrl` → `xlsxUrl`,
+  имя файла `order-<id>.xlsx` → `<code>.xlsx`. Закрывает пункт Ф4, висевший с 2026-07-24.
+  **Кириллица в имени** (коды вида «Нева ДЗЗ 1») требует RFC 5987 — заголовок собираем
+  `django.utils.http.content_disposition_header` (даёт ASCII-фолбэк + `filename*=utf-8''…`),
+  а не f-строкой; плюс `_safe_filename` режет разделители путей и непечатаемое, пустой
+  `code` → фолбэк `закупка-<id>.xlsx`. Тест `test_xlsx_filename_is_procurement_code`.
 - **`cockpit` → `form` во всём коде** (~300 упоминаний): 9 функций движка `*_cockpit`,
   типы `*Cockpit` → `*Form` (`api.ts`), `useOrderCockpit` → `useOrderForm`, безымянные
   `Cockpit`/`CockpitRow` → `KittingForm`/`KittingFormRow`, тест-классы `*CockpitTests`,

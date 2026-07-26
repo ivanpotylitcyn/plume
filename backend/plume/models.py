@@ -408,7 +408,7 @@ class Procurement(models.Model):
     description = models.CharField('описание', max_length=255, blank=True, default='')
     locked = models.BooleanField('зафиксирована', default=False)
     # Контрагент-поставщик (волна 19, Ф4, Р3): закупка = «один поток общения» с
-    # поставщиком; отсюда берётся сторона при «Заказ → УПД» (Ф6) и шапка order.xlsx
+    # поставщиком; отсюда берётся сторона при «Заказ → УПД» (Ф6) и шапка xlsx-бланка
     # (Ф4b). `SET_NULL` (не `PROTECT`, как у `Receipt.contractor`) осознанно: закупка —
     # план/черновик, удаление контрагента её не должно ронять — поле просто опустеет.
     contractor = models.ForeignKey(Counterparty, on_delete=models.SET_NULL, null=True,

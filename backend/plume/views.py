@@ -15,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.http import content_disposition_header
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status as http
 from rest_framework.decorators import api_view, permission_classes
@@ -90,6 +91,18 @@ def _code_kw(d):
 
 def _bad(exc):
     return Response({'detail': str(exc)}, status=http.HTTP_400_BAD_REQUEST)
+
+
+def _safe_filename(code):
+    """`code` сущности → безопасное имя файла (без разделителей путей и мусора).
+
+    Коды вводит человек («Нева ДЗЗ 1»), кириллица и пробелы — норма и остаются как есть;
+    вырезаем только то, что ломает файловую систему или заголовок.
+    """
+    cleaned = ''.join(
+        ch for ch in (code or '').strip()
+        if ch not in '/\\:*?"<>|' and ch.isprintable())
+    return cleaned.strip('. ')
 
 
 def _delete_order(doc):
@@ -1704,16 +1717,23 @@ def procurement_unlock(request, pk):
 
 
 @api_view(['GET'])
-def procurement_order_xlsx(request, pk):
-    """Выгрузка `order.xlsx` закупки-плана — файл поставщику (attachment)."""
+def procurement_xlsx(request, pk):
+    """Выгрузка xlsx-бланка закупки-плана — файл поставщику (attachment).
+
+    **Имя файла = `code` закупки** (2026-07-26): человек скачивает «Нева ДЗЗ 1.xlsx»,
+    а не безликий `order-12.xlsx` — ярлык сущности едет наружу вместе с файлом.
+    Код бывает кириллическим и с пробелами, поэтому заголовок собираем
+    `content_disposition_header` (RFC 6266: ASCII-фолбэк + `filename*=UTF-8''…`),
+    а не f-строкой. Пустой `code` (он nullable) → фолбэк по id.
+    """
     p = get_object_or_404(models.Procurement, pk=pk)
     data = engine.procurement_xlsx(p)
     resp = HttpResponse(
         data,
         content_type=('application/vnd.openxmlformats-officedocument'
                       '.spreadsheetml.sheet'))
-    resp['Content-Disposition'] = (
-        f'attachment; filename="order-{p.id}.xlsx"')
+    resp['Content-Disposition'] = content_disposition_header(
+        as_attachment=True, filename=f'{_safe_filename(p.code) or f"закупка-{p.id}"}.xlsx')
     return resp
 
 

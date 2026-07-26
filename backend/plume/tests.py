@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 from decimal import Decimal
+from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -1443,7 +1444,7 @@ class ClosureHttpTests(TestCase):
 
 
 class ProcurementHttpTests(TestCase):
-    """Волна 7: HTTP-путь — свод, записываемый Procurement, мост, order.xlsx."""
+    """Волна 7: HTTP-путь — свод, записываемый Procurement, мост, xlsx-бланк."""
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
@@ -1493,11 +1494,31 @@ class ProcurementHttpTests(TestCase):
             {'item_id': self.dev.id, 'qty': 1}, content_type='application/json')
         self.assertEqual(locked.status_code, 400)
         # выгрузка xlsx — бинарное тело, xlsx content-type
-        xlsx = self.c.get(f'/api/procurements/{pid}/order.xlsx')
+        xlsx = self.c.get(f'/api/procurements/{pid}/xlsx/')
         self.assertEqual(xlsx.status_code, 200)
         self.assertIn('spreadsheetml', xlsx['Content-Type'])
         self.assertTrue(xlsx['Content-Disposition'].startswith('attachment'))
         self.assertTrue(xlsx.content[:2] == b'PK')      # zip-сигнатура xlsx
+
+    def test_xlsx_filename_is_procurement_code(self):
+        """Имя файла = `code` закупки (2026-07-26), с фолбэком по id у пустого кода.
+
+        Коды человек вводит кириллицей и с пробелами («Нева ДЗЗ 1») — заголовок обязан
+        нести RFC 5987 (`filename*=utf-8''…`), иначе имя приедет мусором.
+        """
+        r = self.c.post('/api/procurements/', {'code': 'Нева ДЗЗ 1'},
+            content_type='application/json')
+        pid = r.json()['id']
+        cd = self.c.get(f'/api/procurements/{pid}/xlsx/')['Content-Disposition']
+        self.assertIn("filename*=utf-8''", cd)
+        self.assertIn(quote('Нева ДЗЗ 1.xlsx'), cd)
+        # пустой код → фолбэк по id, ASCII-имени «order-*» больше нет
+        r2 = self.c.post('/api/procurements/', {'description': 'без кода'},
+            content_type='application/json')
+        pid2 = r2.json()['id']
+        cd2 = self.c.get(f'/api/procurements/{pid2}/xlsx/')['Content-Disposition']
+        self.assertIn(quote(f'закупка-{pid2}.xlsx'), cd2)
+        self.assertNotIn('order', cd2)
 
 
 class PeggingHttpTests(TestCase):

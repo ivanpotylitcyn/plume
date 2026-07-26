@@ -1,7 +1,7 @@
 // Витрина волны 7: форма закупки-плана (Procurement) — записываемое ядро.
 // Самостоятельный план без проекта (маркер командной высоты). Строки (item + qty,
 // автосейв, пока расфиксирована). Замок делает строки read-only.
-// Кнопка выгрузки order.xlsx поставщику. Волна 8 — панель pegging: нарезка плана на
+// Кнопка выгрузки xlsx-бланка поставщику (имя файла = код закупки). Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
@@ -73,7 +73,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
         onUnfix={() => {
           if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
         }}
-        download={{ href: api.orderXlsxUrl(c.id), title: 'Выгрузить order.xlsx для поставщика' }}
+        download={{ href: api.xlsxUrl(c.id), title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }}
         error={err}
       >
 

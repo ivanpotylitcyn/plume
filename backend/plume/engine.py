@@ -51,7 +51,7 @@
 - `procurement_form` / `create_procurement` / `add|update|remove_procurement_line`
   / `send|unsend|cancel|restore_procurement` — записываемый план закупки (без проекта,
   маркер командной высоты; мягкий замок `locked`). Нарезка на `Purchase` — волна 8.
-- `add_to_procurement(...)` — мост «свод → закупка»; `procurement_xlsx(...)` — `order.xlsx`.
+- `add_to_procurement(...)` — мост «свод → закупка»; `procurement_xlsx(...)` — xlsx-бланк поставщику.
 
 Волна 8 (pegging — нарезка плана на проектные заказы):
 - `procurement_pegging(proc)` — проекция: по строке плана пегнуто/остаток/статус +
@@ -2511,7 +2511,7 @@ def add_to_procurement(item, qty, user):
 
 
 def procurement_xlsx(procurement):
-    """Сгенерировать `order.xlsx` закупки-плана (bytes) — файл поставщику.
+    """Сгенерировать xlsx-бланк закупки-плана (bytes) — файл поставщику.
 
     Базовый формат: артикул / наименование / кол-во / ед. Синхронно в запросе
     (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт ленивый (зависимость

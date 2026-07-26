@@ -230,7 +230,7 @@ body { overflow: hidden; }
 .fh-del { position: absolute; right: 0; bottom: 0; }
 .fh-del:hover { color: var(--st-order);
   background: color-mix(in srgb, var(--st-order) 15%, transparent); }
-/* Скачать order.xlsx — в слоте корзины, но только у ЗАФИКСИРОВАННОЙ закупки (корзина
+/* Скачать xlsx-бланк — в слоте корзины, но только у ЗАФИКСИРОВАННОЙ закупки (корзина
    там только у расфиксированной — слоты не сталкиваются). По умолчанию серая; зелёный
    тон-намёк на xlsx — при наведении (тот же принцип, что «Удалить»). */
 .fh-download { position: absolute; right: 0; bottom: 0; text-decoration: none; }

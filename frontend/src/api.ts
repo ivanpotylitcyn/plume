@@ -725,7 +725,7 @@ export const api = {
     send<ProcurementForm>('DELETE', `/api/procurement-lines/${id}/`),
   lockProcurement: (id: number) => send<ProcurementForm>('POST', `/api/procurements/${id}/lock/`),
   unlockProcurement: (id: number) => send<ProcurementForm>('POST', `/api/procurements/${id}/unlock/`),
-  orderXlsxUrl: (id: number) => `/api/procurements/${id}/order.xlsx`,
+  xlsxUrl: (id: number) => `/api/procurements/${id}/xlsx/`,
   // pegging (волна 8)
   pegging: (id: number) => get<Pegging>(`/api/procurements/${id}/pegging/`),
   peg: (id: number, b: { item_id: number; project_id: number; qty: number }) =>

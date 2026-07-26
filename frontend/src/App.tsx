@@ -493,7 +493,7 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'projects',     icon: 'flag',          title: 'Проекты — дефицит, панель проекта' },
   { mode: 'products',     icon: 'rocket',        title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
   { mode: 'items',        icon: 'chip',          title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
-  { mode: 'procurements', icon: 'law',           title: 'Закупки — командный свод, order.xlsx' },
+  { mode: 'procurements', icon: 'law',           title: 'Закупки — командный свод, xlsx-бланк' },
   { mode: 'purchases',    icon: 'package',       title: 'Заказы — обязательства поставщику' },
   { mode: 'orders',       icon: 'notebook',      title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
   { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },

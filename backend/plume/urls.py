@@ -104,7 +104,7 @@ urlpatterns = [
     path('relocations/<int:pk>/unlock/', views.relocation_unlock, name='relocation-unlock'),
     path('relocations/<int:pk>/source-lots/', views.relocation_source_lots, name='relocation-source-lots'),
     path('relocations/<int:pk>/lines/<int:lot_pk>/', views.relocation_line_detail, name='relocation-line'),
-    # планирование закупок (волна 7): командный свод + записываемый Procurement + order.xlsx
+    # планирование закупок (волна 7): командный свод + записываемый Procurement + xlsx-бланк
     path('command-deficit/', views.command_deficit, name='command-deficit'),
     path('command-deficit/add-to-procurement/', views.command_deficit_add, name='command-deficit-add'),
     path('procurements/', views.procurements, name='procurements'),
@@ -112,7 +112,7 @@ urlpatterns = [
     path('procurements/<int:pk>/lines/', views.procurement_lines, name='procurement-lines'),
     path('procurements/<int:pk>/lock/', views.procurement_lock, name='procurement-lock'),
     path('procurements/<int:pk>/unlock/', views.procurement_unlock, name='procurement-unlock'),
-    path('procurements/<int:pk>/order.xlsx', views.procurement_order_xlsx, name='procurement-order-xlsx'),
+    path('procurements/<int:pk>/xlsx/', views.procurement_xlsx, name='procurement-xlsx'),
     path('procurement-lines/<int:pk>/', views.procurement_line_detail, name='procurement-line'),
     # pegging (волна 8): нарезка плана на проектные заказы
     path('procurements/<int:pk>/pegging/', views.procurement_pegging, name='procurement-pegging'),
