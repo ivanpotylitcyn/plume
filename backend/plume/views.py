@@ -363,7 +363,10 @@ def _item_detail_payload(item):
     """Проекция экрана изделия: свойства + окружение из связей (where-used, лоты)."""
     where_used = [
         {'parent_id': bl.parent_id, 'parent_code': bl.parent.code,
-         'parent_description': bl.parent.description, 'qty': bl.qty}
+         'parent_description': bl.parent.description, 'qty': bl.qty,
+         # оси родителя — под глиф строки (Ф3a: ровно один глиф по режиму)
+         'parent_native': bl.parent.native, 'parent_synced': bl.parent.synced,
+         'parent_locked': bl.parent.locked}
         for bl in item.used_in.select_related('parent')
     ]
     bom = [
@@ -390,7 +393,7 @@ def _item_detail_payload(item):
         'synced': item.synced, 'locked': item.locked, 'used': engine.item_is_used(item),
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
-        'shipments': engine.item_shipments(item),
+        'movements': engine.item_movements(item),
     }
 
 
@@ -1799,14 +1802,14 @@ def attachments(request, owner_type, owner_id):
     """Список вложений владельца (GET) / загрузка файла (POST, multipart).
 
     owner_type — имя FK-владельца (`receipt`/`transfer`/`item`/…); файл в поле
-    `file`, подпись — в `label`. Автор берётся из документа (`_actor`).
+    `file`, описание — в `description`. Автор берётся из документа (`_actor`).
     """
     if request.method == 'POST':
         try:
             owner = engine.resolve_attachment_owner(owner_type, owner_id)
             att = engine.add_attachment(
                 owner_type, owner, request.FILES.get('file'),
-                _actor(request), label=request.data.get('label') or '')
+                _actor(request), description=request.data.get('description') or '')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.attachment_row(att), status=http.HTTP_201_CREATED)
@@ -1819,13 +1822,13 @@ def attachments(request, owner_type, owner_id):
 
 @api_view(['PATCH', 'DELETE'])
 def attachment_detail(request, pk):
-    """Правка подписи (PATCH `label`) / удаление вложения (DELETE — файл с диска)."""
+    """Правка описания (PATCH `description`) / удаление вложения (DELETE — файл с диска)."""
     att = get_object_or_404(models.Attachment, pk=pk)
     if request.method == 'DELETE':
         engine.delete_attachment(att)
         return Response(status=http.HTTP_204_NO_CONTENT)
     d = request.data
-    engine.update_attachment(att, label=d['label'] if 'label' in d else None)
+    engine.update_attachment(att, description=d.get('description'))
     return Response(engine.attachment_row(att))
 
 

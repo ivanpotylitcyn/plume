@@ -141,7 +141,7 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
 
   const over = b.compass !== null && b.compass < 0   // перерасход
   return (
-    <div className="budget">
+    <div className="panel budget">
       <div className="bgroup">
         <Stat label="потрачено (факт)" value={money(b.spent)} />
         <Stat label="план (прогноз)" value={money(b.plan)} />

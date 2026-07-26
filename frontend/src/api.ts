@@ -78,10 +78,14 @@ export interface StockMap {
   item_id: number; item_code: string; item_description: string; uom: string
   rows: StockMapRow[]
 }
-export interface ItemShipment {
-  transfer_id: number; number: string; date: string; project_code: string
-  locked: boolean; lot_id: number; qty: number; display_name: string
-  lot_name: string
+// Лента движений изделия (волна 19, Ф12a): ВСЕ ордера, коснувшиеся его партий —
+// рождение (`born`, знак +) и движения существующих партий (`move`, знак в `qty`).
+// Пришла на смену узкой `ItemShipment` (только передачи).
+export interface ItemMovement {
+  event: 'born' | 'move'
+  kind: string; document_id: number; code: string | null; number: string
+  date: string | null; locked: boolean; project_code: string
+  lot_id: number; lot_name: string; qty: number
 }
 export interface ItemDetail {
   id: number; code: string; description: string; category: Category
@@ -91,10 +95,11 @@ export interface ItemDetail {
          component_description: string; component_uom: string;
          component_native: boolean; component_synced: boolean; component_locked: boolean;
          qty: number; position: string }[]
-  where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number }[]
+  where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number
+                parent_native: boolean; parent_synced: boolean; parent_locked: boolean }[]
   lots: { id: number; project_code: string; origin: string; qty_born: number;
           live_qty: number; unit_cost: number; part_number: string; lot_name: string }[]
-  shipments: ItemShipment[]
+  movements: ItemMovement[]
 }
 
 // ── Синхронизация справочника с библиотекой Altium (волна 15) ──
@@ -395,7 +400,10 @@ export interface Pegging {
 // ── Вложения (волна 11): PDF/сканы к документам и изделиям ──
 export interface AttachmentRow {
   id: number; filename: string; size: number; content_type: string
-  label: string; uploaded_at: string; user: string; url: string
+  description: string; uploaded_at: string; user: string; url: string
+  // Состояние файла на диске против записи в БД (волна 19, Ф12a) — цвет глифа строки:
+  // ok = совпадает, changed = размер/время не те, missing = файла нет.
+  state: 'ok' | 'changed' | 'missing'
 }
 
 // ── Аутентификация (волна 12) ──
@@ -442,10 +450,10 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
 
 // Загрузка файла (multipart): Content-Type НЕ ставим — браузер сам добавит
 // boundary. CSRF-токен подхватываем как в send() (на проде — сессия admin).
-async function upload<T>(url: string, file: File, label?: string): Promise<T> {
+async function upload<T>(url: string, file: File, description?: string): Promise<T> {
   const fd = new FormData()
   fd.append('file', file)
-  if (label) fd.append('label', label)
+  if (description) fd.append('description', description)
   const headers: Record<string, string> = { Accept: 'application/json' }
   const csrf = getCookie('csrftoken')
   if (csrf) headers['X-CSRFToken'] = csrf
@@ -737,10 +745,10 @@ export const api = {
   // ── Вложения (волна 11) ──
   attachments: (ownerType: string, ownerId: number) =>
     get<AttachmentRow[]>(`/api/attachments/${ownerType}/${ownerId}/`),
-  uploadAttachment: (ownerType: string, ownerId: number, file: File, label?: string) =>
-    upload<AttachmentRow>(`/api/attachments/${ownerType}/${ownerId}/`, file, label),
-  updateAttachment: (id: number, label: string) =>
-    send<AttachmentRow>('PATCH', `/api/attachments/${id}/`, { label }),
+  uploadAttachment: (ownerType: string, ownerId: number, file: File, description?: string) =>
+    upload<AttachmentRow>(`/api/attachments/${ownerType}/${ownerId}/`, file, description),
+  updateAttachment: (id: number, description: string) =>
+    send<AttachmentRow>('PATCH', `/api/attachments/${id}/`, { description }),
   deleteAttachment: (id: number) => send<void>('DELETE', `/api/attachments/${id}/`),
 
   closure: (id: number) => get<ProjectClosure>(`/api/projects/${id}/closure/`),

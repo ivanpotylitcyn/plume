@@ -1,17 +1,21 @@
 // Витрина волны 1: экран изделия = панель свойств + окружение из связей.
 // Партии на складе (по проектам, с живым остатком), where-used, состав.
-// Волна 5: блок «Отгруженные партии» — куда и по какой накладной ушло заказчику.
-// Эта волна: состав (BOM) — редактируемый (добавить/убрать компонент, автосейв кол-ва).
+// Волна 19 (Ф12a): форма по канону §13 — табы Состав · Применение · Склад ·
+// Движения · Файлы. «Движения» пришли на смену узкому «Отгружено»: вся лента
+// ордеров, коснувшихся изделия (рождение партий + расходы), `engine.item_movements`.
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num, ItemGlyph } from './status'
-import { FormHeader, useFormLock } from './FormHeader'
+import { num, money, count, ItemGlyph, StatusGlyph } from './status'
+import { ORDER_LABEL, type OrderKind } from './orders'
+import { useFormLock } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
 import { ItemPicker } from './Picker'
-import { AttachmentPanel } from './AttachmentPanel'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CommitInput } from './ReceiptView'
 
-export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted }:
+export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
+    openOrder: (kind: OrderKind, id: number) => void   // лента движений кликабельна (§8)
     onChanged?: () => void; onDeleted?: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
@@ -19,6 +23,7 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
   const [busy, setBusy] = useState(false)
   const [rollup, setRollup] = useState<RollupResult | null>(null)
   const { unlocked, toggle } = useFormLock(itemId, isNew)   // §5: существующее — в просмотре
+  const att = useAttachments('item', itemId)   // загрузка — команда шапки (§13.8)
 
   useEffect(() => {
     setD(null); setErr(null); setRollup(null)
@@ -69,38 +74,177 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
   // `metaLocked` запирает «библиотечные» свойства; Оценка гейтится обычным `locked`.
   const metaLocked = locked || d.synced
 
+  // Табы (§13.7): порядок — от сути изделия к его следам на складе. Глифы взяты у
+  // РЕЖИМОВ навигации (§2): состав = `chip` (Компоненты), применение = `rocket`
+  // (Изделия), склад = `layers` (Склады), отгружено = `notebook` (Ордера) — одна
+  // сущность носит один знак, где бы ни встретилась. Счётчиков в табах нет: числа
+  // ушли в мету. «Состав» появляется только там, где состав вообще бывает.
+  const tabs: FormTab[] = []
+  if (composable) tabs.push({
+    key: 'bom', label: 'Состав', icon: 'chip',
+    content: <>
+      {d.bom.length === 0 && <div className="tab-empty">
+        {locked ? 'Состав пуст.' : 'Состав пуст — добавьте компонент ниже.'}</div>}
+      {d.bom.length > 0 &&
+        <table className="grid">
+          <thead><tr><th className="gl" /><th className="c-key">Компонент</th><th>Описание</th>
+            <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+            {!locked && <th className="act" />}</tr></thead>
+          <tbody>{d.bom.map(b => (
+            <tr key={b.id} className="row">
+              <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
+              <td className="c-key">
+                <a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
+              <td style={{ color: 'var(--fg-dim)' }}>
+                <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
+              <td className="num">
+                {!locked
+                  ? <CommitInput value={String(b.qty)} width={56} disabled={busy}
+                      onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
+                      validate={v => Number(v) > 0} />
+                  : num(b.qty)}
+              </td>
+              <td className="uom">{b.component_uom}</td>
+              {!locked && <td className="act">
+                <button className="fh-ctl icon fh-del" title="Убрать компонент из состава"
+                  disabled={busy} onClick={() => run(api.deleteBomLine(b.id))}>
+                  <span className="ci ci-trash" /></button>
+              </td>}
+            </tr>))}</tbody>
+        </table>}
+      {/* Добавление компонента — только когда форма редактируема (мягкий замок открыт
+          и не зафиксировано). Под замком/фиксацией состав = read-only список. */}
+      {!locked && <AddComponent items={items} parentId={d.id} bom={d.bom} busy={busy}
+        add={(component_id, qty) => run(api.addBomLine(d.id, { component_id, qty }))} />}
+    </>,
+  })
+  tabs.push({
+    key: 'where', label: 'Применение', icon: 'rocket',
+    content: d.where_used.length === 0
+      ? <div className="tab-empty">Нигде (не входит в BOM)</div>
+      : <table className="grid">
+          <thead><tr><th className="gl" /><th className="c-key">Изделие</th><th>Описание</th>
+            <th style={{ textAlign: 'right' }}>Кол-во</th>
+            <th className="uom">Ед.</th></tr></thead>
+          <tbody>{d.where_used.map(w => (
+            <tr key={w.parent_id} className="row">
+              {/* Глиф родителя — по его собственным осям (Ф3a: ровно один по режиму). */}
+              <td className="gl"><ItemGlyph native={w.parent_native} synced={w.parent_synced}
+                locked={w.parent_locked} /></td>
+              <td className="c-key">
+                <a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
+              <td style={{ color: 'var(--fg-dim)' }}>{w.parent_description}</td>
+              <td className="num">{num(w.qty)}</td>
+              <td className="uom">{d.uom}</td>
+            </tr>))}</tbody>
+        </table>,
+  })
+  tabs.push({
+    key: 'lots', label: 'Склад', icon: 'layers',
+    content: d.lots.length === 0
+      ? <div className="tab-empty">Нет партий</div>
+      : <table className="grid">
+          <thead><tr><th>Lot</th><th>Проект</th><th>Origin</th>
+            <th style={{ textAlign: 'right' }}>Рожд.</th>
+            <th style={{ textAlign: 'right' }}>Остаток</th>
+            <th>Part number</th><th>Название</th>
+            <th className="uom">Ед.</th></tr></thead>
+          <tbody>{d.lots.map(l => (
+            <tr key={l.id} className={'row' + (l.live_qty > 0 ? ' s-available' : '')}>
+              <td>#{l.id}</td><td>{l.project_code}</td><td className="kind-chip">{l.origin}</td>
+              <td className="num">{num(l.qty_born)}</td>
+              <td className="num">{num(l.live_qty)}</td>
+              <td style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
+              <td style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>
+              <td className="uom">{d.uom}</td>
+            </tr>))}</tbody>
+        </table>,
+  })
+  // «Движения» (2026-07-26, вместо узкого «Отгружено»): ВСЕ ордера, коснувшиеся
+  // изделия — рождение партии (поставка/комплектация/инвентаризация/требование) и её
+  // движения (пайка, передача, списание, перемещение). Знак сохраняем: расход виден
+  // расходом. Ордер кликабелен (§8), глиф — ось фиксации документа.
+  tabs.push({
+    key: 'moves', label: 'Движения', icon: 'notebook',
+    content: d.movements.length === 0
+      ? <div className="tab-empty">Изделие ещё не двигалось по складу</div>
+      : <table className="grid">
+          <thead><tr><th className="gl" /><th className="c-key">Ордер</th><th>Вид</th><th>Дата</th><th>Проект</th>
+            <th>Партия</th>
+            <th style={{ textAlign: 'right' }}>Кол-во</th>
+            <th className="uom">Ед.</th></tr></thead>
+          <tbody>{d.movements.map((m, i) => (
+            <tr key={`${m.kind}-${m.document_id}-${m.lot_id}-${i}`}
+              className={'row ' + (m.qty < 0 ? 's-to_order' : 's-available')}>
+              <td className="gl"><StatusGlyph locked={m.locked} /></td>
+              <td className="c-key"><a className="link" onClick={() => openOrder(m.kind as OrderKind, m.document_id)}>
+                {m.code || m.number || `${ORDER_LABEL[m.kind as OrderKind]} #${m.document_id}`}</a></td>
+              <td style={{ color: 'var(--fg-dim)' }}>
+                {ORDER_LABEL[m.kind as OrderKind] ?? m.kind}
+                {m.event === 'born' && <span className="hint">партия рождена</span>}</td>
+              <td style={{ color: 'var(--fg-dim)' }}>{m.date ?? '—'}</td>
+              <td>{m.project_code}</td>
+              <td style={{ color: 'var(--fg-dim)' }}>#{m.lot_id}{m.lot_name && ` · ${m.lot_name}`}</td>
+              <td className="num">{m.qty > 0 ? `+${num(m.qty)}` : num(m.qty)}</td>
+              <td className="uom">{d.uom}</td>
+            </tr>))}</tbody>
+        </table>,
+  })
+  tabs.push({
+    key: 'files', label: 'Файлы', icon: 'files',
+    content: <AttachmentList att={att} locked={locked} />,
+  })
+
   return (
-    <div className={unlocked && !fixed ? '' : 'form-locked'}>
-      <FormHeader
-        code={d.code}
-        meta={<>
-          {d.category.description}{d.native ? ' · производимое' : ''} · {d.uom}
-          {!d.native && <> · {d.synced ? 'библиотечное' : 'ручное'}</>}
-          {d.synced && !locked && <span className="sub"> (правится только цена)</span>}
-          {d.temperature && <> · {d.temperature}</>}
-          {' · '}<span className={d.used ? 's-available' : ''}>{d.used ? 'используется' : 'спящий'}</span>
-          {d.estimated_cost != null && <> · оценка {d.estimated_cost} ₽</>}
-        </>}
-        unlocked={unlocked} onToggleLock={toggle} error={err}
-        fixed={fixed}
-        onFixate={d.native ? () => run(api.lockItem(d.id)) : undefined}
-        fixateTitle="Зафиксировать: заморозить состав (BOM) и свойства изделия"
-        onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
-        onDelete={del}
-        action={d.native ? { onClick: recalc, label: 'Переоценить', icon: 'ci-symbol-operator',
+    <FormShell
+      id={d.id} code={d.code} entity="изделие" locked={locked} error={err}
+      // Мета (§13.6) — СЧЁТ ПО ТАБАМ в их порядке, число впереди подписи («17
+      // компонентов · 2 вхождения»): читается фразой. Поля не повторяет, глифа нет
+      // (он есть в списке и однозначно читается по доступным командам).
+      // «Спящий» — не счётчик: это «ни одной живой ссылки, можно удалять» (шире
+      // вхождений — сюда же лоты, строки заказов, потребность, комплектации).
+      // Обратное («используется») молчит: об этом говорят сами счётчики.
+      meta={<>
+        {composable && <>{count(d.bom.length, 'компонент', 'компонента', 'компонентов')} · </>}
+        {count(d.where_used.length, 'вхождение', 'вхождения', 'вхождений')} ·{' '}
+        {count(d.lots.length, 'партия', 'партии', 'партий')} ·{' '}
+        {count(d.movements.length, 'движение', 'движения', 'движений')} ·{' '}
+        {count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+        {!d.used && <span className="sub"> · спящий</span>}
+        {d.synced && !locked && <span className="sub"> · правится только цена</span>}
+        {d.native && rollup && <span className="sub">
+          {' · '}переоценено узлов {rollup.updated.length}
+          {rollup.incomplete.length > 0 &&
+            <span className="anomaly"> · без цены: {rollup.incomplete.join(', ')}</span>}
+        </span>}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      fixed={fixed}
+      onFixate={d.native ? () => run(api.lockItem(d.id)) : undefined}
+      fixateTitle="Зафиксировать: заморозить состав (BOM) и свойства изделия"
+      onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
+      onDelete={del}
+      // Фиксация — только у Изделий (native): у Компонентов замок из UI недостижим,
+      // синк держит их расфиксированными (инвариант `synced ⟹ not locked`).
+      actions={[
+        ...(d.native ? [{ onClick: recalc, label: 'Переоценить', icon: 'ci-symbol-operator',
           title: 'Пересчитать стоимость: оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев',
-          disabled: busy } : undefined}
-      >
-      <dl className="props">
+          disabled: busy }] : []),
+        { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+          title: 'Загрузить файл (datasheet, КД) — появится в табе «Файлы»',
+          disabled: att.busy },
+      ]}
+      fields={<>
         <dt>Код</dt>
         <dd>{!metaLocked
-          ? <CommitInput value={d.code} width={160} disabled={busy}
+          ? <CommitInput value={d.code} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { code: v }))}
               validate={v => v.trim() !== ''} />
           : d.code}</dd>
         <dt>Описание</dt>
-        <dd>{!metaLocked
-          ? <CommitInput value={d.description} width={260} disabled={busy}
+        {/* Единственное длинное поле шапки (§13.3) — описание бывает в строку и больше. */}
+        <dd className="wide">{!metaLocked
+          ? <CommitInput value={d.description} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { description: v }))}
               validate={v => v.trim() !== ''} />
           : d.description}</dd>
@@ -111,144 +255,30 @@ export function ItemView({ itemId, items, isNew, openItem, onChanged, onDeleted 
               {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
             </select>
           : d.category.description}</dd>
-        <dt>Производимое</dt>
+        {/* Поля «Производимое» нет (снято 2026-07-26): `native` — не свойство на правку,
+            а ОСЬ РЕЖИМА (Изделия / Компоненты). Заводится вместе с сущностью в том
+            режиме, где нажали «＋ Новое», и дальше не переключается. */}
+        <dt>Температура</dt>
         <dd>{!metaLocked
-          ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={d.native} disabled={busy}
-                onChange={e => run(api.updateItem(d.id, { native: e.target.checked }))} />
-              {d.native ? 'да' : 'нет'}
-            </label>
-          : (d.native ? 'да' : 'нет')}</dd>
-        <dt>Температурный диапазон</dt>
-        <dd>{!metaLocked
-          ? <CommitInput value={d.temperature} width={160} disabled={busy}
+          ? <CommitInput value={d.temperature} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
           : (d.temperature || '—')}</dd>
-        <dt>Ед. изм.</dt>
+        <dt>Единицы</dt>
         <dd>{!metaLocked
-          ? <CommitInput value={d.uom} width={80} disabled={busy}
+          ? <CommitInput value={d.uom} disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
           : d.uom}</dd>
+        {/* «Оценка» без «₽» в подписи: рубль приезжает со значением в просмотре. */}
         <dt>Оценка</dt>
         <dd>{!locked
-          ? <><CommitInput value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
-              width={100} disabled={busy}
+          ? <CommitInput value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
+              disabled={busy}
               onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}
-              validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</>
-          : (d.estimated_cost != null ? `${d.estimated_cost} ₽` : '—')}</dd>
-      </dl>
-      </FormHeader>
-
-      {/* Фиксация Изделия вернулась в шапку (единый контрол, как у закупок/документов):
-          «Зафиксировать»/«Расфиксировать» через onFixate/onUnfix FormHeader — только у
-          Изделий (native). У Компонентов кнопки фиксации нет: их замок из UI недостижим,
-          синк держит их расфиксированными (инвариант `synced ⟹ not locked`). Правка
-          библиотечного (synced) — только цена (матрица `metaLocked`); `synced` руками не
-          снять. Кнопка «Пересчитать стоимость» переехала в правую колонку шапки (action);
-          здесь остаётся только сводка результата после клика. */}
-
-      {d.native && rollup && <div className="kit-actions" style={{ marginBottom: 4 }}>
-        <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>
-          оценка {rollup.estimated_cost != null ? `${rollup.estimated_cost} ₽` : '—'} ·
-          переоценено узлов {rollup.updated.length}
-          {rollup.incomplete.length > 0 &&
-            <span className="anomaly"> · без цены: {rollup.incomplete.join(', ')}</span>}
-        </span>
-      </div>}
-
-      <div className="section-h">Где применяется
-        <span className="hint">вхождений {d.where_used.length}</span></div>
-      {d.where_used.length === 0
-        ? <div style={{ color: 'var(--fg-dim)' }}>Нигде (не входит в BOM)</div>
-        : <table className="grid">
-            <thead><tr><th>Изделие</th><th>Назв.</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th></tr></thead>
-            <tbody>{d.where_used.map(w => (
-              <tr key={w.parent_id} className="row">
-                <td><a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
-                <td style={{ color: 'var(--fg-dim)' }}>{w.parent_description}</td>
-                <td className="num">{num(w.qty)}</td>
-              </tr>))}</tbody>
-          </table>}
-
-      {composable && <>
-        <div className="section-h">Состав (BOM)
-          <span className="hint">компонентов {d.bom.length}</span></div>
-        {d.bom.length === 0 && <div style={{ color: 'var(--fg-dim)' }}>
-          {locked ? 'Состав пуст.' : 'Состав пуст — добавьте компонент ниже.'}</div>}
-        {d.bom.length > 0 &&
-          <table className="grid">
-            <thead><tr><th /><th>Компонент</th><th>Описание</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th>{!locked && <th />}</tr></thead>
-            <tbody>{d.bom.map(b => (
-              <tr key={b.id} className="row">
-                <td><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
-                <td><a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
-                <td style={{ color: 'var(--fg-dim)' }}>
-                  <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
-                <td className="num">
-                  {!locked
-                    ? <><CommitInput value={String(b.qty)} width={56} disabled={busy}
-                        onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
-                        validate={v => Number(v) > 0} /> {b.component_uom}</>
-                    : <>{num(b.qty)} {b.component_uom}</>}
-                </td>
-                {!locked && <td style={{ textAlign: 'right' }}>
-                  <button className="x" title="убрать компонент из состава" disabled={busy}
-                    onClick={() => run(api.deleteBomLine(b.id))}>×</button>
-                </td>}
-              </tr>))}</tbody>
-          </table>}
-        {/* Добавление компонента — только когда форма редактируема (мягкий замок открыт
-            и не зафиксировано). Под замком/фиксацией состав = read-only список. */}
-        {!locked && <AddComponent items={items} parentId={d.id} bom={d.bom} busy={busy}
-          add={(component_id, qty) => run(api.addBomLine(d.id, { component_id, qty }))} />}
-        {err && <div className="anomaly">{err}</div>}
+              validate={v => v.trim() === '' || Number(v) >= 0} />
+          : (d.estimated_cost != null ? money(d.estimated_cost) : '—')}</dd>
       </>}
-
-      <div className="section-h">Партии на складе
-        <span className="hint">партий {d.lots.length} · живых {d.lots.filter(l => l.live_qty > 0).length}</span></div>
-      {d.lots.length === 0
-        ? <div style={{ color: 'var(--fg-dim)' }}>Нет партий</div>
-        : <table className="grid">
-            <thead><tr><th>Lot</th><th>Проект</th><th>Origin</th>
-              <th style={{ textAlign: 'right' }}>Рожд.</th>
-              <th style={{ textAlign: 'right' }}>Остаток</th>
-              <th>Part number</th><th>Название</th></tr></thead>
-            <tbody>{d.lots.map(l => (
-              <tr key={l.id} className={'row' + (l.live_qty > 0 ? ' s-available' : '')}>
-                <td>#{l.id}</td><td>{l.project_code}</td><td className="kind-chip">{l.origin}</td>
-                <td className="num">{num(l.qty_born)}</td>
-                <td className="num">{num(l.live_qty)}</td>
-                <td style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
-                <td style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>
-              </tr>))}</tbody>
-          </table>}
-
-      <div className="section-h">Отгруженные партии
-        <span className="hint">отгрузок {d.shipments.length}</span></div>
-      {d.shipments.length === 0
-        ? <div style={{ color: 'var(--fg-dim)' }}>Пока ничего не отгружено</div>
-        : <table className="grid">
-            <thead><tr><th>Накладная</th><th>Дата</th><th>Проект</th><th>Lot</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th>
-              <th>Имя в накладной</th></tr></thead>
-            <tbody>{d.shipments.map((s, i) => (
-              <tr key={`${s.transfer_id}-${s.lot_id}-${i}`} className="row">
-                <td>
-                  <span className={`glyph ${s.locked ? 'g-lock' : 'g-on_order'}`}>{s.locked ? '🔒' : '●'}</span>{' '}
-                  {s.number}
-                </td>
-                <td style={{ color: 'var(--fg-dim)' }}>{s.date}</td>
-                <td>{s.project_code}</td>
-                <td>#{s.lot_id}</td>
-                <td className="num">{num(s.qty)} {d.uom}</td>
-                <td style={{ color: 'var(--fg-dim)' }}>{s.display_name || '—'}</td>
-              </tr>))}</tbody>
-          </table>}
-
-      <AttachmentPanel ownerType="item" ownerId={d.id} />
-    </div>
+      tabs={tabs}
+    />
   )
 }
 

@@ -17,7 +17,8 @@ import { LibraryImportView } from './LibraryImportView'
 import { PurchaseView } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
 import { CommandDeficitView } from './CommandDeficitView'
-import { OrderForm, type OrderKind } from './OrderForm'
+import { OrderForm } from './OrderForm'
+import { ORDER_KINDS, ORDER_LABEL, type OrderKind } from './orders'
 import { LocationView } from './LocationView'
 import { StatusGlyph, SyncGlyph, statusTone } from './status'
 import { CounterpartyPicker, ItemPicker } from './Picker'
@@ -54,19 +55,8 @@ type Sel =
   | { kind: 'new-location' }
   | null
 
-// Виды ордера (единый режим). Порядок = поток жизненного цикла
-// (приёмка → сборка → выбытие → сверка); label — подпись типа в списке и форме.
-// Тип `OrderKind` — из ./OrderForm (там же диспетчер detail-формы).
-const ORDER_KINDS: { kind: OrderKind; label: string }[] = [
-  { kind: 'receipt',     label: 'Поставка' },
-  { kind: 'kitting',     label: 'Комплектация' },
-  { kind: 'transfer',    label: 'Передача' },
-  { kind: 'requisition', label: 'Требование' },
-  { kind: 'writeoff',    label: 'Списание' },
-  { kind: 'inventory',   label: 'Инвентаризация' },
-  { kind: 'relocation',  label: 'Перемещение' },
-]
-const ORDER_LABEL = Object.fromEntries(ORDER_KINDS.map(k => [k.kind, k.label])) as Record<OrderKind, string>
+// Виды ордера и их подписи живут рядом с типом (`./OrderForm`) — их читает и этот
+// список, и ленты, где вид приходит данными (движения изделия).
 // Ключи detail-выбора, относящиеся к ордеру (для подсветки строки в едином списке).
 const ORDER_SEL_KINDS = new Set(ORDER_KINDS.map(k => k.kind as string))
 
@@ -220,6 +210,8 @@ export default function App() {
   const openProject = (id: number) => { setMode('projects'); setSel({ kind: 'project', id }) }
   const openItem = (id: number) => { setMode('items'); setSel({ kind: 'item', id }) }
   // 6 складских документов открываются в едином режиме «Ордера» (Ф1b-флагман).
+  // Общий вход по виду — для лент, где вид приходит данными (движения изделия).
+  const openOrder = (kind: OrderKind, id: number) => { setMode('orders'); setSel({ kind, id }) }
   const openKitting = (id: number) => { setMode('orders'); setSel({ kind: 'kitting', id }) }
   const openReceipt = (id: number) => { setMode('orders'); setSel({ kind: 'receipt', id }) }
   const openTransfer = (id: number) => { setMode('orders'); setSel({ kind: 'transfer', id }) }
@@ -252,11 +244,7 @@ export default function App() {
     return es.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id)
   }, [receipts, kittings, transfers, requisitions, writeoffs, inventories, relocations])
 
-  const openOrder = (e: OrderEntry) => {
-    ({ receipt: openReceipt, kitting: openKitting, transfer: openTransfer,
-      requisition: openRequisition, writeoff: openWriteoff, inventory: openInventory,
-      relocation: openRelocation }[e.kind])(e.id)
-  }
+  const openOrderEntry = (e: OrderEntry) => openOrder(e.kind, e.id)
   // Ф2i: перезагрузить фид нужного вида ордера — единый колбэк для <OrderForm>.
   const reloadOrderKind = (k: OrderKind) => ({
     receipt: reloadReceipts, kitting: reloadKittings, transfer: reloadTransfers,
@@ -371,7 +359,7 @@ export default function App() {
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
             newSel={sel?.kind === 'new-order'} onNew={() => setSel({ kind: 'new-order' })}
-            onSelect={openOrder} />}
+            onSelect={openOrderEntry} />}
 
         {mode === 'locations' &&
           <ModeList heading="Склады" newLabel="＋ Новый склад"
@@ -432,7 +420,7 @@ export default function App() {
           <NewProject onCreated={id => { reloadProjects(); setJustCreated({ kind: 'project', id }); openProject(id) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
           isNew={isFresh('item', sel.id)}
-          openItem={openItem} onChanged={reloadItems}
+          openItem={openItem} openOrder={openOrder} onChanged={reloadItems}
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'new-item' &&
           <NewItem onCreated={id => { reloadItems(); setJustCreated({ kind: 'item', id }); openItem(id) }} />}
@@ -447,7 +435,7 @@ export default function App() {
           const o = sel as { kind: OrderKind; id: number }
           return <OrderForm kind={o.kind} id={o.id} items={items}
             isNew={isFresh(o.kind, o.id)}
-            openItem={openItem} openPurchase={openPurchase}
+            openItem={openItem} openPurchase={openPurchase} openProject={openProject}
             onChanged={() => reloadOrderKind(o.kind)}
             onDeleted={() => { reloadOrderKind(o.kind); setSel(null) }} />
         })()}
@@ -763,7 +751,7 @@ function NewItem({ onCreated, defaultNative = false }:
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryId, setCategoryId] = useState<number | ''>('')
   const [temperature, setTemperature] = useState('')
-  const [native, setNative] = useState(defaultNative)   // режим «Изделия» → True
+  const native = defaultNative   // ось режима: «Изделия» → True, «Компоненты» → False
   const [uom, setUom] = useState('шт')
   const [cost, setCost] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -802,16 +790,16 @@ function NewItem({ onCreated, defaultNative = false }:
           onChange={e => setCategoryId(Number(e.target.value))}>
           {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
         </select></dd>
-        <dt>Производимое</dt>
-        <dd><input type="checkbox" checked={native}
-          onChange={e => setNative(e.target.checked)} /> <span className="sub">делаем сами (цель комплектации)</span></dd>
-        <dt>Температурный диапазон</dt>
+        {/* Поля «Производимое» нет (снято 2026-07-26 вместе с формой изделия): `native`
+            — ось РЕЖИМА, а не свойство на правку. Новое рождается таким, из какого
+            режима нажали «＋ Новое»: «Изделия» → native, «Компоненты» → покупное. */}
+        <dt>Температура</dt>
         <dd><input className="qty-in" style={{ width: 160 }} value={temperature}
           placeholder="напр. -40-125°C" onChange={e => setTemperature(e.target.value)} /></dd>
-        <dt>Ед. изм.</dt>
+        <dt>Единицы</dt>
         <dd><input className="qty-in" style={{ width: 80 }} value={uom}
           onChange={e => setUom(e.target.value)} /></dd>
-        <dt>Оценочная стоимость</dt>
+        <dt>Оценка</dt>
         <dd><input className="qty-in" style={{ width: 120 }} value={cost}
           placeholder="необязательно" onChange={e => setCost(e.target.value)} /></dd>
       </dl>

@@ -818,15 +818,21 @@ class TransferFormTests(EngineTestBase):
         engine.update_transfer_line(line, qty=D(3))            # снова можно
         self.assertEqual(engine.lot_live_qty(self.lot), D(2))
 
-    def test_item_shipments_projection(self):
+    def test_item_movements_projection(self):
+        """Лента движений изделия (волна 19, Ф12a): рождение партии + все ордера,
+        которые её двигали. Знак сохраняем — расход виден расходом."""
         t = engine.create_transfer(self.prj, self.user, 'Н-7')
         engine.add_transfer_line(t, self.lot, D(2), display_name='Прибор №7')
-        rows = engine.item_shipments(self.device)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['number'], 'Н-7')
-        self.assertEqual(rows[0]['qty'], D(2))
-        self.assertEqual(rows[0]['display_name'], 'Прибор №7')
-        self.assertFalse(rows[0]['locked'])
+        rows = engine.item_movements(self.device)
+        self.assertEqual(len(rows), 2)                  # рождение + передача
+        born = next(r for r in rows if r['event'] == 'born')
+        move = next(r for r in rows if r['event'] == 'move')
+        self.assertEqual(born['lot_id'], self.lot.id)
+        self.assertEqual(born['qty'], self.lot.qty)
+        self.assertEqual(move['kind'], models.StockDocument.Kind.TRANSFER)
+        self.assertEqual(move['number'], 'Н-7')
+        self.assertEqual(move['qty'], D(-2))            # знаковое: отгрузка = расход
+        self.assertFalse(move['locked'])
 
 
 class WriteoffFormTests(EngineTestBase):
@@ -2124,12 +2130,12 @@ class AttachmentTests(EngineTestBase):
 
     def test_add_fills_metadata_and_owner(self):
         att = engine.add_attachment('receipt', self.receipt, self._file(),
-                                    self.user, label='  скан УПД ')
+                                    self.user, description='  скан УПД ')
         self.assertEqual(att.document_id, self.receipt.id)
         self.assertEqual(att.filename, 'scan.pdf')
         self.assertEqual(att.size, len(b'%PDF-1.4 test'))
         self.assertEqual(att.content_type, 'application/pdf')
-        self.assertEqual(att.label, 'скан УПД')            # подрезано
+        self.assertEqual(att.description, 'скан УПД')            # подрезано
         self.assertEqual(att.user_id, self.user.id)
         self.assertIsNone(att.item_id)                     # ровно один владелец (item↔document)
 
@@ -2153,13 +2159,24 @@ class AttachmentTests(EngineTestBase):
             with self.assertRaises(ValidationError):
                 engine.add_attachment('receipt', self.receipt, big, self.user)
 
+    def test_state_tracks_file_on_disk(self):
+        """Волна 19, Ф12a: витрина красит глиф вложения по тому, что реально на диске —
+        совпадает (ok), перезаписан мимо Plume (changed), пропал (missing)."""
+        att = engine.add_attachment('receipt', self.receipt, self._file(), self.user)
+        self.assertEqual(engine.attachment_state(att), 'ok')
+        with open(att.file.path, 'wb') as f:               # подменили содержимое мимо нас
+            f.write(b'%PDF-1.4 tampered longer body')
+        self.assertEqual(engine.attachment_state(att), 'changed')
+        os.remove(att.file.path)                           # файл унесли, запись осталась
+        self.assertEqual(engine.attachment_state(att), 'missing')
+
     def test_update_and_delete_removes_file(self):
         att = engine.add_attachment('receipt', self.receipt, self._file(), self.user)
         path = att.file.path
         self.assertTrue(os.path.exists(path))
-        engine.update_attachment(att, label='новая подпись')
+        engine.update_attachment(att, description='новая подпись')
         att.refresh_from_db()
-        self.assertEqual(att.label, 'новая подпись')
+        self.assertEqual(att.description, 'новая подпись')
         engine.delete_attachment(att)
         self.assertFalse(models.Attachment.objects.filter(pk=att.id).exists())
         self.assertFalse(os.path.exists(path))             # файл удалён с диска
@@ -2184,17 +2201,17 @@ class AttachmentHttpTests(TestCase):
     def test_full_cycle(self):
         up = SimpleUploadedFile('scan.pdf', b'%PDF data', content_type='application/pdf')
         r = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
-                        {'file': up, 'label': 'скан'})
+                        {'file': up, 'description': 'скан'})
         self.assertEqual(r.status_code, 201)
         aid = r.json()['id']
         lst = self.c.get(f'/api/attachments/receipt/{self.receipt.id}/').json()
         self.assertEqual(len(lst), 1)
         self.assertEqual(lst[0]['filename'], 'scan.pdf')
         self.assertEqual(lst[0]['user'], 'admin')          # автор с документа
-        pr = self.c.patch(f'/api/attachments/{aid}/', {'label': 'скан УПД №1'},
+        pr = self.c.patch(f'/api/attachments/{aid}/', {'description': 'скан УПД №1'},
                           content_type='application/json')
         self.assertEqual(pr.status_code, 200)
-        self.assertEqual(pr.json()['label'], 'скан УПД №1')
+        self.assertEqual(pr.json()['description'], 'скан УПД №1')
         dl = self.c.get(f'/api/attachments/{aid}/download/')
         self.assertEqual(dl.status_code, 200)
         self.assertEqual(b''.join(dl.streaming_content), b'%PDF data')
@@ -2226,7 +2243,7 @@ class AttachmentHttpTests(TestCase):
 
     def test_missing_file(self):
         r = self.c.post(f'/api/attachments/receipt/{self.receipt.id}/',
-                        {'label': 'нет файла'})
+                        {'description': 'нет файла'})
         self.assertEqual(r.status_code, 400)
 
 

@@ -11,25 +11,27 @@ import { RequisitionView } from './RequisitionView'
 import { InventoryView } from './InventoryView'
 import { RelocationView } from './RelocationView'
 
-// Виды ордера, у которых есть detail-форма (единый режим «Ордера»).
-export type OrderKind =
-  | 'receipt' | 'kitting' | 'transfer' | 'requisition' | 'writeoff' | 'inventory'
-  | 'relocation'
+// Тип и подписи видов — в `./orders` (знание домена, не компонент).
+import type { OrderKind } from './orders'
+export type { OrderKind }
 
-export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
+export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, openProject,
+  onChanged, onDeleted }: {
   kind: OrderKind
   id: number
   items: ItemRow[]
   isNew: boolean            // §5: только что созданный ордер открыть в правке
   openItem: (id: number) => void
   openPurchase: (id: number) => void
+  openProject: (id: number) => void   // якорь-проект шапки кликабелен под замком (§8)
   onChanged: () => void
   onDeleted: () => void
 }) {
   switch (kind) {
     case 'receipt':
       return <ReceiptView receiptId={id} items={items} isNew={isNew} openItem={openItem}
-        openPurchase={openPurchase} onChanged={onChanged} onDeleted={onDeleted} />
+        openPurchase={openPurchase} openProject={openProject}
+        onChanged={onChanged} onDeleted={onDeleted} />
     case 'kitting':
       return <KittingView kittingId={id} isNew={isNew} openItem={openItem}
         onChanged={onChanged} onDeleted={onDeleted} />

@@ -742,9 +742,12 @@ class Attachment(models.Model):
 
     file = models.FileField('файл', upload_to='attachments/%Y/%m/')
     filename = models.CharField('имя файла', max_length=255, blank=True, default='')
+    # Волна 19 (Ф12a): `label` → `description` — та же пара «идентичность + описание»,
+    # что у всех сущностей (Ф10). Идентичность вложения — `filename` (своего `code`
+    # у файла нет), поэтому описание идёт сразу за ним.
+    description = models.CharField('описание', max_length=255, blank=True, default='')
     size = models.IntegerField('размер, байт', default=0)
     content_type = models.CharField('тип', max_length=64, blank=True, default='')
-    label = models.CharField('подпись', max_length=255, blank=True, default='')
     uploaded_at = models.DateTimeField('загружено', auto_now_add=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='attachments', verbose_name='загрузил')

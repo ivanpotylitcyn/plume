@@ -47,6 +47,34 @@ export function ItemGlyph({ native, synced, locked, tone, title }: {
     : <SyncGlyph synced={synced} title={title} />
 }
 
+// Глиф вложения (волна 19, Ф12a). ФОРМА = вид файла (по расширению: pdf, картинка,
+// код, архив, прочее-бинарь), ЦВЕТ = живо ли оно на диске: зелёный — файл на месте и
+// совпадает с записью, оранжевый — на месте, но размер/время разошлись (перезалили
+// мимо приложения), красный — записи есть, файла нет. Две оси не путаем — тот же
+// принцип, что у ItemGlyph (глиф ⟂ цвет, §7a).
+const FILE_GLYPH: [RegExp, string][] = [
+  [/\.pdf$/i, 'file-pdf'],
+  [/\.(png|jpe?g|gif|bmp|webp|svg|tiff?)$/i, 'file-media'],
+  [/\.(zip|rar|7z|tar|gz)$/i, 'file-zip'],
+  [/\.(json|xml|ya?ml|csv|py|ts|tsx|js|sql|sh|md|txt)$/i, 'file-code'],
+  [/\.(exe|dll|bin|hex|elf|step|stp|stl|dwg|sch|pcb)$/i, 'file-binary'],
+]
+const FILE_TONE: Record<'ok' | 'changed' | 'missing', string> = {
+  ok: 'sg-ok', changed: 'sg-wip', missing: 'sg-order',
+}
+const FILE_TITLE: Record<'ok' | 'changed' | 'missing', string> = {
+  ok: 'файл на месте',
+  changed: 'файл на месте, но размер или время изменились — перезаписан мимо Plume',
+  missing: 'файла нет на сервере (запись осталась)',
+}
+
+export function FileGlyph({ filename, state }: {
+  filename: string; state: 'ok' | 'changed' | 'missing'
+}) {
+  const icon = FILE_GLYPH.find(([re]) => re.test(filename))?.[1] ?? 'file'
+  return <span className={`ci sg ci-${icon} ${FILE_TONE[state]}`} title={FILE_TITLE[state]} />
+}
+
 export const GLYPH: Record<Status, string> = {
   to_order: '▲',     // красный — дефицит, нужна работа
   on_order: '●',     // оранжевый — заказано/делается, ждём
@@ -104,7 +132,20 @@ export function num(x: number): string {
   return Number.isInteger(x) ? String(x) : String(x)
 }
 
-// Деньги: разряды пробелом + ₽ (округляем до рубля — копейки в бюджете не важны).
+// Деньги: разряды пробелом + копейки + ₽ («1 200 300,00 ₽»). Единый формат везде —
+// бюджет проекта, суммы документов, оценка изделия (принято 2026-07-26).
 export function money(x: number): string {
-  return Math.round(x).toLocaleString('ru-RU') + ' ₽'
+  return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽'
+}
+
+// Русское склонение при числе: `count(2, 'вхождение', 'вхождения', 'вхождений')`
+// → «2 вхождения». Число ВПЕРЕДИ подписи — так строка меты читается фразой (§13.6).
+export function count(n: number, one: string, few: string, many: string): string {
+  const mod100 = n % 100
+  const mod10 = n % 10
+  const word = mod100 >= 11 && mod100 <= 14 ? many
+    : mod10 === 1 ? one
+    : mod10 >= 2 && mod10 <= 4 ? few
+    : many
+  return `${n} ${word}`
 }

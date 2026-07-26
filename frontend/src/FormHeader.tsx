@@ -129,11 +129,22 @@ export function AnchorSelect({ label, id, currentLabel, options, disabled, onCha
 let _projectsCache: Promise<ProjectRow[]> | null = null
 function loadProjects() { return (_projectsCache ??= api.projects()) }
 
-export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
-  projectId: number; projectLabel: string; disabled: boolean; onChange: (id: number) => void
+export function ProjectField({ projectId, projectLabel, disabled, onChange, onOpen }: {
+  projectId: number; projectLabel: string; disabled: boolean
+  onChange: (id: number) => void
+  onOpen?: (id: number) => void   // задан → под замком поле = ссылка на проект
 }) {
   const [projects, setProjects] = useState<ProjectRow[]>([])
   useEffect(() => { loadProjects().then(setProjects) }, [])
+  // Под замком показываем ОДИН код и делаем его кликабельным (§8: кликабельно то, что
+  // названо): расшифровка проекта в форме документа — шум, за ней идут на форму проекта.
+  if (disabled && onOpen)
+    return (
+      <>
+        <dt>Проект</dt>
+        <dd><a className="link" onClick={() => onOpen(projectId)}>{projectLabel}</a></dd>
+      </>
+    )
   return (
     <AnchorSelect label="Проект" id={projectId} currentLabel={projectLabel}
       options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.description}` }))}
@@ -141,18 +152,12 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange }: {
   )
 }
 
-// Шапка формы (§5, Ф9): контролы — вертикальной колонкой справа, подпись слева от
-// иконки, глиф = НАЗНАЧЕНИЕ (куда попадёшь), не состояние. Иконки — Codicons (§2).
-// Индикаторы «✓ сохранено»/«● редактируется» сняты (автосейв → «сохранено» всегда,
-// ничего не различало). Две оси не путаем: замок ФОРМЫ (Редактировать/Просмотр) —
-// личный, режим показа; фиксация ДОКУМЕНТА (Зафиксировать/Расфиксировать) — в данных.
-// У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
-export function FormHeader({
-  code, meta, unlocked, onToggleLock, fixed, onFixate, fixateTitle, onUnfix, onDelete,
-  download, action, error, children,
-}: {
-  code: ReactNode           // первичная идентичность в H1 (волна 19, Ф11: бывш. `name`)
-  meta: ReactNode
+// Команды формы (§5): единый набор кнопок шапки — режим показа, фиксация, доп.
+// действие вида, корзина и «Скачать». Вынесены отдельно (волна 19, Ф12), чтобы
+// `FormHeader` (старый лэйаут) и `FormShell` (канон §13) рисовали ОДНИ И ТЕ ЖЕ
+// команды, а не две расходящиеся копии: пока формы переезжают на канон, обе
+// разметки живут рядом.
+export interface FormCommandProps {
   unlocked?: boolean
   onToggleLock?: () => void
   fixed?: boolean
@@ -162,9 +167,89 @@ export function FormHeader({
   onDelete?: () => void      // удалить документ (только расфиксированный; под замком корзины нет)
   download?: { href: string; title?: string }  // скачать (xlsx) — в слоте корзины, но
                              // только у ЗАФИКСИРОВАННОГО (слоты не сталкиваются с корзиной)
-  action?: { onClick: () => void; label: string; icon: string; title?: string; disabled?: boolean }
-                             // доп. действие формы в правой колонке (напр. «Пересчитать
-                             // стоимость» у изделия) — чтобы кнопки не болтались между шапкой и телом
+  actions?: FormAction[]     // доп. действия формы в правой колонке («Переоценить»,
+                             // «Загрузить») — чтобы кнопки не болтались между шапкой и телом
+}
+
+export interface FormAction {
+  onClick: () => void; label: string; icon: string; title?: string; disabled?: boolean
+}
+
+// Верхние команды: вертикальная колонка справа-сверху. `children` — нижний слот
+// колонки (корзина/«Скачать»), который в каноне §13.3 прижимается к её низу.
+export function FormCommands({ unlocked, onToggleLock, fixed, onFixate, fixateTitle,
+  onUnfix, actions, children }: FormCommandProps & { children?: ReactNode }) {
+  return (
+    <div className="fh-right">
+      {fixed ? (
+        // Зафиксирован: единственная степень свободы — расфиксировать. Корзины нет
+        // (движок всё равно не даст удалить запертое — «сперва расфиксируйте»).
+        onUnfix && (
+          <button className="fh-ctl" title="Снять фиксацию документа" onClick={onUnfix}>
+            <span className="lbl">Расфиксировать</span><span className="ci ci-unlock" />
+          </button>
+        )
+      ) : (
+        <>
+          {/* Режим показа: подпись/иконка говорят, КУДА ведёт клик (§5). */}
+          {onToggleLock && (
+            <button className="fh-ctl" onClick={onToggleLock}
+              title={unlocked ? 'Просмотр — закрыть форму (чистый текст)'
+                              : 'Редактировать — открыть форму для правки'}>
+              <span className="lbl">{unlocked ? 'Просмотр' : 'Редактировать'}</span>
+              <span className={'ci ' + (unlocked ? 'ci-eye' : 'ci-edit')} />
+            </button>
+          )}
+          {onFixate && (
+            <button className="fh-ctl" onClick={onFixate}
+              title={fixateTitle ?? 'Зафиксировать документ'}>
+              <span className="lbl">Зафиксировать</span><span className="ci ci-lock" />
+            </button>
+          )}
+        </>
+      )}
+      {/* Доп. действия — ПОД контролами замка/фиксации (низ правой колонки). */}
+      {actions?.map(a => (
+        <button key={a.label} className="fh-ctl" onClick={a.onClick} disabled={a.disabled}
+          title={a.title ?? a.label}>
+          <span className="lbl">{a.label}</span>
+          <span className={'ci ' + a.icon} />
+        </button>
+      ))}
+      {children}
+    </div>
+  )
+}
+
+// Нижний слот шапки (§5): корзина ИЛИ «Скачать» — у нижней границы зоны, справа.
+// Корзина только в режиме ПРАВКИ: просмотр чист, случайное удаление структурно
+// невозможно. У зафиксированного корзины нет — в её слоте живёт «Скачать».
+export function FormCornerCommand({ fixed, unlocked, onDelete, download }: FormCommandProps) {
+  if (!fixed && unlocked && onDelete)
+    return (
+      <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
+        <span className="lbl">Удалить</span><span className="ci ci-trash" />
+      </button>
+    )
+  if (fixed && download)
+    return (
+      <a className="fh-ctl fh-download" href={download.href} download
+         title={download.title ?? 'Скачать'}>
+        <span className="lbl">Скачать</span><span className="ci ci-file" />
+      </a>
+    )
+  return null
+}
+
+// Шапка формы (§5, Ф9): контролы — вертикальной колонкой справа, подпись слева от
+// иконки, глиф = НАЗНАЧЕНИЕ (куда попадёшь), не состояние. Иконки — Codicons (§2).
+// Индикаторы «✓ сохранено»/«● редактируется» сняты (автосейв → «сохранено» всегда,
+// ничего не различало). Две оси не путаем: замок ФОРМЫ (Редактировать/Просмотр) —
+// личный, режим показа; фиксация ДОКУМЕНТА (Зафиксировать/Расфиксировать) — в данных.
+// У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
+export function FormHeader({ code, meta, error, children, ...cmd }: FormCommandProps & {
+  code: ReactNode           // первичная идентичность в H1 (волна 19, Ф11: бывш. `name`)
+  meta: ReactNode
   error?: string | null
   children?: ReactNode       // блок свойств (.props) — входит в зону шапки, чтобы корзина
                              // села у её НИЖНЕЙ границы (§5: слоты разнесены по вертикали)
@@ -179,60 +264,10 @@ export function FormHeader({
             <div className="fh-name">{code}</div>
             <div className="fh-meta">{meta}</div>
           </div>
-          <div className="fh-right">
-            {fixed ? (
-              // Зафиксирован: единственная степень свободы — расфиксировать. Корзины нет
-              // (движок всё равно не даст удалить запертое — «сперва расфиксируйте»).
-              onUnfix && (
-                <button className="fh-ctl" title="Снять фиксацию документа" onClick={onUnfix}>
-                  <span className="lbl">Расфиксировать</span><span className="ci ci-unlock" />
-                </button>
-              )
-            ) : (
-              <>
-                {/* Режим показа: подпись/иконка говорят, КУДА ведёт клик (§5). */}
-                {onToggleLock && (
-                  <button className="fh-ctl" onClick={onToggleLock}
-                    title={unlocked ? 'Просмотр — закрыть форму (чистый текст)'
-                                    : 'Редактировать — открыть форму для правки'}>
-                    <span className="lbl">{unlocked ? 'Просмотр' : 'Редактировать'}</span>
-                    <span className={'ci ' + (unlocked ? 'ci-eye' : 'ci-edit')} />
-                  </button>
-                )}
-                {onFixate && (
-                  <button className="fh-ctl" onClick={onFixate}
-                    title={fixateTitle ?? 'Зафиксировать документ'}>
-                    <span className="lbl">Зафиксировать</span><span className="ci ci-lock" />
-                  </button>
-                )}
-              </>
-            )}
-            {/* Доп. действие — ПОД контролами замка/фиксации (низ правой колонки). */}
-            {action && (
-              <button className="fh-ctl" onClick={action.onClick} disabled={action.disabled}
-                title={action.title ?? action.label}>
-                <span className="lbl">{action.label}</span>
-                <span className={'ci ' + action.icon} />
-              </button>
-            )}
-          </div>
+          <FormCommands {...cmd} />
         </div>
         {children}
-        {/* Корзина — у нижней границы зоны (низ-право), только в режиме ПРАВКИ
-            (§5, Ф9): просмотр чист и от случайного удаления защищён структурно. */}
-        {!fixed && unlocked && onDelete && (
-          <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
-            <span className="lbl">Удалить</span><span className="ci ci-trash" />
-          </button>
-        )}
-        {/* Скачать (xlsx) — тот же слот, но у ЗАФИКСИРОВАННОГО: корзины там нет, слоты
-            не сталкиваются. Зелёная подсветка намекает на выгрузку. */}
-        {fixed && download && (
-          <a className="fh-ctl fh-download" href={download.href} download
-             title={download.title ?? 'Скачать'}>
-            <span className="lbl">Скачать</span><span className="ci ci-file" />
-          </a>
-        )}
+        <FormCornerCommand {...cmd} />
       </div>
       {error && <div className="fh-error">ошибка: {error}</div>}
     </>

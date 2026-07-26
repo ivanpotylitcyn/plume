@@ -48,7 +48,9 @@ Django + Django REST Framework · React + TypeScript (Vite) · MySQL/MariaDB.
 её сверх своих юридических полей (`number`/`date`/`contractor`). Списки, пикеры и шапки
 форм везде показывают одну пару. Исключений **не осталось**: `Item.design_item_id`
 переехал в `code` последним (Ф3b, 2026-07-25) — значение то же (заказной PN, канон
-библиотеки Altium), имя общее.
+библиотеки Altium), имя общее. Вложение подтянулось следом (Ф12a, 2026-07-26:
+`Attachment.label` → `description`): своего `code` у файла нет, его идентичность —
+`filename`, и описание идёт сразу за ним.
 
 ### Сущности
 
@@ -360,10 +362,10 @@ erDiagram
   ATTACHMENT {
     int id PK
     string file "путь в MEDIA_ROOT (файл на диске, не BLOB)"
-    string filename "оригинальное имя для скачивания"
+    string filename "оригинальное имя для скачивания = идентичность вложения"
+    string description "опц. описание (Ф12a: label→description, пара filename+description)"
     int size "байт"
     string content_type "application/pdf | image/jpeg | image/png"
-    string label "опц. подпись (nullable)"
     datetime uploaded_at
     int user_id FK "кто загрузил"
     int item_id FK "владелец: datasheet изделия (nullable)"

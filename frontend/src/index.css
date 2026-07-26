@@ -74,6 +74,18 @@
   --st-lock: #8C8C8C;    /* 🔒 серый — зафиксировано */
   --st-info: #48A0C7;    /* ○ синий — информационный */
 
+  /* Скругление панелей-карточек (UI_GUIDE §13.2): важен факт скругления, величина
+     вторична — потому живёт ОДНИМ значением в одном месте (заболит — правится тут). */
+  --radius-panel: 6px;
+  /* Ширина полей шапки формы (§13.3): две ступени на всю тему — обычное поле и
+     длинное (Описание). В вьюхах ширину не задаём, только выбираем ступень. */
+  --field-w: 320px;
+  --field-w-wide: 640px;
+  /* Ширина колонки идентичности в списках формы (§7a): одна на все табы, чтобы
+     колонка описания не переезжала при переключении. Коды короткие — колонке хватает
+     ~160px, остальное отдаём описанию (ужато с 260px на приёмке 2026-07-26). */
+  --col-key: 160px;
+
   font-family: var(--font-base);
   font-size: 13px;
   color: var(--fg);
@@ -132,6 +144,18 @@ body { overflow: hidden; }
 .ci-broadcast::before       { content: '\eaad'; }  /* датчики */
 .ci-plug::before            { content: '\eb2d'; }  /* интерфейсы */
 .ci-vm::before              { content: '\ea7a'; }  /* приборы (демо-класс) */
+/* волна 19 Ф12 — глифы табов канона формы (коды сверены с codicon.ttf фонттулзом) */
+.ci-list-tree::before       { content: '\eb86'; }  /* таб «Состав (BOM)» */
+.ci-references::before      { content: '\eb36'; }  /* таб «Где применяется» */
+.ci-files::before           { content: '\eaf0'; }  /* таб «Файлы» */
+.ci-new-file::before        { content: '\ea7f'; }  /* команда шапки «Загрузить» */
+.ci-download::before        { content: '\ec74'; }  /* строка вложения: «Скачать» */
+/* глифы вложений по расширению (цвет = состояние файла на диске, §7a) */
+.ci-file-pdf::before        { content: '\eaeb'; }
+.ci-file-media::before      { content: '\eaea'; }
+.ci-file-code::before       { content: '\eae9'; }
+.ci-file-binary::before     { content: '\eae8'; }
+.ci-file-zip::before        { content: '\eaef'; }
 
 /* ---- каркас (строки состояния больше нет — §11) ---- */
 .app { display: grid; grid-template-columns: 48px 240px 1fr; height: 100vh; }
@@ -220,7 +244,10 @@ body { overflow: hidden; }
   flex: 0 0 auto; }
 .fh-ctl { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px;
   background: none; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
-  color: var(--fg-dim); padding: 3px 6px; font: inherit; }
+  color: var(--fg-dim); padding: 3px 6px; font: inherit; text-decoration: none; }
+/* Подчёркивания у команд нет НИГДЕ (принято 2026-07-26): команда — не ссылка-текст,
+   её знак — глиф и подсветка фоном. Ховер тоже не подчёркивает. */
+.fh-ctl:hover { text-decoration: none; }
 .fh-ctl .lbl { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
 .fh-ctl .ci { font-size: 16px; }
 .fh-ctl:hover { background: var(--bg-hover); color: var(--fg); }
@@ -239,6 +266,76 @@ body { overflow: hidden; }
 /* строка ошибки под шапкой (заменила индикатор в слоте сохранения) */
 .fh-error { font-family: var(--font-mono); font-size: 11px; color: var(--st-order);
   margin: 4px 0 0; }
+
+/* ---- канон формы (UI_GUIDE §13, волна 19 Ф12) ----
+   Один лэйаут на все формы: титул(code) → панель ШАПКА (поля │ команды) → мета →
+   табы → панель СПИСОК. Разметку держит `FormShell.tsx` (слой ТЕМЫ, не core). */
+
+/* Панель-карточка (§13.2) — общий класс, поднятый из `.budget`. Радиус — из
+   единственного токена `--radius-panel`. */
+.panel { border: 1px solid var(--border); border-radius: var(--radius-panel);
+  background: var(--bg-side); padding: 12px 16px; }
+
+/* Титул = `code` (§13.5): крупно, моно, по центру нижележащих панелей, без глифов.
+   Пустой код → титул пустой (min-height держит стек от прыжка). */
+.fs-title { font-family: var(--font-mono); font-size: 19px; font-weight: 500;
+  color: var(--fg-bright); text-align: center; margin: 2px 0 12px; min-height: 25px;
+  overflow-wrap: anywhere; }
+
+/* Шапка (§13.3): две зоны в ОДНОЙ горизонтали — поля слева, команды справа. Зоны
+   не разделяются ничем, их разводит выключка. Высоту задают ПОЛЯ: колонка команд
+   растянута на высоту шапки (`stretch`), поэтому первая команда идёт вровень с первым
+   полем, а нижняя (корзина/«Скачать») — вровень с последним. */
+.fs-head { display: flex; align-items: stretch; gap: 24px; }
+.fs-head .props { flex: 1; min-width: 0; margin-bottom: 0; max-width: none;
+  /* Колонка меток — по САМОЙ ДЛИННОЙ подписи этой шапки (§13.3): фиксированные
+     168px оставляли гэп в формах с короткими подписями. */
+  grid-template-columns: max-content 1fr; }
+/* Ширина поля — две ступени, заданные ОДНИМ токеном на всю тему (§13.3): обычное и
+   длинное (Описание). «Во всю оставшуюся ширину» оказалось слишком длинно. */
+.fs-head .props dd :is(input, select):not([type="checkbox"]) {
+  width: var(--field-w) !important; max-width: 100%; }
+.fs-head .props dd.wide :is(input, select) { width: var(--field-w-wide) !important; }
+/* Значение поля выключено ВЛЕВО, к своей подписи (§13.3). `.qty-in` числовой правит
+   выключку вправо — в таблице это верно, в шапке разрывало пару «подпись — значение». */
+.fs-head .props dd :is(input, select) { text-align: left; }
+/* Колонка команд: строки той же высоты, что строки полей — команда №1 читается в одной
+   строке с полем №1. Нижняя команда прижата к низу колонки (`margin-top: auto`), то есть
+   встаёт вровень с последним полем; `position: absolute` для неё больше не нужен. */
+.fs-head .fh-right { gap: 0; }
+.fs-head .fh-ctl { height: 26px; padding-top: 0; padding-bottom: 0; }
+.fs-head :is(.fh-del, .fh-download) { position: static; margin-top: auto; }
+
+/* Корзина/«Скачать» (§5) внутри панели садятся по её паддингу, а не встык к рамке:
+   `.fh-del`/`.fh-download` позиционируются от `.fs-head` (у неё position: relative). */
+.fs-head > .fh-del, .fs-head > .fh-download { right: 12px; bottom: 8px; }
+
+/* Мета (§13.6): по центру, между шапкой и табами; поля НЕ повторяет. */
+.fs-meta { text-align: center; font-family: var(--font-mono); font-size: 12px;
+  color: var(--fg-dim); font-variant-numeric: tabular-nums; margin: 10px 0 12px; }
+.fs-meta .ci.sg { margin-right: 5px; }
+.fs-meta .sub { color: var(--fg-dim); }
+
+/* Табы (§13.7): оформление кнопок-команд шапки (`.fh-ctl`), но глиф СЛЕВА. Рисуем
+   всегда, даже когда список один. Живут в СВЕТЛОЙ ПОЛОСЕ вверху панели-списка (образец
+   — окно агентов VS Code): полоса отделяет их от меты, панель и её табы читаются как
+   одно целое. Счётчиков в табах нет — числа шумели, они ушли в мету (§13.6). */
+.fs-body { padding: 0; overflow: hidden; }
+.fs-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); }
+.fs-tab { justify-content: flex-start; padding: 3px 10px; }
+/* Активный таб оформлен КАК КОМАНДА ШАПКИ ПОД КУРСОРОМ (§13.7): один язык подсветки
+   на весь продукт — своего вида у таба нет. */
+.fs-tab.on { background: var(--bg-hover); color: var(--fg); }
+
+/* Тело активного таба. Сверху тесно: заголовок списка — такая же строка, как данные,
+   и большой отступ делал её «первой высокой строкой» (§7a). */
+.fs-list { padding: 4px 16px 12px; }
+.fs-list > :first-child { margin-top: 0; }
+.fs-list .section-h:first-child { margin-top: 0; }
+/* Замещающий текст пустого таба: дышит одинаково сверху и снизу — иначе липнет к
+   полосе табов (принято 2026-07-26). 8px + 4px паддинга тела = 12px, как снизу. */
+.tab-empty { color: var(--fg-dim); padding: 8px 0; }
 
 /* ---- панель свойств (узкая, пары label:value) ---- */
 .props { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;
@@ -266,9 +363,44 @@ h1.title .lit { font-family: var(--font-base); font-weight: 400; }
 
 /* ---- грид строк (плотный, без заливки; статус — полоса слева + значок) ---- */
 table.grid { border-collapse: collapse; width: 100%; }
+/* Заголовок = ПЕРВАЯ СТРОКА списка, не отдельная сущность (§7a): тот же шрифт и та же
+   высота, что у строк-данных, отличается только приглушённым цветом (и тем, что в ней
+   нет ссылок). Мелкий 11px читался как «подпись мелким шрифтом» и терялся. */
 table.grid th { text-align: left; color: var(--fg-dim); font-weight: 400;
-  font-size: 11px; padding: 2px 10px; border-bottom: 1px solid var(--border); }
+  padding: 3px 10px; border-bottom: 1px solid var(--border); }
 table.grid td { padding: 3px 10px; border-bottom: 1px solid var(--border); }
+/* Все строки одной высоты, включая заголовок: без общего `line-height` первая строка
+   («Компонент · Описание…») оказывалась выше остальных и шумела (§7a). */
+table.grid :is(th, td) { line-height: 20px; }
+/* Колонка глифа: отступ от края = отступу глиф→код (иначе глиф «отлипал» от кода и
+   прижимался к рамке). Ширина по содержимому, правый паддинг отдаём соседу. */
+table.grid :is(th, td).gl { width: 1%; padding-right: 0; white-space: nowrap; }
+/* Команды ВНУТРИ строки списка: тот же язык, что у команд шапки (`.fh-ctl`), но
+   ОДНИМИ ГЛИФАМИ — подписи живут в `title`. В списке команд много, текст на каждой
+   строке шумел бы. Колонка команд — крайняя правая, по содержимому. */
+table.grid .fh-ctl { height: 20px; padding: 0 5px; }
+table.grid .fh-ctl .ci { font-size: 14px; }
+.fh-ctl.icon { gap: 0; }
+/* `.fh-del` в шапке позиционируется абсолютно (нижний слот панели) — в строке списка
+   это уносило кнопку из потока, и корзины просто не было видно. В таблице — в поток. */
+table.grid .fh-del { position: static; }
+table.grid :is(th, td).act { width: 1%; white-space: nowrap; text-align: right; }
+/* Колонка идентичности (код / имя файла / номер ордера) — ОДНОЙ ширины во всех табах
+   формы (§7a): при переключении табов соседняя колонка описания не прыгает. */
+table.grid :is(th, td).c-key { width: var(--col-key); }
+/* Колонка описания забирает ВСЮ свободную ширину, служебные колонки (размер, даты,
+   автор) жмутся по содержимому и уезжают вправо, к командам строки (§7a). Так между
+   описанием и числами не остаётся мёртвого поля. */
+table.grid :is(th, td).c-desc { width: auto; }
+table.grid :is(th, td).c-fit { width: 1%; white-space: nowrap; }
+/* Описание — текст, а не число: выключка ВЛЕВО (числовой `.qty-in` правит её вправо,
+   и описание уезжало к соседней колонке). То же правило, что в шапке формы (§13.3). */
+table.grid td.c-desc :is(input, .picker) { width: 100%; text-align: left; }
+/* Единица измерения — ВСЕГДА своя колонка, крайняя правая (§7a). Раньше «шт» ездила
+   внутри ячейки кол-ва и плясала от разрядности числа. Колонка узкая (по содержимому),
+   значение выключено влево — примыкает к числу своей строки. */
+table.grid :is(th, td).uom { text-align: left; width: 1%; white-space: nowrap;
+  color: var(--fg-dim); font-family: var(--font-mono); padding-left: 6px; }
 table.grid td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 /* Описание в одну строку с многоточием (волна 17): «допуск …». */
 .cell-ellip { display: block; max-width: 600px; overflow: hidden;
@@ -311,7 +443,8 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .prow.s-to_order { border-left-color: var(--st-order); }
 .prow.s-on_order { border-left-color: var(--st-wip); }
 .prow.s-available { border-left-color: var(--st-ok); }
-.prow--head { color: var(--fg-dim); font-size: 11px; text-transform: none;
+/* Заголовок = первая строка списка (§7a): тот же шрифт, что у строк-данных. */
+.prow--head { color: var(--fg-dim); text-transform: none;
   border-bottom: 1px solid var(--border); padding-bottom: 4px; margin: 2px 0; }
 /* Тонкая серая полоса-разделитель — у ВСЕХ строк-данных единообразно (правило строк,
    UI_GUIDE §7a). Раньше её несли только `--comp`; device-строки «Приборов» шли без неё
@@ -353,10 +486,11 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .anomaly { color: var(--st-order); margin-left: 8px; }
 .kind-chip { color: var(--fg-dim); font-size: 11px; }
 
-/* ---- панель бюджета (волна 10) ---- */
+/* ---- панель бюджета (волна 10) ----
+   Карточку (рамка/радиус/фон/паддинг) даёт общий `.panel` (§13.2, Ф12) — здесь
+   остаётся только раскладка статов. */
 .budget { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 28px;
-  margin: 0 0 18px; padding: 12px 16px; border: 1px solid var(--border);
-  border-radius: 4px; background: var(--bg-side); }
+  margin: 0 0 18px; }
 .bgroup { display: flex; gap: 24px; }
 .bgroup.okup { margin-left: auto; padding-left: 28px; border-left: 1px solid var(--border); }
 .bstat { display: flex; flex-direction: column; gap: 2px; }

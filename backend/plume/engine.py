@@ -33,8 +33,9 @@
   отдаваемых лотов (live>0). `create_transfer`, `add/update/remove_transfer_line`.
 - Мягкий замок «отгружено» (единый `locked`, волна 13 Ф1):
   `lock_transfer`/`unlock_transfer` — под замком форма read-only; снятие ничего не
-  разрушает (guard по потомкам не нужен). `item_shipments(item)` — отгруженные партии
-  изделия для его экрана (замыкает петлю `комплектация → передача`).
+  разрушает (guard по потомкам не нужен). Лента `item_movements(item)` — ВСЕ ордера,
+  коснувшиеся изделия (рождения партий + движения), для его экрана; заменила узкую
+  `item_shipments` в волне 19 (Ф12a).
 
 Волна 6 (закрытие проекта — сведение остатков в 0 + мягкий замок):
 - `writeoff_form` / `create_writeoff` / `add|update|remove_writeoff_line` — списание
@@ -81,6 +82,8 @@
 """
 import csv
 import io
+import os
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
@@ -1387,26 +1390,45 @@ def transfer_form(transfer):
     }
 
 
-def item_shipments(item):
-    """Отгруженные партии изделия — где и по какой накладной ушло заказчику.
+def _movement_row(document, lot, qty, event):
+    """Одна строка ленты движений: ордер + партия + знаковое кол-во."""
+    return {
+        'event': event,                 # 'born' — партия родилась | 'move' — движение
+        'kind': document.kind, 'document_id': document.id,
+        'code': document.code, 'number': document.number, 'date': document.date,
+        'locked': document.locked, 'project_code': document.project.code,
+        'lot_id': lot.id, 'lot_name': lot.lot_name, 'qty': qty,
+    }
 
-    Read-only проекция для экрана изделия: строки передач его лотов (замыкает
-    петлю `комплектация → передача`). Порядок — свежие сверху.
+
+def item_movements(item):
+    """Все ордера, коснувшиеся изделия, одной лентой — для его экрана (волна 19, Ф12a).
+
+    Заменила узкую `item_shipments` (только передачи): изделие живёт не одними
+    отгрузками, и «куда делось» читается лишь по всей ленте. Два источника, ровно
+    как в модели:
+
+    * **рождение партии** (born-direct) — `Lot.origin` (поставка / комплектация /
+      инвентаризация / требование), знак `+`;
+    * **движение существующей партии** — `StockLine` (пайка в комплектацию, передача,
+      списание, требование, перемещение), знак уже в `qty` (− расход).
+
+    `StockMovement` намеренно НЕ читаем: это проекция-остаток, её `source_type`/
+    `source_id` пришлось бы резолвить обратно в документы. Порядок — свежие сверху;
+    дата у ордера nullable (черновик комплектации), такие уходят в конец.
     """
-    rows = []
-    for line in (models.StockLine.objects
-                 .filter(document__kind=models.StockDocument.Kind.TRANSFER,
-                         lot__item=item)
-                 .select_related('document__transfer__project', 'lot')
-                 .order_by('-document__transfer__date', '-id')):
-        t = line.document.transfer
-        rows.append({
-            'transfer_id': t.id, 'number': t.number, 'date': t.date,
-            'project_code': t.project.code, 'locked': t.locked,
-            'lot_id': line.lot_id, 'qty': -line.qty,     # знаковый → магнитуда
-            'display_name': line.display_name,
-            'lot_name': line.lot.lot_name,
-        })
+    rows = [
+        _movement_row(lot.origin, lot, lot.qty, 'born')
+        for lot in (models.Lot.objects.filter(item=item)
+                    .select_related('origin', 'origin__project'))
+    ]
+    rows += [
+        _movement_row(line.document, line.lot, line.qty, 'move')
+        for line in (models.StockLine.objects.filter(lot__item=item)
+                     .select_related('document', 'document__project', 'lot'))
+    ]
+    rows.sort(key=lambda r: (r['date'] is not None, r['date'], r['document_id']),
+              reverse=True)
     return rows
 
 
@@ -3495,13 +3517,40 @@ def resolve_attachment_owner(owner_type, owner_id):
         raise ValidationError('Документ-владелец вложения не найден.')
 
 
+# Файл на диске может разойтись с записью в БД — вручную удалили, перезалили мимо
+# приложения, не доехал при переносе. Витрина показывает это ЦВЕТОМ глифа (волна 19,
+# Ф12a): ok — совпадает, changed — на месте, но размер/время не те, missing — записи
+# есть, файла нет. Допуск по времени: mtime записывается диском чуть позже, чем БД
+# штампует `uploaded_at`.
+_ATTACHMENT_MTIME_SLACK = timedelta(minutes=1)
+
+
+def attachment_state(att):
+    """Состояние файла на диске относительно записи в БД: ok | changed | missing."""
+    try:
+        path = att.file.path
+        stat = os.stat(path)
+    except (ValueError, OSError):
+        return 'missing'
+    if stat.st_size != att.size:
+        return 'changed'
+    if att.uploaded_at:
+        touched = datetime.fromtimestamp(stat.st_mtime, tz=dt_timezone.utc)
+        if touched > att.uploaded_at + _ATTACHMENT_MTIME_SLACK:
+            return 'changed'
+    return 'ok'
+
+
 def attachment_row(att):
     """Проекция вложения для витрины (путь к файлу не отдаём — качаем эндпоинтом)."""
     return {
         'id': att.id, 'filename': att.filename or att.file.name,
         'size': att.size, 'content_type': att.content_type,
-        'label': att.label, 'uploaded_at': att.uploaded_at,
-        'user': att.user.get_username() if att.user_id else '',
+        'description': att.description, 'uploaded_at': att.uploaded_at,
+        # Человеческое имя, а не логин: в списке «Загрузил» читают людей (Ф12a).
+        # Тот же выбор, что у авторства документов (`_author`).
+        'user': (att.user.get_full_name() or att.user.get_username()) if att.user_id else '',
+        'state': attachment_state(att),
         'url': f'/api/attachments/{att.id}/download/',
     }
 
@@ -3521,7 +3570,7 @@ def attachments_for(owner_type, owner_id):
     return [attachment_row(a) for a in qs]
 
 
-def add_attachment(owner_type, owner, upload, user, label=''):
+def add_attachment(owner_type, owner, upload, user, description=''):
     """Прикрепить файл к владельцу: файл на диск, метаданные из upload (не с клиента).
 
     filename/size/content_type заполняет сервер из загруженного файла. Владелец
@@ -3537,18 +3586,18 @@ def add_attachment(owner_type, owner, upload, user, label=''):
     att = models.Attachment(
         file=upload, filename=upload.name or '', size=upload.size or 0,
         content_type=getattr(upload, 'content_type', '') or '',
-        label=(label or '').strip(), user=user,
+        description=(description or '').strip(), user=user,
         **{_attachment_owner_field(owner_type): owner})
     att.full_clean(exclude=['file'])   # exclusive-arc + длины полей (file уже валиден)
     att.save()
     return att
 
 
-def update_attachment(att, label=None):
-    """Правка подписи вложения (label). Метаданные файла неизменны."""
-    if label is not None:
-        att.label = (label or '').strip()
-        att.save(update_fields=['label'])
+def update_attachment(att, description=None):
+    """Правка описания вложения. Метаданные файла неизменны."""
+    if description is not None:
+        att.description = (description or '').strip()
+        att.save(update_fields=['description'])
     return att
 
 
