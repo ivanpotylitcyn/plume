@@ -62,6 +62,26 @@ ATTACHMENT_OWNER_FIELDS = ('item', 'document', 'project', 'procurement',
 # --------------------------------------------------------------------------- #
 #  Абстрактная шапка складского документа (волна 13, Ф1)
 # --------------------------------------------------------------------------- #
+# Виды ордера живут на уровне модуля, а не внутри `StockDocument`: тело вложенного
+# `Meta` не видит пространство имён внешнего класса, а CHECK-констрейнты Ф14 обязаны
+# ссылаться на конкретные виды. Внутри модели остаётся привычный алиас
+# `StockDocument.Kind` — все обращения в коде продолжают читаться как раньше.
+class DocumentKind(models.TextChoices):
+    RECEIPT = 'receipt', 'Приход (УПД)'
+    KITTING = 'kitting', 'Комплектация'
+    INVENTORY = 'inventory', 'Инвентаризация'
+    REQUISITION = 'requisition', 'Требование'
+    TRANSFER = 'transfer', 'Передача'
+    WRITEOFF = 'writeoff', 'Списание'
+    RELOCATION = 'relocation', 'Перемещение'
+
+
+# Виды, у которых поле специфики вообще применимо (источник правды и для CHECK,
+# и для прикладных проверок). Ф14: «пустая колонка не у своего вида» — не стиль,
+# а инвариант БД.
+CONTRACTOR_KINDS = (DocumentKind.RECEIPT, DocumentKind.TRANSFER)
+
+
 # Волна 19, Ф1c: строковый `DocStatus {draft,posted}` снят — ось стала `bool locked`
 # на всех пяти сущностях (Item / StockDocument / Procurement / Purchase / Project).
 # Мотив — понятность модели: два состояния, которые не надо запоминать словами
@@ -71,14 +91,13 @@ ATTACHMENT_OWNER_FIELDS = ('item', 'document', 'project', 'procurement',
 
 
 class StockDocument(models.Model):
-    """Конкретный MTI-родитель складского ордера (Приход/Комплектация/Инвентаризация/
-    Требование/Передача/Списание) — «Ордер» в UI (волна 13, Ф2a).
+    """**Единая таблица** складского ордера (Поставка/Комплектация/Инвентаризация/
+    Требование/Передача/Списание/Перемещение) — «Ордер» в UI (волна 13, Ф2a).
 
     Несёт **единый мягкий замок** `locked` (волна 13, Ф1; строка → bool в волне 19,
     Ф1c): свернул разнородные `Receipt.approved`, `Transfer.posted`,
     `Kitting.status{wip/closed/cancelled}` в одну ось. `locked=True` = edit-freeze
-    (форма read-only); склад **НЕ гейтится** — замок чисто интерфейсный (остатки
-    собираются независимо от него). `cancelled` снят: отмена = удаление.
+    (форма read-only). `cancelled` снят: отмена = удаление.
 
     **Ф2a:** абстрактный миксин `StockDoc` схлопнут в этого конкретного родителя —
     6 документов стали MTI-наследниками, их PK = единый `id` этой таблицы (унификация
@@ -87,20 +106,28 @@ class StockDocument(models.Model):
     **Ф2b:** дуги `Lot.origin` (4 FK) / `StockLine.document` (4 FK) схлопнуты в один FK
     на этот PK (реверс — `lots`/`lines`), `Attachment.document` — один FK (владелец теперь
     Item ИЛИ ордер).
-    **Ф2c:** общие поля `project`/`user`/`date`/`number` подняты сюда с 6 детей
-    (дедуп; реверс — `project.documents`/`user.documents`). Специфика осталась на детях:
-    `Receipt.contractor`/`purchase`, `Kitting.target_item`/`qty`, `Writeoff.reason`,
-    `Transfer.contractor` (контрагент-заказчик, Ф2f+).
+    **Ф2c:** общие поля `project`/`user`/`date`/`number` подняты сюда с 6 детей (дедуп;
+    реверс — `project.documents`/`user.documents`).
+
+    **Волна 19, Ф14 — MTI снят.** Семь детских таблиц ради шести колонок специфики
+    (три из них были пусты — только свой PK) схлопнуты сюда же: специфика стала
+    nullable-колонками этой таблицы, дети — `proxy`-моделями с kind-фильтрующим
+    менеджером. Уходят JOIN на каждом чтении, второй INSERT на записи и семь
+    downcast-сайтов; `Lot.origin`/`StockLine.document`/`Attachment.document` уже
+    указывали на родителя (Ф2b сделала тяжёлую часть заранее), перевязывать нечего.
+    Форма правильной аналогии — не `Item.category` (категории это ДАННЫЕ: приезжают
+    из библиотеки, растут, правятся), а `Item.native`: одна таблица + дискриминатор.
+    Вид ордера — это КОД (зашитое поведение движка), из интерфейса его не завести,
+    поэтому таблицы видов документов нет и не будет.
+
+    **Контрагент — одна колонка** (решение Ивана 2026-07-27): у поставки он поставщик,
+    у передачи — заказчик, направление читается из `kind` и двусмысленным быть не может.
+    Тот же приём, что уже применён к `Lot.origin` в волне 13 (четыре типизированных FK
+    → один, вид из `kind`).
     """
 
-    class Kind(models.TextChoices):
-        RECEIPT = 'receipt', 'Приход (УПД)'
-        KITTING = 'kitting', 'Комплектация'
-        INVENTORY = 'inventory', 'Инвентаризация'
-        REQUISITION = 'requisition', 'Требование'
-        TRANSFER = 'transfer', 'Передача'
-        WRITEOFF = 'writeoff', 'Списание'
-        RELOCATION = 'relocation', 'Перемещение'  # ← новый вид, дочерней таблицы пока нет
+    Kind = DocumentKind
+    CONTRACTOR_KINDS = CONTRACTOR_KINDS
 
     # Дочерний класс объявляет свой вид (`KIND`); `save()` штампует его в `kind`.
     KIND = None
@@ -148,9 +175,57 @@ class StockDocument(models.Model):
     date = models.DateField('дата', null=True, blank=True)
     number = models.CharField('номер', max_length=64, blank=True, default='')
 
+    # ------------------------------------------------------------------ #
+    #  Специфика видов (Ф14): шесть полей на семь видов, все nullable.
+    #  Применимость стережёт CHECK по `kind` (см. Meta.constraints), а
+    #  обязательность — ФИКСАЦИЯ, а не рождение: черновик имеет право быть
+    #  неполным (решение Ивана 2026-07-27, см. `REQUIRED_HEADER_BY_KIND`).
+    # ------------------------------------------------------------------ #
+    # Поставка → поставщик, передача → заказчик. Направление задаёт `kind`.
+    contractor = models.ForeignKey('Counterparty', on_delete=models.PROTECT,
+                                   null=True, blank=True, related_name='documents',
+                                   verbose_name='контрагент')
+    # Поставка: заказ, который она закрывает.
+    purchase = models.ForeignKey('Purchase', on_delete=models.SET_NULL, null=True,
+                                 blank=True, related_name='receipts')
+    # Комплектация: прибор-цель и сколько образцов собираем.
+    target_item = models.ForeignKey('Item', on_delete=models.PROTECT, null=True,
+                                    blank=True, related_name='kittings',
+                                    verbose_name='прибор-цель')
+    qty = qty(null=True, blank=True, verbose_name='кол-во образцов')
+    # Списание: причина.
+    reason = models.CharField('причина', max_length=255, blank=True, default='')
+
     class Meta:
         verbose_name = 'ордер'
         verbose_name_plural = 'ордера'
+        constraints = [
+            # --- обязательность у СВОЕГО вида: гейт на фиксации, не на рождении ---
+            models.CheckConstraint(
+                condition=(~Q(kind=DocumentKind.RECEIPT) | Q(locked=False)
+                           | Q(contractor__isnull=False)),
+                name='doc_locked_receipt_has_contractor',
+            ),
+            models.CheckConstraint(
+                condition=(~Q(kind=DocumentKind.KITTING) | Q(locked=False)
+                           | (Q(target_item__isnull=False) & Q(qty__isnull=False))),
+                name='doc_locked_kitting_has_target',
+            ),
+            # --- неприменимость у ЧУЖОГО вида: колонка обязана быть пустой ---
+            models.CheckConstraint(
+                condition=(Q(kind__in=CONTRACTOR_KINDS) | Q(contractor__isnull=True)),
+                name='doc_contractor_only_own_kinds',
+            ),
+            models.CheckConstraint(
+                condition=(Q(kind=DocumentKind.RECEIPT) | Q(purchase__isnull=True)),
+                name='doc_purchase_only_receipt',
+            ),
+            models.CheckConstraint(
+                condition=(Q(kind=DocumentKind.KITTING)
+                           | (Q(target_item__isnull=True) & Q(qty__isnull=True))),
+                name='doc_target_only_kitting',
+            ),
+        ]
 
     def clean(self):
         """Условная валидация шапки по виду (Ф2d): восстанавливает per-kind
@@ -492,17 +567,33 @@ class PurchaseLine(models.Model):
 # --------------------------------------------------------------------------- #
 #  Документы-origin партий + приёмка
 # --------------------------------------------------------------------------- #
+class _KindManager(models.Manager):
+    """Менеджер proxy-вида: сужает выборку до своего `kind` (Ф14).
+
+    Держит иллюзию семи таблиц там, где она полезна: `Receipt.objects.filter(...)`
+    по-прежнему видит только поставки, поэтому 108 обращений к `models.<Вид>.objects`
+    и все per-kind функции движка пережили снос MTI без единой правки. Базовый
+    менеджер (`_base_manager`) Django заводит себе сам, нефильтрованным — обратные
+    связи и каскады работают поверх всей таблицы, как и должны.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(kind=self.model.KIND)
+
+
 class Receipt(StockDocument):
-    """Приход / УПД — приёмка по передаточному документу, рождает партии."""
+    """Приход / УПД — приёмка по передаточному документу, рождает партии.
 
-    KIND = StockDocument.Kind.RECEIPT
+    Ф14: proxy над `StockDocument`. Своих колонок нет — `contractor` (здесь он
+    поставщик) и `purchase` живут в родителе.
+    """
 
-    contractor = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
-                                   related_name='receipts', verbose_name='поставщик')
-    purchase = models.ForeignKey(Purchase, on_delete=models.SET_NULL, null=True,
-                                 blank=True, related_name='receipts')
+    KIND = DocumentKind.RECEIPT
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'поставка'
         verbose_name_plural = 'поставки'
 
@@ -512,31 +603,38 @@ class Receipt(StockDocument):
 
 class Kitting(StockDocument):
     """Комплектация — инструмент ведения сборки лота: списывает компоненты и
-    рождает партию-прибор. Замок `locked` (фиксация рождает лот-прибор)."""
+    рождает партию-прибор. Замок `locked` (фиксация рождает лот-прибор).
 
-    KIND = StockDocument.Kind.KITTING
+    Ф14: proxy над `StockDocument` (`target_item`/`qty` — в родителе).
+    """
 
-    target_item = models.ForeignKey(Item, on_delete=models.PROTECT,
-                                    related_name='kittings')
-    qty = qty(verbose_name='кол-во образцов')
+    KIND = DocumentKind.KITTING
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'комплектация'
         verbose_name_plural = 'комплектации'
 
     def __str__(self):
-        return (f'Комплектация #{self.pk} {self.target_item.code}'
+        target = self.target_item.code if self.target_item_id else '—'
+        return (f'Комплектация #{self.pk} {target}'
                 + (' 🔒' if self.locked else ''))
 
 
 class Inventory(StockDocument):
-    """Инвентаризация — рождает «найденные» партии (излишки/ре-материализация)."""
+    """Инвентаризация — рождает «найденные» партии (излишки/ре-материализация).
 
-    KIND = StockDocument.Kind.INVENTORY
+    Ф14: proxy — своих колонок у вида нет и не было (таблица содержала только PK).
+    """
 
-    # Все поля (project/user/number/date/code/description) подняты в StockDocument (Ф2c/Ф10).
+    KIND = DocumentKind.INVENTORY
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'инвентаризация'
         verbose_name_plural = 'инвентаризации'
 
@@ -545,13 +643,17 @@ class Inventory(StockDocument):
 
 
 class Requisition(StockDocument):
-    """Требование/отпочкование — рождает лоты в проекте-получателе из source-лота."""
+    """Требование/отпочкование — рождает лоты в проекте-получателе из source-лота.
 
-    KIND = StockDocument.Kind.REQUISITION
+    Ф14: proxy — своих колонок у вида нет и не было (таблица содержала только PK).
+    """
 
-    # Все поля (project — «проект-получатель», user/number/date) подняты в StockDocument (Ф2c).
+    KIND = DocumentKind.REQUISITION
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'требование'
         verbose_name_plural = 'требования'
 
@@ -681,18 +783,20 @@ class StockLine(models.Model):
 #  Выбытие / передача / закрытие
 # --------------------------------------------------------------------------- #
 class Transfer(StockDocument):
-    """Передача — только заказчикам, по накладной в рамках проекта."""
+    """Передача — только заказчикам, по накладной в рамках проекта.
 
-    KIND = StockDocument.Kind.TRANSFER
+    Ф14: proxy над `StockDocument`. Структурный получатель (Ф2f+) — общая колонка
+    `contractor` родителя, у этого вида она читается как «заказчик». Пустой она
+    бывает законно: исторические передачи получателя-сущности не имели (текст жил
+    в `StockLine.display_name`).
+    """
 
-    # Все поля (project/user/date/number) подняты в StockDocument (Ф2c). Специфика —
-    # структурный получатель (Ф2f+): контрагент-заказчик. Nullable — исторические
-    # передачи получателя-сущности не имели (текст жил в `StockLine.display_name`).
-    contractor = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
-                                   null=True, blank=True, related_name='transfers',
-                                   verbose_name='заказчик')
+    KIND = DocumentKind.TRANSFER
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'передача'
         verbose_name_plural = 'передачи'
 
@@ -701,14 +805,17 @@ class Transfer(StockDocument):
 
 
 class Writeoff(StockDocument):
-    """Списание — с причиной (серый путь: → «Свободные неучтённые»)."""
+    """Списание — с причиной (серый путь: → «Свободные неучтённые»).
 
-    KIND = StockDocument.Kind.WRITEOFF
+    Ф14: proxy над `StockDocument` (`reason` — в родителе).
+    """
 
-    # project/user/number/date подняты в StockDocument (Ф2c); `reason` — специфика.
-    reason = models.CharField('причина', max_length=255, blank=True, default='')
+    KIND = DocumentKind.WRITEOFF
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'списание'
         verbose_name_plural = 'списания'
 
@@ -723,13 +830,17 @@ class Relocation(StockDocument):
     хранения. В отличие от `Transfer` (терминальна, отдаём заказчику), перемещение
     остаётся внутри учёта — полный остаток лота/проекта сохраняется. Механика — пара
     знаковых `StockLine` на ход (`−q` на источнике, `+q` на приёмнике), зеркалящих
-    `StockMovement`; лот меняет распределение по локациям, не тотал."""
+    `StockMovement`; лот меняет распределение по локациям, не тотал.
 
-    KIND = StockDocument.Kind.RELOCATION
+    Ф14: proxy — своих колонок у вида нет и не было (таблица содержала только PK).
+    """
 
-    # Все поля (project/user/date/number) подняты в StockDocument (Ф2c).
+    KIND = DocumentKind.RELOCATION
+
+    objects = _KindManager()
 
     class Meta:
+        proxy = True
         verbose_name = 'перемещение'
         verbose_name_plural = 'перемещения'
 

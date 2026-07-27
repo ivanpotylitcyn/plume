@@ -556,9 +556,9 @@ def kitting_lines(request, pk):
 def kitting_line_detail(request, pk):
     """Автосейв количества пайки (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('document__kitting', 'lot'),
+        models.StockLine.objects.select_related('document', 'lot'),
         pk=pk, document__kind=models.StockDocument.Kind.KITTING)
-    kitting = line.document.kitting
+    kitting = line.document
     try:
         if request.method == 'DELETE':
             engine.remove_kitting_line(line)
@@ -709,10 +709,10 @@ def receipt_lots(request, pk):
 def receipt_lot_detail(request, pk):
     """Автосейв строки УПД (PATCH) / удаление строки (DELETE)."""
     lot = get_object_or_404(
-        models.Lot.objects.select_related('origin__receipt', 'item'), pk=pk)
+        models.Lot.objects.select_related('origin', 'item'), pk=pk)
     if lot.origin.kind != models.StockDocument.Kind.RECEIPT:
         return _bad('Партия не из прихода — правка через её origin-документ.')
-    receipt = lot.origin.receipt
+    receipt = lot.origin
     try:
         if request.method == 'DELETE':
             engine.remove_receipt_lot(lot)
@@ -996,9 +996,9 @@ def transfer_lines(request, pk):
 def transfer_line_detail(request, pk):
     """Автосейв строки передачи (кол-во/имя) (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('document__transfer', 'lot'),
+        models.StockLine.objects.select_related('document', 'lot'),
         pk=pk, document__kind=models.StockDocument.Kind.TRANSFER)
-    transfer = line.document.transfer
+    transfer = line.document
     try:
         if request.method == 'DELETE':
             engine.remove_transfer_line(line)
@@ -1247,9 +1247,9 @@ def writeoff_lines(request, pk):
 def writeoff_line_detail(request, pk):
     """Автосейв количества строки списания (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('document__writeoff', 'lot'),
+        models.StockLine.objects.select_related('document', 'lot'),
         pk=pk, document__kind=models.StockDocument.Kind.WRITEOFF)
-    writeoff = line.document.writeoff
+    writeoff = line.document
     try:
         if request.method == 'DELETE':
             engine.remove_writeoff_line(line)
@@ -1351,9 +1351,9 @@ def requisition_lines(request, pk):
 def requisition_line_detail(request, pk):
     """Автосейв количества строки требования (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
-        models.StockLine.objects.select_related('document__requisition', 'lot'),
+        models.StockLine.objects.select_related('document', 'lot'),
         pk=pk, document__kind=models.StockDocument.Kind.REQUISITION)
-    requisition = line.document.requisition
+    requisition = line.document
     try:
         if request.method == 'DELETE':
             engine.remove_requisition_line(line)
@@ -1479,10 +1479,10 @@ def inventory_lots(request, pk):
 def inventory_lot_detail(request, pk):
     """Автосейв строки акта (PATCH) / удаление строки (DELETE)."""
     lot = get_object_or_404(
-        models.Lot.objects.select_related('origin__inventory', 'item'), pk=pk)
+        models.Lot.objects.select_related('origin', 'item'), pk=pk)
     if lot.origin.kind != models.StockDocument.Kind.INVENTORY:
         return _bad('Партия не из инвентаризации — правка через её origin-документ.')
-    inventory = lot.origin.inventory
+    inventory = lot.origin
     try:
         if request.method == 'DELETE':
             engine.remove_inventory_lot(lot)

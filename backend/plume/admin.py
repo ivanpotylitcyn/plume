@@ -142,8 +142,8 @@ class StockDocumentAdmin(admin.ModelAdmin):
 
     @admin.display(description='форма')
     def open_child(self, obj):
-        # Ссылка на дочернюю форму (правка/удаление). `kind` дословно = имя дочерней
-        # модели, а в MTI pk ребёнка == pk родителя → URL собираем без запроса к БД.
+        # Ссылка на форму вида (правка/удаление). `kind` дословно = имя proxy-модели,
+        # а у proxy pk тот же самый (одна таблица, Ф14) → URL собираем без запроса к БД.
         url = reverse(f'admin:plume_{obj.kind}_change', args=[obj.pk])
         return format_html('<a href="{}">✎ открыть</a>', url)
 
@@ -154,10 +154,11 @@ class StockDocumentAdmin(admin.ModelAdmin):
         return False                 # витрина только для просмотра (view-perm держит список)
 
     def has_delete_permission(self, request, obj=None):
-        # ВАЖНО: разрешаем удаление РОДИТЕЛЯ. Иначе MTI-каскад из дочерней админки
-        # (удаление Перемещения/Прихода/…) блокируется: Django при сборе связанных
-        # объектов проверяет право на StockDocument, и жёсткий `False` рубит даже
-        # суперюзера («нет прав на удаление ордер»). Прямое удаление из витрины при
+        # ВАЖНО: разрешаем удаление РОДИТЕЛЯ. Иначе удаление из админки вида
+        # (Перемещение/Поставка/…) блокируется: Django при сборе связанных объектов
+        # проверяет право на конкретную модель `StockDocument` — а после Ф14 это
+        # ровно та же таблица, — и жёсткий `False` рубит даже суперюзера («нет прав
+        # на удаление ордер»). Прямое удаление из витрины при
         # этом закрыто иначе: строки некликабельны (list_display_links=None),
         # change-страницы нет (has_change_permission=False), а bulk-action снят ниже.
         return super().has_delete_permission(request, obj)

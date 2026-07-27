@@ -147,31 +147,17 @@ erDiagram
   ITEM ||--o{ PURCHASELINE : ""
   ITEM ||--o{ PROCUREMENTLINE : ""
   ITEM ||--o{ PROJECTDEMAND : "target"
-  ITEM ||--o{ KITTING : "target"
+  ITEM ||--o{ STOCKDOCUMENT : "target_item (только kitting)"
 
-  COUNTERPARTY ||--o{ RECEIPT : "поставщик"
-  COUNTERPARTY ||--o{ TRANSFER : "заказчик (nullable)"
+  COUNTERPARTY ||--o{ STOCKDOCUMENT : "contractor: поставщик у receipt / заказчик у transfer (nullable)"
   COUNTERPARTY ||--o{ PROCUREMENT : "поставщик (nullable)"
-
-  STOCKDOCUMENT ||--|| RECEIPT : "MTI-наследник"
-  STOCKDOCUMENT ||--|| KITTING : "MTI-наследник"
-  STOCKDOCUMENT ||--|| INVENTORY : "MTI-наследник"
-  STOCKDOCUMENT ||--|| REQUISITION : "MTI-наследник"
-  STOCKDOCUMENT ||--|| TRANSFER : "MTI-наследник"
-  STOCKDOCUMENT ||--|| WRITEOFF : "MTI-наследник"
-  STOCKDOCUMENT ||--|| RELOCATION : "MTI-наследник"
 
   LOCATION ||--o{ STOCKMOVEMENT : ""
   LOCATION ||--o{ STOCKLINE : ""
 
   USER ||--o{ PROCUREMENT : "автор"
   USER ||--o{ PURCHASE : "автор"
-  USER ||--o{ RECEIPT : "автор"
-  USER ||--o{ KITTING : "автор"
-  USER ||--o{ TRANSFER : "автор"
-  USER ||--o{ INVENTORY : "автор"
-  USER ||--o{ WRITEOFF : "автор"
-  USER ||--o{ REQUISITION : "автор"
+  USER ||--o{ STOCKDOCUMENT : "автор (любой вид)"
   USER ||--o{ ATTACHMENT : "загрузил"
 
   LOT ||--o{ STOCKMOVEMENT : ""
@@ -181,17 +167,12 @@ erDiagram
   PROJECT ||--o{ PROJECTDEMAND : ""
   PROJECT ||--o{ LOT : "home (проект лота)"
   PROJECT ||--o{ PURCHASE : ""
-  PROJECT ||--o{ RECEIPT : ""
-  PROJECT ||--o{ KITTING : ""
-  PROJECT ||--o{ TRANSFER : ""
-  PROJECT ||--o{ INVENTORY : ""
-  PROJECT ||--o{ WRITEOFF : ""
-  PROJECT ||--o{ REQUISITION : "получатель"
+  PROJECT ||--o{ STOCKDOCUMENT : "проект-якорь (у requisition — получатель)"
 
   PROCUREMENT ||--o{ PROCUREMENTLINE : ""
   PROCUREMENT ||--o{ PURCHASE : ""
   PURCHASE ||--o{ PURCHASELINE : ""
-  PURCHASE ||--o{ RECEIPT : "nullable"
+  PURCHASE ||--o{ STOCKDOCUMENT : "purchase (только receipt, nullable)"
   STOCKDOCUMENT ||--o{ LOT : "origin (рождение; receipt/kitting/inventory/requisition — вид = kind)"
   STOCKDOCUMENT ||--o{ STOCKLINE : "расход/движение (kitting/transfer/writeoff/requisition/relocation — вид = kind)"
 
@@ -317,7 +298,7 @@ erDiagram
     decimal qty "заказано"
   }
   STOCKDOCUMENT {
-    int id PK "единый id-пространство ордера (MTI-родитель)"
+    int id PK "единый id ордера — ОДНА таблица на все семь видов (Ф14: MTI снят)"
     string kind "receipt/kitting/inventory/requisition/transfer/writeoff/relocation — дискриминатор"
     bool locked "единый мягкий замок"
     int project_id FK "общий, поднят с 6 детей (Ф2c); реверс project.documents"
@@ -326,16 +307,11 @@ erDiagram
     string number "№ документа (внешний, юридический) — общий, поднят (Ф2c); blank у Kitting"
     string code "наш ярлык (напр. Нева ДЗЗ 1), uniq, nullable — общий (Ф10)"
     string description "развёрнутое имя — общее (Ф10; note удалён)"
-  }
-  RECEIPT {
-    int id PK "= StockDocument.id (MTI parent_link)"
-    int contractor_id FK "поставщик → Counterparty (Ф2f+)"
-    int purchase_id FK "nullable"
-  }
-  KITTING {
-    int id PK "= StockDocument.id (MTI parent_link)"
-    int target_item_id FK
-    decimal qty "кол-во образцов"
+    int contractor_id FK "Ф14, nullable: поставщик у receipt / заказчик у transfer (направление = kind)"
+    int purchase_id FK "Ф14, nullable: закрываемый заказ — только у receipt"
+    int target_item_id FK "Ф14, nullable: прибор-цель — только у kitting"
+    decimal qty "Ф14, nullable: кол-во образцов — только у kitting"
+    string reason "Ф14: причина — только у writeoff"
   }
   STOCKLINE {
     int id PK
@@ -345,23 +321,6 @@ erDiagram
     decimal qty "со знаком: − расход; «Перемещение» — пара −/+ между локациями (Ф2e)"
     date date "дата пайки (nullable, комплектация)"
     string display_name "имя для накладной (nullable, передача)"
-  }
-  TRANSFER {
-    int id PK "= StockDocument.id (MTI parent_link); шапка — на StockDocument (Ф2c)"
-    int contractor_id FK "заказчик → Counterparty (nullable; Ф2f+)"
-  }
-  INVENTORY {
-    int id PK "= StockDocument.id (MTI parent_link); вся шапка — на StockDocument (Ф2c)"
-  }
-  WRITEOFF {
-    int id PK "= StockDocument.id (MTI parent_link)"
-    string reason "причина (специфика)"
-  }
-  REQUISITION {
-    int id PK "= StockDocument.id (MTI parent_link); проект-получатель = StockDocument.project (Ф2c)"
-  }
-  RELOCATION {
-    int id PK "= StockDocument.id (MTI parent_link); перемещение лота между локациями (Ф2e)"
   }
   ATTACHMENT {
     int id PK
@@ -391,13 +350,15 @@ erDiagram
 - **Партия (`Lot`) — склад, движения и комплектация.** Главная учётная единица:
   вокруг неё `StockMovement` (проекция остатков, по паре `(лот, локация)` — мультисклад
   Ф2e) и все складские документы — `Kitting` / `Transfer` / `Writeoff` / `Requisition` /
-  `Inventory` / `Relocation` (+ `Receipt`) с их строками. Все семь — **MTI-наследники
-  единого родителя `StockDocument` («Ордер»)**:
-  общая шапка (`kind`-дискриминатор + `locked` + `project`/`user`/`date`/`number` +
-  `code`/`description` (волна 19, Ф10), поднятые с детей в Ф2c) и единое id-пространство
-  (волна 13, Ф2a); специфика
-  (`contractor`/`purchase`, `target_item`/`qty`, `reason`, `Transfer.contractor`) — на
-  детях. Отвечает на «что физически есть и куда движется».
+  `Inventory` / `Relocation` (+ `Receipt`) с их строками. Все семь — **один
+  `StockDocument` («Ордер») в ОДНОЙ таблице** (волна 19, Ф14: MTI снят): вид задаёт
+  дискриминатор `kind`, общая шапка — `locked` + `project`/`user`/`date`/`number` +
+  `code`/`description`, специфика — nullable-колонки там же (`contractor` — поставщик у
+  поставки и заказчик у передачи; `purchase`; `target_item`/`qty`; `reason`).
+  Применимость колонки своему виду держат `CheckConstraint` по `kind`, обязательность —
+  фиксация (`locked`), а не рождение: черновик имеет право быть неполным. Сами семь
+  имён остались `proxy`-моделями с kind-фильтрующим менеджером — код пишет
+  `Receipt.objects…` как раньше. Отвечает на «что физически есть и куда движется».
 - **Вложение (`Attachment`) рядом с `User` — оффлайн-факты.** Сканы документов и datasheet'ы
   плюс авторство (`user` на всех документах). Отвечает на «чем подтверждено и кто
   отвечает».
@@ -414,9 +375,10 @@ erDiagram
   (`Receipt`), изготовление (`Kitting`), инвентаризация (`Inventory` — «найденные»
   партии) или отпочкование (`Requisition` — новый лот, отделённый от исходного).
   **origin задан всегда** — один FK `Lot.origin → StockDocument` (NOT NULL), вид
-  читается из `origin.kind`. Дуга из четырёх nullable-FK схлопнута в один при MTI
-  (волна 13, Ф2b): id-пространство ордеров едино (Ф2a), поэтому Check «ровно один»
-  больше не нужен — целостность держит обычный FK.
+  читается из `origin.kind`. Дуга из четырёх nullable-FK схлопнута в один ещё в
+  волне 13 (Ф2b): id-пространство ордеров едино (Ф2a), поэтому Check «ровно один»
+  больше не нужен — целостность держит обычный FK. Именно эта ранняя работа сделала
+  снос MTI (Ф14) дешёвым: ссылки уже указывали на родителя, перевязывать было нечего.
 - **Комплектация (`Kitting`) — инструмент ведения сборки лота, не атомарный акт.**
   Это главная работа, ради неё всё. Акт живёт расфиксированным и **копится по ходу
   проекта**: строка `KittingLine` добавляется по факту физической интеграции
@@ -711,7 +673,7 @@ erDiagram
   таблице — путь, имя, размер, `content_type` (PDF / JPEG / PNG), автор загрузки
   (`user`) и дата. Связь с владельцем — **двухпутный exclusive arc**: `item`
   (datasheet изделия) ИЛИ `document → StockDocument` (скан любого ордера). Семь
-  документных FK схлопнуты в один при MTI (волна 13, Ф2b: id ордеров едины) —
+  документных FK схлопнуты в один ещё в волне 13 (Ф2b: id ордеров едины) —
   осталось шесть путей (`item` · `document` · `project` · `procurement` · `purchase` ·
   `counterparty`), из которых **задан ровно один** (инвариант через
   `CheckConstraint` в БД + `clean()` для понятной ошибки в форме). Владельцами

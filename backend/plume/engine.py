@@ -420,9 +420,13 @@ def _line_received(line):
 
     Документ = УПД правда: поступившее — приход (`+RECEIPT` через `Receipt.purchase`),
     не текущий остаток (получили 100 → спаяли 40 → заказ закрыт на 100).
+
+    Ф14: путь был `origin__receipt__purchase` — JOIN через детскую таблицу MTI. После
+    схлопывания `purchase` живёт на самом ордере, а непоставки его не имеют вовсе
+    (CHECK `doc_purchase_only_receipt`), поэтому сужать по виду отдельно не нужно.
     """
     return models.Lot.objects.filter(
-        item=line.item, origin__receipt__purchase=line.purchase,
+        item=line.item, origin__purchase=line.purchase,
     ).aggregate(s=Sum('qty'))['s'] or ZERO
 
 
@@ -1054,7 +1058,10 @@ def receipt_form(receipt):
         'id': receipt.id, **_author(receipt), 'number': receipt.number, 'date': receipt.date,
         'code': receipt.code, 'description': receipt.description,
         'contractor_id': receipt.contractor_id,
-        'contractor_name': receipt.contractor.description,
+        # Ф14: колонка стала nullable (обязательность — на фиксации, не на рождении),
+        # поэтому проекция больше не опирается на прежний NOT NULL.
+        'contractor_name': (receipt.contractor.description
+                            if receipt.contractor_id else ''),
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
         'project_name': receipt.project.description,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
@@ -1216,7 +1223,8 @@ def purchase_form(purchase):
         })
     receipts = [
         {'id': r.id, 'number': r.number, 'date': r.date,
-         'contractor_name': r.contractor.description, 'lines': r.lots.count()}
+         'contractor_name': r.contractor.description if r.contractor_id else '',
+         'lines': r.lots.count()}
         for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
     return {
@@ -2164,17 +2172,44 @@ def _set_target_item(kitting, item):
     kitting.save(update_fields=['target_item'])
 
 
-def update_receipt(receipt, number=None, date=None, code=_UNSET, description=None,
-                   user=_UNSET, project=_UNSET):
-    """Правка шапки прихода (№ УПД / дата / код / описание / автор / проект-якорь). До замка «сверено»."""
-    _require_unlocked(receipt)
+def update_document(doc, number=None, date=None, code=_UNSET, description=None,
+                    user=_UNSET, project=_UNSET, contractor=_UNSET, reason=None):
+    """**Единая** правка шапки ордера (волна 19, Ф14).
+
+    До Ф14 шесть видов несли шесть одинаковых `update_*`, различавшихся ровно двумя
+    строками специфики (`contractor` у передачи, `reason` у списания) — различие было
+    структурным (у каждого своя таблица), а не поведенческим. MTI снят, специфика
+    живёт колонками одной таблицы — вместе с ним схлопывается и эта шестерня.
+    Per-kind имена остаются тонкими делегатами ниже: на них завязан словарь вызова
+    (`update_writeoff(w, reason=…)` читается лучше общего), но реализация одна.
+
+    `contractor` — часовой: не передан → не трогаем; `Counterparty` → выставить;
+    `None` → снять. Применим только к своим видам (`CONTRACTOR_KINDS`) — то же, что
+    стережёт CHECK `doc_contractor_only_own_kinds`, но дружелюбной ошибкой вместо
+    `IntegrityError`.
+    """
+    _require_unlocked(doc)
     _require_number(number)
     _require_date(date)
-    _set_author(receipt, user)
-    _set_project(receipt, project)
-    _set_code(receipt, code)
-    return _apply(receipt, {'number': number and number.strip(), 'date': date,
-                            'description': None if description is None else description.strip()})
+    _set_author(doc, user)
+    _set_project(doc, project)
+    _set_code(doc, code)
+    if contractor is not _UNSET:
+        if doc.kind not in models.CONTRACTOR_KINDS:
+            raise ValidationError(
+                'Контрагент есть только у поставки (поставщик) и передачи (заказчик).')
+        doc.contractor = contractor
+        doc.save(update_fields=['contractor'])
+    return _apply(doc, {
+        'number': number and number.strip(), 'date': date,
+        'reason': None if reason is None else reason.strip(),
+        'description': None if description is None else description.strip(),
+    })
+
+
+def update_receipt(receipt, **kw):
+    """Шапка поставки: № УПД / дата / код / описание / автор / проект-якорь."""
+    return update_document(receipt, **kw)
 
 
 def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UNSET,
@@ -2220,68 +2255,27 @@ def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UN
     return purchase
 
 
-def update_transfer(transfer, number=None, date=None, code=_UNSET, description=None,
-                    contractor=_UNSET, user=_UNSET, project=_UNSET):
-    """Правка шапки передачи (№ накладной / дата / код / описание / заказчик / автор / проект).
-    До «отгружено».
-
-    `contractor` — часовой: не передан → не трогаем; `Counterparty` → выставить;
-    `None` → снять получателя (nullable).
-    """
-    _require_unlocked(transfer)
-    _require_number(number)
-    _require_date(date)
-    _set_author(transfer, user)
-    _set_project(transfer, project)
-    _set_code(transfer, code)
-    if contractor is not _UNSET:
-        transfer.contractor = contractor
-        transfer.save(update_fields=['contractor'])
-    return _apply(transfer, {'number': number and number.strip(), 'date': date,
-                             'description': None if description is None else description.strip()})
+def update_transfer(transfer, **kw):
+    """Шапка передачи: № накладной / дата / код / описание / **заказчик** / автор / проект."""
+    return update_document(transfer, **kw)
 
 
-def update_writeoff(writeoff, number=None, date=None, reason=None, code=_UNSET,
-                    description=None, user=_UNSET, project=_UNSET):
-    """Правка шапки списания (№ акта / дата / причина / код / описание / автор / проект). Только черновик."""
-    _require_unlocked(writeoff)
-    _require_number(number)
-    _require_date(date)
-    _set_author(writeoff, user)
-    _set_project(writeoff, project)
-    _set_code(writeoff, code)
-    return _apply(writeoff, {'number': number and number.strip(), 'date': date,
-                             'reason': None if reason is None else reason.strip(),
-                             'description': None if description is None else description.strip()})
+def update_writeoff(writeoff, **kw):
+    """Шапка списания: № акта / дата / **причина** / код / описание / автор / проект."""
+    return update_document(writeoff, **kw)
 
 
-def update_requisition(requisition, number=None, date=None, code=_UNSET,
-                       description=None, user=_UNSET, project=_UNSET):
-    """Правка шапки требования (№ / дата / код / описание / автор / проект-получатель). Только черновик (замок)."""
-    _require_unlocked(requisition)
-    _require_number(number)
-    _require_date(date)
-    _set_author(requisition, user)
-    _set_project(requisition, project)
-    _set_code(requisition, code)
-    return _apply(requisition, {'number': number and number.strip(), 'date': date,
-                                'description': None if description is None else description.strip()})
+def update_requisition(requisition, **kw):
+    """Шапка требования: № / дата / код / описание / автор / проект-получатель."""
+    return update_document(requisition, **kw)
 
 
-def update_relocation(relocation, number=None, date=None, code=_UNSET,
-                      description=None, user=_UNSET, project=_UNSET):
-    """Правка шапки перемещения (№ / дата / код / описание / автор / проект-якорь). Только черновик (замок).
+def update_relocation(relocation, **kw):
+    """Шапка перемещения: № / дата / код / описание / автор / проект-якорь.
 
-    Проект — якорь (`_set_project`): у перемещения строки-ходы ссылаются на лоты этого
+    Проект — якорь (`_set_project`): у перемещения строки-ходы ссылаются на лоты того
     же проекта, поэтому сменить его можно лишь у пустого ордера."""
-    _require_unlocked(relocation)
-    _require_number(number)
-    _require_date(date)
-    _set_author(relocation, user)
-    _set_project(relocation, project)
-    _set_code(relocation, code)
-    return _apply(relocation, {'number': number and number.strip(), 'date': date,
-                               'description': None if description is None else description.strip()})
+    return update_document(relocation, **kw)
 
 
 def update_kitting(kitting, qty=None, date=None, code=_UNSET, description=None,
@@ -2858,19 +2852,14 @@ def unlock_inventory(inventory):
     return unlock_document(inventory)
 
 
-def update_inventory(inventory, number=None, date=None, code=_UNSET, description=None,
-                     user=_UNSET, project=_UNSET):
-    """Правка шапки инвентаризации (№ акта / дата / код / описание / автор / проект). Только черновик."""
-    _require_unlocked(inventory)
-    _require_number(number)
-    _require_date(date)
-    _set_author(inventory, user)
-    _set_project(inventory, project)
-    patch = {'number': number and number.strip(), 'date': date,
-             'description': None if description is None else description.strip()}
-    if code is not _UNSET:
-        patch['code'] = (code or '').strip() or None
-    return _apply(inventory, patch)
+def update_inventory(inventory, **kw):
+    """Шапка инвентаризации: № акта / дата / код / описание / автор / проект.
+
+    Ф14: заодно приведена к общей дороге — своя рукописная обработка `code` (мимо
+    `require_unique_code`, единственная такая среди шести) была недосмотром, а не
+    решением; теперь код инвентаризации стережёт та же мягкая уникальность, что у
+    остальных ордеров."""
+    return update_document(inventory, **kw)
 
 
 def written_off_lots():

@@ -278,8 +278,8 @@ UI-контейнеру, при этом чиним по смыслу: ключ 
 (раздел B матрицы: шапка + строка/born-лот) — это же спец единой формы `<OrderForm
 kind=…>`. Канон ордера:
 
-- **Шапка** (`project`/`user`/`date`/`number`/`note` — общие в MTI-родителе;
-  `contractor`/`purchase`/`target_item`/`qty`/`reason` — специфика ребёнка): всё
+- **Шапка** (`project`/`user`/`date`/`number` — общие; `contractor`/`purchase`/
+  `target_item`/`qty`/`reason` — специфика вида, с Ф14 в той же таблице): всё
   редактируемо под замком; `date`+`number` обязательны для всех видов кроме
   комплектации (`REQUIRED_HEADER_BY_KIND`, Ф2d); `project`/`contractor`/`target_item` —
   **якоря** ⚓ (движок валидирует, может отказать при зависимых).
