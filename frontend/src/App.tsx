@@ -9,9 +9,7 @@ import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type InventoryRow, type RelocationRow, type LocationRow } from './api'
 import { Login } from './Login'
 import { CommandPalette, type PaletteEntry } from './CommandPalette'
-import { DeficitView } from './DeficitView'
-import { ClosurePanel } from './ClosurePanel'
-import { ProjectStockPanel } from './ProjectStockPanel'
+import { ProjectView } from './ProjectView'
 import { ItemView } from './ItemView'
 import { LibraryImportView } from './LibraryImportView'
 import { PurchaseView } from './PurchaseView'
@@ -399,23 +397,15 @@ export default function App() {
       </div>
 
       <div className="work">
-        {sel?.kind === 'project' && (() => {
-          const p = projects.find(pr => pr.id === sel.id)
-          // Внутренние склады (белый/серый) — экран остатков; внешние — дефицит + закрытие.
-          if (p && p.kind !== 'external')
-            return <ProjectStockPanel key={sel.id} projectId={sel.id}
-              projectName={p.description} openItem={openItem} />
-          return <>
-            <DeficitView key={`deficit-${sel.id}`} projectId={sel.id} items={items}
-              isNew={isFresh('project', sel.id)}
-              closed={p?.locked ?? false} openItem={openItem}
-              openPurchase={id => { reloadPurchases(); openPurchase(id) }}
-              onChanged={reloadProjects}
-              onDeleted={() => { reloadProjects(); setSel(null) }} />
-            <ClosurePanel key={`closure-${sel.id}`} projectId={sel.id} openItem={openItem}
-              onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }} />
-          </>
-        })()}
+        {/* Одна форма на ВСЕ проекты, включая внутренние склады (Ф12c): кастомный
+            экран остатков и панель закрытия свёрнуты в её табы. */}
+        {sel?.kind === 'project' &&
+          <ProjectView key={sel.id} projectId={sel.id} items={items}
+            isNew={isFresh('project', sel.id)}
+            openItem={openItem}
+            openPurchase={id => { reloadPurchases(); openPurchase(id) }}
+            onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }}
+            onDeleted={() => { reloadProjects(); setSel(null) }} />}
         {sel?.kind === 'new-project' &&
           <NewProject onCreated={id => { reloadProjects(); setJustCreated({ kind: 'project', id }); openProject(id) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
@@ -442,7 +432,7 @@ export default function App() {
         {sel?.kind === 'purchase' &&
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
             isNew={isFresh('purchase', sel.id)}
-            openReceipt={openReceipt} onChanged={reloadPurchases}
+            openReceipt={openReceipt} openProject={openProject} onChanged={reloadPurchases}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'new-purchase' &&
           <NewPurchase projects={projects}

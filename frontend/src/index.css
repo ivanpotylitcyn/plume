@@ -148,6 +148,9 @@ body { overflow: hidden; }
 .ci-list-tree::before       { content: '\eb86'; }  /* таб «Состав (BOM)» */
 .ci-references::before      { content: '\eb36'; }  /* таб «Где применяется» */
 .ci-files::before           { content: '\eaf0'; }  /* таб «Файлы» */
+/* волна 19 Ф12c — глифы партии по origin (LotGlyph; коды сверены с codicon.ttf) */
+.ci-git-branch::before      { content: '\ec6f'; }  /* партия отпочкована требованием */
+.ci-archive::before         { content: '\ea98'; }  /* таб «Списанные» (инвентаризация) */
 .ci-new-file::before        { content: '\ea7f'; }  /* команда шапки «Загрузить» */
 .ci-download::before        { content: '\ec74'; }  /* строка вложения: «Скачать» */
 /* глифы вложений по расширению (цвет = состояние файла на диске, §7a) */
@@ -357,9 +360,8 @@ h1.title .lit { font-family: var(--font-base); font-weight: 400; }
   padding-bottom: 4px; font-weight: 500; }
 .hint { color: var(--fg-dim); font-size: 11px; margin-left: 8px; text-transform: none;
   letter-spacing: 0; font-family: var(--font-base); }
-.closure { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 4px; }
-.closure .section-h .lit { text-transform: none; letter-spacing: 0; }
-.closure-foot { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+/* `.closure`/`.closure-foot` сняты в Ф12c: панель закрытия проекта стала табом «Склад»
+   формы проекта, а её кнопки — обычными командами шапки (фиксация проекта, §5). */
 
 /* ---- грид строк (плотный, без заливки; статус — полоса слева + значок) ---- */
 table.grid { border-collapse: collapse; width: 100%; }
@@ -395,7 +397,7 @@ table.grid :is(th, td).c-desc { width: auto; }
 table.grid :is(th, td).c-fit { width: 1%; white-space: nowrap; }
 /* Описание — текст, а не число: выключка ВЛЕВО (числовой `.qty-in` правит её вправо,
    и описание уезжало к соседней колонке). То же правило, что в шапке формы (§13.3). */
-table.grid td.c-desc :is(input, .picker) { width: 100%; text-align: left; }
+table.grid :is(td.c-desc, td.c-key) :is(input, .picker) { width: 100%; text-align: left; }
 /* Единица измерения — ВСЕГДА своя колонка, крайняя правая (§7a). Раньше «шт» ездила
    внутри ячейки кол-ва и плясала от разрядности числа. Колонка узкая (по содержимому),
    значение выключено влево — примыкает к числу своей строки. */
@@ -427,11 +429,16 @@ tr.row.s-available { border-left-color: var(--st-ok); }
      «Потребность» синхронны. Длинные коды переносятся внутри своей колонки (см.
      .prow .link overflow-wrap), а не наезжают на «Назв.». */
   /* Ф3a-добор: глиф уехал в ведущую ячейку (`.tree-cell`) — треугольник·глиф·код едут
-     единым блоком, отступая по глубине (UI_GUIDE §7a). Первая колонка = 18+190 = 208. */
-  grid-template-columns: 208px minmax(140px, 1fr) 96px 124px 46px 88px;
+     единым блоком, отступая по глубине (UI_GUIDE §7a). Первая колонка = 18+190 = 208.
+     Ф12c: у «Надо» появилась своя колонка единиц (28px) — «шт» больше не приклеена
+     к числу внутри ячейки количества (§7a, сквозное правило). */
+  grid-template-columns: 208px minmax(140px, 1fr) 96px 28px 124px 46px 88px;
   border-left: 2px solid transparent; padding: 3px 0 3px 8px; }
 .prow .pnum { text-align: right; font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; }
+/* Единица измерения строки дерева: своя колонка, выключка влево — примыкает к числу
+   «Надо» (тот же уговор, что у колонки `.uom` в таблицах, §7a). */
+.prow .puom { color: var(--fg-dim); font-family: var(--font-mono); }
 /* Код-ссылка — ВСЕГДА одной строкой, длинный обрезается многоточием (не переносится).
    Так строки одной высоты, а глифы идут ровной вертикальной колонкой — сильно помогает
    при сканировании (правило строк, UI_GUIDE §7). min-width:0 — чтобы ужималась внутри

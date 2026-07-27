@@ -316,7 +316,7 @@ def location_stock(location):
            .values('lot').annotate(q=Sum('qty')).order_by('lot'))
     lot_ids = [r['lot'] for r in agg if r['q'] and r['q'] > 0]
     lots = {lot.id: lot for lot in models.Lot.objects
-            .filter(id__in=lot_ids).select_related('item', 'project')}
+            .filter(id__in=lot_ids).select_related('item', 'project', 'origin')}
     rows = []
     for r in agg:
         if not r['q'] or r['q'] <= 0:
@@ -327,6 +327,7 @@ def location_stock(location):
         rows.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
             'part_number': lot.part_number, 'lot_name': lot.lot_name,
+            'origin': lot.origin_kind,          # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': r['q'],
             'project_id': lot.project_id, 'project_code': lot.project.code,
@@ -1206,6 +1207,10 @@ def purchase_form(purchase):
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom,
+            # Оси изделия — под глиф строки (§7a): форма = изделие/компонент,
+            # цвет = закрытость строки. Так же устроена форма закупки-плана (Ф3a).
+            'item_native': line.item.native, 'item_synced': line.item.synced,
+            'item_locked': line.item.locked,
             'qty': line.qty, 'received': received, 'remaining': remaining,
             'status': st,
         })
@@ -1368,13 +1373,14 @@ def transfer_form(transfer):
     """
     lines = []
     total_qty = ZERO
-    for line in transfer.lines.select_related('lot__item').order_by('id'):
+    for line in transfer.lines.select_related('lot__item', 'lot__origin').order_by('id'):
         lot = line.lot
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
         total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id,
             'lot_label': _lot_label(lot),
+            'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'display_name': line.display_name,
@@ -1570,12 +1576,13 @@ def writeoff_form(writeoff):
     """
     lines = []
     total_qty = ZERO
-    for line in writeoff.lines.select_related('lot__item').order_by('id'):
+    for line in writeoff.lines.select_related('lot__item', 'lot__origin').order_by('id'):
         lot = line.lot
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
         total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id, 'lot_label': _lot_label(lot),
+            'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'lot_live_qty': lot_live_qty(lot),
@@ -1669,7 +1676,7 @@ def requisition_form(requisition):
     lines = []
     total_qty = ZERO
     for line in (requisition.lines
-                 .select_related('lot__item', 'lot__project')
+                 .select_related('lot__item', 'lot__project', 'lot__origin')
                  .order_by('id')):
         src = line.lot                        # StockLine.lot = лот-источник расхода
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
@@ -1677,6 +1684,7 @@ def requisition_form(requisition):
         born = _requisition_born_lot(requisition, src)
         lines.append({
             'id': line.id, 'source_lot_id': src.id, 'lot_label': _lot_label(src),
+            'origin': src.origin_kind,        # глиф партии (§7a): форма = откуда родилась
             'source_project_code': src.project.code,
             'item_id': src.item_id, 'item_code': src.item.code,
             'item_description': src.item.description, 'uom': src.item.uom,
@@ -1805,6 +1813,7 @@ def relocation_form(relocation):
         total_qty += mag
         moves.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
+            'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': mag,
             'from_location_id': src.location_id if src else None,
@@ -1933,12 +1942,13 @@ def project_closure(project):
     residuals = []
     positive = ZERO
     anomaly_count = 0
-    for lot in project.lots.select_related('item').order_by('item__code', 'id'):
+    for lot in project.lots.select_related('item', 'origin').order_by('item__code', 'id'):
         live = lot_live_qty(lot)
         if live == 0:
             continue
         residuals.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
+            'origin': lot.origin_kind,          # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'live_qty': live, 'anomaly': live < 0,

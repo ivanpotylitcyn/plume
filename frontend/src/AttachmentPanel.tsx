@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type AttachmentRow } from './api'
 import { FileGlyph } from './status'
-import { CommitInput } from './ReceiptView'
+import { CommitInput } from './CommitInput'
 
 function humanSize(n: number): string {
   if (n < 1024) return `${n} Б`
@@ -107,25 +107,6 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
         </table>}
       {rows && rows.length === 0 &&
         <div className="tab-empty">Нет вложений — «Загрузить» в шапке формы</div>}
-    </>
-  )
-}
-
-// Старая самодостаточная панель (заголовок секции + поле выбора файла + список) —
-// для форм, ещё не переехавших на канон §13. Уйдёт вместе с ними в Ф12c.
-export function AttachmentPanel({ ownerType, ownerId }: {
-  ownerType: string; ownerId: number
-}) {
-  const att = useAttachments(ownerType, ownerId)
-  return (
-    <>
-      <div className="section-h">Вложения
-        <span className="hint">PDF/сканы · подписанные документы</span></div>
-      <div className="kit-actions">
-        <button className="btn sm" disabled={att.busy} onClick={att.pick}>Загрузить файл</button>
-        {att.busy && <span className="hint">загружаю…</span>}
-      </div>
-      <AttachmentList att={att} locked={false} />
     </>
   )
 }

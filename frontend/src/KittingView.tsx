@@ -2,19 +2,22 @@
 // BOM целевого прибора (1 уровень): реальные (пробитые) строки — зелёные,
 // автосейв qty; остаток → призрачная строка, покрашенная по доступности, с
 // пикером лота. Пайка = промоушн призрака в реальную KittingLine (+ ISSUE).
+//
+// Волна 19 (Ф12c): на канон §13 переведён ТОЛЬКО скелет формы (титул/шапка/мета/табы
+// Строки · Файлы). Тело пробивки намеренно не трогаем: комплектация ждёт своего
+// глубокого прохода отдельной волной (BACKLOG «форма комплектации»), и открывать
+// второй фронт внутри Ф12c мы не стали.
 import { useEffect, useState } from 'react'
 import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
-import { CommitInput } from './ReceiptView'
-import { AnchorSelect, AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
-import { Glyph, Segment, num } from './status'
-import { AttachmentPanel } from './AttachmentPanel'
+import { CommitInput } from './CommitInput'
+import { AnchorSelect, OrderFields, useOrderForm } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { Glyph, Segment, count, num } from './status'
 
-// Волна 19, Ф1c: словарь `wip/closed/cancelled` снят — ось та же `locked`, что у
-// всех сущностей. Подпись остаётся своей: у комплектации фиксация рождает прибор.
-const kitLabel = (locked: boolean) => locked ? 'зафиксирована' : 'в работе'
-
-export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }:
-  { kittingId: number; isNew: boolean; openItem: (id: number) => void; onChanged: () => void
+export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
+  { kittingId: number; isNew: boolean; openItem: (id: number) => void
+    openProject: (id: number) => void; onChanged: () => void
     onDeleted: () => void }) {
   // Справочник изделий — для якоря «целевое изделие» (Ф2k). Загружаем один раз.
   const [items, setItems] = useState<ItemRow[]>([])
@@ -25,6 +28,7 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
       remove: api.deleteKitting,
       confirmDelete: 'Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.',
     }, isNew)
+  const att = useAttachments('kitting', kittingId)   // загрузка — команда шапки (§13.8)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -32,65 +36,62 @@ export function KittingView({ kittingId, isNew, openItem, onChanged, onDeleted }
   const wip = !c.locked
   const fixed = !wip                       // зафиксирована — read-only
   const locked = fixed || !unlocked
+
+  const tabs: FormTab[] = [
+    { key: 'lines', label: 'Строки', icon: 'checklist',
+      content: <>
+        {c.born_lots.length > 0 && (
+          <div className="born">
+            Рождён лот-прибор:{' '}
+            {c.born_lots.map(l => (
+              <span key={l.id} className="seg">#{l.id} ×{num(l.qty)} · {num(l.unit_cost)} ₽/шт</span>
+            ))}
+          </div>
+        )}
+        {c.rows.length === 0 && <div className="tab-empty">
+          У целевого изделия нет состава — пробивать нечего.</div>}
+        {c.rows.map(row => (
+          <Component key={row.component_id} row={row} form={c} wip={!locked} busy={busy}
+            openItem={openItem} run={run} />
+        ))}
+      </> },
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  ]
+
   return (
-    <div className={unlocked && !fixed ? '' : 'form-locked'}>
-      <FormHeader
-        code={c.code || `Комплектация ${c.target_code}`}
-        meta={<>
-          <Glyph status={c.worst_status} /> {c.target_code} · {c.project_code} ·
-          {' '}образцов {num(c.qty)} · {kitLabel(c.locked)}
-        </>}
-        unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed}
-        onFixate={() => run(api.lockKitting(c.id))}
-        fixateTitle="Зафиксировать комплектацию — родить прибор"
-        onUnfix={() => { if (confirm('Расфиксировать комплектацию? Рождённый прибор откатится.')) run(api.unlockKitting(c.id)) }}
-        onDelete={del}
-        error={err}
-      >
-
-      <dl className="props">
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateKitting(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
-        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
-          onCommit={v => run(api.updateKitting(c.id, { description: v }))} /></dd>
-        <dt>Образцов</dt>
-        <dd><CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
-          onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
-          validate={v => Number(v) > 0} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date ?? ''} width={140} type="date" disabled={locked || busy}
-          onCommit={v => run(api.updateKitting(c.id, { date: v }))} /></dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
-          onChange={id => run(api.updateKitting(c.id, { user_id: id }))} />
-        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
-          onChange={id => run(api.updateKitting(c.id, { project_id: id }))} />
-        <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
-          options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.description}` }))}
-          disabled={locked || busy}
-          onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
-      </dl>
-      </FormHeader>
-
-
-      {c.born_lots.length > 0 && (
-        <div className="born">
-          Рождён лот-прибор:{' '}
-          {c.born_lots.map(l => (
-            <span key={l.id} className="seg">#{l.id} ×{num(l.qty)} · {num(l.unit_cost)} ₽/шт</span>
-          ))}
-        </div>
-      )}
-
-      {c.rows.map(row => (
-        <Component key={row.component_id} row={row} form={c} wip={!locked} busy={busy}
-          openItem={openItem} run={run} />
-      ))}
-
-      <AttachmentPanel ownerType="kitting" ownerId={c.id} />
-    </div>
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="комплектацию" locked={locked} error={err}
+      // Мета (§13.6): счёт по табам + разбор пайки. Прибор/образцы/проект не
+      // повторяем — они в полях шапки.
+      meta={<>
+        {count(c.rows.length, 'компонент', 'компонента', 'компонентов')}
+        {' · '}{count(c.rows.filter(r => r.remaining <= 0).length, 'пробит', 'пробито', 'пробито')}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      fixed={fixed}
+      onFixate={() => run(api.lockKitting(c.id))}
+      fixateTitle="Зафиксировать комплектацию — родить прибор"
+      onUnfix={() => { if (confirm('Расфиксировать комплектацию? Рождённый прибор откатится.')) run(api.unlockKitting(c.id)) }}
+      onDelete={del}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл (акт комплектации) — появится в табе «Файлы»', disabled: att.busy }]}
+      fields={
+        <OrderFields c={c} locked={locked} busy={busy}
+          openProject={openProject}
+          patch={b => run(api.updateKitting(c.id, b))}>
+          <dt>Образцов</dt>
+          <dd><CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
+            onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
+            validate={v => Number(v) > 0} /></dd>
+          <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
+            options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.description}` }))}
+            disabled={locked || busy}
+            onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
+        </OrderFields>}
+      tabs={tabs}
+    />
   )
 }
 
@@ -123,9 +124,10 @@ function Component({ row, form, wip, busy, openItem, run }: {
                   onCommit={q => run(api.updateLine(ln.id, q))} /> {row.uom}
               </td>
               <td style={{ color: 'var(--fg-dim)' }}>{ln.date ?? ''}</td>
-              <td style={{ textAlign: 'right' }}>
-                {wip && <button className="x" title="убрать строку" disabled={busy}
-                  onClick={() => run(api.deleteLine(ln.id))}>×</button>}
+              <td className="act">
+                {wip && <button className="fh-ctl icon fh-del" title="Убрать пробитую строку"
+                  disabled={busy} onClick={() => run(api.deleteLine(ln.id))}>
+                  <span className="ci ci-trash" /></button>}
               </td>
             </tr>
           ))}

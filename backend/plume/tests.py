@@ -4496,3 +4496,42 @@ class LibrarySyncHttpTests(TestCase):
                                           category=_cat(), estimated_cost=D(5))
         r = self.c.post(f'/api/items/{item.id}/recalc-cost/')
         self.assertEqual(r.status_code, 400)
+
+
+class LotOriginProjectionTests(EngineTestBase):
+    """Волна 19, Ф12c: глиф партии (§7a) = форма по origin + цвет по остатку, поэтому
+    `origin` обязан быть В КАЖДОЙ проекции, где строка = партия. Раньше вид рождения
+    знали только форма изделия и внутренний склад — списки склада/ордеров молчали."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.lot = self.receipt_lot(self.item, self.prj, 10)   # origin = поставка
+
+    def test_location_stock_carries_origin(self):
+        rows = engine.location_stock(self.main)
+        self.assertEqual(rows[0]['origin'], models.StockDocument.Kind.RECEIPT)
+
+    def test_project_closure_residuals_carry_origin(self):
+        row = engine.project_closure(self.prj)['residuals'][0]
+        self.assertEqual(row['origin'], models.StockDocument.Kind.RECEIPT)
+
+    def test_order_lines_carry_origin_of_source_lot(self):
+        wo = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        engine.add_writeoff_line(wo, self.lot, D(2))
+        self.assertEqual(engine.writeoff_form(wo)['lines'][0]['origin'],
+                         models.StockDocument.Kind.RECEIPT)
+        tr = engine.create_transfer(self.prj, self.user, 'НАК-1')
+        engine.add_transfer_line(tr, self.lot, D(1))
+        self.assertEqual(engine.transfer_form(tr)['lines'][0]['origin'],
+                         models.StockDocument.Kind.RECEIPT)
+
+    def test_purchase_rows_carry_item_axes(self):
+        """Строка заказа несёт оси изделия — глиф строки один (форма = изделие,
+        цвет = закрытость), как в форме закупки-плана."""
+        purchase = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(purchase, self.item, D(5))
+        row = engine.purchase_form(purchase)['rows'][0]
+        self.assertEqual(
+            (row['item_native'], row['item_synced'], row['item_locked']),
+            (self.item.native, self.item.synced, self.item.locked))

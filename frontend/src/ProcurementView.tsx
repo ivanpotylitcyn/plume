@@ -3,14 +3,21 @@
 // автосейв, пока расфиксирована). Замок делает строки read-only.
 // Кнопка выгрузки xlsx-бланка поставщику (имя файла = код закупки). Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
+//
+// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Привязка · Заказы · Файлы.
+// Панель pegging разобрана на два таба (§13.7), её команда «Разрезать по проектам»
+// уехала в колонку команд шапки. Проекта у плана нет (он командный) — поэтому общий
+// `OrderFields` тут неприменим, поля выписаны свои; охват проектов придёт в Ф13.
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
   type CounterpartyRow } from './api'
-import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, useFormLock } from './FormHeader'
-import { PeggingPanel } from './PeggingPanel'
+import { CommitInput } from './CommitInput'
+import { AuthorField, useFormLock } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { PeggingRows, PurchaseFan, usePegging } from './PeggingPanel'
 import { CounterpartyPicker, ItemPicker } from './Picker'
-import { StatusGlyph, ItemGlyph, num } from './status'
+import { ItemGlyph, count, num, sumByUom } from './status'
 
 export function ProcurementView({ procurementId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
   procurementId: number; items: ItemRow[]; isNew: boolean
@@ -26,6 +33,8 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
 
   // Контрагенты-поставщики (Ф4, Р3): закупка = поток общения с поставщиком.
   useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
+  const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
+  const peg = usePegging(procurementId, rev)                 // табы «Привязка» и «Заказы»
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -55,71 +64,86 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
 
   const editable = c.editable
   const fixed = !editable                  // зафиксирована — read-only
-  return (
-    <div className={unlocked && editable ? '' : 'form-locked'}>
-      <FormHeader
-        code={c.code || `Закупка #${c.id}`}
-        meta={<>
-          <StatusGlyph locked={c.locked} />
-          {c.locked ? 'зафиксирована' : 'расфиксирована'} · план
-          {c.description && <> · {c.description}</>}
-          {c.contractor_name && <> · {c.contractor_name}</>}
-          {c.date && <> · {c.date}</>} · позиций {c.lines.length} · всего {num(c.total_qty)}
-        </>}
-        unlocked={unlocked} onToggleLock={toggle}
-        onDelete={del}
-        fixed={fixed}
-        onFixate={() => run(api.lockProcurement(c.id))}
-        onUnfix={() => {
-          if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
-        }}
-        download={{ href: api.xlsxUrl(c.id), title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }}
-        error={err}
-      >
+  const locked = !editable || !unlocked
 
-      <dl className="props">
+  const tabs: FormTab[] = [
+    { key: 'lines', label: 'Строки', icon: 'checklist',
+      content: <>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              {editable && <th className="act" />}
+            </tr>
+          </thead>
+          <tbody>
+            {c.lines.map(ln => (
+              <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
+                openItem={openItem} run={run} />
+            ))}
+            {editable && <GhostRow procurementId={c.id} items={items} busy={busy} run={run} />}
+          </tbody>
+        </table>
+        {c.lines.length === 0 && !editable && <div className="tab-empty">Закупка пуста.</div>}
+      </> },
+    { key: 'pegging', label: 'Привязка', icon: 'flag',
+      content: <PeggingRows st={peg} procurementId={c.id} /> },
+    { key: 'fan', label: 'Заказы', icon: 'package',
+      content: <PurchaseFan st={peg} openPurchase={openPurchase} /> },
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  ]
+
+  return (
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="закупку" locked={locked} error={err}
+      // Мета (§13.6): счёт по табам + итог плана в натуре. Контрагент и дата — в полях.
+      meta={<>
+        {count(c.lines.length, 'позиция', 'позиции', 'позиций')}
+        {sumByUom(c.lines).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {' · '}{count(peg.p?.fan.length ?? 0, 'заказ', 'заказа', 'заказов')}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      onDelete={del}
+      fixed={fixed}
+      onFixate={() => run(api.lockProcurement(c.id))}
+      fixateTitle="Зафиксировать закупку — строки станут read-only"
+      onUnfix={() => {
+        if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
+      }}
+      download={{ href: api.xlsxUrl(c.id), title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }}
+      actions={[
+        ...(editable ? [{ onClick: peg.autopeg, label: 'Разрезать', icon: 'ci-git-branch',
+          title: 'Разложить каждую строку плана по нуждающимся проектам (наводка свода)',
+          disabled: peg.busy }] : []),
+        { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+          title: 'Загрузить файл (КП, счёт) — появится в табе «Файлы»', disabled: att.busy },
+      ]}
+      fields={<>
         <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} width={240} disabled={!editable || busy}
+        <dd><CommitInput value={c.code ?? ''} disabled={!editable || busy}
           onCommit={v => run(api.updateProcurement(c.id, { code: v }))} /></dd>
         <dt>Описание</dt>
-        <dd><CommitInput value={c.description} width={240} disabled={!editable || busy}
+        <dd className="wide"><CommitInput value={c.description} disabled={!editable || busy}
           onCommit={v => run(api.updateProcurement(c.id, { description: v }))} /></dd>
         <dt>Дата</dt>
-        <dd><CommitInput value={c.date ?? ''} width={140} type="date" disabled={!editable || busy}
+        <dd><CommitInput value={c.date ?? ''} type="date" disabled={!editable || busy}
           onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></dd>
         <dt>Контрагент</dt>
         <dd>
           <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
-            disabled={!editable || busy} width={240} placeholder="— не указан —"
+            disabled={!editable || busy} placeholder="— не указан —"
             onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
             onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))} />
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
-      </dl>
-      </FormHeader>
-
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>изделие</th><th>назв.</th>
-            <th style={{ textAlign: 'right' }}>кол-во</th><th />
-          </tr>
-        </thead>
-        <tbody>
-          {c.lines.map(ln => (
-            <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
-              openItem={openItem} run={run} />
-          ))}
-          {editable && <GhostRow procurementId={c.id} items={items} busy={busy} run={run} />}
-        </tbody>
-      </table>
-      {c.lines.length === 0 && !editable &&
-        <div className="empty">Закупка пуста.</div>}
-
-      {/* Гейт по «не отменённой» снят вместе со статусом (волна 19, Ф1). */}
-      <PeggingPanel procurementId={c.id} rev={rev} openPurchase={openPurchase} />
-    </div>
+      </>}
+      tabs={tabs}
+    />
   )
 }
 
@@ -129,24 +153,26 @@ function LineRow({ ln, editable, busy, openItem, run }: {
   openItem: (id: number) => void; run: (p: Promise<ProcurementForm>) => void
 }) {
   return (
-    <tr className="row s-available">
-      <td>
-        <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} />{' '}
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a>
-      </td>
-      <td style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</td>
+    <tr className="row">
+      <td className="gl">
+        <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         {editable
           ? <CommitInput value={String(ln.qty)} width={72} disabled={busy}
               onCommit={v => run(api.updateProcurementLine(ln.id, Number(v)))}
               validate={v => Number(v) > 0} />
-          : num(ln.qty)} {ln.uom}
+          : num(ln.qty)}
       </td>
-      <td style={{ textAlign: 'right' }}>
-        {editable &&
-          <button className="x" title="убрать строку" disabled={busy}
-            onClick={() => run(api.deleteProcurementLine(ln.id))}>×</button>}
-      </td>
+      <td className="uom">{ln.uom}</td>
+      {editable && <td className="act">
+        <button className="fh-ctl icon fh-del" title="Убрать строку плана"
+          disabled={busy} onClick={() => run(api.deleteProcurementLine(ln.id))}>
+          <span className="ci ci-trash" /></button>
+      </td>}
     </tr>
   )
 }
@@ -168,16 +194,19 @@ function GhostRow({ procurementId, items, busy, run }: {
 
   return (
     <tr className="row ghost">
-      <td colSpan={2}>
+      <td className="gl" />
+      <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          width={240} placeholder="＋ изделие…" onEnter={add} />
+          placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td style={{ textAlign: 'right' }}>
+      {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
+      <td className="uom" />
+      <td className="act">
         <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>
       </td>

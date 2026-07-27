@@ -2,10 +2,11 @@
 // Строки УПД = лоты (в модели отдельной ReceiptLine нет): изделие + кол-во +
 // цена + название, автосейв по blur/Enter. Добавление строки = рождение партии
 // (+RECEIPT). Замок «сверено со сканом» (approved) делает форму read-only.
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptForm,
   type ReceiptLot } from './api'
-import { num, money, count } from './status'
+import { CommitInput } from './CommitInput'
+import { num, money, count, sumByUom, LotGlyph } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AuthorField, ProjectField, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -44,10 +45,13 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
         <table className="grid">
           <thead>
             <tr>
-              <th>Изделие</th><th style={{ textAlign: 'right' }}>Кол-во</th>
+              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th>
               <th className="uom">Ед.</th>
               <th style={{ textAlign: 'right' }}>Цена, ₽</th>
-              <th>Part number</th><th>Название из УПД</th><th className="act" />
+              <th className="c-fit">Part number</th>
+              <th className="c-fit">Название из УПД</th><th className="act" />
             </tr>
           </thead>
           <tbody>
@@ -74,7 +78,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       // («10 344 шт · 50 м»), деньги — отдельным итогом.
       meta={<>
         {count(c.lots.length, 'позиция', 'позиции', 'позиций')}
-        {qtyByUom(c.lots).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {sumByUom(c.lots).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
         {' · '}{money(c.total_cost)}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
       </>}
@@ -126,15 +130,6 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   )
 }
 
-// Итог поставки в натуре: количества сворачиваются ПО ЕДИНИЦАМ (штуки с метрами не
-// складываем). Порядок групп — как единицы встретились в документе, чтобы итог читался
-// в том же порядке, что строки. Пустые (нулевые) группы не показываем.
-function qtyByUom(lots: ReceiptLot[]): [string, number][] {
-  const sums = new Map<string, number>()
-  for (const l of lots) sums.set(l.uom, (sums.get(l.uom) ?? 0) + l.qty)
-  return [...sums].filter(([, qty]) => qty !== 0)
-}
-
 // Реальная строка УПД (лот): автосейв кол-ва/цены/названия, удаление до замка.
 function LotRow({ lot, locked, busy, openItem, run }: {
   lot: ReceiptLot; locked: boolean; busy: boolean
@@ -142,11 +137,14 @@ function LotRow({ lot, locked, busy, openItem, run }: {
 }) {
   const short = lot.live_qty !== lot.qty   // просел под пайку/расход
   return (
-    <tr className="row s-available">
-      <td>
-        <span className="glyph g-available">✓</span>{' '}
-        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_description}</span>
+    <tr className="row">
+      {/* Строка = партия, рождённая этой поставкой: глиф партии (форма — origin,
+          цвет — живость остатка, §7a), код и описание — РАЗНЫМИ колонками. */}
+      <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
@@ -204,9 +202,12 @@ function GhostRow({ receiptId, items, busy, run }: {
 
   return (
     <tr className="row ghost">
-      <td>
+      <td className="gl" />
+      {/* Пикер занимает пару «код + описание»: ищет по обоим, и ширину берёт по ним
+          (inline-`width` контрола не задаём — §7a). */}
+      <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          width={200} placeholder="＋ изделие…" onEnter={add} />
+          placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
@@ -238,27 +239,3 @@ function GhostRow({ receiptId, items, busy, run }: {
   )
 }
 
-// Автосейв текстового/числового поля: коммит по blur / Enter (без кнопки).
-// Переиспуемый компонент (формы прихода/заказа).
-//
-// `width` без значения по умолчанию (волна 19, Ф12a): inline-стиль сильнее любого
-// класса, поэтому дефолтные 60px не давали полю растянуться по своей колонке или по
-// шапке. Не передан — ширину решает CSS (`.qty-in`, `.c-desc`, шапка формы).
-export function CommitInput({ value, onCommit, disabled, width, validate, type }: {
-  value: string; onCommit: (v: string) => void; disabled?: boolean
-  width?: number; validate?: (v: string) => boolean; type?: string
-}) {
-  const [v, setV] = useState(value)
-  useEffect(() => { setV(value) }, [value])
-  const commit = () => {
-    if (v === value) return
-    if (validate && !validate(v)) { setV(value); return }
-    onCommit(v)
-  }
-  return (
-    <input className="qty-in" style={width ? { width } : undefined}
-      value={v} disabled={disabled} type={type}
-      onChange={e => setV(e.target.value)} onBlur={commit}
-      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
-  )
-}

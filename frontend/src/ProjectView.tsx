@@ -1,30 +1,40 @@
-// Форма проекта (внешний): три секции — «Приборы» (что делаем, редактируемо + прогресс),
-// «Потребность» (полная картина по компонентам на весь проект) и «Склад проекта»
-// (ClosurePanel, ниже в App). Секция «Приборы» — редактор ProjectDemand: список
-// приборов с инлайн-правкой кол-ва, аккордеон раскрывает дефицит по конкретному прибору.
+// Форма ПРОЕКТА (волна 19, Ф12c) — канон §13: табы «Приборы» (что делаем, редактируемо
+// + прогресс), «Потребность» (полная картина по компонентам на весь проект), «Склад»
+// (живые лоты + сведение остатков к нулю, бывш. ClosurePanel) и «Файлы» (владелец
+// заведён Ф12b). Панель бюджета — органичное дополнение стека (§13.1), между метой и
+// табами. Внутренние склады (белый/серый) идут ЧЕРЕЗ ЭТУ ЖЕ форму (решение Ивана
+// 2026-07-26: «это обычные проекты, унифицируем») — у них просто нет приборов и
+// потребности, поэтому набор табов сужается, как у покупного изделия нет «Состава».
+// Фиксация проекта (бывш. «Закрыть проект») — обычная команда шапки (§5).
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
-  type DeficitTreeNode, type ItemRow, type ProjectDetail } from './api'
-import { Chevron, LayerSeg, money, num, ItemGlyph } from './status'
-import { CommitInput } from './ReceiptView'
-import { FormHeader, useFormLock } from './FormHeader'
+  type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
+  type ResidualLot } from './api'
+import { Chevron, LayerSeg, LotGlyph, count, money, num, ItemGlyph } from './status'
+import { CommitInput } from './CommitInput'
+import { useFormLock } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
 
-export function DeficitView({ projectId, items, isNew, closed, openItem, openPurchase, onChanged, onDeleted }:
-  { projectId: number; items: ItemRow[]; isNew: boolean; closed: boolean
+export function ProjectView({ projectId, items, isNew, openItem, openPurchase, onChanged, onDeleted }:
+  { projectId: number; items: ItemRow[]; isNew: boolean
     openItem: (id: number) => void; openPurchase: (id: number) => void
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
   const [phead, setPhead] = useState<ProjectDetail | null>(null)  // реквизиты шапки
+  const [closure, setClosure] = useState<ProjectClosure | null>(null)   // таб «Склад»
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)      // бюджет пересчитывается при правке потребности
   const { unlocked, toggle } = useFormLock(projectId, isNew)   // §5: существующее — в просмотре
+  const att = useAttachments('project', projectId)   // владелец заведён Ф12b (§13.8)
 
   useEffect(() => {
-    setData(null); setPhead(null); setErr(null)
+    setData(null); setPhead(null); setClosure(null); setErr(null)
     api.deficit(projectId).then(setData).catch(e => setErr(String(e)))
     api.project(projectId).then(setPhead).catch(() => {})
+    api.closure(projectId).then(setClosure).catch(() => {})
   }, [projectId])
 
   // Обёртка мутации потребности: ответ = свежий дефицит (обе секции), + пинок бюджету.
@@ -39,6 +49,19 @@ export function DeficitView({ projectId, items, isNew, closed, openItem, openPur
   const runP = (p: Promise<ProjectDetail>) => {
     setBusy(true); setErr(null)
     p.then(next => { setPhead(next); setRev(r => r + 1); onChanged?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  // Обёртка мутаций склада проекта (списать / на баланс / фиксация проекта): ответ —
+  // свежая панель закрытия; шапку тоже освежаем, в ней живёт замок проекта.
+  const runC = (p: Promise<ProjectClosure>) => {
+    setBusy(true); setErr(null)
+    p.then(next => {
+      setClosure(next); setRev(r => r + 1)
+      api.project(projectId).then(setPhead).catch(() => {})
+      onChanged?.()
+    })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -65,64 +88,156 @@ export function DeficitView({ projectId, items, isNew, closed, openItem, openPur
   if (!data) return <div className="empty">Загрузка…</div>
 
   const deviceTotal = data.demands.reduce((s, d) => s + d.qty, 0)
-  const unitsTotal = data.components.reduce((s, c) => s + c.need, 0)
-  const name = phead?.description ?? data.project_name
   const code = phead?.code ?? data.project_code   // после правки кода — из phead (живо)
-  return (
-    <div>
-      <FormHeader
-        code={code}
-        meta={<>{name} · проект</>}
-        unlocked={unlocked} onToggleLock={toggle} error={err}
-        onDelete={del}
-      >
-      {unlocked && phead &&
-        <dl className="props">
-          <dt>Код</dt>
-          <dd><CommitInput value={phead.code} disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { code: v }))}
-            validate={v => v.trim() !== ''} /></dd>
-          <dt>Описание</dt>
-          <dd><CommitInput value={phead.description} disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { description: v }))}
-            validate={v => v.trim() !== ''} /></dd>
-          <dt>Бюджет на материалы</dt>
-          <dd><CommitInput value={phead.budget != null ? String(phead.budget) : ''} disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { budget: v.trim() === '' ? null : Number(v) }))}
-            validate={v => v.trim() === '' || Number(v) >= 0} /> ₽</dd>
-          <dt>Начат</dt>
-          <dd><CommitInput value={phead.started ?? ''} type="date" disabled={busy}
-            onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} /></dd>
-        </dl>}
-      </FormHeader>
-      <div className="subtitle">Проект · приборы, потребность, склад · дефицит = надо − склад − заказано (разузловано до покупных листьев)</div>
-      <BudgetPanel projectId={projectId} rev={rev} />
+  const closed = phead?.locked ?? false           // зафиксирован = закрыт (§5)
+  const locked = closed || !unlocked
+  // Внешний проект (НИР/контракт) делает приборы; внутренние склады — только хранят.
+  const external = phead ? phead.kind === 'external' : true
+  const residuals = closure?.residuals ?? []
 
-      <div className="section-h">Приборы
-        <span className="hint">типов приборов {data.demands.length} · всего приборов {num(deviceTotal)}</span></div>
-      {data.demands.length === 0
-        ? <div style={{ color: 'var(--fg-dim)' }}>Пока ничего — добавьте прибор ниже.</div>
-        : <div className="pgrid">
-            <CompHead />
-            {data.demands.map(d => <DeviceRow key={d.demand_id} d={d}
-              editable={unlocked && !closed}
-              busy={busy} openItem={openItem} run={run} />)}
-          </div>}
-      {/* §5 (Ф9): контролы правки приборов только в режиме правки — просмотр чище. */}
-      {!closed && unlocked && <AddDevice items={items} demands={data.demands} busy={busy}
-        add={(target_item_id, qty) => run(api.addDemand(projectId, { target_item_id, qty }))} />}
-      {err && <div className="anomaly">{err}</div>}
-
-      <div className="section-h">Потребность
-        <span className="hint">типов компонентов {data.components.length} · всего штук {num(unitsTotal)}</span></div>
-      {data.components.length === 0
-        ? <div style={{ color: 'var(--fg-dim)' }}>Нет компонентов — задайте приборы и их составы.</div>
+  const tabs: FormTab[] = []
+  if (external) tabs.push(
+    { key: 'devices', label: 'Приборы', icon: 'rocket',
+      content: <>
+        {data.demands.length === 0
+          ? <div className="tab-empty">
+              {locked ? 'Приборов нет.' : 'Пока ничего — добавьте прибор ниже.'}</div>
+          : <div className="pgrid">
+              <CompHead />
+              {data.demands.map(d => <DeviceRow key={d.demand_id} d={d}
+                editable={!locked}
+                busy={busy} openItem={openItem} run={run} />)}
+            </div>}
+        {/* §5 (Ф9): контролы правки приборов только в режиме правки — просмотр чище. */}
+        {!locked && <AddDevice items={items} demands={data.demands} busy={busy}
+          add={(target_item_id, qty) => run(api.addDemand(projectId, { target_item_id, qty }))} />}
+      </> },
+    { key: 'need', label: 'Потребность', icon: 'chip',
+      content: data.components.length === 0
+        ? <div className="tab-empty">Нет компонентов — задайте приборы и их составы.</div>
         : <div className="pgrid">
             <CompHead />
             {data.components.map(c => <CompRow key={c.component_id} ln={c}
               busy={busy} openItem={openItem} order={order} />)}
-          </div>}
-    </div>
+          </div> },
+  )
+  tabs.push(
+    { key: 'stock', label: 'Склад', icon: 'layers',
+      content: residuals.length === 0
+        ? <div className="tab-empty">Склад проекта пуст — живых остатков нет.</div>
+        : <table className="grid">
+            <thead><tr>
+              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Остаток</th><th className="uom">Ед.</th>
+              {!locked && <th className="act" />}
+            </tr></thead>
+            <tbody>
+              {residuals.map(r => (
+                <ResidualRow key={r.lot_id} r={r} projectId={projectId} locked={locked}
+                  busy={busy} openItem={openItem} run={runC} />
+              ))}
+            </tbody>
+          </table> },
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  )
+
+  return (
+    <FormShell
+      id={projectId} code={code} entity="проект" locked={locked} error={err}
+      // Мета (§13.6): счёт по табам в их порядке + приборы штуками. Описание и бюджет
+      // не повторяем — они в полях; аномалии остатков всплывают отдельным сегментом.
+      meta={<>
+        {external && <>
+          {count(data.demands.length, 'прибор', 'прибора', 'приборов')}
+          {' · '}{num(deviceTotal)} шт
+          {' · '}{count(data.components.length, 'компонент', 'компонента', 'компонентов')}
+          {' · '}
+        </>}
+        {count(residuals.length, 'партия', 'партии', 'партий')}
+        {(closure?.anomaly_count ?? 0) > 0 &&
+          <span className="anomaly"> · {closure!.anomaly_count} в минусе</span>}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      onDelete={del}
+      // Фиксация проекта = закрытие (свод остатков в 0 + веха). Гейт бэка тот же,
+      // подсказка несёт причину отказа (`blocker`).
+      fixed={closed}
+      onFixate={closure?.is_external
+        ? () => {
+            if (!closure.can_close) { setErr(closure.blocker); return }
+            if (confirm('Зафиксировать проект? Остатков быть не должно.'))
+              runC(api.lockProject(projectId))
+          }
+        : undefined}
+      fixateTitle={closure?.can_close
+        ? 'Остатков нет — закрыть проект (веха)'
+        : closure?.blocker || 'Зафиксировать проект'}
+      onUnfix={closure?.is_external ? () => runC(api.unlockProject(projectId)) : undefined}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл (договор, ТЗ) — появится в табе «Файлы»', disabled: att.busy }]}
+      fields={<>
+        <dt>Код</dt>
+        <dd><CommitInput value={phead?.code ?? code} disabled={locked || busy || !phead}
+          onCommit={v => runP(api.updateProject(projectId, { code: v }))}
+          validate={v => v.trim() !== ''} /></dd>
+        <dt>Описание</dt>
+        <dd className="wide"><CommitInput value={phead?.description ?? data.project_name}
+          disabled={locked || busy || !phead}
+          onCommit={v => runP(api.updateProject(projectId, { description: v }))}
+          validate={v => v.trim() !== ''} /></dd>
+        {external && <>
+          <dt>Бюджет</dt>
+          <dd><CommitInput value={phead?.budget != null ? String(phead.budget) : ''}
+            disabled={locked || busy || !phead}
+            onCommit={v => runP(api.updateProject(projectId, { budget: v.trim() === '' ? null : Number(v) }))}
+            validate={v => v.trim() === '' || Number(v) >= 0} /></dd>
+          <dt>Начат</dt>
+          <dd><CommitInput value={phead?.started ?? ''} type="date" disabled={locked || busy || !phead}
+            onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} /></dd>
+        </>}
+      </>}
+      extra={external ? <BudgetPanel projectId={projectId} rev={rev} /> : undefined}
+      tabs={tabs}
+    />
+  )
+}
+
+// Живой лот проекта: один клик сводит его в 0 (списать → серый / на баланс → белый).
+// Переехала сюда из `ClosurePanel` вместе со всей панелью закрытия (Ф12c).
+function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
+  r: ResidualLot; projectId: number; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<ProjectClosure>) => void
+}) {
+  const positive = r.live_qty > 0
+  return (
+    <tr className={'row' + (r.anomaly ? ' s-to_order' : '')}>
+      <td className="gl"><LotGlyph origin={r.origin} liveQty={r.live_qty} /></td>
+      <td className="c-key"><span className="pn">{r.lot_label}</span></td>
+      <td className="c-fit">
+        <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
+      <td className="num">
+        <span className={r.anomaly ? 'anomaly' : ''}>{num(r.live_qty)}</span>
+        {r.anomaly && <span className="anomaly" title="недостача — подбей лоты"> ▲</span>}
+      </td>
+      <td className="uom">{r.uom}</td>
+      {!locked && <td className="act">
+        {positive && <>
+          <button className="btn sm" disabled={busy}
+            title="списать остаток → серый склад (Свободные неучтённые)"
+            onClick={() => run(api.writeoffLot(projectId, { lot_id: r.lot_id, qty: r.live_qty }))}>
+            списать</button>{' '}
+          <button className="btn sm" disabled={busy}
+            title="поставить на баланс → белый склад (Собственный склад)"
+            onClick={() => run(api.stockLot(projectId, { lot_id: r.lot_id, qty: r.live_qty }))}>
+            на баланс</button>
+        </>}
+      </td>}
+    </tr>
   )
 }
 
@@ -184,6 +299,7 @@ function CompHead() {
       <span className="tree-cell">Компонент</span>
       <span>Назв.</span>
       <span className="pnum">Надо</span>
+      <span className="puom">Ед.</span>
       <span>Разбор</span>
       <span className="pnum">Склад</span>
       <span />
@@ -217,6 +333,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
                 validate={v => Number(v) > 0} />
             : num(d.qty)}
         </span>
+        <span className="puom">шт</span>
         <span title="сделано / делается / осталось сделать">
           <LayerSeg status="available" value={dev.done} />
           <LayerSeg status="on_order" value={dev.wip} />
@@ -225,8 +342,10 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
         <span />
         <span className="act">
           {editable &&
-            <button className="x" title="убрать прибор из потребности" disabled={busy}
-              onClick={() => { if (confirm(`Убрать ${d.target_code} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>×</button>}
+            <button className="fh-ctl icon fh-del" title="Убрать прибор из потребности"
+              disabled={busy}
+              onClick={() => { if (confirm(`Убрать ${d.target_code} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>
+              <span className="ci ci-trash" /></button>}
         </span>
       </div>
       {open && (d.tree.length === 0
@@ -286,7 +405,8 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
         <a className="link" onClick={() => openItem(n.component_id)}>{n.component_code}</a>
       </span>
       <span className="name">{n.component_description}</span>
-      <span className="pnum">{num(n.need)} {n.uom}</span>
+      <span className="pnum">{num(n.need)}</span>
+      <span className="puom">{n.uom}</span>
       {n.is_leaf ? <>
         <span>
           <LayerSeg status="available" value={n.have ?? 0} />
@@ -318,7 +438,8 @@ function CompRow({ ln, busy, openItem, order }: {
         <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_code}</a>
       </span>
       <span className="name">{ln.component_description}</span>
-      <span className="pnum">{num(ln.need)} {ln.uom}</span>
+      <span className="pnum">{num(ln.need)}</span>
+      <span className="puom">{ln.uom}</span>
       <span>
         <LayerSeg status="available" value={ln.have} />
         <LayerSeg status="on_order" value={ln.on_order} />

@@ -1,15 +1,19 @@
-// Волна 8 — панель pegging: нарезка плана-закупки (Procurement) на проектные заказы.
+// Волна 8 — pegging: нарезка плана-закупки (Procurement) на проектные заказы.
 // По каждой строке плана — распределение по проектам (наводка из командного свода +
 // фактически пегнутое) с ручным пегом/снятием; «разрезать по проектам» (autopeg) кладёт
-// по наводке в один клик. Внизу — веер проектных заказов со ссылками в их формы.
+// по наводке в один клик. Веер проектных заказов — ссылки в их формы.
 // Пег рождает проектный Purchase под этим планом-родителем (ломает 1:1-заглушку).
+//
+// Волна 19 (Ф12c): панель разобрана на части канона §13 — состояние в хук `usePegging`,
+// два списка стали двумя ТАБАМИ формы закупки («Привязка», «Заказы»), а команда
+// «Разрезать по проектам» уехала в колонку команд шапки (была `.kit-actions` в теле).
 import { useEffect, useState } from 'react'
 import { api, type Pegging, type PeggingRow, type PeggingProject } from './api'
 import { Chevron, Glyph, StatusGlyph, num } from './status'
 
-export function PeggingPanel({ procurementId, rev, openPurchase }: {
-  procurementId: number; rev: number; openPurchase: (id: number) => void
-}) {
+// Состояние pegging: загрузка по id, обновление на `rev` (мутации формы плана) и
+// обёртка мутации. Живёт у формы — оба таба смотрят в одни данные.
+export function usePegging(procurementId: number, rev: number) {
   const [p, setP] = useState<Pegging | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -23,67 +27,76 @@ export function PeggingPanel({ procurementId, rev, openPurchase }: {
     pr.then(setP).catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
+  return { p, err, busy, run, autopeg: () => run(api.autopeg(procurementId)) }
+}
 
-  if (!p) return null
-  const editable = p.editable
+export type PeggingState = ReturnType<typeof usePegging>
+
+// Таб «Привязка»: строки плана с раскрытием по проектам.
+export function PeggingRows({ st, procurementId }: {
+  st: PeggingState; procurementId: number
+}) {
+  const { p, err, busy, run } = st
+  if (!p) return <div className="tab-empty">Загрузка…</div>
+  if (p.rows.length === 0)
+    return <div className="tab-empty">В плане нет строк — добавьте позиции в табе «Строки».</div>
   return (
-    <div style={{ marginTop: 20 }}>
-      <div className="section-h">Привязка к проектам{' '}
-        <span className="lit">— из плана в проектные заказы</span></div>
-      <div className="kit-actions">
-        {editable &&
-          <button className="btn" disabled={busy}
-            title="разложить каждую строку плана по нуждающимся проектам (наводка свода)"
-            onClick={() => run(api.autopeg(procurementId))}>Разрезать по проектам</button>}
-        {busy && <span className="hint">сохраняю…</span>}
-        {err && <span className="anomaly">{err}</span>}
-      </div>
+    <>
+      {err && <div className="anomaly">{err}</div>}
+      <table className="grid">
+        <thead>
+          <tr>
+            <th className="gl" /><th className="c-key">Изделие</th>
+            <th className="c-desc">Описание</th>
+            <th style={{ textAlign: 'right' }}>В плане</th><th className="uom">Ед.</th>
+            <th style={{ textAlign: 'right' }}>Разложено</th>
+            <th style={{ textAlign: 'right' }}>Остаток</th>
+            <th className="act" />
+          </tr>
+        </thead>
+        <tbody>
+          {p.rows.map(r => (
+            <LineRow key={r.line_id} r={r} editable={p.editable} busy={busy}
+              procurementId={procurementId} run={run} />
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
 
-      {p.rows.length === 0 &&
-        <div className="empty">В плане нет строк — добавьте позиции выше.</div>}
-      {p.rows.length > 0 &&
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Изделие</th><th style={{ textAlign: 'right' }}>В плане</th>
-              <th style={{ textAlign: 'right' }}>Разложено</th>
-              <th style={{ textAlign: 'right' }}>Остаток</th><th>Проекты</th>
-            </tr>
-          </thead>
-          <tbody>
-            {p.rows.map(r => (
-              <LineRow key={r.line_id} r={r} editable={editable} busy={busy}
-                procurementId={procurementId} run={run} />
-            ))}
-          </tbody>
-        </table>}
-
-      {p.fan.length > 0 && <>
-        <div className="subtitle" style={{ marginTop: 16 }}>Проектные заказы (веер плана)</div>
-        <table className="grid">
-          <thead><tr><th>Заказ</th><th>Проект</th>
-            <th style={{ textAlign: 'right' }}>строк</th>
-            <th style={{ textAlign: 'right' }}>всего</th></tr></thead>
-          <tbody>
-            {p.fan.map(f => (
-              <tr key={f.purchase_id} className="row s-available">
-                <td>
-                  <StatusGlyph locked={f.locked} />{' '}
-                  <a className="link" onClick={() => openPurchase(f.purchase_id)}>
-                    Заказ #{f.purchase_id}</a>{' '}
-                  <span style={{ fontSize: 11, color: 'var(--fg-dim)' }}>
-                    {f.locked ? 'зафиксирован' : 'расфиксирован'}</span>
-                </td>
-                <td><span className="code">{f.project_code}</span>{' '}
-                  <span style={{ color: 'var(--fg-dim)' }}>{f.project_name}</span></td>
-                <td className="num">{f.lines}</td>
-                <td className="num">{num(f.total)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </>}
-    </div>
+// Таб «Заказы»: веер проектных заказов, рождённых из этого плана.
+export function PurchaseFan({ st, openPurchase }: {
+  st: PeggingState; openPurchase: (id: number) => void
+}) {
+  const { p } = st
+  if (!p) return <div className="tab-empty">Загрузка…</div>
+  if (p.fan.length === 0)
+    return <div className="tab-empty">План ещё не разложен на проектные заказы.</div>
+  return (
+    <table className="grid">
+      <thead><tr>
+        <th className="gl" /><th className="c-key">Заказ</th>
+        <th className="c-fit">Проект</th><th className="c-desc">Описание проекта</th>
+        <th style={{ textAlign: 'right' }}>Строк</th>
+        <th style={{ textAlign: 'right' }}>Всего</th>
+      </tr></thead>
+      <tbody>
+        {p.fan.map(f => (
+          <tr key={f.purchase_id} className="row">
+            <td className="gl"><StatusGlyph locked={f.locked} /></td>
+            <td className="c-key">
+              <a className="link" onClick={() => openPurchase(f.purchase_id)}>
+                Заказ #{f.purchase_id}</a></td>
+            <td className="c-fit"><span className="code">{f.project_code}</span></td>
+            <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+              <span className="cell-ellip" title={f.project_name}>{f.project_name}</span></td>
+            <td className="num">{f.lines}</td>
+            <td className="num">{num(f.total)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
@@ -96,18 +109,18 @@ function LineRow({ r, editable, busy, procurementId, run }: {
   return (
     <>
       <tr className={`row s-${r.status}`}>
-        <td>
-          <Glyph status={r.status} />{' '}
-          <span className="code">{r.item_code}</span>{' '}
-          <span style={{ color: 'var(--fg-dim)' }}>{r.item_description}</span>
-        </td>
-        <td className="num">{num(r.qty)} {r.uom}</td>
+        <td className="gl"><Glyph status={r.status} /></td>
+        <td className="c-key"><span className="code">{r.item_code}</span></td>
+        <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+          <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
+        <td className="num">{num(r.qty)}</td>
+        <td className="uom">{r.uom}</td>
         <td className="num">{num(r.pegged)}</td>
         <td className="num" style={{ color: r.remaining < 0 ? 'var(--st-order)' : undefined }}>
           {num(r.remaining)}
         </td>
-        <td>
-          <button className="x" title="распределение по проектам"
+        <td className="act">
+          <button className="fh-ctl icon" title="Распределение по проектам"
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           {r.by_project.length === 0 &&
             <span className="sub" style={{ marginLeft: 6 }}>нет нужды по проектам</span>}
@@ -135,21 +148,22 @@ function ProjectRow({ bp, item_id, editable, busy, procurementId, run }: {
   }
   return (
     <tr className="row ghost">
-      <td style={{ paddingLeft: 24 }}>
-        <span className="code">{bp.project_code}</span>{' '}
-        <span className="sub">{bp.project_name}</span>
-      </td>
+      <td className="gl" />
+      <td className="c-key"><span className="code">{bp.project_code}</span></td>
+      <td className="c-desc"><span className="sub">{bp.project_name}</span></td>
       <td className="num sub" title="наводка свода (сколько проекту ещё надо)">
         {bp.suggest > 0 ? num(bp.suggest) : '—'}
       </td>
+      <td className="uom" />
       <td className="num">{num(bp.pegged)}</td>
       <td className="num">
         {bp.pegged > 0 && editable &&
-          <button className="x" title="отвязать" disabled={busy}
+          <button className="fh-ctl icon fh-del" title="Отвязать от проекта" disabled={busy}
             onClick={() => run(api.unpeg(procurementId,
-              { item_id, project_id: bp.project_id }))}>×</button>}
+              { item_id, project_id: bp.project_id }))}>
+            <span className="ci ci-trash" /></button>}
       </td>
-      <td>
+      <td className="act">
         {editable && <>
           <input className="qty-in" value={qty} disabled={busy} placeholder="+кол-во"
             onChange={e => setQty(e.target.value)}

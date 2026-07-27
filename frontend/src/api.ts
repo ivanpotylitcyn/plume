@@ -194,6 +194,7 @@ export interface PurchaseRow {
 }
 export interface PurchaseFormLine {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
+  item_native: boolean; item_synced: boolean; item_locked: boolean
   qty: number; received: number; remaining: number; status: Status
 }
 export interface PurchaseReceiptRow {
@@ -222,7 +223,8 @@ export interface AvailableLot {
   live_qty: number; origin: string; part_number: string; lot_name: string
 }
 export interface TransferFormLine {
-  id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
+  id: number; lot_id: number; lot_label: string; origin: string | null
+  item_id: number; item_code: string
   item_description: string; uom: string; qty: number; display_name: string
   lot_live_qty: number; lot_name: string
 }
@@ -240,7 +242,8 @@ export interface WriteoffRow {
   reason: string; locked: boolean; lines: number
 }
 export interface WriteoffFormLine {
-  id: number; lot_id: number; lot_label: string; item_id: number; item_code: string
+  id: number; lot_id: number; lot_label: string; origin: string | null
+  item_id: number; item_code: string
   item_description: string; uom: string; qty: number; lot_live_qty: number
   lot_name: string
 }
@@ -262,7 +265,8 @@ export interface AllAvailableLot {
   part_number: string; lot_name: string
 }
 export interface RequisitionFormLine {
-  id: number; source_lot_id: number; lot_label: string; source_project_code: string
+  id: number; source_lot_id: number; lot_label: string; origin: string | null
+  source_project_code: string
   item_id: number; item_code: string; item_description: string; uom: string
   qty: number; source_live_qty: number; born_lot_id: number | null
   lot_name: string
@@ -277,7 +281,7 @@ export interface RequisitionForm extends Authored {
 // ── Место хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
 export interface LocationRow { id: number; code: string; description: string; kind: string }
 export interface LocationStockLot {
-  lot_id: number; lot_label: string; part_number: string; lot_name: string
+  lot_id: number; lot_label: string; part_number: string; lot_name: string; origin: string | null
   item_id: number; item_code: string; item_description: string; uom: string; qty: number
   project_id: number; project_code: string; project_name: string
 }
@@ -292,7 +296,8 @@ export interface RelocationRow {
   locked: boolean; lines: number
 }
 export interface RelocationMove {
-  lot_id: number; lot_label: string; item_id: number; item_code: string
+  lot_id: number; lot_label: string; origin: string | null
+  item_id: number; item_code: string
   item_description: string; uom: string; qty: number
   from_location_id: number | null; from_location: string
   to_location_id: number | null; to_location: string
@@ -339,7 +344,7 @@ export interface WrittenOffLot {
 
 // ── Панель закрытия проекта (волна 6) ──
 export interface ResidualLot {
-  lot_id: number; lot_label: string; item_id: number; item_code: string
+  lot_id: number; lot_label: string; origin: string | null; item_id: number; item_code: string
   item_description: string; uom: string; live_qty: number; anomaly: boolean
 }
 export interface ProjectClosure {

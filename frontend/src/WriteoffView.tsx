@@ -1,20 +1,25 @@
 // Витрина волны 6: форма списания / Writeoff (записываемое ядро).
 // Списание — чистое выбытие партии из проекта (`−ISSUE`, серый путь): born-лота
 // нет, лот покидает учёт. Строка = списываем свою партию; добавление/правка/
-// удаление автосейвом. Замка нет (у Writeoff нет поля статуса) — правимо всегда;
-// корректность — «списываем только своё» + пересписание в минус информативно (▲).
+// удаление автосейвом. Корректность — «списываем только своё» + пересписание в
+// минус информативно (▲).
+//
+// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Файлы, общие поля шапки
+// через `OrderFields`, «Причина» — специфика вида.
 import { useState } from 'react'
 import { api, type AvailableLot, type WriteoffForm,
   type WriteoffFormLine } from './api'
-import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
-import { StatusGlyph, num } from './status'
-import { AttachmentPanel } from './AttachmentPanel'
+import { CommitInput } from './CommitInput'
+import { OrderFields, useOrderForm } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { LotGlyph, count, num, sumByUom } from './status'
 
-export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted }: {
+export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChanged, onDeleted }: {
   writeoffId: number
   isNew: boolean
   openItem: (id: number) => void
+  openProject: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
 }) {
@@ -26,74 +31,67 @@ export function WriteoffView({ writeoffId, isNew, openItem, onChanged, onDeleted
       remove: api.deleteWriteoff,
       confirmDelete: 'Удалить списание? Действие необратимо.',
     }, isNew)
+  const att = useAttachments('writeoff', writeoffId)   // загрузка — команда шапки (§13.8)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
   const fixed = c.locked                   // проведено — read-only (единый мягкий замок)
   const locked = fixed || !unlocked
+
+  const tabs: FormTab[] = [
+    { key: 'lines', label: 'Строки', icon: 'checklist',
+      content: <>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              <th style={{ textAlign: 'right' }}>Остаток</th>
+              {!locked && <th className="act" />}
+            </tr>
+          </thead>
+          <tbody>
+            {c.lines.map(ln => (
+              <LineRow key={ln.id} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
+            ))}
+            {!locked && <GhostRow writeoffId={c.id} lots={lots} busy={busy} run={run} />}
+          </tbody>
+        </table>
+        {c.lines.length === 0 && locked && <div className="tab-empty">Акт пуст.</div>}
+      </> },
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  ]
+
   return (
-    <div className={unlocked && !fixed ? '' : 'form-locked'}>
-      <FormHeader
-        code={c.code || `Списание ${c.number}`}
-        meta={<>
-          <StatusGlyph locked={c.locked} />
-          {c.project_code} · {c.project_name} · {c.date}
-          {c.reason && <> · {c.reason}</>} · списано {num(c.total_qty)}
-        </>}
-        unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed}
-        onFixate={() => run(api.lockWriteoff(c.id))}
-        onUnfix={() => { if (confirm('Расфиксировать списания?')) run(api.unlockWriteoff(c.id)) }}
-        onDelete={del}
-        error={err}
-      >
-
-      <dl className="props">
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateWriteoff(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
-        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
-          onCommit={v => run(api.updateWriteoff(c.id, { description: v }))} /></dd>
-        <dt>№ акта</dt>
-        <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
-          onCommit={v => run(api.updateWriteoff(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
-          onCommit={v => run(api.updateWriteoff(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Причина</dt>
-        <dd><CommitInput value={c.reason} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
-          onChange={id => run(api.updateWriteoff(c.id, { user_id: id }))} />
-        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
-          onChange={id => run(api.updateWriteoff(c.id, { project_id: id }))} />
-      </dl>
-      </FormHeader>
-
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>партия</th><th>изделие</th>
-            <th style={{ textAlign: 'right' }}>кол-во</th>
-            <th style={{ textAlign: 'right' }}>остаток</th><th />
-          </tr>
-        </thead>
-        <tbody>
-          {c.lines.map(ln => (
-            <LineRow key={ln.id} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
-          ))}
-          {!locked && <GhostRow writeoffId={c.id} lots={lots} busy={busy} run={run} />}
-        </tbody>
-      </table>
-      {c.lines.length === 0 &&
-        <div className="empty">Акт пуст — добавьте партию к списанию.</div>}
-
-      <AttachmentPanel ownerType="writeoff" ownerId={c.id} />
-    </div>
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="списание" locked={locked} error={err}
+      // Мета (§13.6): счёт по табам + итог документа в натуре (по единицам).
+      meta={<>
+        {count(c.lines.length, 'строка', 'строки', 'строк')}
+        {sumByUom(c.lines).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      fixed={fixed}
+      onFixate={() => run(api.lockWriteoff(c.id))}
+      fixateTitle="Зафиксировать акт списания"
+      onUnfix={() => { if (confirm('Расфиксировать списания?')) run(api.unlockWriteoff(c.id)) }}
+      onDelete={del}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}
+      fields={
+        <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ акта"
+          openProject={openProject}
+          patch={b => run(api.updateWriteoff(c.id, b))}>
+          <dt>Причина</dt>
+          <dd><CommitInput value={c.reason} disabled={locked || busy}
+            onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></dd>
+        </OrderFields>}
+      tabs={tabs}
+    />
   )
 }
 
@@ -104,29 +102,28 @@ function LineRow({ ln, locked, busy, openItem, run }: {
 }) {
   const negative = ln.lot_live_qty < 0   // пересписали — источник в минусе
   return (
-    <tr className="row s-available">
-      <td>
-        <span className="glyph g-available">✓</span>{' '}
-        <span className="pn">{ln.lot_label}</span>
-      </td>
-      <td>
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</span>
-      </td>
+    <tr className="row">
+      <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
+      <td className="c-key"><span className="pn">{ln.lot_label}</span></td>
+      <td className="c-fit">
+        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoffLine(ln.id, Number(v)))}
-          validate={v => Number(v) > 0} /> {ln.uom}
+          validate={v => Number(v) > 0} />
       </td>
+      <td className="uom">{ln.uom}</td>
       <td className="num">
         <span className={negative ? 'anomaly' : ''}>{num(ln.lot_live_qty)}</span>
         {negative && <span className="anomaly" title="пересписали — источник в минусе">▲</span>}
       </td>
-      <td style={{ textAlign: 'right' }}>
-        {!locked &&
-          <button className="x" title="убрать строку" disabled={busy}
-            onClick={() => run(api.deleteWriteoffLine(ln.id))}>×</button>}
-      </td>
+      {!locked && <td className="act">
+        <button className="fh-ctl icon fh-del" title="Убрать строку списания"
+          disabled={busy} onClick={() => run(api.deleteWriteoffLine(ln.id))}>
+          <span className="ci ci-trash" /></button>
+      </td>}
     </tr>
   )
 }
@@ -149,7 +146,8 @@ function GhostRow({ writeoffId, lots, busy, run }: {
 
   return (
     <tr className="row ghost">
-      <td>
+      <td className="gl" />
+      <td className="c-key" colSpan={2}>
         <select className="lot-sel" value={lotId} disabled={busy}
           onChange={e => setLotId(e.target.value ? Number(e.target.value) : '')}>
           <option value="">＋ партия…</option>
@@ -160,16 +158,18 @@ function GhostRow({ writeoffId, lots, busy, run }: {
           ))}
         </select>
       </td>
-      <td style={{ color: 'var(--fg-dim)' }}>{picked?.item_description ?? ''}</td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        {picked?.item_description ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
+      <td className="uom">{picked?.uom ?? ''}</td>
       <td className="num" style={{ color: 'var(--fg-dim)' }}>
         {picked ? num(picked.live_qty) : ''}
       </td>
-      <td style={{ textAlign: 'right' }}>
+      <td className="act">
         <button className="btn sm" disabled={busy || !lotId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>
       </td>

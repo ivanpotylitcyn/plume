@@ -5,13 +5,13 @@
 // ордеров, коснувшихся изделия (рождение партий + расходы), `engine.item_movements`.
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num, money, count, ItemGlyph, StatusGlyph } from './status'
+import { num, money, count, ItemGlyph, LotGlyph, StatusGlyph } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { ItemPicker } from './Picker'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { CommitInput } from './ReceiptView'
+import { CommitInput } from './CommitInput'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
@@ -143,20 +143,27 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
     key: 'lots', label: 'Склад', icon: 'layers',
     content: d.lots.length === 0
       ? <div className="tab-empty">Нет партий</div>
+      // Глиф партии (Ф12c): форма = откуда родилась, цвет = живость остатка. Текстовый
+      // чип «origin» снят — вид рождения теперь несёт сам глиф (§7a: одна строка —
+      // один знак).
       : <table className="grid">
-          <thead><tr><th>Lot</th><th>Проект</th><th>Origin</th>
+          <thead><tr><th className="gl" /><th className="c-key">Партия</th>
+            <th className="c-fit">Проект</th>
             <th style={{ textAlign: 'right' }}>Рожд.</th>
             <th style={{ textAlign: 'right' }}>Остаток</th>
-            <th>Part number</th><th>Название</th>
-            <th className="uom">Ед.</th></tr></thead>
+            <th className="uom">Ед.</th>
+            <th className="c-fit">Part number</th><th className="c-desc">Название</th>
+          </tr></thead>
           <tbody>{d.lots.map(l => (
-            <tr key={l.id} className={'row' + (l.live_qty > 0 ? ' s-available' : '')}>
-              <td>#{l.id}</td><td>{l.project_code}</td><td className="kind-chip">{l.origin}</td>
+            <tr key={l.id} className="row">
+              <td className="gl"><LotGlyph origin={l.origin} liveQty={l.live_qty} /></td>
+              <td className="c-key">#{l.id}</td>
+              <td className="c-fit">{l.project_code}</td>
               <td className="num">{num(l.qty_born)}</td>
               <td className="num">{num(l.live_qty)}</td>
-              <td style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
-              <td style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>
               <td className="uom">{d.uom}</td>
+              <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
+              <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>
             </tr>))}</tbody>
         </table>,
   })

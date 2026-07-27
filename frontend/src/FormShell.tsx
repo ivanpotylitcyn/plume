@@ -25,13 +25,14 @@ export interface FormTab {
   content: ReactNode
 }
 
-export function FormShell({ id, code, entity, fields, meta, tabs, error, locked, ...cmd }:
+export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, locked, ...cmd }:
   FormCommandProps & {
     id: number              // смена = другая сущность: сброс таба (канон Ф9)
     code: string            // титул; пустой — так и остаётся пустым (§13.5)
     entity: string          // винительный падеж для предупреждения: «удалите изделие»
     fields: ReactNode       // содержимое `.props` (пары dt/dd) — зона полей шапки
     meta?: ReactNode
+    extra?: ReactNode       // органичное дополнение стека (§13.1): панель бюджета проекта
     tabs: FormTab[]
     error?: string | null
     locked: boolean         // форма read-only (фиксация ИЛИ закрытый замок формы)
@@ -77,6 +78,10 @@ export function FormShell({ id, code, entity, fields, meta, tabs, error, locked,
       {error && <div className="fh-error">ошибка: {error}</div>}
 
       {meta && <div className="fs-meta">{meta}</div>}
+
+      {/* Дополнение стека той же карточной раскладкой (§13.1) — сейчас это панель
+          бюджета на форме проекта: не список (табом быть не может) и не поле шапки. */}
+      {extra}
 
       {/* Табы и тело — одна карточка: полоса табов вверху панели (§13.7). */}
       <div className="panel fs-body">

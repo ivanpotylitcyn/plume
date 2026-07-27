@@ -75,6 +75,29 @@ export function FileGlyph({ filename, state }: {
   return <span className={`ci sg ci-${icon} ${FILE_TONE[state]}`} title={FILE_TITLE[state]} />
 }
 
+// Глиф партии (волна 19, Ф12c). Своей оси состояния у лота нет — решение Ивана
+// 2026-07-26: ФОРМА = откуда партия родилась (origin-ордер, `Lot.origin_kind`), ЦВЕТ =
+// живость остатка (зелёный — есть, приглушённый — исчерпана, красный — минус, то есть
+// недостача «подбей лоты»). Тот же приём, что у `FileGlyph`: форма отвечает «что это»,
+// цвет — «как дела» (§7a, ось ⟂ ось). Лот без origin (данные до волны 13) — `layers`.
+const LOT_GLYPH: Record<string, string> = {
+  receipt: 'inbox',            // приехало от поставщика по УПД
+  kitting: 'tools',            // изготовлено нами (комплектация родила прибор)
+  inventory: 'checklist',      // найдено сверкой
+  requisition: 'git-branch',   // отпочковано требованием от другой партии
+}
+const LOT_ORIGIN: Record<string, string> = {
+  receipt: 'из поставки', kitting: 'изготовлено',
+  inventory: 'найдено инвентаризацией', requisition: 'отпочковано требованием',
+}
+export function LotGlyph({ origin, liveQty }: { origin: string | null; liveQty: number }) {
+  const icon = LOT_GLYPH[origin ?? ''] ?? 'layers'
+  const tone = liveQty > 0 ? 'sg-ok' : liveQty < 0 ? 'sg-order' : 'sg-none'
+  const life = liveQty > 0 ? 'есть остаток' : liveQty < 0 ? 'недостача — подбей лоты' : 'исчерпана'
+  return <span className={`ci sg ci-${icon} ${tone}`}
+    title={`${LOT_ORIGIN[origin ?? ''] ?? 'партия'} · ${life}`} />
+}
+
 export const GLYPH: Record<Status, string> = {
   to_order: '▲',     // красный — дефицит, нужна работа
   on_order: '●',     // оранжевый — заказано/делается, ждём
@@ -111,7 +134,7 @@ export function Segment({ status, value }: { status: Status; value: number }) {
 // Ось разбора на codicon `layers` (Ф1b, пилот в проекте): глиф = «слои склада»
 // (перекликается с режимом «Склады»), а состояние несёт ЦВЕТ, не форма — треугольники
 // и кружки больше не шумят. `layers` красный (не заказано) → `layers-dot` оранжевый
-// (заказано, ждём) → `layers-active` зелёный (на складе). Пока только DeficitView.
+// (заказано, ждём) → `layers-active` зелёный (на складе). Пока только форма проекта.
 const LAYER_GLYPH: Record<Status, string> = {
   to_order: 'layers', on_order: 'layers-dot', available: 'layers-active',
 }
@@ -136,6 +159,16 @@ export function num(x: number): string {
 // бюджет проекта, суммы документов, оценка изделия (принято 2026-07-26).
 export function money(x: number): string {
   return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽'
+}
+
+// Итог списка в натуре: количества сворачиваются ПО ЕДИНИЦАМ (§13.6) — штуки с метрами
+// не складываем. Порядок групп — как единицы встретились в списке, чтобы итог читался в
+// том же порядке, что строки; нулевые группы не показываем. Общий для всех форм
+// (волна 19, Ф12c: жил в `ReceiptView`, понадобился каждому списку с количеством).
+export function sumByUom(rows: { uom: string; qty: number }[]): [string, number][] {
+  const sums = new Map<string, number>()
+  for (const r of rows) sums.set(r.uom, (sums.get(r.uom) ?? 0) + r.qty)
+  return [...sums].filter(([, qty]) => qty !== 0)
 }
 
 // Русское склонение при числе: `count(2, 'вхождение', 'вхождения', 'вхождений')`

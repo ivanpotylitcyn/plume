@@ -3,19 +3,23 @@
 // партию проекта (`−ISSUE`); добавление/правка/удаление автосейвом. Мягкого
 // замка нет (у Transfer нет поля статуса) — правимо всегда; guard корректности —
 // «лот не потреблён ниже» на бэке. Отображаемое имя строки печатается в накладной.
+// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Файлы, общие поля шапки
+// через `OrderFields`, «Заказчик» — специфика вида.
 import { useEffect, useState } from 'react'
 import { api, type AvailableLot, type CounterpartyRow, type TransferForm,
   type TransferFormLine } from './api'
-import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
-import { StatusGlyph, num } from './status'
-import { AttachmentPanel } from './AttachmentPanel'
+import { CommitInput } from './CommitInput'
+import { OrderFields, useOrderForm } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { LotGlyph, count, num, sumByUom } from './status'
 import { CounterpartyPicker } from './Picker'
 
-export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted }: {
+export function TransferView({ transferId, isNew, openItem, openProject, onChanged, onDeleted }: {
   transferId: number
   isNew: boolean
   openItem: (id: number) => void
+  openProject: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
 }) {
@@ -30,81 +34,72 @@ export function TransferView({ transferId, isNew, openItem, onChanged, onDeleted
       remove: api.deleteTransfer,
       confirmDelete: 'Удалить передачу (накладную)? Действие необратимо.',
     }, isNew)
+  const att = useAttachments('transfer', transferId)   // загрузка — команда шапки (§13.8)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
   const fixed = c.locked                   // отгружено (проведена) — read-only
   const locked = fixed || !unlocked
+
+  const tabs: FormTab[] = [
+    { key: 'lines', label: 'Строки', icon: 'checklist',
+      content: <>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              <th style={{ textAlign: 'right' }}>Остаток</th>
+              <th className="c-fit">Имя в накладной</th>
+              {!locked && <th className="act" />}
+            </tr>
+          </thead>
+          <tbody>
+            {c.lines.map(ln => (
+              <LineRow key={ln.id} ln={ln} locked={locked} busy={busy}
+                openItem={openItem} run={run} />
+            ))}
+            {!locked && <GhostRow transferId={c.id} lots={lots} busy={busy} run={run} />}
+          </tbody>
+        </table>
+        {c.lines.length === 0 && locked && <div className="tab-empty">Накладная пуста.</div>}
+      </> },
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  ]
+
   return (
-    <div className={unlocked && !fixed ? '' : 'form-locked'}>
-      <FormHeader
-        code={c.code || `Накладная ${c.number}`}
-        meta={<>
-          <StatusGlyph locked={c.locked} />
-          {c.project_code} · {c.project_name}
-          {c.contractor_name && <> · {c.contractor_name}</>} · {c.date} · отдано {num(c.total_qty)}
-        </>}
-        unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed}
-        onFixate={() => run(api.lockTransfer(c.id))}
-        fixateTitle="Отгружено — зафиксировать передачу"
-        onUnfix={() => { if (confirm('Расфиксировать передачу? Отгрузка откатится.')) run(api.unlockTransfer(c.id)) }}
-        onDelete={del}
-        error={err}
-      >
-
-      <dl className="props">
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateTransfer(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
-        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
-          onCommit={v => run(api.updateTransfer(c.id, { description: v }))} /></dd>
-        <dt>№ накладной</dt>
-        <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
-          onCommit={v => run(api.updateTransfer(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
-          onCommit={v => run(api.updateTransfer(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Заказчик</dt>
-        <dd>
-          <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
-            disabled={locked || busy} width={240} placeholder="— не указан —"
-            onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
-            onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))} />
-        </dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
-          onChange={id => run(api.updateTransfer(c.id, { user_id: id }))} />
-        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
-          onChange={id => run(api.updateTransfer(c.id, { project_id: id }))} />
-      </dl>
-      </FormHeader>
-
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>партия</th><th>изделие</th>
-            <th style={{ textAlign: 'right' }}>кол-во</th>
-            <th style={{ textAlign: 'right' }}>остаток</th>
-            <th>имя в накладной</th><th />
-          </tr>
-        </thead>
-        <tbody>
-          {c.lines.map(ln => (
-            <LineRow key={ln.id} ln={ln} locked={locked} busy={busy}
-              openItem={openItem} run={run} />
-          ))}
-          {!locked && <GhostRow transferId={c.id} lots={lots} busy={busy} run={run} />}
-        </tbody>
-      </table>
-      {c.lines.length === 0 &&
-        <div className="empty">Накладная пуста — добавьте партию к отгрузке.</div>}
-
-      <AttachmentPanel ownerType="transfer" ownerId={c.id} />
-    </div>
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="передачу" locked={locked} error={err}
+      meta={<>
+        {count(c.lines.length, 'строка', 'строки', 'строк')}
+        {sumByUom(c.lines).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      fixed={fixed}
+      onFixate={() => run(api.lockTransfer(c.id))}
+      fixateTitle="Отгружено — зафиксировать передачу"
+      onUnfix={() => { if (confirm('Расфиксировать передачу? Отгрузка откатится.')) run(api.unlockTransfer(c.id)) }}
+      onDelete={del}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл (скан накладной) — появится в табе «Файлы»', disabled: att.busy }]}
+      fields={
+        <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ накладной"
+          openProject={openProject}
+          patch={b => run(api.updateTransfer(c.id, b))}>
+          <dt>Заказчик</dt>
+          <dd>
+            <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
+              disabled={locked || busy} placeholder="— не указан —"
+              onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
+              onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))} />
+          </dd>
+        </OrderFields>}
+      tabs={tabs}
+    />
   )
 }
 
@@ -115,33 +110,32 @@ function LineRow({ ln, locked, busy, openItem, run }: {
 }) {
   const negative = ln.lot_live_qty < 0   // переотдали — источник в минусе
   return (
-    <tr className="row s-available">
-      <td>
-        <span className="glyph g-available">✓</span>{' '}
-        <span className="pn">{ln.lot_label}</span>
-      </td>
-      <td>
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{ln.item_description}</span>
-      </td>
+    <tr className="row">
+      <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
+      <td className="c-key"><span className="pn">{ln.lot_label}</span></td>
+      <td className="c-fit">
+        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateTransferLine(ln.id, { qty: Number(v) }))}
-          validate={v => Number(v) > 0} /> {ln.uom}
+          validate={v => Number(v) > 0} />
       </td>
+      <td className="uom">{ln.uom}</td>
       <td className="num">
         <span className={negative ? 'anomaly' : ''}>{num(ln.lot_live_qty)}</span>
         {negative && <span className="anomaly" title="переотдали — источник в минусе">▲</span>}
       </td>
-      <td>
+      <td className="c-fit">
         <CommitInput value={ln.display_name} width={200} disabled={locked || busy}
           onCommit={v => run(api.updateTransferLine(ln.id, { display_name: v }))} />
       </td>
-      <td style={{ textAlign: 'right' }}>
-        {!locked &&
-          <button className="x" title="убрать строку" disabled={busy}
-            onClick={() => run(api.deleteTransferLine(ln.id))}>×</button>}
-      </td>
+      {!locked && <td className="act">
+        <button className="fh-ctl icon fh-del" title="Убрать строку передачи"
+          disabled={busy} onClick={() => run(api.deleteTransferLine(ln.id))}>
+          <span className="ci ci-trash" /></button>
+      </td>}
     </tr>
   )
 }
@@ -167,7 +161,8 @@ function GhostRow({ transferId, lots, busy, run }: {
 
   return (
     <tr className="row ghost">
-      <td>
+      <td className="gl" />
+      <td className="c-key" colSpan={2}>
         <select className="lot-sel" value={lotId} disabled={busy}
           onChange={e => setLotId(e.target.value ? Number(e.target.value) : '')}>
           <option value="">＋ партия…</option>
@@ -178,21 +173,23 @@ function GhostRow({ transferId, lots, busy, run }: {
           ))}
         </select>
       </td>
-      <td style={{ color: 'var(--fg-dim)' }}>{picked?.item_description ?? ''}</td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        {picked?.item_description ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
+      <td className="uom">{picked?.uom ?? ''}</td>
       <td className="num" style={{ color: 'var(--fg-dim)' }}>
         {picked ? num(picked.live_qty) : ''}
       </td>
-      <td>
+      <td className="c-fit">
         <input className="qty-in" style={{ width: 200 }} value={name} disabled={busy}
           placeholder="имя в накладной (авто)" onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td style={{ textAlign: 'right' }}>
+      <td className="act">
         <button className="btn sm" disabled={busy || !lotId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>
       </td>

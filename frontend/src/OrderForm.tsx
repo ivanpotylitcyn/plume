@@ -34,21 +34,21 @@ export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, open
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'kitting':
       return <KittingView kittingId={id} isNew={isNew} openItem={openItem}
-        onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'transfer':
       return <TransferView transferId={id} isNew={isNew} openItem={openItem}
-        onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'requisition':
       return <RequisitionView requisitionId={id} isNew={isNew} openItem={openItem}
-        onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'writeoff':
       return <WriteoffView writeoffId={id} isNew={isNew} openItem={openItem}
-        onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'inventory':
       return <InventoryView inventoryId={id} items={items} isNew={isNew} openItem={openItem}
-        onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'relocation':
       return <RelocationView relocationId={id} isNew={isNew} openItem={openItem}
-        onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
   }
 }

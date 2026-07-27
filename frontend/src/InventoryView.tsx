@@ -4,18 +4,25 @@
 // партии (+RECEIPT). Замка нет — правимо всегда; guard'ы держат корректность.
 // Payoff волны — серая ре-материализация: пикер «из списанных» рождает лот-потомок
 // с provenance (predecessor → списанный, наследование item/цены/названия/зав.№).
+//
+// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Списанные (только в правке) ·
+// Файлы. Аккордеон-секция «Ре-материализация» стала табом: несколько списков формы
+// разрешаются табами, а не простынёй секций (§13.7).
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type InventoryForm, type InventoryFormLot,
   type WrittenOffLot } from './api'
-import { Chevron, StatusGlyph, num } from './status'
-import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
-import { AttachmentPanel } from './AttachmentPanel'
+import { LotGlyph, count, money, num, sumByUom } from './status'
+import { CommitInput } from './CommitInput'
+import { OrderFields, useOrderForm } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
 
-export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, onDeleted }: {
+export function InventoryView({ inventoryId, items, isNew, openItem, openProject,
+  onChanged, onDeleted }: {
   inventoryId: number; items: ItemRow[]; isNew: boolean
-  openItem: (id: number) => void; onChanged: () => void; onDeleted: () => void
+  openItem: (id: number) => void; openProject: (id: number) => void
+  onChanged: () => void; onDeleted: () => void
 }) {
   const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     inventoryId, api.inventory, {
@@ -23,73 +30,70 @@ export function InventoryView({ inventoryId, items, isNew, openItem, onChanged, 
       remove: api.deleteInventory,
       confirmDelete: 'Удалить инвентаризацию? Действие необратимо.',
     }, isNew)
+  const att = useAttachments('inventory', inventoryId)   // загрузка — команда шапки (§13.8)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
   const fixed = c.locked                   // проведено — read-only (единый мягкий замок)
   const locked = fixed || !unlocked
+
+  const tabs: FormTab[] = [
+    { key: 'lines', label: 'Строки', icon: 'checklist',
+      content: <>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              <th style={{ textAlign: 'right' }}>Цена, ₽</th>
+              <th className="c-fit">Part number</th><th className="c-fit">Название</th>
+              <th className="c-fit">Провенанс</th><th className="act" />
+            </tr>
+          </thead>
+          <tbody>
+            {c.lots.map(lot => (
+              <LotRow key={lot.id} lot={lot} locked={locked} busy={busy} openItem={openItem} run={run} />
+            ))}
+            {!locked && <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />}
+          </tbody>
+        </table>
+        {c.lots.length === 0 && locked && <div className="tab-empty">Акт пуст.</div>}
+      </> },
+  ]
+  // «Из списанных» — рабочий стол ре-материализации: показываем только в правке,
+  // как и прочие контролы, меняющие данные (§5).
+  if (!locked) tabs.push({
+    key: 'written-off', label: 'Списанные', icon: 'archive',
+    content: <RematerializeTab inventoryId={c.id} busy={busy} run={run} />,
+  })
+  tabs.push({ key: 'files', label: 'Файлы', icon: 'files',
+    content: <AttachmentList att={att} locked={locked} /> })
+
   return (
-    <div className={unlocked && !fixed ? '' : 'form-locked'}>
-      <FormHeader
-        code={c.code || `Инвентаризация ${c.number}`}
-        meta={<>
-          <StatusGlyph locked={c.locked} />
-          {c.project_code} · {c.project_name} · {c.date} · сумма {num(c.total_cost)} ₽
-        </>}
-        unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed}
-        onFixate={() => run(api.lockInventory(c.id))}
-        onUnfix={() => { if (confirm('Расфиксировать инвентаризации?')) run(api.unlockInventory(c.id)) }}
-        onDelete={del}
-        error={err}
-      >
-
-      <dl className="props">
-        <dt>№ акта</dt>
-        <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
-          onCommit={v => run(api.updateInventory(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
-          onCommit={v => run(api.updateInventory(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateInventory(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
-        <dd><CommitInput value={c.description} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateInventory(c.id, { description: v }))} /></dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
-          onChange={id => run(api.updateInventory(c.id, { user_id: id }))} />
-        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
-          onChange={id => run(api.updateInventory(c.id, { project_id: id }))} />
-      </dl>
-      </FormHeader>
-
-
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>изделие</th><th style={{ textAlign: 'right' }}>кол-во</th>
-            <th style={{ textAlign: 'right' }}>цена, ₽</th>
-            <th>part number</th><th>название</th>
-            <th>провенанс</th><th />
-          </tr>
-        </thead>
-        <tbody>
-          {c.lots.map(lot => (
-            <LotRow key={lot.id} lot={lot} locked={locked} busy={busy} openItem={openItem} run={run} />
-          ))}
-          {!locked && <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />}
-        </tbody>
-      </table>
-      {c.lots.length === 0 && <div className="empty">Акт пуст — добавьте найденную партию.</div>}
-
-      {!locked && <RematerializePanel inventoryId={c.id} busy={busy} run={run} />}
-
-      <AttachmentPanel ownerType="inventory" ownerId={c.id} />
-    </div>
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="инвентаризацию" locked={locked} error={err}
+      meta={<>
+        {count(c.lots.length, 'партия', 'партии', 'партий')}
+        {sumByUom(c.lots).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {' · '}{money(c.total_cost)}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      fixed={fixed}
+      onFixate={() => run(api.lockInventory(c.id))}
+      fixateTitle="Зафиксировать акт инвентаризации"
+      onUnfix={() => { if (confirm('Расфиксировать инвентаризации?')) run(api.unlockInventory(c.id)) }}
+      onDelete={del}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}
+      fields={
+        <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ акта"
+          openProject={openProject}
+          patch={b => run(api.updateInventory(c.id, b))} />}
+      tabs={tabs}
+    />
   )
 }
 
@@ -100,41 +104,45 @@ function LotRow({ lot, locked, busy, openItem, run }: {
 }) {
   const short = lot.live_qty !== lot.qty   // просел под последующий расход
   return (
-    <tr className="row s-available">
-      <td>
-        <span className="glyph g-available">✓</span>{' '}
-        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{lot.item_description}</span>
+    <tr className="row">
+      {/* Строка = партия, рождённая этим актом (origin = инвентаризация). */}
+      <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
         <CommitInput value={String(lot.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { qty: Number(v) }))}
-          validate={v => Number(v) > 0} /> {lot.uom}
+          validate={v => Number(v) > 0} />
       </td>
+      <td className="uom">{lot.uom}</td>
       <td className="num">
         <CommitInput value={String(lot.unit_cost)} width={72} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { unit_cost: Number(v) }))}
           validate={v => Number(v) >= 0} />
       </td>
-      <td>
+      <td className="c-fit">
         <CommitInput value={lot.part_number} width={140} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { part_number: v }))} />
       </td>
-      <td>
+      <td className="c-fit">
         <CommitInput value={lot.lot_name} width={160} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { lot_name: v }))} />
       </td>
-      <td>
+      <td className="c-fit">
         {lot.predecessor_id
           ? <span className="hint" title="ре-материализовано из списанного лота">
               ← {lot.predecessor_label}</span>
           : <span style={{ color: 'var(--fg-dim)' }}>излишек</span>}
       </td>
-      <td style={{ textAlign: 'right' }}>
+      <td className="act">
         {!locked && !lot.consumed &&
-          <button className="x" title="убрать строку" disabled={busy}
-            onClick={() => run(api.deleteInventoryLot(lot.id))}>×</button>}
+          <button className="fh-ctl icon fh-del" title="Убрать строку акта"
+            disabled={busy} onClick={() => run(api.deleteInventoryLot(lot.id))}>
+            <span className="ci ci-trash" /></button>}
         {lot.consumed && <span className="hint">потреблён</span>}
       </td>
     </tr>
@@ -166,32 +174,35 @@ function GhostRow({ inventoryId, items, busy, run }: {
 
   return (
     <tr className="row ghost">
-      <td>
+      <td className="gl" />
+      <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          width={200} placeholder="＋ изделие…" onEnter={add} />
+          placeholder="＋ изделие…" onEnter={add} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
+      {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
+      <td className="uom" />
       <td className="num">
         <input className="qty-in" value={cost} disabled={busy} placeholder="0"
           onChange={e => setCost(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td>
+      <td className="c-fit">
         <input className="qty-in" style={{ width: 140 }} value={pn} disabled={busy}
           placeholder="part number" onChange={e => setPn(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td>
+      <td className="c-fit">
         <input className="qty-in" style={{ width: 160 }} value={name} disabled={busy}
           placeholder="название" onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td><span style={{ color: 'var(--fg-dim)' }}>излишек</span></td>
-      <td style={{ textAlign: 'right' }}>
+      <td className="c-fit"><span style={{ color: 'var(--fg-dim)' }}>излишек</span></td>
+      <td className="act">
         <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>
       </td>
@@ -199,15 +210,15 @@ function GhostRow({ inventoryId, items, busy, run }: {
   )
 }
 
-// Панель «из списанных»: серая ре-материализация — вернуть найденный физически
-// списанный (серый) остаток на баланс. Порождает лот-потомок с provenance.
-function RematerializePanel({ inventoryId, busy, run }: {
+// Таб «Списанные»: серая ре-материализация — вернуть найденный физически списанный
+// (серый) остаток на баланс. Порождает лот-потомок с provenance. Был аккордеон-секцией
+// под формой; по канону §13.7 второй список формы = свой таб.
+function RematerializeTab({ inventoryId, busy, run }: {
   inventoryId: number; busy: boolean; run: (p: Promise<InventoryForm>) => void
 }) {
   const [lots, setLots] = useState<WrittenOffLot[]>([])
-  const [open, setOpen] = useState(false)
 
-  useEffect(() => { if (open) api.writtenOffLots().then(setLots) }, [open, inventoryId])
+  useEffect(() => { api.writtenOffLots().then(setLots) }, [inventoryId])
 
   const rematerialize = (lot: WrittenOffLot) => {
     run(api.addInventoryLot(inventoryId, {
@@ -215,36 +226,37 @@ function RematerializePanel({ inventoryId, busy, run }: {
     }))
   }
 
+  if (lots.length === 0) return <div className="tab-empty">Списанных партий нет.</div>
   return (
-    <div className="closure">
-      <h2 className="section-h" onClick={() => setOpen(o => !o)} style={{ cursor: 'pointer' }}>
-        <Chevron open={open} /> Ре-материализация из списанных (серый путь → на баланс)
-      </h2>
-      {open && (lots.length === 0
-        ? <div className="empty">Списанных лотов нет.</div>
-        : <table className="grid">
-            <thead>
-              <tr>
-                <th>изделие</th><th>проект-источник</th>
-                <th style={{ textAlign: 'right' }}>списано</th>
-                <th>название</th><th />
-              </tr>
-            </thead>
-            <tbody>
-              {lots.map(l => (
-                <tr key={l.lot_id} className="row">
-                  <td>{l.item_code} <span style={{ color: 'var(--fg-dim)' }}>{l.item_description}</span></td>
-                  <td>{l.project_code}</td>
-                  <td className="num">{num(l.written_qty)} {l.uom}</td>
-                  <td>{l.lot_name || '—'}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button className="btn sm" disabled={busy}
-                      onClick={() => rematerialize(l)}>вернуть на баланс</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>)}
-    </div>
+    <table className="grid">
+      <thead>
+        <tr>
+          <th className="gl" /><th className="c-key">Изделие</th>
+          <th className="c-desc">Описание</th>
+          <th className="c-fit">Проект-источник</th>
+          <th style={{ textAlign: 'right' }}>Списано</th><th className="uom">Ед.</th>
+          <th className="c-fit">Название</th><th className="act" />
+        </tr>
+      </thead>
+      <tbody>
+        {lots.map(l => (
+          <tr key={l.lot_id} className="row">
+            {/* Партия списана — живого остатка нет: глиф приглушён по определению. */}
+            <td className="gl"><LotGlyph origin={null} liveQty={0} /></td>
+            <td className="c-key">{l.item_code}</td>
+            <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+              <span className="cell-ellip" title={l.item_description}>{l.item_description}</span></td>
+            <td className="c-fit">{l.project_code}</td>
+            <td className="num">{num(l.written_qty)}</td>
+            <td className="uom">{l.uom}</td>
+            <td className="c-fit">{l.lot_name || '—'}</td>
+            <td className="act">
+              <button className="btn sm" disabled={busy}
+                onClick={() => rematerialize(l)}>вернуть на баланс</button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }

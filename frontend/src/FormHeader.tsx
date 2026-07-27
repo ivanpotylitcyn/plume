@@ -2,7 +2,8 @@
 // «Название первое»: литературное имя (Inter 500) сверху, мета-строка (mono, dim)
 // снизу; справа — индикатор сохранения + замок формы, ИЛИ чип фиксации.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { api, type UserRow, type ProjectRow } from './api'
+import { api, type Authored, type UserRow, type ProjectRow } from './api'
+import { CommitInput } from './CommitInput'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Канон §5 (Ф9): всё существующее открывается В ПРОСМОТРЕ; исключение ровно одно —
@@ -149,6 +150,60 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange, onOp
     <AnchorSelect label="Проект" id={projectId} currentLabel={projectLabel}
       options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.description}` }))}
       disabled={disabled} onChange={onChange} />
+  )
+}
+
+// Общие поля шапки ордера (волна 19, Ф12c). Все семь видов держат одну и ту же
+// пятёрку — `code` + `description` (§13.4), номер, дата, автор, проект-якорь — и
+// раньше каждая вьюха выписывала её руками (пять копий, разъезжавшихся по ширинам и
+// подписям). Специфика вида приходит через `children` (Причина списания, Заказ
+// поставки, Прибор комплектации) и встаёт ПОСЛЕ общих полей.
+export interface OrderHead extends Authored {
+  id: number; code: string | null; description: string
+  number?: string; date: string | null
+  project_id: number; project_code: string
+}
+// Общий знаменатель PATCH-тел всех видов ордера (у каждого вида шире, но эти поля
+// принимают все — кроме `number` у комплектации, которая его и не рисует).
+export type OrderHeadPatch = Partial<{
+  number: string; date: string; user_id: number; project_id: number
+  code: string | null; description: string
+}>
+
+export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, children }: {
+  c: OrderHead
+  locked: boolean
+  busy: boolean
+  patch: (b: OrderHeadPatch) => void
+  numberLabel?: string          // «№ УПД» / «№ акта» / «№» — у комплектации номера нет
+  openProject?: (id: number) => void
+  children?: ReactNode          // поля вида — после общих
+}) {
+  return (
+    <>
+      <dt>Код</dt>
+      <dd><CommitInput value={c.code ?? ''} disabled={locked || busy}
+        onCommit={v => patch({ code: v })} /></dd>
+      <dt>Описание</dt>
+      {/* Единственное длинное поле шапки (§13.3). */}
+      <dd className="wide"><CommitInput value={c.description} disabled={locked || busy}
+        onCommit={v => patch({ description: v })} /></dd>
+      {numberLabel && <>
+        <dt>{numberLabel}</dt>
+        <dd><CommitInput value={c.number ?? ''} disabled={locked || busy}
+          onCommit={v => patch({ number: v })}
+          validate={v => v.trim().length > 0} /></dd>
+      </>}
+      <dt>Дата</dt>
+      <dd><CommitInput value={c.date ?? ''} type="date" disabled={locked || busy}
+        onCommit={v => patch({ date: v })} /></dd>
+      <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
+        onChange={id => patch({ user_id: id })} />
+      <ProjectField projectId={c.project_id} projectLabel={c.project_code}
+        disabled={locked || busy} onOpen={openProject}
+        onChange={id => patch({ project_id: id })} />
+      {children}
+    </>
   )
 }
 

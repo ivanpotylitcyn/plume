@@ -3,18 +3,23 @@
 // знаковых `StockLine` `−q`/`+q` на бэке, тотал лота сохранён). Комплектовщик
 // собирает перемещение из живых лотов; автосейв кол-ва/мест; мягкий замок как
 // у прочих ордеров (draft ⇄ posted).
+//
+// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Файлы, общие поля шапки
+// через `OrderFields` (своих полей у перемещения нет).
 import { useEffect, useState } from 'react'
 import { api, type LocationRow, type RelocationForm, type RelocationMove,
   type RelocationSourceLot } from './api'
-import { CommitInput } from './ReceiptView'
-import { AuthorField, FormHeader, ProjectField, useOrderForm } from './FormHeader'
-import { StatusGlyph, num } from './status'
-import { AttachmentPanel } from './AttachmentPanel'
+import { CommitInput } from './CommitInput'
+import { OrderFields, useOrderForm } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { LotGlyph, count, num, sumByUom } from './status'
 
-export function RelocationView({ relocationId, isNew, openItem, onChanged, onDeleted }: {
+export function RelocationView({ relocationId, isNew, openItem, openProject, onChanged, onDeleted }: {
   relocationId: number
   isNew: boolean
   openItem: (id: number) => void
+  openProject: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
 }) {
@@ -29,72 +34,64 @@ export function RelocationView({ relocationId, isNew, openItem, onChanged, onDel
       remove: api.deleteRelocation,
       confirmDelete: 'Удалить перемещение? Ходы откатятся, действие необратимо.',
     }, isNew)
+  const att = useAttachments('relocation', relocationId)   // загрузка — команда шапки (§13.8)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
 
   const fixed = c.locked                   // проведено — read-only
   const locked = fixed || !unlocked
+
+  const tabs: FormTab[] = [
+    { key: 'lines', label: 'Строки', icon: 'checklist',
+      content: <>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              <th className="c-fit">Откуда</th><th className="c-fit">Куда</th>
+              {!locked && <th className="act" />}
+            </tr>
+          </thead>
+          <tbody>
+            {c.moves.map(m => (
+              <MoveRow key={m.lot_id} m={m} relocationId={c.id} locs={locs}
+                locked={locked} busy={busy} openItem={openItem} run={run} />
+            ))}
+            {!locked && <GhostRow relocationId={c.id} lots={lots} locs={locs}
+              busy={busy} run={run} />}
+          </tbody>
+        </table>
+        {c.moves.length === 0 && locked && <div className="tab-empty">Перемещение пусто.</div>}
+      </> },
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  ]
+
   return (
-    <div className={unlocked && !fixed ? '' : 'form-locked'}>
-      <FormHeader
-        code={c.code || `Перемещение ${c.number}`}
-        meta={<>
-          <StatusGlyph locked={c.locked} />
-          {c.project_code} · {c.project_name} · {c.date} · перемещено {num(c.total_qty)}
-        </>}
-        unlocked={unlocked} onToggleLock={toggle}
-        fixed={fixed}
-        onFixate={() => run(api.lockRelocation(c.id))}
-        onUnfix={() => { if (confirm('Расфиксировать перемещения?')) run(api.unlockRelocation(c.id)) }}
-        onDelete={del}
-        error={err}
-      >
-
-      <dl className="props">
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} width={220} disabled={locked || busy}
-          onCommit={v => run(api.updateRelocation(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
-        <dd><CommitInput value={c.description} width={260} disabled={locked || busy}
-          onCommit={v => run(api.updateRelocation(c.id, { description: v }))} /></dd>
-        <dt>№ перемещения</dt>
-        <dd><CommitInput value={c.number} width={140} disabled={locked || busy}
-          onCommit={v => run(api.updateRelocation(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date} width={140} type="date" disabled={locked || busy}
-          onCommit={v => run(api.updateRelocation(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
-          onChange={id => run(api.updateRelocation(c.id, { user_id: id }))} />
-        <ProjectField projectId={c.project_id} projectLabel={c.project_code} disabled={locked || busy}
-          onChange={id => run(api.updateRelocation(c.id, { project_id: id }))} />
-      </dl>
-      </FormHeader>
-
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>партия</th><th>изделие</th>
-            <th style={{ textAlign: 'right' }}>кол-во</th>
-            <th>откуда</th><th>куда</th><th />
-          </tr>
-        </thead>
-        <tbody>
-          {c.moves.map(m => (
-            <MoveRow key={m.lot_id} m={m} relocationId={c.id} locs={locs}
-              locked={locked} busy={busy} openItem={openItem} run={run} />
-          ))}
-          {!locked && <GhostRow relocationId={c.id} lots={lots} locs={locs}
-            busy={busy} run={run} />}
-        </tbody>
-      </table>
-      {c.moves.length === 0 &&
-        <div className="empty">Перемещение пусто — добавьте ход (лот · откуда → куда).</div>}
-
-      <AttachmentPanel ownerType="relocation" ownerId={c.id} />
-    </div>
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="перемещение" locked={locked} error={err}
+      meta={<>
+        {count(c.moves.length, 'ход', 'хода', 'ходов')}
+        {sumByUom(c.moves).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      fixed={fixed}
+      onFixate={() => run(api.lockRelocation(c.id))}
+      fixateTitle="Зафиксировать перемещение"
+      onUnfix={() => { if (confirm('Расфиксировать перемещения?')) run(api.unlockRelocation(c.id)) }}
+      onDelete={del}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}
+      fields={
+        <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ перемещения"
+          openProject={openProject}
+          patch={b => run(api.updateRelocation(c.id, b))} />}
+      tabs={tabs}
+    />
   )
 }
 
@@ -106,21 +103,20 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
 }) {
   const negative = m.from_live_qty < 0   // источник в минусе — переместили больше, чем лежало
   return (
-    <tr className="row s-available">
-      <td>
-        <span className="glyph g-available">⇄</span>{' '}
-        <span className="pn">{m.lot_label}</span>
-      </td>
-      <td>
-        <a className="link" onClick={() => openItem(m.item_id)}>{m.item_code}</a>{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>{m.item_description}</span>
-      </td>
+    <tr className="row">
+      <td className="gl"><LotGlyph origin={m.origin} liveQty={m.from_live_qty} /></td>
+      <td className="c-key"><span className="pn">{m.lot_label}</span></td>
+      <td className="c-fit">
+        <a className="link" onClick={() => openItem(m.item_id)}>{m.item_code}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={m.item_description}>{m.item_description}</span></td>
       <td className="num">
         <CommitInput value={String(m.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateRelocationLine(relocationId, m.lot_id, { qty: Number(v) }))}
-          validate={v => Number(v) > 0} /> {m.uom}
+          validate={v => Number(v) > 0} />
       </td>
-      <td>
+      <td className="uom">{m.uom}</td>
+      <td className="c-fit">
         <select className="lot-sel" value={m.from_location_id ?? ''} disabled={locked || busy}
           onChange={e => run(api.updateRelocationLine(relocationId, m.lot_id,
             { from_location_id: Number(e.target.value) }))}>
@@ -130,7 +126,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
           ({num(m.from_live_qty)}){negative && <span className="anomaly" title="источник в минусе">▲</span>}
         </span>
       </td>
-      <td>
+      <td className="c-fit">
         <select className="lot-sel" value={m.to_location_id ?? ''} disabled={locked || busy}
           onChange={e => run(api.updateRelocationLine(relocationId, m.lot_id,
             { to_location_id: Number(e.target.value) }))}>
@@ -138,11 +134,11 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
         </select>{' '}
         <span style={{ color: 'var(--fg-dim)' }}>({num(m.to_live_qty)})</span>
       </td>
-      <td style={{ textAlign: 'right' }}>
-        {!locked &&
-          <button className="x" title="убрать ход" disabled={busy}
-            onClick={() => run(api.deleteRelocationLine(relocationId, m.lot_id))}>×</button>}
-      </td>
+      {!locked && <td className="act">
+        <button className="fh-ctl icon fh-del" title="Убрать ход перемещения"
+          disabled={busy} onClick={() => run(api.deleteRelocationLine(relocationId, m.lot_id))}>
+          <span className="ci ci-trash" /></button>
+      </td>}
     </tr>
   )
 }
@@ -180,7 +176,8 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
 
   return (
     <tr className="row ghost">
-      <td>
+      <td className="gl" />
+      <td className="c-key" colSpan={2}>
         <select className="lot-sel" value={lotId} disabled={busy}
           onChange={e => pick(e.target.value ? Number(e.target.value) : '')}>
           <option value="">＋ лот…</option>
@@ -191,13 +188,15 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
           ))}
         </select>
       </td>
-      <td style={{ color: 'var(--fg-dim)' }}>{picked?.item_description ?? ''}</td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        {picked?.item_description ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td>
+      <td className="uom">{picked?.uom ?? ''}</td>
+      <td className="c-fit">
         <select className="lot-sel" value={from} disabled={busy || !lotId}
           onChange={e => setFrom(e.target.value ? Number(e.target.value) : '')}>
           <option value="">откуда…</option>
@@ -209,14 +208,14 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
           })}
         </select>
       </td>
-      <td>
+      <td className="c-fit">
         <select className="lot-sel" value={to} disabled={busy || !lotId}
           onChange={e => setTo(e.target.value ? Number(e.target.value) : '')}>
           <option value="">куда…</option>
           {locs.map(l => <option key={l.id} value={l.id} disabled={l.id === from}>{l.code}</option>)}
         </select>
       </td>
-      <td style={{ textAlign: 'right' }}>
+      <td className="act">
         <button className="btn sm"
           disabled={busy || !lotId || !from || !to || from === to || !(Number(qty) > 0)}
           onClick={add}>добавить</button>
