@@ -90,10 +90,16 @@ const LOT_ORIGIN: Record<string, string> = {
   receipt: 'из поставки', kitting: 'изготовлено',
   inventory: 'найдено инвентаризацией', requisition: 'отпочковано требованием',
 }
-export function LotGlyph({ origin, liveQty }: { origin: string | null; liveQty: number }) {
+// `draft` — партия ещё не на складе: её родил РАСФИКСИРОВАННЫЙ ордер (волна 19, Ф15 —
+// замок гейтит склад). Живости у неё нет вовсе, поэтому цвет не «исчерпана» (это была
+// бы ложь про израсходованную партию), а нейтральный «ждёт фиксации».
+export function LotGlyph({ origin, liveQty, draft }: {
+  origin: string | null; liveQty: number; draft?: boolean
+}) {
   const icon = LOT_GLYPH[origin ?? ''] ?? 'layers'
-  const tone = liveQty > 0 ? 'sg-ok' : liveQty < 0 ? 'sg-order' : 'sg-none'
-  const life = liveQty > 0 ? 'есть остаток' : liveQty < 0 ? 'недостача — подбей лоты' : 'исчерпана'
+  const tone = draft ? 'sg-none' : liveQty > 0 ? 'sg-ok' : liveQty < 0 ? 'sg-order' : 'sg-none'
+  const life = draft ? 'ещё не на складе — зафиксируйте документ'
+    : liveQty > 0 ? 'есть остаток' : liveQty < 0 ? 'недостача — подбей лоты' : 'исчерпана'
   return <span className={`ci sg ci-${icon} ${tone}`}
     title={`${LOT_ORIGIN[origin ?? ''] ?? 'партия'} · ${life}`} />
 }

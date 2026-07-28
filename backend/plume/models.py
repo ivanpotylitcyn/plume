@@ -96,8 +96,17 @@ class StockDocument(models.Model):
 
     Несёт **единый мягкий замок** `locked` (волна 13, Ф1; строка → bool в волне 19,
     Ф1c): свернул разнородные `Receipt.approved`, `Transfer.posted`,
-    `Kitting.status{wip/closed/cancelled}` в одну ось. `locked=True` = edit-freeze
-    (форма read-only). `cancelled` снят: отмена = удаление.
+    `Kitting.status{wip/closed/cancelled}` в одну ось. `cancelled` снят: отмена =
+    удаление.
+
+    **Волна 19, Ф15 — замок гейтит склад.** `locked=False` (черновик) = документ
+    правится и **ничего не двигает**: его партии не лежат на складе, его строки не
+    расходуют чужие, бюджет проекта его не видит. `locked=True` = форма read-only И
+    документ материализован в `StockMovement` — «зафиксировано = видно всем и
+    участвует в расчётах». До Ф15 замок был **чисто интерфейсным** (склад двигался
+    сразу на добавление строки), и по правилу работала одна комплектация из семи
+    видов — фаза убрала исключения, а не завела новое правило. Единственный писатель
+    движений — `engine.rebuild_movements`, там же и гейт.
 
     **Ф2a:** абстрактный миксин `StockDoc` схлопнут в этого конкретного родителя —
     6 документов стали MTI-наследниками, их PK = единый `id` этой таблицы (унификация
@@ -666,7 +675,10 @@ class Requisition(StockDocument):
 # --------------------------------------------------------------------------- #
 class Lot(models.Model):
     """Партия — физическое воплощение изделия, главная учётная единица склада.
-    Ровно один origin-документ (`origin` → `StockDocument`)."""
+    Ровно один origin-документ (`origin` → `StockDocument`).
+
+    Волна 19, Ф15: партия черновика существует в справочнике, но на складе не лежит
+    — её `+RECEIPT` рождается фиксацией origin-документа (живой остаток до неё 0)."""
 
     item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name='lots')
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
@@ -715,7 +727,11 @@ class Lot(models.Model):
 
 class StockMovement(models.Model):
     """Движение склада — пересчитываемая проекция из документов (не журнал).
-    item и project выводятся из партии; тип — из origin+знак."""
+    item и project выводятся из партии; тип — из origin+знак.
+
+    Волна 19, Ф15: проекция собирается **только по зафиксированным** ордерам —
+    черновик в неё не попадает (см. `StockDocument.locked` и
+    `engine.rebuild_movements`, единственного писателя этой таблицы)."""
 
     class Type(models.TextChoices):
         RECEIPT = 'RECEIPT', 'Приход'
@@ -752,6 +768,9 @@ class StockLine(models.Model):
     MTI-родителя (id-пространство унифицировано в Ф2a). Рождение лотов сюда НЕ входит:
     born-лоты остаются на `Lot.origin` (born-direct). Компонент строки комплектации
     не храним — он выводится из `lot.item`.
+
+    Волна 19, Ф15: строка сама по себе склад не двигает — в `StockMovement` она
+    попадает, когда её документ **зафиксирован** (до того это намерение, а не факт).
     """
 
     document = models.ForeignKey(StockDocument, on_delete=models.CASCADE,

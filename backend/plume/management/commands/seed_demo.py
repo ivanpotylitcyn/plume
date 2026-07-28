@@ -10,6 +10,10 @@
 
 Мультисклад (волна 13, Ф2e): два места хранения — «103» (основной) и «105» (пайка);
 перемещение ПЕР-1 двигает 4 КОРПУС-1 с 103 на 105 (тотал лота 12 сохранён: 8@103 + 4@105).
+
+Волна 19, Ф15 (замок гейтит склад): все ордера, чьи партии должны лежать на складе,
+заведены зафиксированными. Расфиксированной осталась ровно одна комплектация (wip) —
+она демонстрирует новое правило: черновик виден в «делается», но склад не двигает.
 """
 import datetime
 
@@ -86,18 +90,23 @@ class Command(BaseCommand):
                                              part_number='AL-CASE-100')
 
         # --- ВИНТ-М3: открытый заказ 25 (●), склада нет ---------------- #
+        # Волна 19, Ф1c: строковый `status{draft/sent/…}` у закупки и заказа снят —
+        # ось стала единым булевым `locked` (сид отставал и падал `AttributeError`).
         proc = models.Procurement.objects.create(
-            user=user, status=models.Procurement.Status.SENT, date=D(2026, 5, 10))
+            user=user, locked=True, date=D(2026, 5, 10))
         models.ProcurementLine.objects.create(procurement=proc, item=screw, qty=25)
         purchase = models.Purchase.objects.create(
             procurement=proc, project=prj, user=user,
-            status=models.Purchase.Status.SENT, date=D(2026, 5, 12))
+            locked=True, date=D(2026, 5, 12))
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=25)
 
         # --- ПЛАТА-1: сделано 3 (закрытая компл.) + делается 4 (wip) --- #
         # источник под пайку резисторов: приход РЕЗ-10К 100
+        # Ф15 (волна 19): поставка обязана быть зафиксирована, иначе её партии на
+        # складе не лежат (замок гейтит склад) и пайке нечего расходовать.
         r_res = models.Receipt.objects.create(
-            number='УПД-2', date=D(2026, 5, 21), contractor=supplier, project=prj, user=user)
+            number='УПД-2', date=D(2026, 5, 21), contractor=supplier, project=prj,
+            user=user, locked=True)
         res_lot = models.Lot.objects.create(item=res, project=prj, origin=r_res,
                                             qty=100, unit_cost=1, lot_name='Резистор',
                                             part_number='RES-10K-0805')
@@ -110,6 +119,8 @@ class Command(BaseCommand):
         models.Lot.objects.create(item=board, project=prj, origin=closed_k, qty=3,
                                   unit_cost=1506, lot_name='ПЛ-001..003')
 
+        # Ф15: пайка черновой комплектации склад НЕ двигает (резервирования нет) —
+        # «делается 4» видно дефициту отдельным членом (`_manufactured_in_progress`).
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
             locked=False)
@@ -119,7 +130,7 @@ class Command(BaseCommand):
         # --- КОРПУС-1 на «Собственном складе» (5) — для карты ---------- #
         inv = models.Inventory.objects.create(
             project=white, user=user, number='ИНВ-1', date=D(2026, 6, 3),
-            description='Остаток с прошлого НИР')
+            description='Остаток с прошлого НИР', locked=True)   # Ф15: иначе не на складе
         models.Lot.objects.create(item=case, project=white, origin=inv, qty=5,
                                   unit_cost=800, lot_name='Корпус Al (остаток)')
 

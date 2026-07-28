@@ -78,6 +78,15 @@
   тотал лота сохранён) / `post|unlock_relocation` / `relocation_source_lots` (пикер с
   разбивкой по местам). HTTP/React — следующим заходом («вьюхи потом»).
 
+Волна 19, Ф15 (замок гейтит склад):
+- `rebuild_movements` пропускает в `StockMovement` только зафиксированные документы:
+  черновик создаётся/правится/удаляется, **ничего никому не двигая**; фиксация делает
+  его видимым всем. Правило не новое — так с волны 2 работала комплектация (лот-прибор
+  ждал замка) и фильтр «готово» в дефиците; фаза сняла шесть исключений.
+- `rebuild_document_movements(doc)` — материализация/снятие склада на `lock_*`/`unlock_*`
+  (партии документа + партии-источники его строк). Деньги: `_project_spent` считает
+  только лоты зафиксированных поставок (единственное чтение денег мимо движений).
+
 Следующие волны: логин-экран, UI вложений (`Attachment`).
 """
 import csv
@@ -149,27 +158,48 @@ def _require_header(doc):
     doc.clean()
 
 
+def rebuild_document_movements(doc):
+    """Пересобрать движения ВСЕХ партий, которых касается документ (волна 19, Ф15).
+
+    Замок гейтит склад, поэтому смена `locked` — событие склада: фиксация обязана
+    материализовать движения документа, расфиксация — снять. Касается двух семейств
+    партий: рождённых документом (`doc.lots`, origin-`+RECEIPT`) и упомянутых его
+    знаковыми строками (`doc.lines`, расход/приём источника). Зовётся из всех
+    `lock_*`/`unlock_*`; сама пересборка чистая, порядок вызовов не важен.
+    """
+    lots = set(doc.lots.all())
+    lots |= {sl.lot for sl in doc.lines.select_related('lot')}
+    for lot in lots:
+        rebuild_movements(lot)
+
+
 def lock_document(doc, rows, empty_msg):
-    """Поставить единый мягкий замок (edit-freeze формы).
+    """Поставить единый мягкий замок (edit-freeze формы) + материализовать склад.
 
     `rows` — менеджер строк документа (`doc.lots` для born-only, `doc.lines` для
-    расходных): нельзя зафиксировать пустой документ. Склад не гейтит (замок
-    интерфейсный) — зеркалит `lock_receipt`/`lock_transfer`.
+    расходных): нельзя зафиксировать пустой документ. Ф15: фиксация — момент, когда
+    документ становится виден складу (до неё его строки не двигали ничего).
     """
     if not rows.exists():
         raise ValidationError(empty_msg)
     _require_header(doc)
     doc.locked = True
     doc.save(update_fields=['locked'])
+    rebuild_document_movements(doc)
     return doc
 
 
 def unlock_document(doc):
-    """Снять единый мягкий замок. Ничего не разрушает (строки и их движения
-    остаются) — guard по потомкам не нужен (в отличие от расфиксации
-    комплектации, где снимается рождённый лот-прибор)."""
+    """Снять единый мягкий замок: форма снова правима, движения документа сняты.
+
+    Ничего не разрушает (строки и рождённые лоты остаются) — guard по потомкам не
+    нужен, в отличие от расфиксации комплектации, где снимается лот-прибор. Ф15:
+    расфиксация возвращает документ в черновики и **со склада убирает** — расход
+    источников отпускается, рождённые партии перестают лежать на складе.
+    """
     doc.locked = False
     doc.save(update_fields=['locked'])
+    rebuild_document_movements(doc)
     return doc
 
 
@@ -229,6 +259,13 @@ def rebuild_movements(lot):
 
     origin-`+RECEIPT` берёт рождённое количество из `Lot.qty`; расходные `ISSUE`
     выводятся из строк-потребителей, ссылающихся на партию.
+
+    **Волна 19, Ф15 — замок гейтит склад.** В движения попадает только то, что
+    пришло от **зафиксированного** документа: черновик спокойно создаётся,
+    заполняется и удаляется, ничего никому не двигая; фиксация делает его видимым
+    всем (`lock_*` пересобирает движения, `unlock_*` их снимает). Точка врезки одна
+    — эта функция единственный писатель `StockMovement`, поэтому остатки, дефицит,
+    карта складов и бюджет подчиняются правилу автоматически.
     """
     lot.movements.all().delete()
     main = _main_location()
@@ -236,7 +273,8 @@ def rebuild_movements(lot):
 
     # origin: рождение партии (+). Дуга схлопнута в один FK (Ф2b): вид и id берём
     # из родителя `StockDocument` (`kind` == прежнее имя origin-FK; id == прежнему).
-    if lot.origin_id and lot.qty:
+    # Ф15: партия черновика на складе не лежит — материализуется на фиксации.
+    if lot.origin_id and lot.qty and lot.origin.locked:
         rows.append(models.StockMovement(
             lot=lot, location=main, type=models.StockMovement.Type.RECEIPT,
             qty=lot.qty, source_type=lot.origin.kind, source_id=lot.origin_id,
@@ -245,9 +283,11 @@ def rebuild_movements(lot):
     # движение существующего лота: единые знаковые строки `StockLine` (волна 13, Ф0)
     # свернули 4 таблицы строк-расхода (комплектация/передача/списание/отпочкование).
     # `StockLine.qty` уже со знаком (− расход); source_type/id — из документа-владельца
-    # (`document.kind`/id; дуга схлопнута в один FK в Ф2b). Статус документа склад НЕ
-    # гейтит (замок чисто интерфейсный); отмена = удаление документа (каскад строк+лотов).
+    # (`document.kind`/id; дуга схлопнута в один FK в Ф2b). Ф15: строка расфиксированного
+    # документа тоже не двигает склад; отмена = удаление документа (каскад строк+лотов).
     for sl in lot.stock_lines.select_related('location', 'document'):
+        if not sl.document.locked:
+            continue
         rows.append(models.StockMovement(
             lot=lot, location=sl.location,
             type=(models.StockMovement.Type.RECEIPT if sl.qty > 0
@@ -720,9 +760,16 @@ def _project_spent(project):
     requisition/inventory/kitting) сюда не входят → бесплатны в бюджете (платил
     источник). Только покупные материалы — снимок цены собранного узла (лот-прибор
     из Kitting) в бюджет не складываем (иначе двойной счёт).
+
+    Волна 19, Ф15 (решение Ивана): считаем только лоты **зафиксированных** поставок.
+    Это единственное место, где деньги читались с лотов напрямую, мимо движений, —
+    поэтому гейт склада его бы не накрыл, а черновой УПД двигал бы бюджет проекта
+    всем пользователям. Черновая поставка не в «потрачено» и не на складе: её
+    позиции остаются в «в пути / к заказу» — картина связная.
     """
     total = ZERO
-    for lot in project.lots.filter(origin__kind=models.StockDocument.Kind.RECEIPT):
+    for lot in project.lots.filter(origin__kind=models.StockDocument.Kind.RECEIPT,
+                                   origin__locked=True):
         total += lot.qty * lot.unit_cost
     return total
 
@@ -990,22 +1037,28 @@ def _device_unit_cost(kitting):
 
 
 def lock_kitting(kitting):
-    """Закрыть комплектацию: рождается лот-прибор (`+RECEIPT`), замок ставится."""
+    """Закрыть комплектацию: рождается лот-прибор (`+RECEIPT`), замок ставится.
+
+    Ф15 сделала фиксацию единым событием склада: вместе с рождением прибора
+    материализуется и **пайка** (`−ISSUE` компонентов) — до замка её строки склад не
+    двигали. Раньше комплектация была наполовину по правилу: лот ждал замка, а
+    компоненты списывались сразу.
+    """
     _require_unlocked(kitting)
     if kitting.lots.exists():
         raise ValidationError('У комплектации уже есть рождённый лот-прибор.')
-    lot = models.Lot.objects.create(
+    models.Lot.objects.create(
         item=kitting.target_item, project=kitting.project, origin=kitting,
         qty=kitting.qty, unit_cost=_device_unit_cost(kitting),
     )
     kitting.locked = True
     kitting.save(update_fields=['locked'])
-    rebuild_movements(lot)
-    return lot
+    rebuild_document_movements(kitting)     # лот-прибор + пайка компонентов
+    return kitting.lots.first()
 
 
 def unlock_kitting(kitting):
-    """Расфиксировать комплектацию: снять лот-прибор.
+    """Расфиксировать комплектацию: снять лот-прибор + отпустить пайку (Ф15).
 
     Guard: лот-прибор не должен быть потреблён/передан/отпочкован ниже.
     """
@@ -1020,6 +1073,7 @@ def unlock_kitting(kitting):
         lot.delete()
     kitting.locked = False
     kitting.save(update_fields=['locked'])
+    rebuild_document_movements(kitting)     # снять `−ISSUE` компонентов
 
 
 # --------------------------------------------------------------------------- #
@@ -1129,21 +1183,18 @@ def remove_receipt_lot(lot):
 
 
 def lock_receipt(receipt):
-    """Поставить замок «сверено со сканом» — форма прихода становится read-only."""
-    if not receipt.lots.exists():
-        raise ValidationError('Нельзя сверить пустой приход — добавьте строку.')
-    _require_header(receipt)
-    receipt.locked = True
-    receipt.save(update_fields=['locked'])
-    return receipt
+    """Поставить замок «сверено со сканом» — форма прихода read-only, партии УПД
+    ложатся на склад (Ф15). Ф15 заодно сняла рукописную копию `lock_document`:
+    поставка ходит общей дорогой, как остальные пять ордеров."""
+    return lock_document(receipt, receipt.lots,
+                         'Нельзя сверить пустой приход — добавьте строку.')
 
 
 def unlock_receipt(receipt):
-    """Снять замок — снова разрешить правку. Ничего не разрушает (в отличие от
-    переоткрытия комплектации), поэтому guard по потомкам не нужен."""
-    receipt.locked = False
-    receipt.save(update_fields=['locked'])
-    return receipt
+    """Снять замок — снова разрешить правку (партии УПД уходят со склада, Ф15).
+    Ничего не разрушает (в отличие от переоткрытия комплектации), поэтому guard по
+    потомкам не нужен."""
+    return unlock_document(receipt)
 
 
 def set_receipt_purchase(receipt, purchase):
@@ -1508,22 +1559,17 @@ def remove_transfer_line(line):
 
 
 def lock_transfer(transfer):
-    """Поставить замок «отгружено» — накладная становится read-only (зеркалит
-    `lock_receipt`). Сюда позже ляжет подписанная накладная (Attachment)."""
-    if not transfer.lines.exists():
-        raise ValidationError('Нельзя отгрузить пустую накладную — добавьте строку.')
-    _require_header(transfer)
-    transfer.locked = True
-    transfer.save(update_fields=['locked'])
-    return transfer
+    """Поставить замок «отгружено»: накладная read-only, партии уходят со склада
+    (`−ISSUE` материализуется, Ф15). Сюда позже ляжет подписанная накладная
+    (Attachment). Ф15 сняла рукописную копию `lock_document` — общая дорога."""
+    return lock_document(transfer, transfer.lines,
+                         'Нельзя отгрузить пустую накладную — добавьте строку.')
 
 
 def unlock_transfer(transfer):
-    """Снять замок — снова разрешить правку. Ничего не разрушает (строки и их
-    `−ISSUE` остаются), поэтому guard по потомкам не нужен."""
-    transfer.locked = False
-    transfer.save(update_fields=['locked'])
-    return transfer
+    """Снять замок — снова разрешить правку (`−ISSUE` отпускается, партии
+    возвращаются на склад, Ф15). Строки остаются, guard по потомкам не нужен."""
+    return unlock_document(transfer)
 
 
 # --------------------------------------------------------------------------- #
@@ -1946,6 +1992,13 @@ def project_closure(project):
     выходами (передача/списание/на баланс), отрицательные — аномалия «подбей лоты»
     (недостача, чинится правкой документа-потребителя). Закрыть можно **внешний**
     проект, когда остатков нет (внутренние склады постоянны — не закрываются).
+
+    Волна 19, Ф15: раз черновик склад не двигает, мост «списать/на баланс» больше не
+    уводит остаток мгновенно — он кладёт его в **черновой** закрывающий документ.
+    Чтобы панель не выглядела «кнопка не сработала», отдаём `closing_drafts` —
+    расфиксированные документы, уже разобравшие остатки этого проекта (в т.ч. чужого
+    проекта-получателя, как требование в «Собственный склад»): их видно строкой
+    «ждут фиксации», и они же становятся причиной отказа в `blocker`.
     """
     residuals = []
     positive = ZERO
@@ -1965,6 +2018,7 @@ def project_closure(project):
             positive += live
         else:
             anomaly_count += 1
+    drafts = _closing_drafts(project)
     is_external = project.kind == models.Project.Kind.EXTERNAL
     is_closed = project.locked
     can_close = is_external and not is_closed and not residuals
@@ -1972,6 +2026,8 @@ def project_closure(project):
         blocker = 'Внутренний склад постоянный — не закрывается.'
     elif is_closed:
         blocker = ''
+    elif residuals and drafts:
+        blocker = 'Закрывающие документы ещё черновики — зафиксируйте их.'
     elif residuals:
         blocker = 'Есть остаточные лоты — сведите их в 0.'
     else:
@@ -1982,9 +2038,31 @@ def project_closure(project):
         'locked': project.locked, 'closed': project.closed,
         'is_external': is_external,
         'residuals': residuals, 'residual_positive': positive,
-        'anomaly_count': anomaly_count,
+        'anomaly_count': anomaly_count, 'closing_drafts': drafts,
         'can_close': can_close, 'blocker': blocker,
     }
+
+
+def _closing_drafts(project):
+    """Расфиксированные документы, уже разобравшие остатки проекта (Ф15).
+
+    Ищем по строкам: любой `locked=False` документ, чья `StockLine` ссылается на лот
+    этого проекта. Документ может жить в другом проекте (требование в «Собственный
+    склад» тянет наш лот) — поэтому фильтр по строкам, а не по `document.project`.
+    `qty` — сколько остатка ждёт фиксации (магнитуда расхода по нашим лотам).
+    """
+    rows = []
+    docs = (models.StockDocument.objects
+            .filter(locked=False, lines__lot__project=project)
+            .distinct().order_by('id'))
+    for doc in docs:
+        qty = -(doc.lines.filter(lot__project=project, qty__lt=0)
+                .aggregate(s=Sum('qty'))['s'] or ZERO)
+        rows.append({
+            'document_id': doc.id, 'kind': doc.kind,
+            'code': doc.code or '', 'number': doc.number, 'qty': qty,
+        })
+    return rows
 
 
 def lock_project(project):
@@ -2022,14 +2100,18 @@ def unlock_project(project):
 def writeoff_lot(project, lot, qty, user):
     """Мост «списать остаток»: найти-или-создать акт списания проекта + строка.
 
-    Оживляет действие панели: один клик уводит остаток лота в 0 (`−ISSUE`).
-    Переиспользует последний акт проекта (если этого лота в нём ещё нет).
+    Оживляет действие панели: один клик кладёт остаток лота в акт списания. Ф15:
+    остаток уйдёт в 0 не сейчас, а на фиксации акта — панель показывает лот
+    остаточным, пока акт черновик (это и есть «ответственно нажал Зафиксировать»).
+    Переиспользует последний **черновой** акт проекта (если этого лота в нём ещё нет);
+    зафиксированный не трогаем — правка под замком запрещена.
     """
     if lot.project_id != project.id:
         raise ValidationError('Лот из другого проекта.')
     # Ф2c: `project` поднят в StockDocument (реверс — `project.documents`); типизированный
     # доступ через дочерний менеджер (прозрачно фильтрует по родительскому полю).
-    writeoff = models.Writeoff.objects.filter(project=project).order_by('-id').first()
+    writeoff = (models.Writeoff.objects.filter(project=project, locked=False)
+                .order_by('-id').first())
     if writeoff is None or writeoff.lines.filter(lot=lot).exists():
         writeoff = create_writeoff(
             project, user, _auto_number('СПИС', project), reason='закрытие проекта')
@@ -2040,14 +2122,16 @@ def writeoff_lot(project, lot, qty, user):
 def requisition_lot(project, lot, qty, user, dest_kind=None):
     """Мост «на баланс»: отпочковать остаток проекта в белый «Собственный склад».
 
-    Один клик панели: остаток лота уходит в 0 у проекта (`−ISSUE`) и рождается
-    лот-потомок на балансе (`+RECEIPT`). Переиспользует последнее требование в
-    целевой склад (если этого источника в нём ещё нет).
+    Один клик панели кладёт остаток в требование: на фиксации он уйдёт в 0 у проекта
+    (`−ISSUE`) и появится лотом-потомком на балансе (`+RECEIPT`) — до неё склад не
+    двигается (Ф15). Переиспользует последнее **черновое** требование в целевой склад
+    (если этого источника в нём ещё нет); зафиксированное не трогаем.
     """
     if lot.project_id != project.id:
         raise ValidationError('Лот из другого проекта.')
     dest = _internal_project(dest_kind or models.Project.Kind.INTERNAL_STOCK)
-    requisition = models.Requisition.objects.filter(project=dest).order_by('-id').first()
+    requisition = (models.Requisition.objects.filter(project=dest, locked=False)
+                   .order_by('-id').first())
     if requisition is None or requisition.lines.filter(lot=lot).exists():
         requisition = create_requisition(dest, user, _auto_number('ТРБ', dest))
     add_requisition_line(requisition, lot, qty)

@@ -145,7 +145,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       ? <div className="tab-empty">Нет партий</div>
       // Глиф партии (Ф12c): форма = откуда родилась, цвет = живость остатка. Текстовый
       // чип «origin» снят — вид рождения теперь несёт сам глиф (§7a: одна строка —
-      // один знак).
+      // один знак). Ф15: партия расфиксированного origin остаётся в списке (видно
+      // входящий поток), но идёт нейтральным тоном — она не «исчерпана», а не принята.
       : <table className="grid">
           <thead><tr><th className="gl" /><th className="c-key">Партия</th>
             <th className="c-fit">Проект</th>
@@ -156,11 +157,17 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
           </tr></thead>
           <tbody>{d.lots.map(l => (
             <tr key={l.id} className="row">
-              <td className="gl"><LotGlyph origin={l.origin} liveQty={l.live_qty} /></td>
+              <td className="gl"><LotGlyph origin={l.origin} liveQty={l.live_qty}
+                draft={!l.origin_locked} /></td>
               <td className="c-key">#{l.id}</td>
               <td className="c-fit">{l.project_code}</td>
               <td className="num">{num(l.qty_born)}</td>
-              <td className="num">{num(l.live_qty)}</td>
+              {/* Ф15: у партии черновика остатка нет вовсе — прочерк, а не 0 (ноль
+                  здесь читался бы как «израсходована»). Рождённое кол-во остаётся:
+                  это и есть входящий поток «едет, ещё не принято». */}
+              <td className="num" title={l.origin_locked ? undefined
+                : 'Партия ещё не на складе — зафиксируйте документ-origin'}>
+                {l.origin_locked ? num(l.live_qty) : '—'}</td>
               <td className="uom">{d.uom}</td>
               <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
               <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>

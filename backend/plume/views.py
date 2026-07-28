@@ -379,8 +379,12 @@ def _item_detail_payload(item):
          'qty': bl.qty, 'position': bl.position}
         for bl in item.bom_lines.select_related('component')
     ]
+    # Ф15: партия черновика в этом табе ОСТАЁТСЯ (видно входящий поток: «10 едет, 0
+    # принято»), но живости у неё нет — вью обязано отличать её от израсходованной,
+    # поэтому отдаём замок origin-документа.
     lots = [
         {'id': lot.id, 'project_code': lot.project.code, 'origin': lot.origin_kind,
+         'origin_locked': lot.origin.locked,
          'qty_born': lot.qty, 'live_qty': engine.lot_live_qty(lot),
          'unit_cost': lot.unit_cost, 'part_number': lot.part_number,
          'lot_name': lot.lot_name}

@@ -11,15 +11,18 @@ import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDema
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
   type ResidualLot } from './api'
 import { Chevron, LayerSeg, LotGlyph, count, money, num, ItemGlyph } from './status'
+import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
 
-export function ProjectView({ projectId, items, isNew, openItem, openPurchase, onChanged, onDeleted }:
+export function ProjectView({ projectId, items, isNew, openItem, openPurchase, openOrder,
+  onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean
     openItem: (id: number) => void; openPurchase: (id: number) => void
+    openOrder: (kind: OrderKind, id: number) => void   // Ф15: черновики закрытия кликабельны
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
   const [phead, setPhead] = useState<ProjectDetail | null>(null)  // реквизиты шапки
@@ -94,6 +97,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
   // Внешний проект (НИР/контракт) делает приборы; внутренние склады — только хранят.
   const external = phead ? phead.kind === 'external' : true
   const residuals = closure?.residuals ?? []
+  const drafts = closure?.closing_drafts ?? []   // Ф15: закрывающие документы-черновики
 
   const tabs: FormTab[] = []
   if (external) tabs.push(
@@ -125,20 +129,33 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
     { key: 'stock', label: 'Склад', icon: 'layers',
       content: residuals.length === 0
         ? <div className="tab-empty">Склад проекта пуст — живых остатков нет.</div>
-        : <table className="grid">
-            <thead><tr>
-              <th className="gl" /><th className="c-key">Партия</th>
-              <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Остаток</th><th className="uom">Ед.</th>
-              {!locked && <th className="act" />}
-            </tr></thead>
-            <tbody>
-              {residuals.map(r => (
-                <ResidualRow key={r.lot_id} r={r} projectId={projectId} locked={locked}
-                  busy={busy} openItem={openItem} run={runC} />
-              ))}
-            </tbody>
-          </table> },
+        : <>
+            {/* Ф15: «списать»/«на баланс» кладут остаток в ЧЕРНОВОЙ документ, а со
+                склада он уйдёт на его фиксации — иначе клик выглядит несработавшим. */}
+            {drafts.length > 0 && <div className="hint-row">
+              Ждут фиксации:{' '}
+              {drafts.map((d, i) => <span key={d.document_id}>
+                {i > 0 && ' · '}
+                <a className="link" onClick={() => openOrder(d.kind as OrderKind, d.document_id)}>
+                  {ORDER_LABEL[d.kind as OrderKind]} {d.code || d.number || `#${d.document_id}`}
+                </a>{' '}<span style={{ color: 'var(--fg-dim)' }}>({num(d.qty)})</span>
+              </span>)}
+            </div>}
+            <table className="grid">
+              <thead><tr>
+                <th className="gl" /><th className="c-key">Партия</th>
+                <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
+                <th style={{ textAlign: 'right' }}>Остаток</th><th className="uom">Ед.</th>
+                {!locked && <th className="act" />}
+              </tr></thead>
+              <tbody>
+                {residuals.map(r => (
+                  <ResidualRow key={r.lot_id} r={r} projectId={projectId} locked={locked}
+                    busy={busy} openItem={openItem} run={runC} />
+                ))}
+              </tbody>
+            </table>
+          </> },
     { key: 'files', label: 'Файлы', icon: 'files',
       content: <AttachmentList att={att} locked={locked} /> },
   )

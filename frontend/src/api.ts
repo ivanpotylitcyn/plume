@@ -97,7 +97,10 @@ export interface ItemDetail {
          qty: number; position: string }[]
   where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number
                 parent_native: boolean; parent_synced: boolean; parent_locked: boolean }[]
-  lots: { id: number; project_code: string; origin: string; qty_born: number;
+  // `origin_locked` (Ф15): партия черновика лежит в этом списке, но НЕ на складе —
+  // остатка у неё нет вовсе (не «исчерпана»), вью гасит колонку и тон глифа.
+  lots: { id: number; project_code: string; origin: string; origin_locked: boolean
+          qty_born: number
           live_qty: number; unit_cost: number; part_number: string; lot_name: string }[]
   movements: ItemMovement[]
 }
@@ -347,10 +350,17 @@ export interface ResidualLot {
   lot_id: number; lot_label: string; origin: string | null; item_id: number; item_code: string
   item_description: string; uom: string; live_qty: number; anomaly: boolean
 }
+// Черновой закрывающий документ (волна 19, Ф15): мост панели («списать»/«на баланс»)
+// кладёт остаток в расфиксированный ордер, а склад тот двигает только на фиксации —
+// панель показывает такие документы, иначе кнопка выглядит несработавшей.
+export interface ClosingDraft {
+  document_id: number; kind: string; code: string; number: string; qty: number
+}
 export interface ProjectClosure {
   project_id: number; project_code: string; project_name: string; kind: string
   locked: boolean; closed: string | null; is_external: boolean
   residuals: ResidualLot[]; residual_positive: number; anomaly_count: number
+  closing_drafts: ClosingDraft[]
   can_close: boolean; blocker: string
 }
 

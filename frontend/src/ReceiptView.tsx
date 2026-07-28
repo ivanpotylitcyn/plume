@@ -56,7 +56,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
           </thead>
           <tbody>
             {c.lots.map(lot => (
-              <LotRow key={lot.id} lot={lot} locked={locked} busy={busy}
+              <LotRow key={lot.id} lot={lot} locked={locked} draft={!fixed} busy={busy}
                 openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow receiptId={c.id} items={items} busy={busy} run={run} />}
@@ -131,16 +131,19 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
 }
 
 // Реальная строка УПД (лот): автосейв кол-ва/цены/названия, удаление до замка.
-function LotRow({ lot, locked, busy, openItem, run }: {
-  lot: ReceiptLot; locked: boolean; busy: boolean
+// `draft` — поставка ещё не сверена (Ф15): партия на складе не лежит, живого остатка
+// у неё нет вовсе. Показывать «остаток 0» было бы враньём про израсходованную партию,
+// поэтому в черновике остаток не показываем, а глиф гасим в нейтральный.
+function LotRow({ lot, locked, draft, busy, openItem, run }: {
+  lot: ReceiptLot; locked: boolean; draft: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<ReceiptForm>) => void
 }) {
-  const short = lot.live_qty !== lot.qty   // просел под пайку/расход
+  const short = !draft && lot.live_qty !== lot.qty   // просел под пайку/расход
   return (
     <tr className="row">
       {/* Строка = партия, рождённая этой поставкой: глиф партии (форма — origin,
           цвет — живость остатка, §7a), код и описание — РАЗНЫМИ колонками. */}
-      <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} /></td>
+      <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
       <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>

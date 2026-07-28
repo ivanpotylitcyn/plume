@@ -54,7 +54,8 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
           </thead>
           <tbody>
             {c.lots.map(lot => (
-              <LotRow key={lot.id} lot={lot} locked={locked} busy={busy} openItem={openItem} run={run} />
+              <LotRow key={lot.id} lot={lot} locked={locked} draft={!fixed} busy={busy}
+                openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
@@ -98,15 +99,17 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
 }
 
 // Реальная строка акта (найденный лот): автосейв кол-ва/цены/названия, удаление.
-function LotRow({ lot, locked, busy, openItem, run }: {
-  lot: InventoryFormLot; locked: boolean; busy: boolean
+// `draft` — акт не проведён (Ф15): найденная партия ещё не на складе, живости у неё
+// нет — остаток не показываем, глиф нейтральный (иначе «остаток 0» на каждой строке).
+function LotRow({ lot, locked, draft, busy, openItem, run }: {
+  lot: InventoryFormLot; locked: boolean; draft: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<InventoryForm>) => void
 }) {
-  const short = lot.live_qty !== lot.qty   // просел под последующий расход
+  const short = !draft && lot.live_qty !== lot.qty   // просел под последующий расход
   return (
     <tr className="row">
       {/* Строка = партия, рождённая этим актом (origin = инвентаризация). */}
-      <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} /></td>
+      <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
       <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>

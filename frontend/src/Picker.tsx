@@ -6,9 +6,14 @@
 // меню `.typeahead-menu`, строка кандидата по правилу вёрстки `[глиф][code] описание`
 // (UI_GUIDE §7a). `renderRow` оставлен подменяемым — под будущий пикер лотов
 // (у лота свой словарь строки: изделие + партия + остаток).
+//
+// Меню и плашка «не найдено» живут в `AnchoredMenu` — портал в `body` с фиксированной
+// привязкой к полю (2026-07-28): внутри формы их резали панель табов и прокрутка
+// страницы, а у нижнего края окна меню теперь раскрывается вверх.
 import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { useTypeahead } from './core/useTypeahead'
+import { AnchoredMenu } from './AnchoredMenu'
 import type { ItemRow, CounterpartyRow, ProjectPurchaseRow } from './api'
 import { ItemGlyph, StatusGlyph } from './status'
 
@@ -30,6 +35,7 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
 }) {
   const t = useTypeahead({ options, value, onPick, keyOf, textOf, searchOf, onEnter })
   const menu = useRef<HTMLDivElement>(null)
+  const field = useRef<HTMLInputElement>(null)     // якорь меню (портал считает от него)
 
   // Подсветка = смысл (ядро), прокрутка за ней = знак (тема). Двигаем только свой
   // список: `scrollIntoView` уехал бы вверх по всем прокручиваемым предкам и дёрнул
@@ -45,13 +51,13 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
 
   return (
     <span className="picker">
-      <input className="lot-sel" style={width ? { width } : undefined} value={t.text}
+      <input ref={field} className="lot-sel" style={width ? { width } : undefined} value={t.text}
         disabled={disabled} placeholder={placeholder ?? 'код или описание…'}
         onChange={e => t.type(e.target.value)} onKeyDown={t.onKeyDown} onBlur={t.close} />
       {onClear && value !== '' && !disabled &&
         <button className="x" title="Очистить" onClick={onClear}>×</button>}
       {t.open &&
-        <div className="typeahead-menu" ref={menu}>
+        <AnchoredMenu anchor={field} boxRef={menu} className="typeahead-menu">
           {t.matches.map((o, i) => (
             // onMouseDown гасим: иначе blur поля закрыл бы меню до клика.
             <div key={keyOf(o)} className={`typeahead-item${i === t.active ? ' active' : ''}`}
@@ -59,8 +65,11 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
               {renderRow(o)}
             </div>
           ))}
-        </div>}
-      {t.empty && <div className="picker-empty">{notFound ?? 'ничего не найдено'}</div>}
+        </AnchoredMenu>}
+      {t.empty &&
+        <AnchoredMenu anchor={field} className="picker-empty">
+          {notFound ?? 'ничего не найдено'}
+        </AnchoredMenu>}
     </span>
   )
 }

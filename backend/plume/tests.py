@@ -54,10 +54,13 @@ class EngineTestBase(TestCase):
             code=code, description=code, category=_cat(),
             native=manufactured)
 
-    def receipt_lot(self, item, project, qty, purchase=None):
+    def receipt_lot(self, item, project, qty, purchase=None, locked=True):
+        """Партия, приехавшая по УПД. Волна 19, Ф15: поставка **зафиксирована** —
+        иначе её партия на складе не лежит (замок гейтит склад), а фикстура значит
+        именно «товар на складе». `locked=False` — для тестов самого гейта."""
         r = models.Receipt.objects.create(
             number=f'UPD-{item.code}-{qty}', date='2026-05-01', contractor=self.supplier,
-            project=project, user=self.user, purchase=purchase)
+            project=project, user=self.user, purchase=purchase, locked=locked)
         lot = models.Lot.objects.create(item=item, project=project, origin=r, qty=D(qty))
         engine.rebuild_movements(lot)
         return lot
@@ -75,7 +78,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          locked=False)
+                                          locked=True)     # Ф15: спаяно = зафиксировано
         models.StockLine.objects.create(document=k, lot=lot,
                                         location=self.main, qty=D(-30))
         engine.rebuild_movements(lot)
@@ -87,7 +90,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          locked=False)
+                                          locked=True)
         models.StockLine.objects.create(document=k, lot=lot,
                                         location=self.main, qty=D(-8))
         engine.rebuild_movements(lot)
@@ -128,15 +131,19 @@ class RebuildAndStockTests(EngineTestBase):
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 100)
         dev = self.make_item('DEV', manufactured=True)
+        # Ф15: расход виден складу только у зафиксированных документов — фикстура
+        # моделирует свершившийся факт, поэтому все три заведены под замком.
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
-                                          locked=False)
+                                          locked=True)
         w = models.Writeoff.objects.create(project=self.prj, user=self.user,
-                                           number='W-1', date='2026-06-01')
+                                           number='W-1', date='2026-06-01',
+                                           locked=True)
         cust = models.Project.objects.create(
             code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         t = models.Transfer.objects.create(project=self.prj, user=self.user,
-                                            number='T-1', date='2026-06-01')
+                                            number='T-1', date='2026-06-01',
+                                            locked=True)
         # знаковые строки (− расход) трёх разных документов на один лот
         models.StockLine.objects.create(document=k, lot=lot, location=self.main, qty=D(-30))
         models.StockLine.objects.create(document=w, lot=lot, location=self.main, qty=D(-10))
@@ -326,7 +333,8 @@ class StockMapTests(EngineTestBase):
         item = self.make_item('CASE')
         self.receipt_lot(item, self.prj, 12)
         inv = models.Inventory.objects.create(project=white, user=self.user,
-                                              number='INV-1', date='2026-06-01')
+                                              number='INV-1', date='2026-06-01',
+                                              locked=True)   # Ф15: иначе не на складе
         lot = models.Lot.objects.create(item=item, project=white, origin=inv, qty=D(5))
         engine.rebuild_movements(lot)
 
@@ -387,7 +395,9 @@ class KittingFormTests(EngineTestBase):
         lot = self.receipt_lot(self.case, self.prj, 10)
         k = self.make_kitting(qty=2)
         engine.add_kitting_line(k, self.case, lot, D(2))
-        # лот просел на 2 (ISSUE), строка BOM закрыта
+        # Ф15: пайка черновика склад не двигает — компонент ещё целиком свой
+        self.assertEqual(engine.lot_live_qty(lot), D(10))
+        engine.lock_kitting(k)                   # фиксация материализует −ISSUE
         self.assertEqual(engine.lot_live_qty(lot), D(8))
         c = engine.kitting_form(k)
         row = {r['component_code']: r for r in c['rows']}['CASE']
@@ -414,14 +424,22 @@ class KittingFormTests(EngineTestBase):
         k = self.make_kitting(qty=2)
         line = engine.add_kitting_line(k, self.case, lot, D(2))
         engine.update_kitting_line(line, D(5))
+        engine.lock_kitting(k)                   # Ф15: расход виден с фиксации
         self.assertEqual(engine.lot_live_qty(lot), D(5))
 
     def test_remove_line_restores_qty(self):
+        """Ф15: правка черновика склад не трогает вовсе — ни добавление строки, ни
+        её снятие; проверяем через фиксацию (расход) и расфиксацию (возврат)."""
         lot = self.receipt_lot(self.case, self.prj, 10)
         k = self.make_kitting(qty=2)
         line = engine.add_kitting_line(k, self.case, lot, D(3))
+        self.assertEqual(engine.lot_live_qty(lot), D(10))   # черновик не двигает
+        engine.lock_kitting(k)
         self.assertEqual(engine.lot_live_qty(lot), D(7))
+        engine.unlock_kitting(k)                            # расход отпущен
+        self.assertEqual(engine.lot_live_qty(lot), D(10))
         engine.remove_kitting_line(line)
+        engine.lock_kitting(k)
         self.assertEqual(engine.lot_live_qty(lot), D(10))
 
     def test_close_births_device_lot_with_cost_snapshot(self):
@@ -489,6 +507,10 @@ class ReceiptFormTests(EngineTestBase):
         lot = engine.add_receipt_lot(r, case, D(12), unit_cost=D(800),
                                      lot_name='Корпус Al')
         self.assertEqual(lot.project_id, r.project_id)   # проект наследован
+        # Ф15: партия черновой поставки на складе не лежит — движение рождает замок
+        self.assertEqual(engine.lot_live_qty(lot), D(0))
+        self.assertEqual(lot.movements.count(), 0)
+        engine.lock_receipt(r)
         self.assertEqual(engine.lot_live_qty(lot), D(12))
         mv = lot.movements.get()
         self.assertEqual(mv.type, models.StockMovement.Type.RECEIPT)
@@ -512,6 +534,7 @@ class ReceiptFormTests(EngineTestBase):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(10))
         engine.update_receipt_lot(lot, qty=D(7))
+        engine.lock_receipt(r)                   # Ф15: склад видит с фиксации
         self.assertEqual(engine.lot_live_qty(lot), D(7))
 
     def test_update_lot_cost_and_name(self):
@@ -562,17 +585,22 @@ class ReceiptFormTests(EngineTestBase):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
         engine.lock_receipt(r)
+        self.assertEqual(engine.lot_live_qty(lot), D(5))
         engine.unlock_receipt(r)
         r.refresh_from_db()
         self.assertFalse(r.locked)
-        engine.update_receipt_lot(lot, qty=D(9))       # снова можно
+        self.assertEqual(engine.lot_live_qty(lot), D(0))   # Ф15: ушла со склада
+        engine.update_receipt_lot(lot, qty=D(9))           # снова можно править
+        engine.lock_receipt(r)
         self.assertEqual(engine.lot_live_qty(lot), D(9))
 
     def test_received_lot_feeds_kitting_form(self):
-        # приход РЕЗ → лот сразу виден форме комплектации как кандидат
+        # сверенный приход РЕЗ → лот виден форме комплектации как кандидат
+        # (Ф15: именно сверенный — черновая поставка складу не видна)
         r = self.make_receipt()
         comp = self.make_item('R')
         engine.add_receipt_lot(r, comp, D(50))
+        engine.lock_receipt(r)
         dev = self.make_item('DEV', manufactured=True)
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
         k = models.Kitting.objects.create(project=self.prj, target_item=dev,
@@ -727,12 +755,17 @@ class TransferFormTests(EngineTestBase):
     def test_add_line_issues_from_lot(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, self.lot, D(2))
+        # Ф15: черновая накладная ничего не отгружает — партия ещё вся на складе
+        self.assertEqual(engine.lot_live_qty(self.lot), D(5))
+        self.assertFalse(self.lot.movements.filter(type='ISSUE').exists())
+        engine.lock_transfer(t)                                 # «отгружено»
         self.assertEqual(engine.lot_live_qty(self.lot), D(3))   # 5 − 2
         self.assertTrue(self.lot.movements.filter(type='ISSUE', qty=D(-2)).exists())
 
     def test_form_totals_and_live(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, self.lot, D(2), display_name='Прибор зав.№7')
+        engine.lock_transfer(t)
         c = engine.transfer_form(t)
         self.assertEqual(c['number'], 'Н-1')
         self.assertEqual(c['total_qty'], D(2))
@@ -768,13 +801,16 @@ class TransferFormTests(EngineTestBase):
     def test_over_issue_drives_negative_not_clamped(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, self.lot, D(8))             # больше остатка 5
+        engine.lock_transfer(t)
         self.assertEqual(engine.lot_live_qty(self.lot), D(-3))  # недостача информативна
 
     def test_update_qty_rebuilds_and_remove_restores(self):
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         line = engine.add_transfer_line(t, self.lot, D(2))
         engine.update_transfer_line(line, qty=D(4))
+        engine.lock_transfer(t)
         self.assertEqual(engine.lot_live_qty(self.lot), D(1))   # 5 − 4
+        engine.unlock_transfer(t)                               # Ф15: правка — под замком снятым
         engine.update_transfer_line(line, display_name='новое имя')
         line.refresh_from_db()
         self.assertEqual(line.display_name, 'новое имя')
@@ -788,6 +824,7 @@ class TransferFormTests(EngineTestBase):
         self.receipt_lot(self.device, other, 3)                 # чужой проект
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, self.lot, D(5))             # свой лот в ноль
+        engine.lock_transfer(t)                                 # Ф15: отгружено фиксацией
         picker = engine.project_available_lots(self.prj)
         self.assertEqual(picker, [])                            # живых своих лотов нет
         self.assertEqual(len(engine.project_available_lots(other)), 1)
@@ -815,7 +852,9 @@ class TransferFormTests(EngineTestBase):
         engine.lock_transfer(t)
         engine.unlock_transfer(t)
         self.assertFalse(engine.transfer_form(t)['locked'])
-        engine.update_transfer_line(line, qty=D(3))            # снова можно
+        self.assertEqual(engine.lot_live_qty(self.lot), D(5))  # Ф15: отгрузка отпущена
+        engine.update_transfer_line(line, qty=D(3))            # снова можно править
+        engine.lock_transfer(t)
         self.assertEqual(engine.lot_live_qty(self.lot), D(2))
 
     def test_item_movements_projection(self):
@@ -847,12 +886,16 @@ class WriteoffFormTests(EngineTestBase):
     def test_add_line_issues_from_lot(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='брак')
         engine.add_writeoff_line(w, self.lot, D(4))
+        # Ф15: черновой акт ничего не списывает — партия целиком на месте
+        self.assertEqual(engine.lot_live_qty(self.lot), D(10))
+        engine.lock_writeoff(w)                                  # проведён
         self.assertEqual(engine.lot_live_qty(self.lot), D(6))
         self.assertTrue(self.lot.movements.filter(type='ISSUE', qty=D(-4)).exists())
 
     def test_form_totals(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='брак')
         engine.add_writeoff_line(w, self.lot, D(4))
+        engine.lock_writeoff(w)
         c = engine.writeoff_form(w)
         self.assertEqual(c['number'], 'СП-1')
         self.assertEqual(c['reason'], 'брак')
@@ -878,13 +921,16 @@ class WriteoffFormTests(EngineTestBase):
     def test_over_writeoff_negative_not_clamped(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1')
         engine.add_writeoff_line(w, self.lot, D(14))
+        engine.lock_writeoff(w)
         self.assertEqual(engine.lot_live_qty(self.lot), D(-4))
 
     def test_update_and_remove_restores(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1')
         line = engine.add_writeoff_line(w, self.lot, D(4))
         engine.update_writeoff_line(line, D(7))
+        engine.lock_writeoff(w)
         self.assertEqual(engine.lot_live_qty(self.lot), D(3))
+        engine.unlock_writeoff(w)                      # Ф15: списание отпущено
         engine.remove_writeoff_line(line)
         self.assertEqual(engine.lot_live_qty(self.lot), D(10))
 
@@ -907,6 +953,9 @@ class RequisitionFormTests(EngineTestBase):
     def test_add_line_issues_source_and_births_child(self):
         req = engine.create_requisition(self.white, self.user, 'ТР-1')
         engine.add_requisition_line(req, self.src, D(4))
+        # Ф15: черновое требование не двигает ни источник, ни потомка
+        self.assertEqual(engine.lot_live_qty(self.src), D(10))
+        engine.lock_requisition(req)
         self.assertEqual(engine.lot_live_qty(self.src), D(6))    # источник просел
         born = engine._requisition_born_lot(req, self.src)
         self.assertIsNotNone(born)
@@ -919,6 +968,7 @@ class RequisitionFormTests(EngineTestBase):
     def test_form_shows_source_and_born(self):
         req = engine.create_requisition(self.white, self.user, 'ТР-1')
         engine.add_requisition_line(req, self.src, D(4))
+        engine.lock_requisition(req)
         c = engine.requisition_form(req)
         self.assertEqual(c['total_qty'], D(4))
         row = c['lines'][0]
@@ -941,6 +991,7 @@ class RequisitionFormTests(EngineTestBase):
         req = engine.create_requisition(self.white, self.user, 'ТР-1')
         line = engine.add_requisition_line(req, self.src, D(4))
         engine.update_requisition_line(line, D(7))
+        engine.lock_requisition(req)
         born = engine._requisition_born_lot(req, self.src)
         self.assertEqual(engine.lot_live_qty(self.src), D(3))
         self.assertEqual(engine.lot_live_qty(born), D(7))
@@ -948,6 +999,9 @@ class RequisitionFormTests(EngineTestBase):
     def test_remove_restores_source_and_deletes_child(self):
         req = engine.create_requisition(self.white, self.user, 'ТР-1')
         line = engine.add_requisition_line(req, self.src, D(4))
+        engine.lock_requisition(req)
+        self.assertEqual(engine.lot_live_qty(self.src), D(6))
+        engine.unlock_requisition(req)                  # Ф15: отпочкование отпущено
         engine.remove_requisition_line(line)
         self.assertEqual(engine.lot_live_qty(self.src), D(10))
         self.assertIsNone(engine._requisition_born_lot(req, self.src))
@@ -976,7 +1030,10 @@ class ProjectClosureTests(EngineTestBase):
             engine.lock_project(self.prj)
 
     def test_writeoff_bridge_then_close(self):
-        engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
+        # Ф15: мост кладёт остаток в черновой акт, в 0 он уходит на фиксации акта
+        w = engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
+        self.assertEqual(engine.project_closure(self.prj)['residual_positive'], D(10))
+        engine.lock_writeoff(w)
         c = engine.project_closure(self.prj)
         self.assertEqual(c['residuals'], [])
         self.assertTrue(c['can_close'])
@@ -987,7 +1044,8 @@ class ProjectClosureTests(EngineTestBase):
         self.assertIsNone(self.prj.closed)
 
     def test_requisition_bridge_moves_to_white(self):
-        engine.requisition_lot(self.prj, self.lot, D(10), self.user)
+        req = engine.requisition_lot(self.prj, self.lot, D(10), self.user)
+        engine.lock_requisition(req)                            # Ф15: перекладка = фиксация
         self.assertEqual(engine.lot_live_qty(self.lot), D(0))
         white = engine._internal_project(models.Project.Kind.INTERNAL_STOCK)
         moved = engine.item_available(self.item, white)
@@ -997,6 +1055,7 @@ class ProjectClosureTests(EngineTestBase):
     def test_negative_residual_is_anomaly_and_blocks(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1')
         engine.add_writeoff_line(w, self.lot, D(14))            # пересписали → −4
+        engine.lock_writeoff(w)
         c = engine.project_closure(self.prj)
         self.assertEqual(c['anomaly_count'], 1)
         self.assertTrue(c['residuals'][0]['anomaly'])
@@ -1013,7 +1072,7 @@ class ProjectClosureTests(EngineTestBase):
             engine.lock_project(white)
 
     def test_unlock_restores_editable(self):
-        engine.writeoff_lot(self.prj, self.lot, D(10), self.user)
+        engine.lock_writeoff(engine.writeoff_lot(self.prj, self.lot, D(10), self.user))
         engine.lock_project(self.prj)
         engine.unlock_project(self.prj)
         self.prj.refresh_from_db()
@@ -1387,7 +1446,7 @@ class ClosureHttpTests(TestCase):
         self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
-            contractor=self.sup, project=self.prj,
+            contractor=self.sup, project=self.prj, locked=True,   # Ф15: партия на складе
             user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10))
@@ -1419,11 +1478,18 @@ class ClosureHttpTests(TestCase):
         panel = self.c.get(f'/api/projects/{self.prj.id}/closure/').json()
         self.assertFalse(panel['can_close'])
         self.assertEqual(len(panel['residuals']), 1)
-        # мост «на баланс» → белый, остаток в 0, можно закрыть
+        # мост «на баланс» → черновое требование; Ф15: остаток уйдёт на его фиксации
         r = self.c.post(f'/api/projects/{self.prj.id}/stock-lot/',
             {'lot_id': self.lot.id, 'qty': 10}, content_type='application/json')
         self.assertEqual(r.status_code, 200)
-        self.assertTrue(r.json()['can_close'])
+        self.assertFalse(r.json()['can_close'])
+        drafts = r.json()['closing_drafts']
+        self.assertEqual(len(drafts), 1)                    # панель показывает черновик
+        self.assertEqual(drafts[0]['kind'], 'requisition')
+        lock = self.c.post(f'/api/requisitions/{drafts[0]["document_id"]}/lock/')
+        self.assertEqual(lock.status_code, 200)
+        panel = self.c.get(f'/api/projects/{self.prj.id}/closure/').json()
+        self.assertTrue(panel['can_close'])
         # закрытие 200 + повторное закрытие → 400
         c1 = self.c.post(f'/api/projects/{self.prj.id}/lock/')
         self.assertEqual(c1.status_code, 200)
@@ -1688,6 +1754,8 @@ class InventoryFormTests(EngineTestBase):
                                        lot_name='Резистор')
         self.assertEqual(lot.origin_kind, 'inventory')
         self.assertEqual(lot.project_id, self.prj.id)
+        self.assertEqual(engine.lot_live_qty(lot), D(0))       # Ф15: акт — черновик
+        engine.lock_inventory(inv)                              # проведён
         self.assertEqual(engine.lot_live_qty(lot), D(7))       # +RECEIPT
         self.assertTrue(lot.movements.filter(type='RECEIPT', qty=D(7)).exists())
 
@@ -1695,6 +1763,7 @@ class InventoryFormTests(EngineTestBase):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         engine.update_inventory(inv, description='пересчёт')
         engine.add_inventory_lot(inv, self.item, D(4), unit_cost=D('2'))
+        engine.lock_inventory(inv)
         c = engine.inventory_form(inv)
         self.assertEqual(c['number'], 'ИНВ-1')
         self.assertEqual(c['description'], 'пересчёт')
@@ -1716,7 +1785,9 @@ class InventoryFormTests(EngineTestBase):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         lot = engine.add_inventory_lot(inv, self.item, D(4))
         engine.update_inventory_lot(lot, qty=D(9), unit_cost=D('3'))
+        engine.lock_inventory(inv)
         self.assertEqual(engine.lot_live_qty(lot), D(9))
+        engine.unlock_inventory(inv)                 # Ф15: правка — под снятым замком
         engine.remove_inventory_lot(lot)
         self.assertFalse(models.Lot.objects.filter(pk=lot.id).exists())
 
@@ -1736,6 +1807,7 @@ class InventoryFormTests(EngineTestBase):
         src.save(update_fields=['unit_cost', 'lot_name', 'part_number'])
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='на серый')
         engine.add_writeoff_line(w, src, D(6))
+        engine.lock_writeoff(w)                              # Ф15: списано фиксацией
         self.assertEqual(engine.lot_live_qty(src), D(4))
         # пикер показывает списанный лот с суммой списания
         picker = {r['lot_id']: r for r in engine.written_off_lots()}
@@ -1746,6 +1818,7 @@ class InventoryFormTests(EngineTestBase):
         born = engine.add_inventory_lot(inv, src.item, D(6), unit_cost=src.unit_cost,
                                         lot_name=src.lot_name,
                                         part_number=src.part_number, predecessor=src)
+        engine.lock_inventory(inv)
         self.assertEqual(born.project_id, self.grey.id)
         self.assertEqual(born.predecessor_id, src.id)
         self.assertEqual(born.unit_cost, D('2.50'))
@@ -1768,7 +1841,7 @@ class InventoryHttpTests(TestCase):
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
         self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01', locked=True,
             contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10), unit_cost=D('2.50'), part_number='ЗН-9')
@@ -1789,7 +1862,10 @@ class InventoryHttpTests(TestCase):
         self.assertEqual(line.status_code, 201)
         body = line.json()
         self.assertEqual(float(body['total_cost']), 10.5)
-        self.assertEqual(float(body['lots'][0]['live_qty']), 7.0)
+        self.assertEqual(float(body['lots'][0]['live_qty']), 0.0)   # Ф15: черновик
+        posted = self.c.post(f'/api/inventories/{iid}/lock/')
+        self.assertEqual(float(posted.json()['lots'][0]['live_qty']), 7.0)
+        self.assertEqual(self.c.post(f'/api/inventories/{iid}/unlock/').status_code, 200)
         # нонпозитив qty → 400
         bad = self.c.post(f'/api/inventories/{iid}/lots/',
             {'item_id': self.item.id, 'qty': 0}, content_type='application/json')
@@ -1831,7 +1907,7 @@ class OrderDeleteHttpTests(TestCase):
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+        r = models.Receipt.objects.create(number='U-1', date='2026-05-01', locked=True,
             contractor=self.sup, project=self.prj, user=self.user)
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10))
@@ -1879,7 +1955,7 @@ class ProjectBudgetTests(EngineTestBase):
         # приходной лот считается по (цена×кол-во); заём (requisition) — бесплатен
         case = self.make_item('CASE')
         self.receipt_lot(case, self.prj, 1)  # добавит default unit_cost=0
-        r = models.Receipt.objects.create(number='U-2', date='2026-05-02',
+        r = models.Receipt.objects.create(number='U-2', date='2026-05-02', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         paid = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(3), unit_cost=D(800))
@@ -1889,10 +1965,12 @@ class ProjectBudgetTests(EngineTestBase):
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=case, project=white,
             origin=models.Inventory.objects.create(project=white, user=self.user,
-                number='INV-W', date='2026-05-01'), qty=D(5), unit_cost=D(700))
+                number='INV-W', date='2026-05-01', locked=True),
+            qty=D(5), unit_cost=D(700))
         engine.rebuild_movements(src)
         req = engine.create_requisition(self.prj, self.user, 'ТРБ-1')
         engine.add_requisition_line(req, src, D(2))
+        engine.lock_requisition(req)                 # Ф15: заём материализуется фиксацией
 
         b = engine.project_budget(self.prj)
         self.assertEqual(b['spent'], D(2400))   # только 3×800; заём не в счёт
@@ -1915,7 +1993,7 @@ class ProjectBudgetTests(EngineTestBase):
         self.assertEqual(b['unestimated'], [])
 
         # пришёл УПД на все 40 по реальной цене 45 → оценка сменилась фактом
-        r = models.Receipt.objects.create(number='U-3', date='2026-05-03',
+        r = models.Receipt.objects.create(number='U-3', date='2026-05-03', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=screw, project=self.prj, origin=r,
             qty=D(40), unit_cost=D(45))
@@ -1946,7 +2024,7 @@ class ProjectBudgetTests(EngineTestBase):
         self.make_demand(device, 1)
 
         # CASE: куплен ровно 1 @ 800
-        r = models.Receipt.objects.create(number='U-4', date='2026-05-04',
+        r = models.Receipt.objects.create(number='U-4', date='2026-05-04', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         case_lot = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(1), unit_cost=D(800))
@@ -1956,10 +2034,12 @@ class ProjectBudgetTests(EngineTestBase):
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=res, project=white,
             origin=models.Inventory.objects.create(project=white, user=self.user,
-                number='INV-W2', date='2026-05-01'), qty=D(2), unit_cost=D(10))
+                number='INV-W2', date='2026-05-01', locked=True),
+            qty=D(2), unit_cost=D(10))
         engine.rebuild_movements(src)
         req = engine.create_requisition(self.prj, self.user, 'ТРБ-2')
         engine.add_requisition_line(req, src, D(2))
+        engine.lock_requisition(req)                 # Ф15: заём материализуется фиксацией
         res_lot = req.lots.first()
 
         # собираем прибор
@@ -2691,7 +2771,8 @@ class Wave13Fase1bTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'С-4')
         engine.add_writeoff_line(w, lot, D(4))
-        self.assertEqual(engine.lot_live_qty(lot), D(6))
+        # Ф15: черновик источник не двигал — снимаем его вместе с намерением
+        self.assertEqual(engine.lot_live_qty(lot), D(10))
         engine.delete_stock_document(w)
         self.assertFalse(models.Writeoff.objects.filter(pk=w.pk).exists())
         self.assertEqual(engine.lot_live_qty(lot), D(10))   # источник освобождён
@@ -2714,7 +2795,7 @@ class Wave13Fase1bTests(EngineTestBase):
         req = engine.create_requisition(self.prj, self.user, 'Т-4')
         engine.add_requisition_line(req, src, D(3))
         born = req.lots.get()
-        self.assertEqual(engine.lot_live_qty(src), D(7))
+        self.assertEqual(engine.lot_live_qty(src), D(10))   # Ф15: черновик не двигал
         engine.delete_stock_document(req)
         self.assertFalse(models.Lot.objects.filter(pk=born.pk).exists())  # born снят
         self.assertEqual(engine.lot_live_qty(src), D(10))                 # источник цел
@@ -2843,6 +2924,7 @@ class Wave13Fase2bTests(EngineTestBase):
         lot = self.receipt_lot(self.make_item('R'), self.prj, 50)
         w = engine.create_writeoff(self.prj, self.user, 'С-2')
         engine.add_writeoff_line(w, lot, D(4))
+        engine.lock_writeoff(w)                     # Ф15: движение есть у проведённого
         born = lot.movements.get(type=models.StockMovement.Type.RECEIPT)
         self.assertEqual(born.source_type, models.StockDocument.Kind.RECEIPT)
         self.assertEqual(born.source_id, lot.origin_id)
@@ -3053,11 +3135,15 @@ class Wave13Fase2eTests(EngineTestBase):
         self.case = self.make_item('CASE')
         self.lot = self.receipt_lot(self.case, self.prj, 12)   # рождён на self.main
 
-    def _reloc_move(self, qty=4):
+    def _reloc_move(self, qty=4, lock=True):
+        """Ход перемещения. Ф15: по умолчанию **проводим** — до фиксации перемещение
+        склад не двигает, а тесты ниже проверяют именно расщепление по местам."""
         r = engine.create_relocation(self.prj, self.user, number='ПЕР-1',
                                      date='2026-06-05')
         engine.add_relocation_line(r, self.lot, D(qty),
                                    from_location=self.main, to_location=self.sold)
+        if lock:
+            engine.lock_relocation(r)
         return r
 
     def test_conserves_total_splits_locations(self):
@@ -3096,7 +3182,7 @@ class Wave13Fase2eTests(EngineTestBase):
         self.assertEqual(by, {self.main.id: D(8), self.sold.id: D(4)})
 
     def test_add_line_creates_signed_pair(self):
-        r = self._reloc_move(4)
+        r = self._reloc_move(4, lock=False)          # строки есть и в черновике
         lines = sorted(r.lines.all(), key=lambda l: l.qty)
         self.assertEqual(len(lines), 2)
         self.assertEqual(lines[0].qty, D(-4))   # источник
@@ -3105,14 +3191,15 @@ class Wave13Fase2eTests(EngineTestBase):
         self.assertEqual(lines[1].location_id, self.sold.id)
 
     def test_update_line_adjusts_both(self):
-        r = self._reloc_move(4)
+        r = self._reloc_move(4, lock=False)
         engine.update_relocation_line(r, self.lot, qty=D(7))
+        engine.lock_relocation(r)                    # Ф15: провели — места разъехались
         self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(5))
         self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(7))
         self.assertEqual(engine.lot_live_qty(self.lot), D(12))
 
     def test_remove_line_restores(self):
-        r = self._reloc_move(4)
+        r = self._reloc_move(4, lock=False)
         engine.remove_relocation_line(r, self.lot)
         self.assertEqual(r.lines.count(), 0)
         self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(12))
@@ -3194,7 +3281,7 @@ class Wave13Fase2eTests(EngineTestBase):
         self.assertEqual(by, {self.main.id: D(8), self.sold.id: D(4)})
 
     def test_delete_restores_and_conserves(self):
-        r = self._reloc_move(4)
+        r = self._reloc_move(4, lock=False)          # удаляют только расфиксированное
         engine.delete_stock_document(r)
         self.assertFalse(models.Relocation.objects.filter(id=r.id).exists())
         self.assertEqual(engine.lot_live_qty(self.lot), D(12))
@@ -3659,7 +3746,8 @@ class Wave13Fase3HttpTests(EngineTestBase):
         self.assertEqual(resp.status_code, 201)
         ck = resp.json()
         self.assertEqual(len(ck['moves']), 1)
-        # 7 @ MAIN, 5 @ 105, тотал 12
+        self.assertEqual(self.c.post(f'/api/relocations/{rid}/lock/').status_code, 200)
+        # Ф15: провели → 7 @ MAIN, 5 @ 105, тотал 12
         self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(7))
         self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(5))
         self.assertEqual(engine.lot_live_qty(self.lot), D(12))
@@ -3696,8 +3784,10 @@ class Wave13Fase3HttpTests(EngineTestBase):
         upd = self.c.patch(f'/api/relocations/{rid}/lines/{self.lot.id}/',
                           {'qty': 8}, content_type='application/json')
         self.assertEqual(upd.status_code, 200)
+        self.assertEqual(self.c.post(f'/api/relocations/{rid}/lock/').status_code, 200)
         self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(8))
-        # удаление хода → распределение вернулось (всё на MAIN)
+        # удаление хода (после расфиксации) → распределение вернулось (всё на MAIN)
+        self.assertEqual(self.c.post(f'/api/relocations/{rid}/unlock/').status_code, 200)
         rm = self.c.delete(f'/api/relocations/{rid}/lines/{self.lot.id}/')
         self.assertEqual(rm.status_code, 200)
         self.assertEqual(engine.lot_live_qty(self.lot, self.main), D(12))
@@ -3774,6 +3864,7 @@ class Wave13Fase4Tests(EngineTestBase):
     def test_location_stock_reflects_relocation_split(self):
         rel = engine.create_relocation(self.prj, self.user, 'ПЕР-1')
         engine.add_relocation_line(rel, self.lot, D(5), self.main, self.sold)
+        engine.lock_relocation(rel)                 # Ф15: расщепление — с фиксации
         main_rows = engine.location_stock(self.main)
         sold_rows = engine.location_stock(self.sold)
         self.assertEqual(main_rows[0]['qty'], D(7))
@@ -3956,8 +4047,8 @@ class EntityDeleteHttpTests(TestCase):
     def test_location_delete_204_and_guard_400(self):
         loc = models.Location.objects.create(code='EMPTY', description='Пустой')
         self.assertEqual(self.c.delete(f'/api/locations/{loc.id}/').status_code, 204)
-        r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
-            contractor=self.sup, project=self.prj, user=self.user)
+        r = models.Receipt.objects.create(number='U-2', date='2026-05-01', locked=True,
+            contractor=self.sup, project=self.prj, user=self.user)   # Ф15: движение есть
         lot = models.Lot.objects.create(
             item=models.Item.objects.create(code='M', description='M', category=_cat()),
             project=self.prj, origin=r, qty=D(1))
@@ -4535,3 +4626,161 @@ class LotOriginProjectionTests(EngineTestBase):
         self.assertEqual(
             (row['item_native'], row['item_synced'], row['item_locked']),
             (self.item.native, self.item.synced, self.item.locked))
+
+
+class DraftDoesNotMoveStockTests(EngineTestBase):
+    """Волна 19, Ф15: **замок гейтит склад** — черновик ничего не двигает.
+
+    Правило одно на семь видов ордера: пока `locked=False`, документ существует и
+    правится, но его партии не лежат на складе, его строки не расходуют чужие, а
+    бюджет проекта его не видит. Фиксация материализует, расфиксация снимает.
+    Единственная точка врезки — `rebuild_movements`; всё остальное (остатки, дефицит,
+    карта складов, деньги) читает движения и подчиняется автоматически.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+
+    # ── рождение партии: поставка / инвентаризация ──
+    def test_draft_receipt_lot_is_not_on_stock(self):
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.item, D(10), unit_cost=D(100))
+        self.assertTrue(models.Lot.objects.filter(pk=lot.pk).exists())  # партия есть
+        self.assertEqual(lot.movements.count(), 0)                      # склада нет
+        self.assertEqual(engine.item_available(self.item, self.prj), D(0))
+
+    def test_lock_materializes_unlock_takes_back(self):
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.item, D(10))
+        engine.lock_receipt(r)
+        self.assertEqual(engine.item_available(self.item, self.prj), D(10))
+        engine.unlock_receipt(r)
+        self.assertEqual(engine.item_available(self.item, self.prj), D(0))
+        self.assertEqual(lot.movements.count(), 0)
+
+    def test_draft_inventory_lot_is_not_on_stock(self):
+        inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
+        lot = engine.add_inventory_lot(inv, self.item, D(5))
+        self.assertEqual(engine.lot_live_qty(lot), D(0))
+        engine.lock_inventory(inv)
+        self.assertEqual(engine.lot_live_qty(lot), D(5))
+
+    # ── расход существующей партии: все знаковые виды ──
+    def test_draft_consumers_do_not_touch_source(self):
+        """Пять расходных видов в черновике не двигают источник; фиксация двигает."""
+        lot = self.receipt_lot(self.item, self.prj, 100)
+        other = models.Project.objects.create(
+            code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
+        dev = self.make_item('DEV', manufactured=True)
+
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+                                          user=self.user, qty=D(1))
+        engine.add_kitting_line(k, self.item, lot, D(2))
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(t, lot, D(3))
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        engine.add_writeoff_line(w, lot, D(4))
+        req = engine.create_requisition(other, self.user, 'ТР-1')
+        engine.add_requisition_line(req, lot, D(5))
+        rel = engine.create_relocation(self.prj, self.user, 'ПЕР-1')
+        engine.add_relocation_line(rel, lot, D(6), self.main,
+                                   models.Location.objects.create(code='105',
+                                                                  description='Пайка'))
+        # все пять — черновики: остаток нетронут, движение ровно одно (рождение)
+        self.assertEqual(engine.lot_live_qty(lot), D(100))
+        self.assertEqual(lot.movements.count(), 1)
+
+        engine.lock_kitting(k); engine.lock_transfer(t); engine.lock_writeoff(w)
+        engine.lock_requisition(req); engine.lock_relocation(rel)
+        # 100 − 2 − 3 − 4 − 5 = 86 (перемещение тотал не меняет: −6/+6)
+        self.assertEqual(engine.lot_live_qty(lot), D(86))
+
+    def test_issue_from_draft_receipt_goes_negative(self):
+        """Решение Ивана: расход непринятой партии **пускаем в минус** — не клампим,
+        недостача информативнее (канон мутабельной ДНК)."""
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        lot = engine.add_receipt_lot(r, self.item, D(10))
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.add_transfer_line(t, lot, D(4))
+        engine.lock_transfer(t)                      # накладная проведена, УПД — нет
+        self.assertEqual(engine.lot_live_qty(lot), D(-4))
+
+    # ── производные проекции подчиняются автоматически ──
+    def test_draft_receipt_does_not_cover_deficit(self):
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=self.item, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        engine.add_receipt_lot(r, self.item, D(10))
+        row = engine.project_deficit(self.prj)['components'][0]
+        self.assertEqual(row['status'], 'to_order')          # черновик не покрывает
+        engine.lock_receipt(r)
+        row = engine.project_deficit(self.prj)['components'][0]
+        self.assertEqual(row['status'], 'available')         # сверен → покрыл
+
+    def test_draft_receipt_does_not_spend_budget(self):
+        """Деньги — единственное чтение мимо движений, поэтому гейт продублирован в
+        `_project_spent`: черновой УПД не двигает бюджет проекта (Ф15)."""
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        engine.add_receipt_lot(r, self.item, D(3), unit_cost=D(800))
+        self.assertEqual(engine.project_budget(self.prj)['spent'], D(0))
+        engine.lock_receipt(r)
+        self.assertEqual(engine.project_budget(self.prj)['spent'], D(2400))
+
+    def test_closure_panel_shows_draft_closing_documents(self):
+        """Мост панели кладёт остаток в ЧЕРНОВОЙ документ — панель это показывает и
+        называет причиной отказа, иначе кнопка выглядела бы несработавшей."""
+        lot = self.receipt_lot(self.item, self.prj, 10)
+        w = engine.writeoff_lot(self.prj, lot, D(10), self.user)
+        panel = engine.project_closure(self.prj)
+        self.assertFalse(panel['can_close'])
+        self.assertEqual(len(panel['closing_drafts']), 1)
+        self.assertEqual(panel['closing_drafts'][0]['document_id'], w.id)
+        self.assertEqual(panel['closing_drafts'][0]['qty'], D(10))
+        self.assertIn('черновик', panel['blocker'].lower())
+        engine.lock_writeoff(w)
+        panel = engine.project_closure(self.prj)
+        self.assertEqual(panel['closing_drafts'], [])
+        self.assertTrue(panel['can_close'])
+
+    def test_item_screen_keeps_draft_lot_but_marks_it(self):
+        """Таб «Склад» изделия показывает партии НЕЗАВИСИМО от движений — так виден
+        входящий поток («10 едет, 0 принято»). Значит проекция обязана отдать замок
+        origin-документа: иначе вью не отличит непринятую партию от израсходованной
+        (обе с остатком 0) и подпишет её «исчерпана»."""
+        r = models.Receipt.objects.create(
+            number='У-1', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        engine.add_receipt_lot(r, self.item, D(10))
+        row = views._item_detail_payload(self.item)['lots'][0]
+        self.assertEqual(row['qty_born'], D(10))     # рождено — видно
+        self.assertEqual(row['live_qty'], D(0))      # на складе — нет
+        self.assertFalse(row['origin_locked'])       # и вью знает, почему
+        engine.lock_receipt(r)
+        row = views._item_detail_payload(self.item)['lots'][0]
+        self.assertEqual(row['live_qty'], D(10))
+        self.assertTrue(row['origin_locked'])
+
+    def test_bridge_reuses_only_draft_document(self):
+        """Мост переиспользует лишь расфиксированный акт — зафиксированный правке не
+        подлежит, поэтому для следующего остатка заводится новый."""
+        a = self.receipt_lot(self.item, self.prj, 4)
+        b = self.receipt_lot(self.make_item('R200'), self.prj, 6)
+        w1 = engine.writeoff_lot(self.prj, a, D(4), self.user)
+        w2 = engine.writeoff_lot(self.prj, b, D(6), self.user)
+        self.assertEqual(w1.id, w2.id)                    # черновик переиспользован
+        engine.lock_writeoff(w1)
+        c = self.receipt_lot(self.make_item('R300'), self.prj, 2)
+        w3 = engine.writeoff_lot(self.prj, c, D(2), self.user)
+        self.assertNotEqual(w3.id, w1.id)                 # под замком — новый акт

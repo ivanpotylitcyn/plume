@@ -404,6 +404,7 @@ export default function App() {
             isNew={isFresh('project', sel.id)}
             openItem={openItem}
             openPurchase={id => { reloadPurchases(); openPurchase(id) }}
+            openOrder={openOrder}
             onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }}
             onDeleted={() => { reloadProjects(); setSel(null) }} />}
         {sel?.kind === 'new-project' &&
