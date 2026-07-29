@@ -61,6 +61,9 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
 
   const editable = c.editable
   const fixed = !editable                  // зафиксирован — read-only
+  // Замок формы гейтит и поля шапки (Ф12d): раньше они правились в просмотре, то есть
+  // «просмотр» у заказа и закупки значил не то же, что у остальных форм.
+  const locked = !editable || !unlocked
   // Ф1b: цвет строки/меты = покрытие лотами — как в списке Заказов.
   const coverage: Status = c.total_received === 0 ? 'to_order'
     : c.rows.every(r => r.remaining <= 0) ? 'available' : 'on_order'
@@ -139,12 +142,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             </tbody>
           </table> },
     { key: 'files', label: 'Файлы', icon: 'files',
-      content: <AttachmentList att={att} locked={!editable || !unlocked} /> },
+      content: <AttachmentList att={att} locked={locked} /> },
   ]
 
   return (
     <FormShell
-      id={c.id} code={c.code ?? ''} entity="заказ" locked={!editable || !unlocked} error={err}
+      id={c.id} code={c.code ?? ''} entity="заказ" locked={locked} error={err}
       // Мета (§13.6): счёт по табам + закрытость заказа числами (проект/дата — в полях).
       meta={<>
         {count(c.rows.length, 'строка', 'строки', 'строк')}
@@ -168,11 +171,11 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
           title: 'Загрузить файл (счёт, скан накладной) — появится в табе «Файлы»',
           disabled: att.busy }]}
       fields={
-        <OrderFields c={c} locked={!editable} busy={busy} openProject={openProject}
+        <OrderFields c={c} locked={locked} busy={busy} openProject={openProject}
           patch={b => run(api.updatePurchase(c.id, b))}>
           <AnchorSelect label="Закупка" id={c.procurement_id} currentLabel={`#${c.procurement_id}`}
             options={procs.map(p => ({ id: p.id, label: p.code || `Закупка #${p.id}` }))}
-            disabled={!editable || busy}
+            locked={locked} busy={busy} mono
             onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))} />
         </OrderFields>}
       tabs={tabs}

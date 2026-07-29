@@ -12,6 +12,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { ItemPicker } from './Picker'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CommitInput } from './CommitInput'
+import { Field, TextField } from './FormField'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
@@ -87,7 +88,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         {locked ? 'Состав пуст.' : 'Состав пуст — добавьте компонент ниже.'}</div>}
       {d.bom.length > 0 &&
         <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Компонент</th><th>Описание</th>
+          <thead><tr><th className="gl" /><th className="c-key">Компонент</th><th className="c-desc">Описание</th>
             <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
             {!locked && <th className="act" />}</tr></thead>
           <tbody>{d.bom.map(b => (
@@ -95,7 +96,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
               <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
               <td className="c-key">
                 <a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
-              <td style={{ color: 'var(--fg-dim)' }}>
+              <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
                 <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
               <td className="num">
                 {!locked
@@ -123,7 +124,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
     content: d.where_used.length === 0
       ? <div className="tab-empty">Нигде (не входит в BOM)</div>
       : <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Изделие</th><th>Описание</th>
+          <thead><tr><th className="gl" /><th className="c-key">Изделие</th><th className="c-desc">Описание</th>
             <th style={{ textAlign: 'right' }}>Кол-во</th>
             <th className="uom">Ед.</th></tr></thead>
           <tbody>{d.where_used.map(w => (
@@ -133,7 +134,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
                 locked={w.parent_locked} /></td>
               <td className="c-key">
                 <a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
-              <td style={{ color: 'var(--fg-dim)' }}>{w.parent_description}</td>
+              <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+                <span className="cell-ellip" title={w.parent_description}>{w.parent_description}</span></td>
               <td className="num">{num(w.qty)}</td>
               <td className="uom">{d.uom}</td>
             </tr>))}</tbody>
@@ -249,50 +251,35 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
           disabled: att.busy },
       ]}
       fields={<>
-        <dt>Код</dt>
-        <dd>{!metaLocked
-          ? <CommitInput value={d.code} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { code: v }))}
-              validate={v => v.trim() !== ''} />
-          : d.code}</dd>
-        <dt>Описание</dt>
+        <TextField label="Код" mono value={d.code} locked={metaLocked} busy={busy}
+          onCommit={v => run(api.updateItem(d.id, { code: v }))}
+          validate={v => v.trim() !== ''} />
         {/* Единственное длинное поле шапки (§13.3) — описание бывает в строку и больше. */}
-        <dd className="wide">{!metaLocked
-          ? <CommitInput value={d.description} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { description: v }))}
-              validate={v => v.trim() !== ''} />
-          : d.description}</dd>
-        <dt>Категория</dt>
-        <dd>{!metaLocked
-          ? <select className="lot-sel" value={d.category?.id ?? ''} disabled={busy}
-              onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
-              {/* Ф12e: изделие рождается по клику без категории. Пустой пункт —
-                  честное «ещё не выбрана»; фиксация без категории не пройдёт. */}
-              {!d.category && <option value="">— не выбрана —</option>}
-              {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
-            </select>
-          : d.category?.description ?? '—'}</dd>
+        <TextField label="Описание" wide value={d.description} locked={metaLocked} busy={busy}
+          onCommit={v => run(api.updateItem(d.id, { description: v }))}
+          validate={v => v.trim() !== ''} />
+        <Field label="Категория" locked={metaLocked} view={d.category?.description}>
+          <select className="lot-sel" value={d.category?.id ?? ''} disabled={busy}
+            onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
+            {/* Ф12e: изделие рождается по клику без категории. Пустой пункт —
+                честное «ещё не выбрана»; фиксация без категории не пройдёт. */}
+            {!d.category && <option value="">— не выбрана —</option>}
+            {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
+          </select>
+        </Field>
         {/* Поля «Производимое» нет (снято 2026-07-26): `native` — не свойство на правку,
             а ОСЬ РЕЖИМА (Изделия / Компоненты). Заводится вместе с сущностью в том
             режиме, где нажали «＋ Новое», и дальше не переключается. */}
-        <dt>Температура</dt>
-        <dd>{!metaLocked
-          ? <CommitInput value={d.temperature} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
-          : (d.temperature || '—')}</dd>
-        <dt>Единицы</dt>
-        <dd>{!metaLocked
-          ? <CommitInput value={d.uom} disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
-          : d.uom}</dd>
+        <TextField label="Температура" mono value={d.temperature} locked={metaLocked} busy={busy}
+          onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
+        <TextField label="Единицы" mono value={d.uom} locked={metaLocked} busy={busy}
+          onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
         {/* «Оценка» без «₽» в подписи: рубль приезжает со значением в просмотре. */}
-        <dt>Оценка</dt>
-        <dd>{!locked
-          ? <CommitInput value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
-              disabled={busy}
-              onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}
-              validate={v => v.trim() === '' || Number(v) >= 0} />
-          : (d.estimated_cost != null ? money(d.estimated_cost) : '—')}</dd>
+        <TextField label="Оценка" mono locked={locked} busy={busy}
+          value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
+          view={d.estimated_cost != null ? money(d.estimated_cost) : ''}
+          onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}
+          validate={v => v.trim() === '' || Number(v) >= 0} />
       </>}
       tabs={tabs}
     />

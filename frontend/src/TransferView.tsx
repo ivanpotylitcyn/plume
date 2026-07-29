@@ -11,6 +11,7 @@ import { api, type AvailableLot, type CounterpartyRow, type TransferForm,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LotGlyph, count, num, sumByUom } from './status'
 import { CounterpartyPicker } from './Picker'
@@ -90,16 +91,15 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ накладной"
           openProject={openProject}
           patch={b => run(api.updateTransfer(c.id, b))}>
-          <dt>Заказчик</dt>
-          <dd>
+          <Field label="Заказчик" locked={locked} view={c.contractor_name}>
             <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
-              disabled={locked || busy} placeholder="— не указан —"
+              disabled={busy} placeholder="— не указан —"
               onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
               onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))}
               onCreate={name => api.createCounterparty({ description: name, role: 'customer' })
                 .then(cp => { api.counterparties('customer').then(setCustomers)
                   run(api.updateTransfer(c.id, { contractor_id: cp.id })) })} />
-          </dd>
+          </Field>
         </OrderFields>}
       tabs={tabs}
     />

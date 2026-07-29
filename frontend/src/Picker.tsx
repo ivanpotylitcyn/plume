@@ -197,7 +197,7 @@ export function ProjectScopePicker({ projects, selected, onToggle, disabled }: {
   return <Picker options={projects} value={''} onPick={onToggle} keyOf={p => p.id}
     multi summary={summary}
     textOf={p => p.code} searchOf={p => `${p.code} ${p.description}`}
-    disabled={disabled} placeholder="— не выбраны —" width={260}
+    disabled={disabled} placeholder="— не выбраны —"
     notFound="ничего не найдено — проект должен быть в справочнике."
     renderRow={p => <>
       <span className={'ci' + (chosen.has(p.id) ? ' ci-check' : '')} />

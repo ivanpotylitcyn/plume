@@ -81,6 +81,13 @@
      длинное (Описание). В вьюхах ширину не задаём, только выбираем ступень. */
   --field-w: 320px;
   --field-w-wide: 640px;
+  /* ЕДИНИЦА СТРОКИ ШАПКИ (§13.3, волна 19 Ф12d). До неё высоту строки задавал сам
+     контент: текст 16px, инпут 20, дата и селект 22, команда 26 — и «в одну строку»
+     сходилась только первая пара, дальше расхождение копилось. Теперь высоту задаёт
+     ОДИН токен, и ему подчинены все элементы шапки — поля, пикеры, команды. Шаг
+     строки = --row-h + --row-gap, поэтому команда №N всегда против поля №N. */
+  --row-h: 22px;
+  --row-gap: 4px;
   /* Ширина колонки идентичности в списках формы (§7a): одна на все табы, чтобы
      колонка описания не переезжала при переключении. Коды короткие — колонке хватает
      ~160px, остальное отдаём описанию (ужато с 260px на приёмке 2026-07-26). */
@@ -290,23 +297,11 @@ body { overflow: hidden; }
    растянута на высоту шапки (`stretch`), поэтому первая команда идёт вровень с первым
    полем, а нижняя (корзина/«Скачать») — вровень с последним. */
 .fs-head { display: flex; align-items: stretch; gap: 24px; }
-.fs-head .props { flex: 1; min-width: 0; margin-bottom: 0; max-width: none;
-  /* Колонка меток — по САМОЙ ДЛИННОЙ подписи этой шапки (§13.3): фиксированные
-     168px оставляли гэп в формах с короткими подписями. */
-  grid-template-columns: max-content 1fr; }
-/* Ширина поля — две ступени, заданные ОДНИМ токеном на всю тему (§13.3): обычное и
-   длинное (Описание). «Во всю оставшуюся ширину» оказалось слишком длинно. */
-.fs-head .props dd :is(input, select):not([type="checkbox"]) {
-  width: var(--field-w) !important; max-width: 100%; }
-.fs-head .props dd.wide :is(input, select) { width: var(--field-w-wide) !important; }
-/* Значение поля выключено ВЛЕВО, к своей подписи (§13.3). `.qty-in` числовой правит
-   выключку вправо — в таблице это верно, в шапке разрывало пару «подпись — значение». */
-.fs-head .props dd :is(input, select) { text-align: left; }
-/* Колонка команд: строки той же высоты, что строки полей — команда №1 читается в одной
-   строке с полем №1. Нижняя команда прижата к низу колонки (`margin-top: auto`), то есть
-   встаёт вровень с последним полем; `position: absolute` для неё больше не нужен. */
-.fs-head .fh-right { gap: 0; }
-.fs-head .fh-ctl { height: 26px; padding-top: 0; padding-bottom: 0; }
+/* Колонка команд идёт тем же шагом, что строки полей (--row-h + --row-gap): команда №1
+   читается в одной строке с полем №1, №2 — с №2 и так далее. Нижняя команда прижата к
+   низу колонки (`margin-top: auto`) — встаёт вровень с последним полем. */
+.fs-head .fh-right { gap: var(--row-gap); }
+.fs-head .fh-ctl { height: var(--row-h); padding-top: 0; padding-bottom: 0; }
 .fs-head :is(.fh-del, .fh-download) { position: static; margin-top: auto; }
 
 /* Корзина/«Скачать» (§5) внутри панели садятся по её паддингу, а не встык к рамке:
@@ -340,20 +335,39 @@ body { overflow: hidden; }
    полосе табов (принято 2026-07-26). 8px + 4px паддинга тела = 12px, как снизу. */
 .tab-empty { color: var(--fg-dim); padding: 8px 0; }
 
-/* ---- панель свойств (узкая, пары label:value) ---- */
-.props { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;
-  align-items: baseline; margin-bottom: 18px; max-width: 560px; }
+/* ---- поля шапки формы: пары «подпись — значение» на ОДНОЙ единице строки ----
+   `.props` живёт ровно в одном месте — в шапке `FormShell`, — поэтому правила лежат
+   одним блоком, без слоя переопределений (до Ф12d их было два, и второй бил первый
+   через `!important`). Строка не ниже единицы, но может вырасти, если значение
+   перенеслось (охват закупки): фиксированная высота его бы обрезала. */
+.props { display: grid; grid-template-columns: max-content 1fr;
+  grid-auto-rows: minmax(var(--row-h), auto); align-items: center;
+  gap: var(--row-gap) 14px; flex: 1; min-width: 0; }
 .props dt { color: var(--fg-dim); text-align: right; }   /* метки по правому краю — к инпутам */
-.props dd { margin: 0; color: var(--fg); }
+.props dd { margin: 0; color: var(--fg); min-width: 0; }
+/* Кегль и шрифт значения — ОТ СМЫСЛА ПОЛЯ (§3), а не от режима: `mono` у кодов,
+   номеров, дат и чисел, Inter у описаний и имён. Правило накрывает и текст просмотра,
+   и контрол правки, поэтому переключение замка не меняет облик значения — только
+   рамку вокруг него. */
+.props dd, .props dd :is(input, select) { font-family: var(--font-base); font-size: 13px; }
+.props dd.mono, .props dd.mono :is(input, select) { font-family: var(--font-mono); }
+/* Ширина поля — две ступени, заданные ОДНИМ токеном на всю тему (§13.3): обычное и
+   длинное (Описание). Высота — единица строки, одна на инпут, дату, селект и пикер.
+   Выключка ВЛЕВО: числовой `.qty-in` правит её вправо — в таблице это верно, в шапке
+   разрывало пару «подпись — значение». */
+.props dd :is(input, select):not([type="checkbox"]) {
+  width: var(--field-w); max-width: 100%; height: var(--row-h); text-align: left; }
+.props dd.wide :is(input, select) { width: var(--field-w-wide); }
+/* Пикер — обёртка вокруг инпута и кнопки «×»: без явной ширины он был на кнопку шире
+   поля (336.8 против 320), то есть единственный элемент шапки, не слушавший токен. */
+.props dd .picker { display: inline-flex; align-items: center; width: var(--field-w); }
+.props dd.wide .picker { width: var(--field-w-wide); }
+.props dd .picker input { width: 100%; min-width: 0; }
 /* Охват закупки (Ф13): отмеченные проекты — ссылки рядом с пикером, в одной строке
    поля (форма растёт ровно на одно поле). Моно, как всякий код; разделены отступом,
    а не запятыми — сводка запятых уже стоит в самом поле. */
 .props dd a.scope-chip { font-family: var(--font-mono); font-size: 11px;
   margin-left: 10px; white-space: nowrap; }
-/* Единая ширина полей ввода шапки: гасим пиксельные width у CommitInput/select,
-   чтобы инпуты стояли по сетке и не «плясали». Чекбоксы — исключение. */
-.props dd :is(input, select):not([type="checkbox"]) {
-  width: 260px !important; box-sizing: border-box; }
 
 /* legacy-заголовок (постепенно вытесняется .form-head) */
 h1.title { font-size: 16px; font-weight: 500; margin: 0 0 2px; color: var(--fg-bright); }
@@ -412,15 +426,17 @@ table.grid :is(td.c-desc, td.c-key) :is(input, .picker) { width: 100%; text-alig
 table.grid :is(th, td).uom { text-align: left; width: 1%; white-space: nowrap;
   color: var(--fg-dim); font-family: var(--font-mono); padding-left: 6px; }
 table.grid td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-/* Описание в одну строку с многоточием (волна 17): «допуск …». */
-/* Плотные таблицы (Ф5/Ф13: «Привязка» и «К закупке») — там, где в строке стоят разбор,
-   выбор заказа, ввод и команды, и таблица распирала панель за край. Здесь описание
-   сжимается первым (`max-width: 0` говорит auto-layout, что содержимое не задаёт
-   минимум) — общие списки от этого не меняются. */
-table.grid.tight td.c-desc { max-width: 0; width: 100%; }
-.cell-ellip { display: block; max-width: 600px; overflow: hidden;
+/* Описание в одну строку с многоточием (волна 17): «допуск …».
+   Сжимается ПЕРВЫМ во всех списках (Ф12d, долг Ф5): `max-width: 0` говорит
+   auto-layout, что содержимое ячейки не задаёт минимум, поэтому лишнее уходит в
+   многоточие, а не распирает таблицу за край панели. Раньше это правило стояло
+   точечно (класс `tight` у «Привязки» и «К закупке»), а всем остальным спискам
+   описание резали магические 600px — то есть в узком окне таблица всё равно
+   вылезала, а в широком колонка не добирала. Ширина = 100% (остаток после
+   служебных колонок `c-fit`/`num`/`act`, каждая по содержимому). */
+table.grid td.c-desc { max-width: 0; width: 100%; }
+.cell-ellip { display: block; max-width: 100%; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
-table.grid.tight .cell-ellip { max-width: 100%; }
 .seg { font-family: var(--font-mono); }
 tr.row { border-left: 2px solid transparent; }
 tr.row.s-to_order { border-left-color: var(--st-order); }

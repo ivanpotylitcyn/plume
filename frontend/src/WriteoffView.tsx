@@ -12,6 +12,7 @@ import { api, type AvailableLot, type WriteoffForm,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LotGlyph, count, num, sumByUom } from './status'
 
@@ -86,9 +87,8 @@ export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChang
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ акта"
           openProject={openProject}
           patch={b => run(api.updateWriteoff(c.id, b))}>
-          <dt>Причина</dt>
-          <dd><CommitInput value={c.reason} disabled={locked || busy}
-            onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} /></dd>
+          <TextField label="Причина" value={c.reason} locked={locked} busy={busy}
+            onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} />
         </OrderFields>}
       tabs={tabs}
     />

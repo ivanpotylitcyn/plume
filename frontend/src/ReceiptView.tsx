@@ -10,6 +10,7 @@ import { num, money, count, sumByUom, LotGlyph } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AuthorField, ProjectField, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { Field, TextField } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
@@ -96,50 +97,47 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (скан УПД) — появится в табе «Файлы»', disabled: att.busy }]}
       fields={<>
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} disabled={locked || busy}
-          onCommit={v => run(api.updateReceipt(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
+        <TextField label="Код" mono value={c.code ?? ''} locked={locked} busy={busy}
+          onCommit={v => run(api.updateReceipt(c.id, { code: v }))} />
         {/* Единственное длинное поле шапки (§13.3). */}
-        <dd className="wide"><CommitInput value={c.description} disabled={locked || busy}
-          onCommit={v => run(api.updateReceipt(c.id, { description: v }))} /></dd>
-        <dt>№ УПД</dt>
-        <dd><CommitInput value={c.number} disabled={locked || busy}
+        <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
+          onCommit={v => run(api.updateReceipt(c.id, { description: v }))} />
+        <TextField label="№ УПД" mono value={c.number} locked={locked} busy={busy}
           onCommit={v => run(api.updateReceipt(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} /></dd>
+          validate={v => v.trim().length > 0} />
         {/* Ф12e: поставщик обязателен к ФИКСАЦИИ, а не к рождению — значит его
             место в шапке. «Завести» прямо из пикера: отдельной формы контрагента
             в продукте нет (заведётся режимом «Контрагенты», волна 20). */}
-        <dt>Поставщик</dt>
-        <dd><CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
-          disabled={locked || busy} placeholder="— не указан —"
-          onPick={id => run(api.updateReceipt(c.id, { contractor_id: id }))}
-          onClear={() => run(api.updateReceipt(c.id, { contractor_id: null }))}
-          onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
-            .then(cp => { reloadSuppliers()
-              run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date} type="date" disabled={locked || busy}
+        <Field label="Поставщик" locked={locked} view={c.contractor_name}>
+          <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+            disabled={busy} placeholder="— не указан —"
+            onPick={id => run(api.updateReceipt(c.id, { contractor_id: id }))}
+            onClear={() => run(api.updateReceipt(c.id, { contractor_id: null }))}
+            onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+              .then(cp => { reloadSuppliers()
+                run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} />
+        </Field>
+        <TextField label="Дата" mono type="date" value={c.date} locked={locked} busy={busy}
           onCommit={v => run(api.updateReceipt(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} /></dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
+          validate={v => v.trim().length > 0} />
+        <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
           onChange={id => run(api.updateReceipt(c.id, { user_id: id }))} />
         <ProjectField projectId={c.project_id} projectLabel={c.project_code}
-          disabled={locked || busy} onOpen={openProject}
+          locked={locked} busy={busy} onOpen={openProject}
           onChange={id => run(api.updateReceipt(c.id, { project_id: id }))} />
         {/* Якорь-заказ переехал из тела формы в поля шапки (§13.3): это ссылка
             документа, а не список — в теле он висел отдельной строкой `.kit-actions`.
             Под замком поле = САМА ССЫЛКА на заказ (отдельная кнопка «открыть ›» не
             нужна: кликабельно то, что названо). */}
-        <dt>Заказ</dt>
-        <dd>{locked
-          ? (c.purchase_id
-              ? <a className="link" onClick={() => openPurchase(c.purchase_id!)}>{purchaseLabel}</a>
-              : '—')
-          : <PurchasePicker purchases={purchases} value={c.purchase_id ?? ''}
-              disabled={busy}
-              onPick={id => run(api.linkReceiptPurchase(c.id, id))}
-              onClear={() => run(api.linkReceiptPurchase(c.id, null))} />}</dd>
+        <Field label="Заказ" mono locked={locked}
+          view={c.purchase_id
+            ? <a className="link" onClick={() => openPurchase(c.purchase_id!)}>{purchaseLabel}</a>
+            : ''}>
+          <PurchasePicker purchases={purchases} value={c.purchase_id ?? ''}
+            disabled={busy}
+            onPick={id => run(api.linkReceiptPurchase(c.id, id))}
+            onClear={() => run(api.linkReceiptPurchase(c.id, null))} />
+        </Field>
       </>}
       tabs={tabs}
     />

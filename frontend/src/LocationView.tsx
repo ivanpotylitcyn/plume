@@ -12,7 +12,7 @@ import { api, type LocationForm } from './api'
 import { num, count, sumByUom, LotGlyph } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
-import { CommitInput } from './CommitInput'
+import { TextField } from './FormField'
 
 export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted }: {
   locationId: number
@@ -90,17 +90,14 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
       fields={<>
-        <dt>Код</dt>
-        <dd><CommitInput value={d.code} disabled={locked || busy}
+        <TextField label="Код" mono value={d.code} locked={locked} busy={busy}
           onCommit={v => run(api.updateLocation(d.id, { code: v }))}
-          validate={v => v.trim() !== ''} /></dd>
-        <dt>Описание</dt>
-        <dd className="wide"><CommitInput value={d.description} disabled={locked || busy}
+          validate={v => v.trim() !== ''} />
+        <TextField label="Описание" wide value={d.description} locked={locked} busy={busy}
           onCommit={v => run(api.updateLocation(d.id, { description: v }))}
-          validate={v => v.trim() !== ''} /></dd>
-        <dt>Вид</dt>
-        <dd><CommitInput value={d.kind} disabled={locked || busy}
-          onCommit={v => run(api.updateLocation(d.id, { kind: v }))} /></dd>
+          validate={v => v.trim() !== ''} />
+        <TextField label="Вид" value={d.kind} locked={locked} busy={busy}
+          onCommit={v => run(api.updateLocation(d.id, { kind: v }))} />
       </>}
       tabs={tabs}
     />

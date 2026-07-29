@@ -18,6 +18,7 @@ import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
 import { CommitInput } from './CommitInput'
 import { AuthorField, useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { Field, TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { PeggingRows, PurchaseFan, usePegging } from './PeggingPanel'
 import { ScopeDeficitRows, useScopeDeficit } from './ScopeDeficitPanel'
@@ -84,6 +85,13 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
     project_ids: scopeIds.includes(id) ? scopeIds.filter(x => x !== id) : [...scopeIds, id],
   }))
 
+  // Коды охвата — ссылки на проекты; в правке стоят рядом с пикером, в просмотре
+  // остаются одни (§5). Моно, как всякий код; разделены отступом, не запятыми.
+  const scopeLinks = c.projects.map(pr => (
+    <a key={pr.id} className="link scope-chip" title={pr.description}
+      onClick={() => openProject(pr.id)}>{pr.code}</a>
+  ))
+
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <>
@@ -146,35 +154,30 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
           title: 'Загрузить файл (КП, счёт) — появится в табе «Файлы»', disabled: att.busy },
       ]}
       fields={<>
-        <dt>Код</dt>
-        <dd><CommitInput value={c.code ?? ''} disabled={!editable || busy}
-          onCommit={v => run(api.updateProcurement(c.id, { code: v }))} /></dd>
-        <dt>Описание</dt>
-        <dd className="wide"><CommitInput value={c.description} disabled={!editable || busy}
-          onCommit={v => run(api.updateProcurement(c.id, { description: v }))} /></dd>
-        <dt>Дата</dt>
-        <dd><CommitInput value={c.date ?? ''} type="date" disabled={!editable || busy}
-          onCommit={v => run(api.updateProcurement(c.id, { date: v }))} /></dd>
-        <dt>Контрагент</dt>
-        <dd>
+        <TextField label="Код" mono value={c.code ?? ''} locked={locked} busy={busy}
+          onCommit={v => run(api.updateProcurement(c.id, { code: v }))} />
+        <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
+          onCommit={v => run(api.updateProcurement(c.id, { description: v }))} />
+        <TextField label="Дата" mono type="date" value={c.date ?? ''} locked={locked}
+          busy={busy} onCommit={v => run(api.updateProcurement(c.id, { date: v }))} />
+        <Field label="Контрагент" locked={locked} view={c.contractor_name}>
           <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
-            disabled={!editable || busy} placeholder="— не указан —"
+            disabled={busy} placeholder="— не указан —"
             onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
             onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))}
             onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
               .then(cp => { api.counterparties('supplier').then(setSuppliers)
                 run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
-        </dd>
-        <dt>Проекты</dt>
-        <dd className="wide">
+        </Field>
+        {/* Охват (Ф13): отмеченные проекты — ссылки рядом с пикером; в просмотре
+            остаются одни ссылки, поле ввода исчезает вместе с остальными (§5). */}
+        <Field label="Проекты" wide locked={locked}
+          view={c.projects.length ? scopeLinks : ''}>
           <ProjectScopePicker projects={scopeCandidates} selected={scopeIds}
-            disabled={!editable || busy} onToggle={toggleScope} />
-          {c.projects.map(pr => (
-            <a key={pr.id} className="link scope-chip" title={pr.description}
-              onClick={() => openProject(pr.id)}>{pr.code}</a>
-          ))}
-        </dd>
-        <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
+            disabled={busy} onToggle={toggleScope} />
+          {scopeLinks}
+        </Field>
+        <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
       </>}
       tabs={tabs}

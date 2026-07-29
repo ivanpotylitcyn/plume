@@ -49,7 +49,7 @@ export function PeggingRows({ st, procurementId }: {
   return (
     <>
       {err && <div className="anomaly">{err}</div>}
-      <table className="grid tight">
+      <table className="grid">
         <thead>
           <tr>
             <th className="gl" /><th className="c-key">Изделие</th>

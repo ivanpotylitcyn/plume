@@ -42,7 +42,7 @@ export function ScopeDeficitRows({ st, openItem, editable, onTake }: {
       Нет потребностей по охвату — отметьте проекты в поле «Проекты».
     </div>
   return (
-    <table className="grid tight">
+    <table className="grid">
       <thead>
         <tr>
           <th className="gl" /><th className="c-key">Изделие</th>

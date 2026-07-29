@@ -15,6 +15,7 @@ import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
 
@@ -196,24 +197,23 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (договор, ТЗ) — появится в табе «Файлы»', disabled: att.busy }]}
       fields={<>
-        <dt>Код</dt>
-        <dd><CommitInput value={phead?.code ?? code} disabled={locked || busy || !phead}
+        <TextField label="Код" mono value={phead?.code ?? code} locked={locked}
+          busy={busy || !phead}
           onCommit={v => runP(api.updateProject(projectId, { code: v }))}
-          validate={v => v.trim() !== ''} /></dd>
-        <dt>Описание</dt>
-        <dd className="wide"><CommitInput value={phead?.description ?? data.project_name}
-          disabled={locked || busy || !phead}
+          validate={v => v.trim() !== ''} />
+        <TextField label="Описание" wide value={phead?.description ?? data.project_name}
+          locked={locked} busy={busy || !phead}
           onCommit={v => runP(api.updateProject(projectId, { description: v }))}
-          validate={v => v.trim() !== ''} /></dd>
+          validate={v => v.trim() !== ''} />
         {external && <>
-          <dt>Бюджет</dt>
-          <dd><CommitInput value={phead?.budget != null ? String(phead.budget) : ''}
-            disabled={locked || busy || !phead}
+          <TextField label="Бюджет" mono locked={locked} busy={busy || !phead}
+            value={phead?.budget != null ? String(phead.budget) : ''}
+            view={phead?.budget != null ? money(phead.budget) : ''}
             onCommit={v => runP(api.updateProject(projectId, { budget: v.trim() === '' ? null : Number(v) }))}
-            validate={v => v.trim() === '' || Number(v) >= 0} /></dd>
-          <dt>Начат</dt>
-          <dd><CommitInput value={phead?.started ?? ''} type="date" disabled={locked || busy || !phead}
-            onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} /></dd>
+            validate={v => v.trim() === '' || Number(v) >= 0} />
+          <TextField label="Начат" mono type="date" value={phead?.started ?? ''}
+            locked={locked} busy={busy || !phead}
+            onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} />
         </>}
       </>}
       extra={external ? <BudgetPanel projectId={projectId} rev={rev} /> : undefined}

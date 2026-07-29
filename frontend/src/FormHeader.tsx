@@ -3,7 +3,7 @@
 // снизу; справа — индикатор сохранения + замок формы, ИЛИ чип фиксации.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type Authored, type UserRow, type ProjectRow } from './api'
-import { CommitInput } from './CommitInput'
+import { Field, TextField } from './FormField'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Канон §5 (Ф9): всё существующее открывается В ПРОСМОТРЕ; исключение ровно одно —
@@ -78,24 +78,23 @@ export function useOrderForm<C extends { id: number }>(
 let _usersCache: Promise<UserRow[]> | null = null
 function loadUsers() { return (_usersCache ??= api.users()) }
 
-export function AuthorField({ userId, userName, disabled, onChange }: {
-  userId: number; userName: string; disabled: boolean; onChange: (id: number) => void
+export function AuthorField({ userId, userName, locked, busy, onChange }: {
+  userId: number; userName: string; locked: boolean; busy?: boolean
+  onChange: (id: number) => void
 }) {
   const [users, setUsers] = useState<UserRow[]>([])
   useEffect(() => { loadUsers().then(setUsers) }, [])
   const known = users.some(u => u.id === userId)
-  // dt/dd-пара для сетки `.props` шапки (Ф3): подпись отдельно от контрола.
+  // В просмотре — имя автора текстом (§5, Ф12d): подпись видна и без справочника,
+  // поэтому дожидаться загрузки списка не нужно.
   return (
-    <>
-      <dt>Автор</dt>
-      <dd>
-        <select className="lot-sel" value={userId || ''} disabled={disabled}
-          onChange={e => { const v = Number(e.target.value); if (v) onChange(v) }}>
-          {!known && userId ? <option value={userId}>{userName}</option> : null}
-          {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
-        </select>
-      </dd>
-    </>
+    <Field label="Автор" locked={locked} view={userName}>
+      <select className="lot-sel" value={userId || ''} disabled={busy}
+        onChange={e => { const v = Number(e.target.value); if (v) onChange(v) }}>
+        {!known && userId ? <option value={userId}>{userName}</option> : null}
+        {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+      </select>
+    </Field>
   )
 }
 
@@ -106,24 +105,24 @@ export function AuthorField({ userId, userName, disabled, onChange }: {
 // ловит отказ строкой ошибки (как у автора).
 // Ф12e: `id` может быть пустым — якорь (прибор-цель комплектации) выбирают в форме,
 // он обязателен к фиксации, а не к рождению.
-export function AnchorSelect({ label, id, currentLabel, options, disabled, onChange }: {
+export function AnchorSelect({ label, id, currentLabel, options, locked, busy, view,
+  mono, onChange }: {
   label: string; id: number | null; currentLabel: string
   options: { id: number; label: string }[]
-  disabled: boolean; onChange: (id: number) => void
+  locked: boolean; busy?: boolean
+  view?: ReactNode              // просмотр иначе, чем текстом (ссылка на проект)
+  mono?: boolean
+  onChange: (id: number) => void
 }) {
   const known = options.some(o => o.id === id)
-  // dt/dd-пара для сетки `.props` шапки (Ф3): подпись-якорь отдельно от контрола.
   return (
-    <>
-      <dt>{label}</dt>
-      <dd>
-        <select className="lot-sel" value={id || ''} disabled={disabled}
-          onChange={e => { const v = Number(e.target.value); if (v && v !== id) onChange(v) }}>
-          {!known && id ? <option value={id}>{currentLabel}</option> : null}
-          {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-        </select>
-      </dd>
-    </>
+    <Field label={label} locked={locked} mono={mono} view={view ?? (id ? currentLabel : '')}>
+      <select className="lot-sel" value={id || ''} disabled={busy}
+        onChange={e => { const v = Number(e.target.value); if (v && v !== id) onChange(v) }}>
+        {!known && id ? <option value={id}>{currentLabel}</option> : null}
+        {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+    </Field>
   )
 }
 
@@ -132,8 +131,8 @@ export function AnchorSelect({ label, id, currentLabel, options, disabled, onCha
 let _projectsCache: Promise<ProjectRow[]> | null = null
 function loadProjects() { return (_projectsCache ??= api.projects()) }
 
-export function ProjectField({ projectId, projectLabel, disabled, onChange, onOpen }: {
-  projectId: number; projectLabel: string; disabled: boolean
+export function ProjectField({ projectId, projectLabel, locked, busy, onChange, onOpen }: {
+  projectId: number; projectLabel: string; locked: boolean; busy?: boolean
   onChange: (id: number) => void
   onOpen?: (id: number) => void   // задан → под замком поле = ссылка на проект
 }) {
@@ -141,17 +140,13 @@ export function ProjectField({ projectId, projectLabel, disabled, onChange, onOp
   useEffect(() => { loadProjects().then(setProjects) }, [])
   // Под замком показываем ОДИН код и делаем его кликабельным (§8: кликабельно то, что
   // названо): расшифровка проекта в форме документа — шум, за ней идут на форму проекта.
-  if (disabled && onOpen)
-    return (
-      <>
-        <dt>Проект</dt>
-        <dd><a className="link" onClick={() => onOpen(projectId)}>{projectLabel}</a></dd>
-      </>
-    )
   return (
     <AnchorSelect label="Проект" id={projectId} currentLabel={projectLabel}
       options={projects.map(p => ({ id: p.id, label: `${p.code} — ${p.description}` }))}
-      disabled={disabled} onChange={onChange} />
+      locked={locked} busy={busy} onChange={onChange} mono
+      view={projectId && onOpen
+        ? <a className="link" onClick={() => onOpen(projectId)}>{projectLabel}</a>
+        : projectLabel} />
   )
 }
 
@@ -183,26 +178,20 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
 }) {
   return (
     <>
-      <dt>Код</dt>
-      <dd><CommitInput value={c.code ?? ''} disabled={locked || busy}
-        onCommit={v => patch({ code: v })} /></dd>
-      <dt>Описание</dt>
+      <TextField label="Код" mono value={c.code ?? ''} locked={locked} busy={busy}
+        onCommit={v => patch({ code: v })} />
       {/* Единственное длинное поле шапки (§13.3). */}
-      <dd className="wide"><CommitInput value={c.description} disabled={locked || busy}
-        onCommit={v => patch({ description: v })} /></dd>
-      {numberLabel && <>
-        <dt>{numberLabel}</dt>
-        <dd><CommitInput value={c.number ?? ''} disabled={locked || busy}
-          onCommit={v => patch({ number: v })}
-          validate={v => v.trim().length > 0} /></dd>
-      </>}
-      <dt>Дата</dt>
-      <dd><CommitInput value={c.date ?? ''} type="date" disabled={locked || busy}
-        onCommit={v => patch({ date: v })} /></dd>
-      <AuthorField userId={c.user_id} userName={c.user_name} disabled={locked || busy}
+      <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
+        onCommit={v => patch({ description: v })} />
+      {numberLabel &&
+        <TextField label={numberLabel} mono value={c.number ?? ''} locked={locked} busy={busy}
+          onCommit={v => patch({ number: v })} validate={v => v.trim().length > 0} />}
+      <TextField label="Дата" mono type="date" value={c.date ?? ''} locked={locked} busy={busy}
+        onCommit={v => patch({ date: v })} />
+      <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
         onChange={id => patch({ user_id: id })} />
       <ProjectField projectId={c.project_id} projectLabel={c.project_code}
-        disabled={locked || busy} onOpen={openProject}
+        locked={locked} busy={busy} onOpen={openProject}
         onChange={id => patch({ project_id: id })} />
       {children}
     </>

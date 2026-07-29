@@ -9,9 +9,9 @@
 // второй фронт внутри Ф12c мы не стали.
 import { useEffect, useState } from 'react'
 import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
-import { CommitInput } from './CommitInput'
 import { AnchorSelect, OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Glyph, Segment, count, num } from './status'
 
@@ -81,13 +81,14 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
         <OrderFields c={c} locked={locked} busy={busy}
           openProject={openProject}
           patch={b => run(api.updateKitting(c.id, b))}>
-          <dt>Образцов</dt>
-          <dd><CommitInput value={String(c.qty)} width={72} disabled={locked || busy}
+          {/* Ширина поля — токеном темы, не пикселями в JSX (Ф12d: инлайн-стиль
+              сильнее любого класса и выбивал поле из общей сетки шапки). */}
+          <TextField label="Образцов" mono value={String(c.qty)} locked={locked} busy={busy}
             onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
-            validate={v => Number(v) > 0} /></dd>
+            validate={v => Number(v) > 0} />
           <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
             options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.description}` }))}
-            disabled={locked || busy}
+            locked={locked} busy={busy}
             onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
         </OrderFields>}
       tabs={tabs}
