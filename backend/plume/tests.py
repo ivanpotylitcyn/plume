@@ -1601,18 +1601,90 @@ class ProcurementFormTests(EngineTestBase):
         p.refresh_from_db()
         self.assertIsNone(p.contractor_id)
 
-    def test_xlsx_bytes_have_header_and_rows(self):
+    def _xlsx_rows(self, procurement):
+        """Лист бланка списком строк — бланк уходит наружу, читаем его как получатель."""
         from io import BytesIO
 
         from openpyxl import load_workbook
-        p = engine.create_procurement(self.user)
-        engine.add_procurement_line(p, self.make_item('R100'), D(12))
-        data = engine.procurement_xlsx(p)
+        data = engine.procurement_xlsx(procurement)
         self.assertTrue(data)                          # непустой байт-поток
         ws = load_workbook(BytesIO(data)).active
-        self.assertEqual(ws['A1'].value, 'Артикул')
-        self.assertEqual(ws['A2'].value, 'R100')
-        self.assertEqual(ws['C2'].value, 12)
+        return [[c.value for c in row] for row in ws.iter_rows()]
+
+    def test_xlsx_lists_positions_numbered_in_screen_order(self):
+        """Ф4b: у позиции есть «№», и нумерация идёт в порядке экрана, не по id изделия."""
+        p = engine.create_procurement(self.user)
+        # заводим изделия в обратном алфавитном порядке: если бы файл сортировал по
+        # чему-то своему, номера разъехались бы с табом «Строки» (тот же `order_by('id')`)
+        engine.add_procurement_line(p, self.make_item('R900'), D(12))
+        engine.add_procurement_line(p, self.make_item('R100'), D(5))
+        rows = self._xlsx_rows(p)
+        head = rows.index(['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'])
+        self.assertEqual(rows[head + 1][:4], [1, 'R900', 'R900', 12])
+        self.assertEqual(rows[head + 2][:4], [2, 'R100', 'R100', 5])
+        screen = [ln['item_code'] for ln in engine.procurement_form(p)['lines']]
+        self.assertEqual([r[1] for r in rows[head + 1:]], screen)
+
+    def _xlsx_head(self, procurement):
+        """Шапка бланка словарём. Она живёт в колонках B/C (A узкая — под «№»), поэтому
+        подпись читаем из второй ячейки, а не первой."""
+        return {r[1]: r[2] for r in self._xlsx_rows(procurement)
+                if r[0] is None and r[1]}
+
+    def test_xlsx_head_carries_both_parties_date_and_author(self):
+        """Ф4b: шапка запроса — заказчик (мы) · контрагент · дата · автор."""
+        us = models.Counterparty.objects.create(description='Наша сторона', inn='7700000000')
+        p = engine.create_procurement(self.user, date='2026-07-30')
+        engine.update_procurement(p, contractor=self.supplier)
+        engine.add_procurement_line(p, self.make_item('R100'), D(1))
+        with self.settings(ORG_COUNTERPARTY_ID=us.id):
+            head = self._xlsx_head(p)
+            self.assertEqual(head['Заказчик'], 'Наша сторона · ИНН 7700000000')
+            self.assertEqual(head['Контрагент'], self.supplier.description)  # ИНН не задан
+            self.assertEqual(head['Дата запроса'], '30.07.2026')
+            self.assertEqual(head['Автор'], self.user.get_username())
+            # та же дата после перечитывания из БД (в памяти она держится строкой из
+            # JSON — бланк обязан выдержать оба состояния, документ уходит наружу)
+            p.refresh_from_db()
+            self.assertEqual(self._xlsx_head(p)['Дата запроса'], '30.07.2026')
+
+    def test_xlsx_head_labels_never_sit_in_the_narrow_number_column(self):
+        """Подписи шапки — в колонке B, значения в C: в узкой A (она под «№») Excel
+        обрезал бы подпись по границе, потому что соседняя ячейка занята. Поймано
+        глазами на реальном файле — ассерты на значения ячеек такого не видят."""
+        us = models.Counterparty.objects.create(description='Наша сторона')
+        p = engine.create_procurement(self.user, date='2026-07-30')
+        engine.add_procurement_line(p, self.make_item('R100'), D(1))
+        with self.settings(ORG_COUNTERPARTY_ID=us.id):
+            rows = self._xlsx_rows(p)
+        table = next(i for i, r in enumerate(rows) if r[0] == '№')
+        for r in rows[:table]:                            # всё, что выше таблицы
+            self.assertIsNone(r[0], 'колонка A в шапке обязана быть пустой')
+            self.assertTrue(r[3] is None and r[4] is None,  # значению есть куда перетечь
+                            'в строке шапки заполнены только B и C')
+
+    def test_xlsx_survives_unset_organization_and_empty_head(self):
+        """Незаданная строка шапки не рисуется вовсе: пустая графа во внешнем документе
+        читается как брак, а не как «значение не задано» (внутри продукта — прочерк)."""
+        p = engine.create_procurement(self.user)          # без контрагента и без даты
+        engine.add_procurement_line(p, self.make_item('R100'), D(1))
+        with self.settings(ORG_COUNTERPARTY_ID=None):     # мы не настроены
+            head = self._xlsx_head(p)
+            rows = self._xlsx_rows(p)
+        self.assertNotIn('Заказчик', head)
+        self.assertNotIn('Контрагент', head)
+        self.assertNotIn('Дата запроса', head)
+        self.assertIn('Автор', head)                      # автор есть всегда (NOT NULL)
+        self.assertTrue(any(r[0] == '№' for r in rows))   # таблица позиций на месте
+
+    def test_our_organization_ignores_id_of_deleted_counterparty(self):
+        """Настройка указывает на удалённую запись — выгрузка не падает, мы просто
+        «не настроены» (окружение и справочник живут раздельно)."""
+        gone = models.Counterparty.objects.create(description='Была')
+        gone_id = gone.id
+        gone.delete()
+        with self.settings(ORG_COUNTERPARTY_ID=gone_id):
+            self.assertIsNone(engine.our_organization())
 
 
 class PeggingTests(EngineTestBase):

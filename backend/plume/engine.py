@@ -98,7 +98,7 @@
 import csv
 import io
 import os
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import date as dt_date, datetime, timedelta, timezone as dt_timezone
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
@@ -2950,12 +2950,64 @@ def add_to_procurement(procurement, item, qty):
     return procurement
 
 
+def our_organization():
+    """Наша сторона — **обычный контрагент**, чей ID знает окружение (волна 19, Ф4b).
+
+    Решение Ивана 2026-07-30: не константа в коде и не отдельная таблица настроек, а
+    запись `Counterparty`. Тогда себя правят той же формой, что всех, у нас те же
+    `description`/`inn` и та же «карточка предприятия» во вложениях — а окружение лишь
+    знает, кто из справочника «мы» (`settings.ORG_COUNTERPARTY_ID`). Название
+    организации в репозиторий не попадает, оно живёт в данных и в `.env`.
+
+    `None` — настройка не задана или указывает на удалённую запись. Это не ошибка:
+    выгрузка обязана работать и без неё (см. `procurement_xlsx`).
+    """
+    oid = getattr(settings, 'ORG_COUNTERPARTY_ID', None)
+    return models.Counterparty.objects.filter(pk=oid).first() if oid else None
+
+
+def _party_line(cp):
+    """Сторона одной строкой для бланка: наименование + ИНН, если он известен."""
+    return f'{cp.description} · ИНН {cp.inn}' if cp.inn else cp.description
+
+
+def _doc_date(value):
+    """Дата для документа НАРУЖУ — `дд.мм.гггг` (тот же формат, что в просмотре формы).
+
+    Принимает и `date`, и ISO-строку: сущность, только что созданная или поправленная в
+    этом же запросе, держит в памяти ровно то, что пришло из JSON (`'2026-07-30'`), пока
+    её не перечитали из БД. Нераспознанное значение даёт пустую строку — сырой ISO или
+    мусор в бланке у поставщика хуже отсутствующей графы.
+    """
+    if isinstance(value, str):
+        try:
+            value = dt_date.fromisoformat(value)
+        except ValueError:
+            return ''
+    return value.strftime('%d.%m.%Y') if value else ''
+
+
 def procurement_xlsx(procurement):
     """Сгенерировать xlsx-бланк закупки-плана (bytes) — файл поставщику.
 
-    Базовый формат: артикул / наименование / кол-во / ед. Синхронно в запросе
-    (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт ленивый (зависимость
-    только ради экспорта).
+    **Документ наружу** (с 2026-07-20 уходит реальным контрагентам), поэтому состав
+    меняется осознанно и разом, а не побочным эффектом правки формы. Волна 19, Ф4b —
+    первое такое изменение: над таблицей появилась шапка запроса (кто просит, у кого,
+    когда, кто автор), а у позиций — порядковый номер.
+
+    Шапка: **заказчик** — наша сторона (`our_organization`, обычный контрагент);
+    **контрагент** — `Procurement.contractor` (намерение плана: у кого собираемся
+    купить); **дата запроса** — `Procurement.date`; **автор** — `Procurement.user`.
+    Незаданные строки шапки **не рисуются вовсе**: пустая графа во внешнем документе
+    читается как брак, а не как «значение не задано» (внутри продукта правило обратное,
+    §13 — там прочерк честнее).
+
+    **Порядок позиций = порядок на экране** (`order_by('id')`, тот же, что у
+    `procurement_form`): нумерация в файле обязана совпадать с тем, что видит человек,
+    иначе «позиция 3» в переписке означает разное у нас и у поставщика.
+
+    Синхронно в запросе (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт
+    ленивый (зависимость только ради экспорта).
     """
     from io import BytesIO
 
@@ -2965,14 +3017,37 @@ def procurement_xlsx(procurement):
     wb = Workbook()
     ws = wb.active
     ws.title = 'Заказ'
-    headers = ['Артикул', 'Наименование', 'Кол-во', 'Ед.']
+
+    bold = Font(bold=True)
+    us = our_organization()
+    head = [
+        ('Заказчик', _party_line(us) if us else ''),
+        ('Контрагент', _party_line(procurement.contractor)
+                       if procurement.contractor_id else ''),
+        ('Дата запроса', _doc_date(procurement.date)),
+        ('Автор', procurement.user.get_full_name() or procurement.user.get_username()),
+    ]
+    # Шапка идёт колонками **B/C**, а не A/B: колонка A узкая (она под «№»), и подпись
+    # в ней Excel обрезал бы по границе — соседняя ячейка занята. В B/C подписи встают
+    # ровно под «Артикул», значения — под «Наименование» и свободно перетекают вправо
+    # (D/E в строках шапки пусты). Поймано глазами на реальном файле, не тестом.
+    for label, value in head:
+        if not value:
+            continue
+        ws.append([None, label, value])
+        ws.cell(row=ws.max_row, column=2).font = bold
+    ws.append([])                      # пустая строка отбивает шапку от таблицы
+
+    headers = ['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.']
     ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-    for line in procurement.lines.select_related('item').order_by('id'):
-        ws.append([line.item.code, line.item.description, float(line.qty), line.item.uom])
-    widths = [22, 48, 12, 8]
-    for i, width in enumerate(widths, start=1):
+    for cell in ws[ws.max_row]:
+        cell.font = bold
+    for n, line in enumerate(
+            procurement.lines.select_related('item').order_by('id'), start=1):
+        ws.append([n, line.item.code, line.item.description,
+                   float(line.qty), line.item.uom])
+    # «№» узкая; остальные — как были. Ширины идут по колонкам A…E.
+    for i, width in enumerate([5, 22, 48, 12, 8], start=1):
         ws.column_dimensions[chr(64 + i)].width = width
     buf = BytesIO()
     wb.save(buf)
