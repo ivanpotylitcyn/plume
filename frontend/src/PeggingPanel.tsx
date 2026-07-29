@@ -7,6 +7,12 @@
 // Волна 19 (Ф12c): панель разобрана на части канона §13 — состояние в хук `usePegging`,
 // два списка стали двумя ТАБАМИ формы закупки («Привязка», «Заказы»), а команда
 // «Разрезать по проектам» уехала в колонку команд шапки (была `.kit-actions` в теле).
+//
+// Волна 19 (Ф5+Ф13). Три уровня вместо двух:
+//   строка плана → проекты ОХВАТА (наводка + пегнутое) → применения (обратное
+//   разузлование: в какие изделия проекта эта позиция идёт и по сколько штук).
+// Наводка сузилась до охвата закупки — раньше сюда лезли проекты всей организации.
+// Пег кладётся в ЯВНО выбранный заказ (Р2): под проектом их может быть несколько.
 import { useEffect, useState } from 'react'
 import { api, type Pegging, type PeggingRow, type PeggingProject } from './api'
 import { Chevron, Glyph, StatusGlyph, num } from './status'
@@ -43,7 +49,7 @@ export function PeggingRows({ st, procurementId }: {
   return (
     <>
       {err && <div className="anomaly">{err}</div>}
-      <table className="grid">
+      <table className="grid tight">
         <thead>
           <tr>
             <th className="gl" /><th className="c-key">Изделие</th>
@@ -134,50 +140,96 @@ function LineRow({ r, editable, busy, procurementId, run }: {
   )
 }
 
-// Проект под строкой плана: наводка + пегнуто + пег (ввод) / снятие.
+// Проект под строкой плана: наводка + пегнуто + пег (в выбранный заказ) / снятие.
+// Раскрытие — применения: зачем эта позиция проекту (обратное разузлование).
 function ProjectRow({ bp, item_id, editable, busy, procurementId, run }: {
   bp: PeggingProject; item_id: number; editable: boolean; busy: boolean
   procurementId: number; run: (p: Promise<Pegging>) => void
 }) {
   const [qty, setQty] = useState('')
-  const peg = () => {
-    const q = Number(qty)
+  const [open, setOpen] = useState(false)
+  // Куда пегать (Р2). Зафиксированный заказ — не мишень (движок откажет), поэтому в
+  // выборе только черновики. Пока не выбрали руками — первый черновик проекта, то есть
+  // прежнее поведение; «＋ новый заказ» только по явному выбору, иначе каждый пег
+  // плодил бы отдельное обязательство. Исчез выбранный (зафиксировали) — падаем на
+  // тот же дефолт, а не пегаем молча не туда.
+  const drafts = bp.purchases.filter(p => !p.locked)
+  const [into, setInto] = useState<number | 'new' | null>(null)
+  const chosen = into === 'new' || (into !== null && drafts.some(p => p.id === into))
+  const target = chosen ? into as number | 'new' : (drafts[0]?.id ?? 'new')
+
+  const peg = (q: number) => {
     if (!(q > 0)) return
-    run(api.peg(procurementId, { item_id, project_id: bp.project_id, qty: q }))
+    run(api.peg(procurementId,
+      { item_id, project_id: bp.project_id, qty: q, purchase_id: target }))
     setQty('')
   }
   return (
-    <tr className="row ghost">
-      <td className="gl" />
-      <td className="c-key"><span className="code">{bp.project_code}</span></td>
-      <td className="c-desc"><span className="sub">{bp.project_name}</span></td>
-      <td className="num sub" title="наводка свода (сколько проекту ещё надо)">
-        {bp.suggest > 0 ? num(bp.suggest) : '—'}
-      </td>
-      <td className="uom" />
-      <td className="num">{num(bp.pegged)}</td>
-      <td className="num">
-        {bp.pegged > 0 && editable &&
-          <button className="fh-ctl icon fh-del" title="Отвязать от проекта" disabled={busy}
-            onClick={() => run(api.unpeg(procurementId,
-              { item_id, project_id: bp.project_id }))}>
-            <span className="ci ci-trash" /></button>}
-      </td>
-      <td className="act">
-        {editable && <>
-          <input className="qty-in" value={qty} disabled={busy} placeholder="+кол-во"
-            onChange={e => setQty(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') peg() }} />
-          <button className="btn sm" disabled={busy || !(Number(qty) > 0)}
-            style={{ marginLeft: 6 }} onClick={peg}>привязать</button>
-          {bp.suggest > 0 &&
-            <button className="btn sm" disabled={busy} style={{ marginLeft: 6 }}
-              title={`привязать наводку ${num(bp.suggest)}`}
-              onClick={() => run(api.peg(procurementId,
-                { item_id, project_id: bp.project_id, qty: bp.suggest }))}>
-              ＋наводку</button>}
-        </>}
-      </td>
-    </tr>
+    <>
+      <tr className="row ghost">
+        <td className="gl" />
+        <td className="c-key">
+          <button className="fh-ctl icon" title="Зачем это проекту (применения)"
+            onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
+          <span className="code">{bp.project_code}</span></td>
+        <td className="c-desc"><span className="sub">{bp.project_name}</span></td>
+        <td className="num sub" title="наводка по охвату (сколько проекту ещё надо)">
+          {bp.suggest > 0 ? num(bp.suggest) : '—'}
+        </td>
+        <td className="uom" />
+        <td className="num">{num(bp.pegged)}</td>
+        <td className="num">
+          {bp.pegged > 0 && editable &&
+            <button className="fh-ctl icon fh-del" title="Отвязать от проекта" disabled={busy}
+              onClick={() => run(api.unpeg(procurementId,
+                { item_id, project_id: bp.project_id }))}>
+              <span className="ci ci-trash" /></button>}
+        </td>
+        <td className="act">
+          {editable && <>
+            {/* Куда лечь — раньше «сколько»: заказ рождается лениво (пустых призраков
+                не заводим), поэтому «＋ новый заказ» — выбор на будущий пег, а не
+                создание сейчас. */}
+            <select className="lot-sel peg-into" value={target}
+              disabled={busy} title="В какой заказ проекта класть привязку"
+              onChange={e => setInto(e.target.value === 'new' ? 'new' : Number(e.target.value))}>
+              {drafts.map(pu => <option key={pu.id} value={pu.id}>{pu.code}</option>)}
+              <option value="new">＋ новый заказ</option>
+            </select>
+            <input className="qty-in" value={qty} disabled={busy} placeholder="+кол-во"
+              style={{ marginLeft: 6 }}
+              onChange={e => setQty(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') peg(Number(qty)) }} />
+            {/* Команды строки — одними глифами (§7a): текстовые «привязать» и
+                «＋наводку» вместе с выбором заказа не влезали в строку. */}
+            <button className="fh-ctl icon" disabled={busy || !(Number(qty) > 0)}
+              title="Привязать введённое количество"
+              onClick={() => peg(Number(qty))}><span className="ci ci-check" /></button>
+            {bp.suggest > 0 &&
+              <button className="fh-ctl icon" disabled={busy}
+                title={`Привязать наводку — ${num(bp.suggest)}`}
+                onClick={() => peg(bp.suggest)}><span className="ci ci-add" /></button>}
+          </>}
+        </td>
+      </tr>
+      {open && (bp.usage.length === 0
+        ? <tr className="row ghost"><td className="gl" />
+            <td colSpan={7}><span className="sub">
+              Позиция не входит в изделия проекта — привязка ручная.</span></td></tr>
+        : bp.usage.map(u => (
+          <tr key={u.target_item_id} className="row ghost">
+            <td className="gl" />
+            <td className="c-key" style={{ paddingLeft: 28 }}>
+              <span className="code">{u.target_code}</span></td>
+            <td className="c-desc"><span className="sub">{u.target_description}</span></td>
+            <td className="num sub"
+              title={`${num(u.per_unit)} на изделие × ${num(u.demand_qty)} изделий`}>
+              {num(u.total)}</td>
+            <td className="uom" />
+            <td className="num sub">×{num(u.per_unit)}</td>
+            <td /><td className="act" />
+          </tr>
+        )))}
+    </>
   )
 }

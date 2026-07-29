@@ -1,27 +1,34 @@
 // Витрина волны 7: форма закупки-плана (Procurement) — записываемое ядро.
-// Самостоятельный план без проекта (маркер командной высоты). Строки (item + qty,
-// автосейв, пока расфиксирована). Замок делает строки read-only.
+// План под ОХВАТ проектов (Ф13; до неё — «без проекта, командная высота»). Строки
+// (item + qty, автосейв, пока расфиксирована). Замок делает строки read-only.
 // Кнопка выгрузки xlsx-бланка поставщику (имя файла = код закупки). Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 //
-// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Привязка · Заказы · Файлы.
-// Панель pegging разобрана на два таба (§13.7), её команда «Разрезать по проектам»
-// уехала в колонку команд шапки. Проекта у плана нет (он командный) — поэтому общий
-// `OrderFields` тут неприменим, поля выписаны свои; охват проектов придёт в Ф13.
+// Волна 19 (Ф12c): форма по канону §13 — табы Строки · К закупке · Привязка · Заказы ·
+// Файлы. Панель pegging разобрана на табы (§13.7), её команда «Разрезать по проектам»
+// уехала в колонку команд шапки.
+//
+// Ф13: у закупки появился ОХВАТ — набор проектов, под которые она ведётся (поле
+// «Проекты» в шапке). Он задаёт область расчёта: и витрина «К закупке» (бывший экран
+// «Командный свод», схлопнутый в таб), и наводка привязки считаются по нему. Общий
+// `OrderFields` тут по-прежнему неприменим — у закупки проектов много, а не один.
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
-  type CounterpartyRow } from './api'
+  type CounterpartyRow, type ProjectRow } from './api'
 import { CommitInput } from './CommitInput'
 import { AuthorField, useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { PeggingRows, PurchaseFan, usePegging } from './PeggingPanel'
-import { CounterpartyPicker, ItemPicker } from './Picker'
+import { ScopeDeficitRows, useScopeDeficit } from './ScopeDeficitPanel'
+import { CounterpartyPicker, ItemPicker, ProjectScopePicker } from './Picker'
 import { ItemGlyph, count, num, sumByUom } from './status'
 
-export function ProcurementView({ procurementId, items, isNew, openItem, openPurchase, onChanged, onDeleted }: {
-  procurementId: number; items: ItemRow[]; isNew: boolean
-  openItem: (id: number) => void; openPurchase: (id: number) => void; onChanged: () => void
+export function ProcurementView({ procurementId, items, projects, isNew, openItem,
+  openProject, openPurchase, onChanged, onDeleted }: {
+  procurementId: number; items: ItemRow[]; projects: ProjectRow[]; isNew: boolean
+  openItem: (id: number) => void; openProject: (id: number) => void
+  openPurchase: (id: number) => void; onChanged: () => void
   onDeleted?: () => void
 }) {
   const [c, setC] = useState<ProcurementForm | null>(null)
@@ -35,6 +42,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
   useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
   const peg = usePegging(procurementId, rev)                 // табы «Привязка» и «Заказы»
+  const need = useScopeDeficit(procurementId, rev)           // таб «К закупке» (Ф13)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -66,6 +74,16 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
   const fixed = !editable                  // зафиксирована — read-only
   const locked = !editable || !unlocked
 
+  // Охват (Ф13): кандидаты — только активные внешние проекты (внутренние склады не
+  // потребители, закрытый проект не закупают — движок откажет). Отмеченное шлём целым
+  // списком: M2M правится заменой набора, а не дельтой.
+  const scopeIds = c.projects.map(pr => pr.id)
+  const scopeCandidates = projects.filter(
+    pr => pr.kind === 'external' && (!pr.locked || scopeIds.includes(pr.id)))
+  const toggleScope = (id: number) => run(api.updateProcurement(c.id, {
+    project_ids: scopeIds.includes(id) ? scopeIds.filter(x => x !== id) : [...scopeIds, id],
+  }))
+
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <>
@@ -88,6 +106,10 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
         </table>
         {c.lines.length === 0 && !editable && <div className="tab-empty">Закупка пуста.</div>}
       </> },
+    { key: 'need', label: 'К закупке', icon: 'table',
+      content: <ScopeDeficitRows st={need} openItem={openItem}
+        editable={editable} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
+          { item_id: itemId, qty }))} /> },
     { key: 'pegging', label: 'Привязка', icon: 'flag',
       content: <PeggingRows st={peg} procurementId={c.id} /> },
     { key: 'fan', label: 'Заказы', icon: 'package',
@@ -103,6 +125,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
       meta={<>
         {count(c.lines.length, 'позиция', 'позиции', 'позиций')}
         {sumByUom(c.lines).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
+        {' · '}{count(c.projects.length, 'проект', 'проекта', 'проектов')} в охвате
         {' · '}{count(peg.p?.fan.length ?? 0, 'заказ', 'заказа', 'заказов')}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
       </>}
@@ -117,7 +140,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
       download={{ href: api.xlsxUrl(c.id), title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }}
       actions={[
         ...(editable ? [{ onClick: peg.autopeg, label: 'Разрезать', icon: 'ci-git-branch',
-          title: 'Разложить каждую строку плана по нуждающимся проектам (наводка свода)',
+          title: 'Разложить каждую строку плана по нуждающимся проектам охвата',
           disabled: peg.busy }] : []),
         { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
           title: 'Загрузить файл (КП, счёт) — появится в табе «Файлы»', disabled: att.busy },
@@ -141,6 +164,15 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
             onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
               .then(cp => { api.counterparties('supplier').then(setSuppliers)
                 run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
+        </dd>
+        <dt>Проекты</dt>
+        <dd className="wide">
+          <ProjectScopePicker projects={scopeCandidates} selected={scopeIds}
+            disabled={!editable || busy} onToggle={toggleScope} />
+          {c.projects.map(pr => (
+            <a key={pr.id} className="link scope-chip" title={pr.description}
+              onClick={() => openProject(pr.id)}>{pr.code}</a>
+          ))}
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />

@@ -13,7 +13,6 @@ import { ItemView } from './ItemView'
 import { LibraryImportView } from './LibraryImportView'
 import { PurchaseView } from './PurchaseView'
 import { ProcurementView } from './ProcurementView'
-import { CommandDeficitView } from './CommandDeficitView'
 import { OrderForm } from './OrderForm'
 import { ORDER_KINDS, ORDER_LABEL, type OrderKind } from './orders'
 import { LocationView } from './LocationView'
@@ -41,7 +40,6 @@ type Sel =
   | { kind: 'transfer'; id: number }
   | { kind: 'writeoff'; id: number }
   | { kind: 'requisition'; id: number }
-  | { kind: 'command' }
   | { kind: 'procurement'; id: number }
   | { kind: 'inventory'; id: number }
   | { kind: 'relocation'; id: number }
@@ -388,12 +386,6 @@ export default function App() {
             onNew={() => born('procurements', 'procurement', reloadProcurements, openProcurement)}
             selId={sel?.kind === 'procurement' ? sel.id : null}
             onSelect={id => setSel({ kind: 'procurement', id })}
-            extraTop={
-              <div className={'tree-item' + (sel?.kind === 'command' ? ' sel' : '')}
-                onClick={() => setSel({ kind: 'command' })}>
-                <span className="ci ci-table" />
-                <span className="code">Командный свод</span>
-              </div>}
             rows={[...procurements].reverse().map(p => ({
               id: p.id, code: p.code || `Закупка #${p.id}`, name: p.description,
               // Ф1b: закупка-план — ось только фиксация, цвет=фиксация (зелёный заперт).
@@ -432,11 +424,9 @@ export default function App() {
             isNew={isFresh('purchase', sel.id)}
             openReceipt={openReceipt} openProject={openProject} onChanged={reloadPurchases}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
-        {sel?.kind === 'command' &&
-          <CommandDeficitView openItem={openItem}
-            openProcurement={id => { reloadProcurements(); openProcurement(id) }} />}
         {sel?.kind === 'procurement' &&
-          <ProcurementView procurementId={sel.id} items={items} openItem={openItem}
+          <ProcurementView procurementId={sel.id} items={items} projects={projects}
+            openItem={openItem} openProject={openProject}
             isNew={isFresh('procurement', sel.id)}
             openPurchase={id => { reloadPurchases(); openPurchase(id) }}
             onChanged={reloadProcurements}

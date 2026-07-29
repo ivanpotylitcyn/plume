@@ -14,11 +14,11 @@ import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { useTypeahead } from './core/useTypeahead'
 import { AnchoredMenu } from './AnchoredMenu'
-import type { ItemRow, CounterpartyRow, ProjectPurchaseRow } from './api'
+import type { ItemRow, CounterpartyRow, ProjectPurchaseRow, ProjectRow } from './api'
 import { ItemGlyph, StatusGlyph } from './status'
 
 export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, renderRow,
-  placeholder, disabled, width, onEnter, onClear, notFound, onCreate }: {
+  placeholder, disabled, width, onEnter, onClear, notFound, onCreate, multi, summary }: {
   options: T[]
   value: number | ''
   onPick: (id: number) => void
@@ -36,8 +36,13 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
   // заводить справочную мелочь (контрагента) надо оттуда, где о ней вспомнили —
   // из самого поля. Задан → плашка «не найдено» становится кнопкой.
   onCreate?: (text: string) => void
+  // Ф13: множественный выбор — `onPick` переключает отметку, меню живёт до Esc/blur.
+  // Галочку рисует `renderRow` (это знак темы), ядро о ней не знает.
+  multi?: boolean
+  summary?: string              // что стоит в поле при множественном выборе
 }) {
-  const t = useTypeahead({ options, value, onPick, keyOf, textOf, searchOf, onEnter })
+  const t = useTypeahead({ options, value, onPick, keyOf, textOf, searchOf, onEnter,
+    multi, summary })
   const menu = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)     // якорь меню (портал считает от него)
 
@@ -57,7 +62,11 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
     <span className="picker">
       <input ref={field} className="lot-sel" style={width ? { width } : undefined} value={t.text}
         disabled={disabled} placeholder={placeholder ?? 'код или описание…'}
-        onChange={e => t.type(e.target.value)} onKeyDown={t.onKeyDown} onBlur={t.close} />
+        onChange={e => t.type(e.target.value)} onKeyDown={t.onKeyDown} onBlur={t.close}
+        // Множественный выбор раскрывается и по фокусу, и по КЛИКУ: после Esc поле
+        // остаётся сфокусированным, и одного `onFocus` не хватило бы — клик в поле
+        // выглядел бы сломанным (поймано браузерным прогоном Ф13).
+        onFocus={t.focus} onClick={t.focus} />
       {onClear && value !== '' && !disabled &&
         <button className="x" title="Очистить" onClick={onClear}>×</button>}
       {t.open &&
@@ -132,6 +141,33 @@ export function CounterpartyPicker({ counterparties, value, onPick, disabled, pl
       {c.code && <span className="code">{c.code}</span>}
       <span>{c.description}</span>
       {c.inn && <span className="dim">ИНН {c.inn}</span>}
+    </>} />
+}
+
+// ── Пикер охвата закупки (волна 19, Ф13): множественный выбор проектов ──
+// Ориентир — выбор папки в мессенджере: список с галочками, Enter/клик переключает и
+// список НЕ закрывается. Форма растёт ровно на одно поле: отмеченное свёрнуто в поле
+// («ДОП ДЗЗ, ЛК-1 +2»), полный состав виден в меню и в табе «К закупке».
+export function ProjectScopePicker({ projects, selected, onToggle, disabled }: {
+  projects: ProjectRow[]
+  selected: number[]
+  onToggle: (id: number) => void
+  disabled?: boolean
+}) {
+  const chosen = new Set(selected)
+  const names = projects.filter(p => chosen.has(p.id)).map(p => p.code)
+  // Сводка: два кода целиком, остальные счётчиком — иначе поле уезжает по ширине.
+  const summary = names.length === 0 ? ''
+    : names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2}` : '')
+  return <Picker options={projects} value={''} onPick={onToggle} keyOf={p => p.id}
+    multi summary={summary}
+    textOf={p => p.code} searchOf={p => `${p.code} ${p.description}`}
+    disabled={disabled} placeholder="— не выбраны —" width={260}
+    notFound="ничего не найдено — проект должен быть в справочнике."
+    renderRow={p => <>
+      <span className={'ci' + (chosen.has(p.id) ? ' ci-check' : '')} />
+      <span className="code">{p.code}</span>
+      <span className="dim">{p.description}</span>
     </>} />
 }
 

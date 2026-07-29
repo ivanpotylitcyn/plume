@@ -159,6 +159,8 @@ body { overflow: hidden; }
 .ci-file-code::before       { content: '\eae9'; }
 .ci-file-binary::before     { content: '\eae8'; }
 .ci-file-zip::before        { content: '\eaef'; }
+.ci-add::before             { content: '\ea60'; }  /* «Завести "X"» из пикера (Ф12e) */
+.ci-check::before           { content: '\eab2'; }  /* отметка в мультивыборе (Ф13) */
 
 /* ---- каркас (строки состояния больше нет — §11) ---- */
 .app { display: grid; grid-template-columns: 48px 240px 1fr; height: 100vh; }
@@ -343,6 +345,11 @@ body { overflow: hidden; }
   align-items: baseline; margin-bottom: 18px; max-width: 560px; }
 .props dt { color: var(--fg-dim); text-align: right; }   /* метки по правому краю — к инпутам */
 .props dd { margin: 0; color: var(--fg); }
+/* Охват закупки (Ф13): отмеченные проекты — ссылки рядом с пикером, в одной строке
+   поля (форма растёт ровно на одно поле). Моно, как всякий код; разделены отступом,
+   а не запятыми — сводка запятых уже стоит в самом поле. */
+.props dd a.scope-chip { font-family: var(--font-mono); font-size: 11px;
+  margin-left: 10px; white-space: nowrap; }
 /* Единая ширина полей ввода шапки: гасим пиксельные width у CommitInput/select,
    чтобы инпуты стояли по сетке и не «плясали». Чекбоксы — исключение. */
 .props dd :is(input, select):not([type="checkbox"]) {
@@ -406,8 +413,14 @@ table.grid :is(th, td).uom { text-align: left; width: 1%; white-space: nowrap;
   color: var(--fg-dim); font-family: var(--font-mono); padding-left: 6px; }
 table.grid td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 /* Описание в одну строку с многоточием (волна 17): «допуск …». */
+/* Плотные таблицы (Ф5/Ф13: «Привязка» и «К закупке») — там, где в строке стоят разбор,
+   выбор заказа, ввод и команды, и таблица распирала панель за край. Здесь описание
+   сжимается первым (`max-width: 0` говорит auto-layout, что содержимое не задаёт
+   минимум) — общие списки от этого не меняются. */
+table.grid.tight td.c-desc { max-width: 0; width: 100%; }
 .cell-ellip { display: block; max-width: 600px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
+table.grid.tight .cell-ellip { max-width: 100%; }
 .seg { font-family: var(--font-mono); }
 tr.row { border-left: 2px solid transparent; }
 tr.row.s-to_order { border-left-color: var(--st-order); }
@@ -544,6 +557,10 @@ tr.row.ghost .glyph { opacity: 1; }
 .qty-in:disabled { opacity: .5; }
 .lot-sel { background: var(--bg); color: var(--fg); border: 1px solid var(--border-strong);
   border-radius: 3px; padding: 1px 4px; font-family: var(--font-mono); font-size: 12px; max-width: 320px; }
+/* Выбор заказа в строке привязки (Ф5, Р2): узкий — рядом стоят ввод количества и две
+   команды, колонка действий не переносится (`nowrap`) и от полноразмерного поля
+   уезжала за край таблицы. */
+.peg-into { width: 118px; font-size: 11px; }
 .lot-sel:focus { outline: none; border-color: var(--accent); }
 .lot-sel:disabled { opacity: .5; }
 

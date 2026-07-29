@@ -1623,31 +1623,12 @@ def project_unlock(request, pk):
 
 
 # --------------------------------------------------------------------------- #
-#  Планирование закупок (волна 7): командный свод + записываемый Procurement
+#  Планирование закупок (волна 7): записываемый Procurement + витрина по охвату
 # --------------------------------------------------------------------------- #
-@api_view(['GET'])
-def command_deficit(request):
-    """Командный свод: суммарный дефицит по оси Item через все активные внешние проекты."""
-    return Response(engine.command_deficit())
-
-
-@api_view(['POST'])
-def command_deficit_add(request):
-    """Мост «свод → закупка»: положить позицию в draft-`Procurement` (создаст при нужде).
-
-    Возвращает id закупки (UI ведёт в форму плана).
-    """
-    d = request.data
-    try:
-        item = models.Item.objects.get(pk=d['item_id'])
-        p = engine.add_to_procurement(item, _dec(d.get('qty')), _actor(request))
-    except (KeyError, models.Item.DoesNotExist) as e:
-        return _bad(f'Нужны item_id, qty ({e}).')
-    except ValidationError as e:
-        return _bad(e.messages[0] if e.messages else e)
-    return Response({'procurement_id': p.id}, status=http.HTTP_201_CREATED)
-
-
+# Волна 19, Ф13: экрана «Командный свод» больше нет — его маршруты (`/command-deficit/`
+# и мост `add-to-procurement/`) сняты. Свод стал табом «К закупке» конкретной закупки
+# (`/procurements/<pk>/deficit/`), а мост кладёт позицию **в эту** закупку, без магии
+# «найти-или-создать последний черновик».
 def _procurement_row(p):
     """Строка списка закупок-планов для дерева навигации."""
     return {
@@ -1675,8 +1656,8 @@ def procurements(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def procurement_detail(request, pk):
-    """Форма закупки-плана: строки (item, qty) + итог.
-    PATCH — правка шапки (дата / примечание) прямо в форме.
+    """Форма закупки-плана: охват проектов + строки (item, qty) + итог.
+    PATCH — правка шапки (дата / код / описание / контрагент / охват `project_ids`).
     DELETE — удаление закупки (WAVE14 Ф2) под замком; friendly-guard (заказы/отправка)."""
     p = get_object_or_404(models.Procurement, pk=pk)
     if request.method == 'DELETE':
@@ -1695,6 +1676,14 @@ def procurement_detail(request, pk):
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
                 contractor=contractor)
+            # Охват (Ф13) — M2M, отдельным входом движка. Пустой список = снять охват
+            # («пусто = пусто»), поэтому смотрим на наличие ключа, а не на истинность.
+            if 'project_ids' in d:
+                ids = d['project_ids'] or []
+                projects = list(models.Project.objects.filter(pk__in=ids))
+                if len(projects) != len(set(ids)):
+                    return _bad('Проект охвата не найден.')
+                engine.set_procurement_scope(p, projects)
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
         except User.DoesNotExist:
@@ -1733,6 +1722,28 @@ def procurement_line_detail(request, pk):
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.procurement_form(procurement))
+
+
+@api_view(['GET'])
+def procurement_deficit(request, pk):
+    """Витрина «К закупке»: дефицит по охвату этой закупки (бывший командный свод)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    return Response(engine.procurement_deficit(p))
+
+
+@api_view(['POST'])
+def procurement_take(request, pk):
+    """Мост «витрина → строки плана»: довести строку плана до наводки (топ-ап)."""
+    p = get_object_or_404(models.Procurement, pk=pk)
+    d = request.data
+    try:
+        item = models.Item.objects.get(pk=d['item_id'])
+        engine.add_to_procurement(p, item, _dec(d.get('qty')))
+    except (KeyError, models.Item.DoesNotExist) as e:
+        return _bad(f'Нужны item_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.procurement_form(p))
 
 
 def _procurement_transition(request, pk, fn):
@@ -1790,15 +1801,26 @@ def procurement_pegging(request, pk):
 
 @api_view(['POST'])
 def procurement_peg(request, pk):
-    """Пегнуть кол-во строки плана на проект (строка проектного заказа под этим планом)."""
+    """Пегнуть кол-во строки плана на проект (строка проектного заказа под этим планом).
+
+    `purchase_id` (Р2): число — пегаем в **этот** заказ; строка `'new'` — в новый заказ
+    проекта; ключа нет — фолбэк «найти-или-создать черновик».
+    """
     p = get_object_or_404(models.Procurement, pk=pk)
     d = request.data
     try:
         item = models.Item.objects.get(pk=d['item_id'])
         project = models.Project.objects.get(pk=d['project_id'])
+        target, fresh = None, False
+        pid = d.get('purchase_id')
+        if pid == 'new':
+            fresh = True
+        elif pid:
+            target = models.Purchase.objects.get(pk=pid)
         engine.peg_procurement_line(p, item, project, _dec(d.get('qty')),
-                                    _actor(request))
-    except (KeyError, models.Item.DoesNotExist, models.Project.DoesNotExist) as e:
+                                    _actor(request), purchase=target, new_purchase=fresh)
+    except (KeyError, models.Item.DoesNotExist, models.Project.DoesNotExist,
+            models.Purchase.DoesNotExist) as e:
         return _bad(f'Нужны item_id, project_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)

@@ -1156,8 +1156,8 @@ class HeaderEditTests(EngineTestBase):
         self.assertEqual(req.number, 'ТР-2')
 
 
-class CommandDeficitTests(EngineTestBase):
-    """Волна 7: командный свод — Σ проектных дефицитов по Item, без перенеттинга."""
+class ScopeDeficitTests(EngineTestBase):
+    """Свод по охвату — Σ проектных дефицитов по Item, без перенеттинга (В7; охват В19)."""
 
     def _device_with_screw(self, screw, qty_per, suffix=''):
         dev = self.make_item(f'DEV{screw.code}{suffix}', manufactured=True,
@@ -1173,7 +1173,8 @@ class CommandDeficitTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=prj2, target_item=dev, qty=D(5))
 
-        rows = {r['item_code']: r for r in engine.command_deficit()['rows']}
+        rows = {r['item_code']: r
+                for r in engine.scope_deficit([self.prj, prj2])['rows']}
         row = rows['SCR']
         self.assertEqual(row['need'], D(60))         # 40 + 20
         self.assertEqual(row['to_order'], D(60))     # склада/заказов нет
@@ -1190,7 +1191,8 @@ class CommandDeficitTests(EngineTestBase):
         # склад лежит только в P1 (10 шт) — НЕ должен гасить нужду P2
         self.receipt_lot(scr, self.prj, 10)
 
-        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
+        row = {r['item_code']: r
+               for r in engine.scope_deficit([self.prj, prj2])['rows']}['SCR']
         self.assertEqual(row['have'], D(10))          # только P1 покрыт
         self.assertEqual(row['to_order'], D(50))      # 30 (P1) + 20 (P2), не 40
         self.assertEqual(row['need'], D(60))
@@ -1204,7 +1206,9 @@ class CommandDeficitTests(EngineTestBase):
             kind=models.Project.Kind.INTERNAL_STOCK)
         models.ProjectDemand.objects.create(project=closed, target_item=dev, qty=D(3))
         models.ProjectDemand.objects.create(project=white, target_item=dev, qty=D(3))
-        self.assertEqual(engine.command_deficit()['rows'], [])
+        # оба в охвате явно — и всё равно не считаются: закрытый проект не закупают,
+        # а внутренний склад не потребитель (инвариант арифметики, не фильтр вызова)
+        self.assertEqual(engine.scope_deficit([closed, white])['rows'], [])
 
     def test_intra_project_need_aggregated_across_demands(self):
         # два прибора в одном проекте делят компонент → потребность суммируется,
@@ -1215,7 +1219,8 @@ class CommandDeficitTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev_a, qty=D(2))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev_b, qty=D(2))
 
-        row = {r['item_code']: r for r in engine.command_deficit()['rows']}['SCR']
+        row = {r['item_code']: r
+               for r in engine.scope_deficit([self.prj])['rows']}['SCR']
         self.assertEqual(row['need'], D(14))          # 2×4 + 2×3
         self.assertEqual(len(row['by_project']), 1)   # агрегат по проекту
 
@@ -1228,7 +1233,7 @@ class CommandDeficitTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
         self.receipt_lot(green, self.prj, 100)        # GRN покрыт ✓, RED красный ▲
 
-        codes = [r['item_code'] for r in engine.command_deficit()['rows']]
+        codes = [r['item_code'] for r in engine.scope_deficit([self.prj])['rows']]
         self.assertEqual(codes, ['RED', 'GRN'])       # красное наверх
 
 
@@ -1292,21 +1297,34 @@ class ProcurementFormTests(EngineTestBase):
         engine.delete_procurement(p)
         self.assertFalse(models.Procurement.objects.filter(pk=p.pk).exists())
 
-    def test_bridge_add_to_procurement_creates_and_increments(self):
+    def test_bridge_tops_up_line_without_doubling(self):
+        # Ф13: мост кладёт в ЭТУ закупку и доводит строку ДО наводки (топ-ап), а не
+        # плюсует: повторный клик по той же строке витрины ничего не удваивает.
         item = self.make_item('SCR', kind='material')
-        p1 = engine.add_to_procurement(item, D(15), self.user)
-        self.assertEqual(p1.lines.get(item=item).qty, D(15))
-        p2 = engine.add_to_procurement(item, D(10), self.user)
-        self.assertEqual(p1.id, p2.id)                 # тот же черновик
-        self.assertEqual(p2.lines.get(item=item).qty, D(25))
+        p = engine.create_procurement(self.user)
+        engine.add_to_procurement(p, item, D(15))
+        self.assertEqual(p.lines.get(item=item).qty, D(15))
+        engine.add_to_procurement(p, item, D(15))
+        self.assertEqual(p.lines.get(item=item).qty, D(15))
+        engine.add_to_procurement(p, item, D(25))        # наводка выросла — догоняем
+        self.assertEqual(p.lines.get(item=item).qty, D(25))
 
-    def test_bridge_ignores_solo_purchase_stub(self):
-        # заказ волны 4 плодит 1:1-заглушку Procurement — мост её не должен трогать
-        engine.create_purchase(self.prj, self.user)      # заглушка (draft, с purchase)
+    def test_bridge_never_cuts_manual_qty(self):
+        # набранное руками сверх наводки топ-ап не срезает (мутабельная ДНК: расхождение
+        # информативнее молчаливого выравнивания)
         item = self.make_item('SCR', kind='material')
-        p = engine.add_to_procurement(item, D(5), self.user)
-        self.assertFalse(p.purchases.exists())           # это чистый план, не заглушка
-        self.assertEqual(list(engine._plan_procurements()), [p])  # заглушки нет в списке
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, item, D(100))
+        engine.add_to_procurement(p, item, D(10))
+        self.assertEqual(p.lines.get(item=item).qty, D(100))
+
+    def test_bridge_refuses_locked_procurement(self):
+        item = self.make_item('SCR', kind='material')
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, self.make_item('OTH'), D(1))
+        engine.lock_procurement(p)
+        with self.assertRaises(ValidationError):
+            engine.add_to_procurement(p, item, D(5))
 
     def test_update_header(self):
         p = engine.create_procurement(self.user)
@@ -1386,6 +1404,8 @@ class PeggingTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
         self.plan = engine.create_procurement(self.user, description='свод')   # need 40 + 20
+        # Ф13: наводка живёт по охвату — без него плану нечего раскладывать
+        engine.set_procurement_scope(self.plan, [self.prj, self.prj2])
         engine.add_procurement_line(self.plan, self.scr, D(60))
 
     def test_peg_creates_project_purchase_under_plan(self):
@@ -1445,6 +1465,128 @@ class PeggingTests(EngineTestBase):
         engine.create_purchase(self.prj, self.user)         # solo-заглушка (purchases, без строк)
         ids = {p.id for p in engine._plan_procurements()}
         self.assertEqual(ids, {self.plan.id})               # пегнутый план виден, заглушка — нет
+
+    # --- Ф13: охват задаёт область расчёта --------------------------------- #
+
+    def test_scope_narrows_suggestion_to_its_projects(self):
+        # до Ф13 в аккордеон ЛЮБОГО плана лезли проекты всей организации
+        engine.set_procurement_scope(self.plan, [self.prj])
+        row = engine.procurement_pegging(self.plan)['rows'][0]
+        self.assertEqual([bp['project_code'] for bp in row['by_project']], ['P1'])
+
+    def test_empty_scope_gives_no_suggestion_and_autopeg_does_nothing(self):
+        engine.set_procurement_scope(self.plan, [])
+        row = engine.procurement_pegging(self.plan)['rows'][0]
+        self.assertEqual(row['by_project'], [])             # пусто = пусто
+        engine.autopeg_procurement(self.plan, self.user)
+        self.assertEqual(self.plan.purchases.count(), 0)    # раскладывать нечего
+
+    def test_project_outside_scope_still_shows_what_is_pegged(self):
+        # охват правит НАВОДКУ, а не факт: разложенное вручную видно всегда, иначе
+        # сужение охвата прятало бы существующие обязательства
+        engine.peg_procurement_line(self.plan, self.scr, self.prj2, D(7), self.user)
+        engine.set_procurement_scope(self.plan, [self.prj])
+        by = {bp['project_code']: bp for bp in
+              engine.procurement_pegging(self.plan)['rows'][0]['by_project']}
+        self.assertEqual(by['P2']['pegged'], D(7))
+        self.assertEqual(by['P2']['suggest'], D(0))         # но наводки по нему нет
+
+    def test_scope_refuses_internal_and_locked_plan(self):
+        white = models.Project.objects.create(code='WHITE', description='Свой склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        with self.assertRaises(ValidationError):
+            engine.set_procurement_scope(self.plan, [white])
+        engine.lock_procurement(self.plan)
+        with self.assertRaises(ValidationError):            # область расчёта под замком
+            engine.set_procurement_scope(self.plan, [self.prj])
+
+    # --- Ф5: пеггинг в явный заказ (Р2) ------------------------------------ #
+
+    def test_peg_into_explicit_purchase(self):
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
+        first = self.plan.purchases.get(project=self.prj)
+        # «＋ новый заказ»: второе обязательство под тем же проектом
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(5), self.user,
+                                    new_purchase=True)
+        self.assertEqual(self.plan.purchases.filter(project=self.prj).count(), 2)
+        second = self.plan.purchases.filter(project=self.prj).exclude(pk=first.pk).get()
+        self.assertEqual(second.lines.get(item=self.scr).qty, D(5))
+        # явный выбор кладёт именно туда, куда указано (фолбэк взял бы последний черновик)
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(3), self.user,
+                                    purchase=first)
+        self.assertEqual(first.lines.get(item=self.scr).qty, D(13))
+        self.assertEqual(second.lines.get(item=self.scr).qty, D(5))
+
+    def test_peg_into_wrong_or_locked_purchase_refused(self):
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
+        mine = self.plan.purchases.get(project=self.prj)
+        engine.peg_procurement_line(self.plan, self.scr, self.prj2, D(10), self.user)
+        other_project = self.plan.purchases.get(project=self.prj2)
+        with self.assertRaises(ValidationError):            # заказ другого проекта
+            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(1), self.user,
+                                        purchase=other_project)
+        alien = engine.create_procurement(self.user)
+        engine.add_procurement_line(alien, self.scr, D(5))
+        engine.peg_procurement_line(alien, self.scr, self.prj, D(5), self.user)
+        with self.assertRaises(ValidationError):            # заказ под другим планом
+            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(1), self.user,
+                                        purchase=alien.purchases.get())
+        engine.lock_purchase(mine)
+        with self.assertRaises(ValidationError):            # зафиксированный заказ
+            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(1), self.user,
+                                        purchase=mine)
+
+    def test_purchase_fan_per_project_in_projection(self):
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
+        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(5), self.user,
+                                    new_purchase=True)
+        by = {bp['project_code']: bp for bp in
+              engine.procurement_pegging(self.plan)['rows'][0]['by_project']}
+        self.assertEqual(len(by['P1']['purchases']), 2)     # есть из чего выбрать
+        self.assertEqual(by['P2']['purchases'], [])         # под P2 заказов ещё нет
+
+
+class ItemUsageTests(EngineTestBase):
+    """Ф5: обратное разузлование — «зачем этот Item проекту» (третий уровень аккордеона)."""
+
+    def _tree(self):
+        # DEV ×1 → SUB ×2 → SCR ×3  (плюс SCR ×1 напрямую в DEV)
+        scr = self.make_item('SCR', kind='material')
+        sub = self.make_item('SUB', manufactured=True)
+        dev = self.make_item('DEV', manufactured=True, kind='device')
+        models.BomLine.objects.create(parent=sub, component=scr, qty=D(3))
+        models.BomLine.objects.create(parent=dev, component=sub, qty=D(2))
+        models.BomLine.objects.create(parent=dev, component=scr, qty=D(1))
+        return dev, sub, scr
+
+    def test_usage_counts_through_all_levels(self):
+        dev, sub, scr = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
+        usage = engine.item_usage_in_project(scr, self.prj)
+        self.assertEqual(len(usage), 1)                     # одно применение — прибор DEV
+        self.assertEqual(usage[0]['target_code'], 'DEV')
+        self.assertEqual(usage[0]['per_unit'], D(7))        # 2×3 через SUB + 1 напрямую
+        self.assertEqual(usage[0]['demand_qty'], D(10))
+        self.assertEqual(usage[0]['total'], D(70))          # совпадает с нуждой проекта
+
+    def test_usage_splits_by_target_device(self):
+        dev, sub, scr = self._tree()
+        dev2 = self.make_item('DEV2', manufactured=True, kind='device')
+        models.BomLine.objects.create(parent=dev2, component=scr, qty=D(5))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev2, qty=D(2))
+        usage = {u['target_code']: u for u in engine.item_usage_in_project(scr, self.prj)}
+        self.assertEqual(usage['DEV']['total'], D(7))
+        self.assertEqual(usage['DEV2']['total'], D(10))
+        # сумма применений = нужда проекта по этому Item (сходимость с прямым сводом)
+        need = engine.scope_deficit([self.prj])['rows']
+        row = {r['item_code']: r for r in need}['SCR']
+        self.assertEqual(sum(u['total'] for u in usage.values()), row['need'])
+
+    def test_usage_empty_for_item_outside_bom(self):
+        dev, sub, scr = self._tree()
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        self.assertEqual(engine.item_usage_in_project(self.make_item('OTH'), self.prj), [])
 
 
 class ClosureHttpTests(TestCase):
@@ -1545,18 +1687,37 @@ class ProcurementHttpTests(TestCase):
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
-    def test_command_deficit_and_bridge(self):
-        svod = self.c.get('/api/command-deficit/')
-        self.assertEqual(svod.status_code, 200)
+    def test_scope_deficit_and_bridge(self):
+        # Ф13: витрина живёт ВНУТРИ закупки и считает по её охвату
+        pid = self.c.post('/api/procurements/', {'description': 'весна'},
+            content_type='application/json').json()['id']
+        blind = self.c.get(f'/api/procurements/{pid}/deficit/')
+        self.assertEqual(blind.status_code, 200)
+        self.assertEqual(blind.json()['rows'], [])            # пусто = пусто
+        scope = self.c.patch(f'/api/procurements/{pid}/',
+            {'project_ids': [self.prj.id]}, content_type='application/json')
+        self.assertEqual(scope.status_code, 200)
+        self.assertEqual([p['code'] for p in scope.json()['projects']], ['P1'])
+        svod = self.c.get(f'/api/procurements/{pid}/deficit/')
         rows = {r['item_code']: r for r in svod.json()['rows']}
         self.assertEqual(float(rows['SCR']['to_order']), 40.0)
-        # мост «свод → закупка» создаёт черновик
-        add = self.c.post('/api/command-deficit/add-to-procurement/',
+        self.assertEqual(float(rows['SCR']['planned']), 0.0)   # в плане ещё ничего
+        # мост кладёт позицию В ЭТУ закупку
+        add = self.c.post(f'/api/procurements/{pid}/take/',
             {'item_id': self.scr.id, 'qty': 40}, content_type='application/json')
-        self.assertEqual(add.status_code, 201)
-        pid = add.json()['procurement_id']
-        form = self.c.get(f'/api/procurements/{pid}/').json()
-        self.assertEqual(float(form['total_qty']), 40.0)
+        self.assertEqual(add.status_code, 200)
+        self.assertEqual(float(add.json()['total_qty']), 40.0)
+        again = self.c.get(f'/api/procurements/{pid}/deficit/').json()
+        self.assertEqual(float(again['rows'][0]['planned']), 40.0)
+
+    def test_scope_refuses_internal_project(self):
+        white = models.Project.objects.create(code='WHITE', description='Свой склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        pid = self.c.post('/api/procurements/', {}, content_type='application/json').json()['id']
+        bad = self.c.patch(f'/api/procurements/{pid}/', {'project_ids': [white.id]},
+            content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('не закупаются', bad.json()['detail'])
 
     def test_procurement_crud_lock_and_xlsx(self):
         r = self.c.post('/api/procurements/', {'description': 'весна'},
@@ -1629,9 +1790,13 @@ class PeggingHttpTests(TestCase):
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
-        add = self.c.post('/api/command-deficit/add-to-procurement/',
+        self.pid = self.c.post('/api/procurements/', {'description': 'свод'},
+            content_type='application/json').json()['id']
+        self.c.patch(f'/api/procurements/{self.pid}/',
+            {'project_ids': [self.prj.id, self.prj2.id]},
+            content_type='application/json')
+        self.c.post(f'/api/procurements/{self.pid}/lines/',
             {'item_id': self.scr.id, 'qty': 60}, content_type='application/json')
-        self.pid = add.json()['procurement_id']
 
     def test_pegging_projection_and_autopeg(self):
         peg = self.c.get(f'/api/procurements/{self.pid}/pegging/')
@@ -1665,6 +1830,25 @@ class PeggingHttpTests(TestCase):
             content_type='application/json')
         self.assertEqual(un.status_code, 200)
         self.assertEqual(float(un.json()['rows'][0]['pegged']), 0.0)
+
+    def test_peg_chooses_purchase_explicitly(self):
+        # Р2: под проектом заказов может быть несколько — выбор едет в теле запроса
+        body = {'item_id': self.scr.id, 'project_id': self.prj.id, 'qty': 10}
+        self.c.post(f'/api/procurements/{self.pid}/peg/', body,
+                    content_type='application/json')
+        fresh = self.c.post(f'/api/procurements/{self.pid}/peg/',
+            {**body, 'qty': 5, 'purchase_id': 'new'}, content_type='application/json')
+        self.assertEqual(fresh.status_code, 200)
+        by = {b['project_code']: b for b in fresh.json()['rows'][0]['by_project']}
+        self.assertEqual(len(by['P1']['purchases']), 2)
+        target = by['P1']['purchases'][0]['id']
+        into = self.c.post(f'/api/procurements/{self.pid}/peg/',
+            {**body, 'qty': 1, 'purchase_id': target}, content_type='application/json')
+        self.assertEqual(into.status_code, 200)
+        self.assertEqual(float(into.json()['rows'][0]['pegged']), 16.0)
+        alien = self.c.post(f'/api/procurements/{self.pid}/peg/',
+            {**body, 'qty': 1, 'purchase_id': 999999}, content_type='application/json')
+        self.assertEqual(alien.status_code, 400)
 
 
 class ReferenceCreateTests(EngineTestBase):
@@ -2274,10 +2458,10 @@ class MultiLevelDemandTests(EngineTestBase):
         self.assertEqual(bud['plan'], D(5600))
         self.assertEqual(bud['unestimated'], [])
 
-    def test_command_deficit_explodes_to_leaves(self):
+    def test_scope_deficit_explodes_to_leaves(self):
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
-        rows = {r['item_code']: r for r in engine.command_deficit()['rows']}
+        rows = {r['item_code']: r for r in engine.scope_deficit([self.prj])['rows']}
         self.assertEqual(set(rows), {'A', 'B'})
         self.assertEqual(rows['A']['need'], D(5))
         self.assertEqual(rows['B']['need'], D(6))

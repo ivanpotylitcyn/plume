@@ -365,17 +365,20 @@ export interface ProjectClosure {
 }
 
 // ── Планирование закупок (волна 7): командный свод + Procurement ──
-export interface CommandDeficitProject {
+// ── Свод по охвату закупки (волна 19, Ф13; бывший «Командный свод») ──
+// Экран-фантом схлопнут в таб «К закупке» обычной закупки: те же строки, но по её
+// охвату проектов. `planned` — сколько уже взято в строки плана.
+export interface ScopeDeficitProject {
   project_id: number; project_code: string; project_name: string
   need: number; have: number; on_order: number; to_order: number; status: Status
 }
-export interface CommandDeficitRow {
+export interface ScopeDeficitRow {
   item_id: number; item_code: string; item_description: string; uom: string
   native: boolean
-  need: number; have: number; on_order: number; to_order: number
-  status: Status; by_project: CommandDeficitProject[]
+  need: number; have: number; on_order: number; to_order: number; planned: number
+  status: Status; by_project: ScopeDeficitProject[]
 }
-export interface CommandDeficit { rows: CommandDeficitRow[] }
+export interface ScopeDeficit { rows: ScopeDeficitRow[] }
 
 export interface ProcurementRow {
   id: number; locked: boolean; date: string | null
@@ -386,17 +389,31 @@ export interface ProcurementFormLine {
   item_native: boolean; item_synced: boolean; item_locked: boolean
   uom: string; qty: number
 }
+export interface ProcurementScopeProject {
+  id: number; code: string; description: string
+}
 export interface ProcurementForm extends Authored {
   id: number; locked: boolean; date: string | null
   code: string | null; description: string; editable: boolean
   contractor_id: number | null; contractor_name: string
+  projects: ProcurementScopeProject[]        // охват (Ф13): под какие проекты закупка
   total_qty: number; lines: ProcurementFormLine[]
 }
 
 // ── Pegging (волна 8): нарезка плана на проектные заказы ──
+// Применение изделия в проекте (обратное разузлование, Ф5): «зачем оно тут».
+export interface PeggingUsage {
+  target_item_id: number; target_code: string; target_description: string
+  per_unit: number; demand_qty: number; total: number
+}
+// Заказ проекта под этим планом — куда пегать (Р2: их может быть несколько).
+export interface PeggingPurchase {
+  id: number; code: string; locked: boolean; lines: number
+}
 export interface PeggingProject {
   project_id: number; project_code: string; project_name: string
   suggest: number; pegged: number
+  usage: PeggingUsage[]; purchases: PeggingPurchase[]
 }
 export interface PeggingRow {
   line_id: number; item_id: number; item_code: string; item_description: string
@@ -715,14 +732,16 @@ export const api = {
   relocationSourceLots: (id: number) =>
     get<RelocationSourceLot[]>(`/api/relocations/${id}/source-lots/`),
 
-  // ── Планирование закупок (волна 7) ──
-  commandDeficit: () => get<CommandDeficit>('/api/command-deficit/'),
-  addToProcurement: (b: { item_id: number; qty: number }) =>
-    send<{ procurement_id: number }>('POST', '/api/command-deficit/add-to-procurement/', b),
+  // ── Планирование закупок (волна 7; охват — волна 19, Ф13) ──
+  // `/api/command-deficit/` больше нет: свод — витрина конкретной закупки, мост
+  // кладёт позицию в неё же (топ-ап до наводки).
+  procurementDeficit: (id: number) => get<ScopeDeficit>(`/api/procurements/${id}/deficit/`),
+  takeToProcurement: (id: number, b: { item_id: number; qty: number }) =>
+    send<ProcurementForm>('POST', `/api/procurements/${id}/take/`, b),
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementForm>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
-  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; contractor_id: number | null }>) =>
+  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; contractor_id: number | null; project_ids: number[] }>) =>
     send<ProcurementForm>('PATCH', `/api/procurements/${id}/`, b),
   addProcurementLine: (id: number, b: { item_id: number; qty: number }) =>
     send<ProcurementForm>('POST', `/api/procurements/${id}/lines/`, b),
@@ -735,7 +754,8 @@ export const api = {
   xlsxUrl: (id: number) => `/api/procurements/${id}/xlsx/`,
   // pegging (волна 8)
   pegging: (id: number) => get<Pegging>(`/api/procurements/${id}/pegging/`),
-  peg: (id: number, b: { item_id: number; project_id: number; qty: number }) =>
+  // `purchase_id`: число — в этот заказ, 'new' — в новый, нет ключа — фолбэк (Р2)
+  peg: (id: number, b: { item_id: number; project_id: number; qty: number; purchase_id?: number | 'new' }) =>
     send<Pegging>('POST', `/api/procurements/${id}/peg/`, b),
   unpeg: (id: number, b: { item_id: number; project_id: number }) =>
     send<Pegging>('POST', `/api/procurements/${id}/unpeg/`, b),
