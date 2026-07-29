@@ -939,6 +939,25 @@ def purchase_unlock(request, pk):
     return _purchase_transition(request, pk, engine.unlock_purchase)
 
 
+@api_view(['POST'])
+def purchase_receipt(request, pk):
+    """Заказ → УПД (Ф6): родить черновик поставки, преднабитый остатком заказа.
+
+    Отдаём форму ПОСТАВКИ (не заказа): пользователь после клика попадает в неё —
+    править строки по бумажной накладной. Повторный вызов на частично закрытом
+    заказе даёт вторую накладную на остаток.
+    """
+    p = get_object_or_404(models.Purchase, pk=pk)
+    d = request.data
+    try:
+        r = engine.create_receipt_from_purchase(
+            p, _actor(request), number=(d.get('number') or '').strip(),
+            date=d.get('date') or None)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.receipt_form(r), status=http.HTTP_201_CREATED)
+
+
 @api_view(['GET'])
 def project_purchases(request, pk):
     """Заказы проекта — пикер связи прихода с заказом (волна 19, Ф1: отсева по

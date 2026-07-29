@@ -18,7 +18,8 @@ import type { ItemRow, CounterpartyRow, ProjectPurchaseRow, ProjectRow } from '.
 import { ItemGlyph, StatusGlyph } from './status'
 
 export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, renderRow,
-  placeholder, disabled, width, onEnter, onClear, notFound, onCreate, multi, summary }: {
+  placeholder, disabled, width, onEnter, onClear, notFound, onCreate, multi, summary,
+  eager }: {
   options: T[]
   value: number | ''
   onPick: (id: number) => void
@@ -40,11 +41,36 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
   // Галочку рисует `renderRow` (это знак темы), ядро о ней не знает.
   multi?: boolean
   summary?: string              // что стоит в поле при множественном выборе
+  eager?: boolean               // раскрывать весь справочник по клику (выбор из списка)
 }) {
   const t = useTypeahead({ options, value, onPick, keyOf, textOf, searchOf, onEnter,
-    multi, summary })
+    multi, summary, eager })
   const menu = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)     // якорь меню (портал считает от него)
+
+  // Закрытие НЕ вешаем на один `blur` (боль Ивана 2026-07-29: меню залипало намертво).
+  // Каждый выбор шлёт PATCH, на время которого поле становится `disabled` — а браузер
+  // при отключении сфокусированного элемента `blur` НЕ шлёт: фокус тихо уходит в body,
+  // раскрытие остаётся включённым, и закрыть его больше нечем (Esc некому доставить,
+  // клик по полю лишь повторяет `focus`). Поэтому истина о «клике мимо» берётся у
+  // документа — она не зависит ни от фокуса, ни от того, что меню живёт в портале.
+  const open = t.open || t.empty
+  useEffect(() => {
+    if (!open) return
+    const outside = (e: PointerEvent) => {
+      const target = e.target as Node
+      if (field.current?.contains(target) || menu.current?.contains(target)) return
+      t.close()
+    }
+    document.addEventListener('pointerdown', outside, true)
+    return () => document.removeEventListener('pointerdown', outside, true)
+  })
+
+  // Поле «ожило» после сохранения, а меню ещё раскрыто — вернуть ему фокус, иначе
+  // стрелки и Esc работают только до первого выбора.
+  useEffect(() => {
+    if (!disabled && open && document.activeElement !== field.current) field.current?.focus()
+  }, [disabled, open])
 
   // Подсветка = смысл (ядро), прокрутка за ней = знак (тема). Двигаем только свой
   // список: `scrollIntoView` уехал бы вверх по всем прокручиваемым предкам и дёрнул
@@ -79,8 +105,10 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
             </div>
           ))}
         </AnchoredMenu>}
+      {/* Плашки «не найдено» тоже держат `boxRef`: без него сторож клика-мимо считал
+          бы их чужой территорией и гасил меню раньше, чем клик дойдёт до «Завести». */}
       {t.empty && (onCreate
-        ? <AnchoredMenu anchor={field} className="typeahead-menu">
+        ? <AnchoredMenu anchor={field} boxRef={menu} className="typeahead-menu">
             <div className="typeahead-item active"
               onMouseDown={e => e.preventDefault()}
               onClick={() => { const s = t.text.trim(); t.close(); onCreate(s) }}>
@@ -88,7 +116,7 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
               <span>Завести «{t.text.trim()}»</span>
             </div>
           </AnchoredMenu>
-        : <AnchoredMenu anchor={field} className="picker-empty">
+        : <AnchoredMenu anchor={field} boxRef={menu} className="picker-empty">
             {notFound ?? 'ничего не найдено'}
           </AnchoredMenu>)}
     </span>
@@ -122,6 +150,13 @@ export function ItemPicker({ items, value, onPick, disabled, placeholder, width,
 // ── Пикер контрагента ──
 // Глифа в строке нет намеренно: у контрагента пока нет оси состояния (ни замка, ни
 // синка), а глиф без смысла — декорация (UI_PRINCIPLES). Заведётся в волне 20.
+//
+// **Выбор из СПИСКА, а не по памяти** (решение Ивана 2026-07-29): клик по полю
+// раскрывает весь справочник поставщиков/заказчиков. Type-ahead хорош там, где
+// справочник большой и человек знает, что ищет (изделия — тысячи, код на руках);
+// контрагентов десятки, и держать их коды в голове никто не обязан — требовать
+// первую букву значило заставлять угадывать. Ввод продолжает фильтровать, а
+// «Завести «X»» из Ф12e работает как прежде.
 const cpText = (c: CounterpartyRow) => c.code ? `${c.code} — ${c.description}` : c.description
 
 export function CounterpartyPicker({ counterparties, value, onPick, disabled, placeholder,
@@ -135,7 +170,7 @@ export function CounterpartyPicker({ counterparties, value, onPick, disabled, pl
   return <Picker options={counterparties} value={value} onPick={onPick} keyOf={c => c.id}
     textOf={cpText} searchOf={c => `${c.code ?? ''} ${c.description} ${c.inn}`}
     disabled={disabled} placeholder={placeholder} width={width} onClear={onClear}
-    onCreate={onCreate}
+    onCreate={onCreate} eager
     notFound="ничего не найдено — контрагента можно завести рядом."
     renderRow={c => <>
       {c.code && <span className="code">{c.code}</span>}

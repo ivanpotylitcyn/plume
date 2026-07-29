@@ -64,6 +64,7 @@ urlpatterns = [
     path('purchases/<int:pk>/lines/', views.purchase_lines, name='purchase-lines'),
     path('purchases/<int:pk>/lock/', views.purchase_lock, name='purchase-lock'),
     path('purchases/<int:pk>/unlock/', views.purchase_unlock, name='purchase-unlock'),
+    path('purchases/<int:pk>/receipt/', views.purchase_receipt, name='purchase-receipt'),
     path('purchase-lines/<int:pk>/', views.purchase_line_detail, name='purchase-line'),
     # передача / Transfer (записываемое ядро, волна 5)
     path('transfers/', views.transfers, name='transfers'),

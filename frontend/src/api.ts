@@ -199,9 +199,14 @@ export interface PurchaseFormLine {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
   item_native: boolean; item_synced: boolean; item_locked: boolean
   qty: number; received: number; remaining: number; status: Status
+  receipts: LineReceiptRow[]   // Ф6: чем строка закрыта (обычно одна накладная)
+}
+export interface LineReceiptRow {
+  receipt_id: number; number: string; date: string; qty: number
 }
 export interface PurchaseReceiptRow {
-  id: number; number: string; date: string; contractor_name: string; lines: number
+  id: number; code: string | null; number: string; date: string
+  locked: boolean; contractor_name: string; lines: number
 }
 export interface PurchaseForm extends Authored {
   id: number; locked: boolean; project_id: number; project_code: string
@@ -639,6 +644,9 @@ export const api = {
     send<PurchaseForm>('DELETE', `/api/purchase-lines/${id}/`),
   lockPurchase: (id: number) => send<PurchaseForm>('POST', `/api/purchases/${id}/lock/`),
   unlockPurchase: (id: number) => send<PurchaseForm>('POST', `/api/purchases/${id}/unlock/`),
+  // Ф6: заказ → УПД. Отдаёт форму РОЖДЁННОЙ поставки — в неё и переходим.
+  receiptFromPurchase: (id: number) =>
+    send<ReceiptForm>('POST', `/api/purchases/${id}/receipt/`),
   projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
   addToPurchase: (id: number, b: { item_id: number; qty: number }) =>
     send<{ purchase_id: number }>('POST', `/api/projects/${id}/add-to-purchase/`, b),

@@ -483,9 +483,16 @@ def _line_received(line):
     Ф14: путь был `origin__receipt__purchase` — JOIN через детскую таблицу MTI. После
     схлопывания `purchase` живёт на самом ордере, а непоставки его не имеют вовсе
     (CHECK `doc_purchase_only_receipt`), поэтому сужать по виду отдельно не нужно.
+
+    Ф6: считаем только **зафиксированные** поставки (`origin__locked`). Фильтра не было,
+    и это расходилось с собственным обещанием Ф15 («черновая поставка не в потрачено и
+    не на складе — её позиции остаются в в пути / к заказу»): черновой УПД гасил заказ,
+    хотя товар не приехал. До Ф6 черновик, привязанный к заказу, был редкостью; кнопка
+    «Создать УПД» делает его штатным первым шагом, и заказ показывал бы ✓ до приёмки.
+    Один и тот же замок теперь гейтит склад, деньги и закрытость заказа.
     """
     return models.Lot.objects.filter(
-        item=line.item, origin__purchase=line.purchase,
+        item=line.item, origin__purchase=line.purchase, origin__locked=True,
     ).aggregate(s=Sum('qty'))['s'] or ZERO
 
 
@@ -1300,6 +1307,59 @@ def set_receipt_purchase(receipt, purchase):
     return receipt
 
 
+PURCHASE_DRAFT_NO_RECEIPT = (
+    'УПД создаётся по зафиксированному заказу — сперва зафиксируйте заказ.')
+PURCHASE_CLOSED_NO_RECEIPT = (
+    'Заказ закрыт полностью — по нему нечего принимать.')
+
+
+def create_receipt_from_purchase(purchase, user, number='', date=None):
+    """Родить черновик УПД по заказу: строки — ОСТАТКОМ заказа (волна 19, Ф6).
+
+    В 98% случаев накладная повторяет заказ 1:1, и набивать строки заново незачем.
+    Остаток (`qty − уже получено`, тот же `_line_received`, что красит форму заказа)
+    вместо полного количества даёт «поставку частями» бесплатно: повторный вызов на
+    частично закрытом заказе рождает вторую накладную ровно на недостающее.
+
+    Поставщик — `purchase.procurement.contractor` (Р3): контрагент живёт у закупки-плана,
+    она и есть «один поток общения». Заказ проставляется сразу (`purchase`), поэтому
+    руками связывать в форме УПД больше не нужно.
+
+    **Цена ставится в 0, а не в `item.estimated_cost`** (решение Ивана 2026-07-29):
+    `Lot` по канону хранит цену ИЗ УПД, а `_project_spent` считает факт трат по
+    `unit_cost` зафиксированных приходных лотов. Правдоподобная оценка, забытая при
+    фиксации, молча стала бы фактом бюджета; ноль виден глазом (итог поставки 0 ₽).
+    Имя лота преднабиваем описанием изделия — его пользователь и правит по УПД.
+
+    Всё рождённое — черновик: до фиксации на складе ничего не лежит (Ф15).
+    """
+    if not purchase.locked:
+        raise ValidationError(PURCHASE_DRAFT_NO_RECEIPT)
+    # Черновая накладная заказ не гасит (Ф6-правка `_line_received`), поэтому повторный
+    # клик молча плодил бы её близнеца. Отправляем в уже заведённую: «частями» — это
+    # ЗАФИКСИРОВАТЬ первую, а потом жать снова на остаток.
+    open_receipt = models.Receipt.objects.filter(purchase=purchase, locked=False).first()
+    if open_receipt is not None:
+        raise ValidationError(
+            f'По заказу уже заведена черновая поставка {open_receipt.code or open_receipt.number}'
+            ' — заполните и зафиксируйте её; за остатком вернётесь сюда.')
+    remaining = [
+        (line, line.qty - _line_received(line))
+        for line in purchase.lines.select_related('item').order_by('id')
+    ]
+    remaining = [(line, rest) for line, rest in remaining if rest > 0]
+    if not remaining:
+        raise ValidationError(PURCHASE_CLOSED_NO_RECEIPT)
+
+    receipt = _born_order(
+        models.Receipt, purchase.project, user, number, date,
+        contractor=purchase.procurement.contractor, purchase=purchase)
+    for line, rest in remaining:
+        add_receipt_lot(receipt, line.item, rest, unit_cost=ZERO,
+                        lot_name=line.item.description)
+    return receipt
+
+
 # --------------------------------------------------------------------------- #
 #  Форма заказа / Purchase (волна 4): строки-обязательства + гашение приходом
 # --------------------------------------------------------------------------- #
@@ -1326,6 +1386,34 @@ def create_purchase(project, user, date=None, code=None, description=''):
     return p if code else fallback_code(p, 'Заказ')
 
 
+def _purchase_closure(purchase):
+    """`{item_id: [{receipt_id, number, date, qty}]}` — чем закрыта каждая строка (Ф6).
+
+    Источник — лоты приходов заказа (`Lot.origin → Receipt.purchase`); сопоставление
+    по изделию, отдельного FK «строка заказа ↔ лот» не заводим: `PurchaseLine` уникален
+    по `(purchase, item)`, поэтому атрибуция однозначна. Несколько лотов одного изделия
+    в одной накладной (разные партии одной позиции УПД) сворачиваются в одну строку —
+    пользователь спрашивает «какой накладной закрыто», а не «сколькими партиями».
+
+    Заодно это ИСТОЧНИК `received` для формы: та же выборка, что у `_line_received`
+    (включая гейт `origin__locked` — закрывают заказ только зафиксированные накладные),
+    но одним запросом на заказ вместо запроса на строку.
+    """
+    out = {}
+    lots = (models.Lot.objects.filter(origin__purchase=purchase, origin__locked=True)
+            .select_related('origin').order_by('origin__date', 'origin_id', 'id'))
+    for lot in lots:
+        rows = out.setdefault(lot.item_id, [])
+        for r in rows:
+            if r['receipt_id'] == lot.origin_id:
+                r['qty'] += lot.qty
+                break
+        else:
+            rows.append({'receipt_id': lot.origin_id, 'number': lot.origin.number,
+                         'date': lot.origin.date, 'qty': lot.qty})
+    return out
+
+
 def purchase_form(purchase):
     """Проекция формы заказа: шапка + строки (заказано/поступило/остаток) + приходы.
 
@@ -1333,14 +1421,19 @@ def purchase_form(purchase):
     получено полностью → ✓ (available), частично → ● (on_order), ничего → ▲ (to_order).
     Статусы `partial`/`received` не храним — это вычисляемая закрытость. Ничего не
     хранит (чистая проекция).
+
+    Ф6: строка несёт ещё и **чем** она закрыта (`receipts`) — обратная связь потока
+    «Заказ → УПД». Список приходов заказа целиком остаётся отдельным табом.
     """
     editable = not purchase.locked
+    closure = _purchase_closure(purchase)
     rows = []
     statuses = []
     total_ordered = ZERO
     total_received = ZERO
     for line in purchase.lines.select_related('item').order_by('id'):
-        received = _line_received(line)
+        closed_by = closure.get(line.item_id, [])
+        received = sum((r['qty'] for r in closed_by), ZERO)
         remaining = max(ZERO, line.qty - received)
         total_ordered += line.qty
         total_received += received
@@ -1360,9 +1453,13 @@ def purchase_form(purchase):
             'item_locked': line.item.locked,
             'qty': line.qty, 'received': received, 'remaining': remaining,
             'status': st,
+            'receipts': closed_by,     # Ф6: какими накладными строка закрыта
         })
     receipts = [
-        {'id': r.id, 'number': r.number, 'date': r.date,
+        # Ф6: `code` — первичная идентичность накладной (у рождённой из заказа
+        # `number` пуст до заполнения по бумаге, и ссылка на него рисовала пустоту).
+        {'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
+         'locked': r.locked,
          'contractor_name': r.contractor.description if r.contractor_id else '',
          'lines': r.lots.count()}
         for r in purchase.receipts.select_related('contractor').order_by('id')

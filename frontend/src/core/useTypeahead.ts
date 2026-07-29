@@ -21,6 +21,11 @@ export interface TypeaheadSpec<T> {
   // вместо выбранного стоит сводка отмеченного.
   multi?: boolean
   summary?: string
+  // «Выбор из списка», а не из памяти (2026-07-29, боль Ивана): по фокусу раскрывается
+  // ВЕСЬ справочник, печатать необязательно. Для коротких справочников (контрагенты)
+  // type-ahead — лишний труд: человек не помнит, что там заведено, и обязан угадать
+  // первую букву. Ввод продолжает фильтровать, если список длинный.
+  eager?: boolean
 }
 
 export interface Typeahead<T> {
@@ -38,7 +43,10 @@ export interface Typeahead<T> {
 
 export function useTypeahead<T>(spec: TypeaheadSpec<T>): Typeahead<T> {
   const { options, value, onPick, keyOf, textOf, limit = 20, onEnter,
-    multi = false, summary } = spec
+    multi = false, summary, eager = false } = spec
+  // Множественный выбор без раскрытия по фокусу бессмыслен (отметки не проставишь
+  // вслепую) — поэтому `multi` включает список сам, а `eager` даёт то же одиночному.
+  const listing = eager || multi
   // Функции-экстракторы приходят инлайном (новые на каждый рендер) — держим в ref,
   // чтобы они не гоняли мемоизацию и не текли в зависимости хуков.
   const fns = useRef(spec)
@@ -56,15 +64,17 @@ export function useTypeahead<T>(spec: TypeaheadSpec<T>): Typeahead<T> {
 
   const matches = useMemo(() => {
     const s = (q ?? '').trim().toLowerCase()
-    // Пустой ввод: одиночный выбор молчит (иначе меню лезло бы на каждый фокус),
-    // множественный показывает весь список — отметки без списка не проставишь.
-    if (!s) return multi ? options.slice(0, limit) : []
+    // Пустой ввод: обычный пикер молчит (иначе меню лезло бы на каждый фокус), режим
+    // списка показывает справочник ЦЕЛИКОМ — без `limit`. Обрезать список, из которого
+    // выбирают глазами, нельзя: отсутствующий кандидат выглядит как «его нет вовсе», а
+    // меню и так прокручивается. `limit` остаётся защитой для набранного запроса.
+    if (!s) return listing ? options : []
     const key = fns.current.searchOf ?? fns.current.textOf
     return options.filter(o => key(o).toLowerCase().includes(s)).slice(0, limit)
-  }, [options, q, limit, multi])
+  }, [options, q, limit, listing])
 
   const typed = q !== null && q.trim() !== ''
-  const open = (typed || (multi && focused)) && matches.length > 0
+  const open = (typed || (listing && focused)) && matches.length > 0
   const empty = typed && matches.length === 0
 
   useEffect(() => { setActive(0) }, [q])
@@ -73,8 +83,13 @@ export function useTypeahead<T>(spec: TypeaheadSpec<T>): Typeahead<T> {
   // явно). Иначе на формах с немедленным сохранением каждый символ слал бы PATCH.
   const type = (s: string) => setQ(s)
   // Множественный выбор: отметка — не конец выбора, поэтому ввод и меню остаются как
-  // были (следующую галочку ставят в том же отфильтрованном списке).
-  const pick = (o: T) => { if (!multi) setQ(null); onPick(keyOf(o)) }
+  // были (следующую галочку ставят в том же отфильтрованном списке). Одиночный —
+  // наоборот, гасит и ввод, и раскрытие: в режиме списка одного `setQ(null)` не хватило
+  // бы, меню тут же раскрылось бы снова по всё ещё живому фокусу.
+  const pick = (o: T) => {
+    if (!multi) { setQ(null); setFocused(false) }
+    onPick(keyOf(o))
+  }
   const focus = () => setFocused(true)
   const close = () => { setQ(null); setFocused(false) }
 

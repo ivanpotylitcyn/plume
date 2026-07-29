@@ -15,7 +15,7 @@ import { CommitInput } from './CommitInput'
 import { AnchorSelect, OrderFields, useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { ItemGlyph, count, num, statusTone } from './status'
+import { ItemGlyph, StatusGlyph, count, num, statusTone } from './status'
 import { ItemPicker } from './Picker'
 
 export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, openProject,
@@ -65,6 +65,23 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   const coverage: Status = c.total_received === 0 ? 'to_order'
     : c.rows.every(r => r.remaining <= 0) ? 'available' : 'on_order'
 
+  // Ф6, поток «Заказ → УПД»: накладная повторяет заказ 1:1, набивать её заново незачем.
+  // Кнопка живёт у ЗАФИКСИРОВАННОГО заказа (черновик ещё правится — поставки по
+  // неутверждённому обязательству не бывает) и только пока есть остаток. Гейт
+  // дублируется движком; здесь он гасит кнопку и ОБЪЯСНЯЕТ причину — молчаливо
+  // отключённая команда учит хуже, чем подсказка.
+  const open = c.rows.some(r => r.remaining > 0)
+  const receiptWhy = !fixed ? 'Сперва зафиксируйте заказ — УПД создаётся по утверждённому'
+    : !open ? 'Заказ закрыт полностью — принимать нечего'
+    : 'Создать черновик УПД, преднабитый остатком заказа'
+  const makeReceipt = () => {
+    setBusy(true); setErr(null)
+    api.receiptFromPurchase(c.id)
+      .then(r => { onChanged(); openReceipt(r.id) })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <>
@@ -76,13 +93,16 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               <th style={{ textAlign: 'right' }}>Заказано</th><th className="uom">Ед.</th>
               <th style={{ textAlign: 'right' }}>Поступило</th>
               <th style={{ textAlign: 'right' }}>Остаток</th>
+              {/* Ф6: обратная связь потока «Заказ → УПД» — чем строка закрыта.
+                  У зафиксированного заказа она занимает слот команд строки. */}
+              <th className="c-fit">Поставки</th>
               {editable && <th className="act" />}
             </tr>
           </thead>
           <tbody>
             {c.rows.map(ln => (
               <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
-                openItem={openItem} run={run} />
+                openItem={openItem} openReceipt={openReceipt} run={run} />
             ))}
             {editable && <GhostRow purchaseId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
@@ -94,15 +114,23 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         ? <div className="tab-empty">Заказ ещё не закрыт ни одной поставкой.</div>
         : <table className="grid">
             <thead><tr>
-              <th className="c-key">УПД</th><th className="c-fit">Дата</th>
+              <th className="gl" /><th className="c-key">Поставка</th>
+              <th className="c-fit">№ УПД</th><th className="c-fit">Дата</th>
               <th className="c-desc">Поставщик</th>
               <th style={{ textAlign: 'right' }}>Строк</th>
             </tr></thead>
             <tbody>
               {c.receipts.map(r => (
                 <tr key={r.id} className="row">
+                  {/* Глиф-замок: черновая накладная заказ ещё не гасит (Ф6) — видно,
+                      что она заведена, но «поступило» по строкам пока ноль. */}
+                  <td className="gl"><StatusGlyph locked={r.locked} /></td>
+                  {/* Ссылка — по КОДУ: он есть всегда (фолбэк «Поставка 12»), а № УПД
+                      у только что рождённой пуст, и ссылка на него была пустотой. */}
                   <td className="c-key">
-                    <a className="link" onClick={() => openReceipt(r.id)}>{r.number}</a></td>
+                    <a className="link" onClick={() => openReceipt(r.id)}>
+                      {r.code || `Поставка #${r.id}`}</a></td>
+                  <td className="c-fit">{r.number || <span className="hint">не задан</span>}</td>
                   <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{r.date}</td>
                   <td className="c-desc">{r.contractor_name}</td>
                   <td className="num">{r.lines}</td>
@@ -133,9 +161,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       onUnfix={() => {
         if (confirm('Расфиксировать заказ?')) run(api.unlockPurchase(c.id))
       }}
-      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
-        title: 'Загрузить файл (счёт, скан накладной) — появится в табе «Файлы»',
-        disabled: att.busy }]}
+      actions={[
+        { onClick: makeReceipt, label: 'Создать УПД', icon: 'ci-inbox',
+          title: receiptWhy, disabled: busy || !fixed || !open },
+        { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+          title: 'Загрузить файл (счёт, скан накладной) — появится в табе «Файлы»',
+          disabled: att.busy }]}
       fields={
         <OrderFields c={c} locked={!editable} busy={busy} openProject={openProject}
           patch={b => run(api.updatePurchase(c.id, b))}>
@@ -150,9 +181,10 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
 }
 
 // Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
-function LineRow({ ln, editable, busy, openItem, run }: {
+function LineRow({ ln, editable, busy, openItem, openReceipt, run }: {
   ln: PurchaseFormLine; editable: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<PurchaseForm>) => void
+  openItem: (id: number) => void; openReceipt: (id: number) => void
+  run: (p: Promise<PurchaseForm>) => void
 }) {
   return (
     <tr className={`row s-${ln.status}`}>
@@ -174,6 +206,18 @@ function LineRow({ ln, editable, busy, openItem, run }: {
       <td className="uom">{ln.uom}</td>
       <td className="num">{num(ln.received)}</td>
       <td className="num">{num(ln.remaining)}</td>
+      {/* Типовой случай — одна накладная, поэтому список плоский, без аккордеона.
+          Частичная поставка подписана количеством: «УПД-17 (15)». */}
+      <td className="c-fit">
+        {ln.receipts.map((r, i) => (
+          <span key={r.receipt_id}>
+            {i > 0 && ', '}
+            <a className="link" title={`${r.date} · поступило ${num(r.qty)} ${ln.uom}`}
+              onClick={() => openReceipt(r.receipt_id)}>{r.number || `УПД #${r.receipt_id}`}</a>
+            {r.qty !== ln.qty && <span style={{ color: 'var(--fg-dim)' }}> ({num(r.qty)})</span>}
+          </span>
+        ))}
+      </td>
       {editable && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку заказа"
           disabled={busy} onClick={() => run(api.deletePurchaseLine(ln.id))}>
@@ -211,7 +255,7 @@ function GhostRow({ purchaseId, items, busy, run }: {
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
-      <td className="uom" /><td /><td />
+      <td className="uom" /><td /><td /><td />
       <td className="act">
         <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>

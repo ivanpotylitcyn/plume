@@ -741,6 +741,104 @@ class PurchaseFormTests(EngineTestBase):
         self.assertEqual(p2.lines.get(item=item).qty, D(25))
 
 
+class ReceiptFromPurchaseTests(EngineTestBase):
+    """Волна 19, Ф6: поток «Заказ → УПД» — накладная преднабивается остатком заказа."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('SCR', kind='material')
+        self.other = self.make_item('CAP', kind='material')
+        self.p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(self.p, self.item, D(40))
+        engine.add_purchase_line(self.p, self.other, D(10))
+        # Р3: поставщик приезжает из закупки-плана, а не из заказа.
+        engine.update_procurement(self.p.procurement, contractor=self.supplier)
+        engine.lock_purchase(self.p)
+
+    def test_prefills_lines_from_order(self):
+        r = engine.create_receipt_from_purchase(self.p, self.user)
+        self.assertEqual(r.purchase_id, self.p.id)
+        self.assertEqual(r.project_id, self.prj.id)
+        self.assertEqual(r.contractor_id, self.supplier.id)   # Р3
+        self.assertFalse(r.locked)                            # черновик
+        lots = {lot.item_id: lot for lot in r.lots.all()}
+        self.assertEqual(lots[self.item.id].qty, D(40))
+        self.assertEqual(lots[self.other.id].qty, D(10))
+        # Цена — 0, НЕ estimated_cost: оценка, забытая при фиксации, стала бы фактом
+        # трат проекта неотличимо от реальной цены УПД.
+        self.assertEqual(lots[self.item.id].unit_cost, D(0))
+        self.assertEqual(lots[self.item.id].lot_name, self.item.description)
+
+    def test_draft_purchase_rejected(self):
+        engine.unlock_purchase(self.p)
+        with self.assertRaises(ValidationError):
+            engine.create_receipt_from_purchase(self.p, self.user)
+
+    def test_closed_purchase_rejected(self):
+        self.receipt_lot(self.item, self.prj, 40, purchase=self.p)
+        self.receipt_lot(self.other, self.prj, 10, purchase=self.p)
+        with self.assertRaises(ValidationError):
+            engine.create_receipt_from_purchase(self.p, self.user)
+
+    def test_second_call_covers_remainder(self):
+        """Поставка частями: зафиксировали первую накладную → вторая идёт на остаток."""
+        # номер обязателен к ФИКСАЦИИ, а не к рождению (Ф12e) — здесь задаём сразу
+        r1 = engine.create_receipt_from_purchase(self.p, self.user, number='УПД-1')
+        # приехало меньше заказанного — правим по бумажной накладной и фиксируем
+        lot = r1.lots.get(item=self.item)
+        engine.update_receipt_lot(lot, qty=D(15))
+        engine.remove_receipt_lot(r1.lots.get(item=self.other))
+        engine.lock_receipt(r1)
+
+        r2 = engine.create_receipt_from_purchase(self.p, self.user)
+        lots = {lot.item_id: lot for lot in r2.lots.all()}
+        self.assertEqual(lots[self.item.id].qty, D(25))       # 40 − 15
+        self.assertEqual(lots[self.other.id].qty, D(10))      # не приезжало вовсе
+
+    def test_open_draft_blocks_second_call(self):
+        """Черновик заказ не гасит — значит повторный клик плодил бы близнеца."""
+        engine.create_receipt_from_purchase(self.p, self.user)
+        with self.assertRaises(ValidationError):
+            engine.create_receipt_from_purchase(self.p, self.user)
+
+    def test_draft_receipt_does_not_close_line(self):
+        """Ф6: закрытость заказа гейтит тот же замок, что склад и деньги (Ф15).
+
+        До правки черновая накладная гасила строку — заказ показывал ✓ до приёмки,
+        а позиция исчезала и из «заказано», и со склада разом.
+        """
+        engine.create_receipt_from_purchase(self.p, self.user)
+        row = next(r for r in engine.purchase_form(self.p)['rows']
+                   if r['item_id'] == self.item.id)
+        self.assertEqual(row['received'], D(0))
+        self.assertEqual(row['remaining'], D(40))
+        self.assertEqual(row['status'], 'to_order')
+        self.assertEqual(row['receipts'], [])
+        # и в дефиците позиция всё ещё «заказана» (оранжевый член цел)
+        self.assertEqual(engine.item_on_order(self.item, self.prj), D(40))
+
+    def test_line_carries_closing_receipts(self):
+        """Обратная связь: строка знает, какими накладными закрыта."""
+        engine.create_receipt_from_purchase(self.p, self.user, number='УПД-7')
+        r = models.Receipt.objects.get(purchase=self.p)
+        engine.update_receipt_lot(r.lots.get(item=self.item), qty=D(15))
+        engine.lock_receipt(r)
+        row = next(x for x in engine.purchase_form(self.p)['rows']
+                   if x['item_id'] == self.item.id)
+        self.assertEqual([c['receipt_id'] for c in row['receipts']], [r.id])
+        self.assertEqual(row['receipts'][0]['qty'], D(15))
+        self.assertEqual(row['received'], D(15))
+
+    def test_http_creates_receipt_and_returns_its_form(self):
+        c = Client()
+        c.force_login(self.user)
+        resp = c.post(f'/api/purchases/{self.p.id}/receipt/')
+        self.assertEqual(resp.status_code, 201)
+        body = resp.json()
+        self.assertEqual(body['purchase_id'], self.p.id)
+        self.assertEqual(len(body['lots']), 2)
+
+
 class TransferFormTests(EngineTestBase):
     """Волна 5: форма передачи — отгрузка партии заказчику (`−ISSUE`), пикер
     отдаваемых лотов, guard чужого проекта, коррекция строк."""
