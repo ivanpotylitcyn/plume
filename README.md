@@ -289,8 +289,8 @@ erDiagram
     string code "наш ярлык, uniq, nullable (Ф10)"
     string description "развёрнутое имя (Ф10; note удалён)"
     bool locked "единый мягкий замок"
-    int procurement_id FK
     int project_id FK
+    int procurement_id FK
     date date "подписание / оформление"
     int user_id FK "автор"
   }
