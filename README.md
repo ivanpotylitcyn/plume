@@ -194,13 +194,13 @@ erDiagram
     int id PK
     string code "заказной PN (канон библиотеки Altium, колонка «Design Item Id»), uniq"
     string description
+    bool native "наше производимое (true) / внешнее покупное (false); делит на режимы Изделия/Компоненты"
+    bool locked "замок-фиксация: форма read-only, мутации гейтятся"
+    bool synced "из библиотеки Altium (true) / заведено вручную (false); ставит синк, руками не снять"
     int category_id FK "→ Category, класс изделия (PROTECT); Ф12e — nullable в черновике, обязательна к фиксации (CHECK item_locked_has_category)"
     string uom "ед. изм."
     string temperature "предельная T компонента (напр. -40-125°C)"
     decimal estimated_cost "оценочная стоимость / роллап по BOM (nullable)"
-    bool native "наше производимое (true) / внешнее покупное (false); делит на режимы Изделия/Компоненты"
-    bool synced "из библиотеки Altium (true) / заведено вручную (false); ставит синк, руками не снять"
-    bool locked "замок-фиксация: форма read-only, мутации гейтятся"
   }
   %% инвариант: synced ⟹ not native (CheckConstraint). Матрица synced×locked:
   %%   ручной+расфикс → правь всё; библ.+расфикс → только цена; зафикс → read-only.
@@ -270,13 +270,13 @@ erDiagram
   }
   PROCUREMENT {
     int id PK
-    int user_id FK "автор"
-    int contractor_id FK "поставщик (nullable, SET_NULL)"
-    bool locked "единый мягкий замок"
-    date date "начало переговоров"
     string code "наш ярлык (напр. Нева ДЗЗ 1), uniq, nullable (Ф10)"
     string description "развёрнутое имя (Ф10; note удалён)"
+    bool locked "единый мягкий замок"
     m2m projects "охват — набор проектов, под которые ведётся (Ф13); задаёт область расчёта дефицита, чисел не хранит"
+    int contractor_id FK "поставщик (nullable, SET_NULL)"
+    date date "начало переговоров"
+    int user_id FK "автор"
   }
   PROCUREMENTLINE {
     int id PK
@@ -286,13 +286,13 @@ erDiagram
   }
   PURCHASE {
     int id PK
-    int procurement_id FK
-    int project_id FK
-    int user_id FK "автор"
-    bool locked "единый мягкий замок"
-    date date "подписание / оформление"
     string code "наш ярлык, uniq, nullable (Ф10)"
     string description "развёрнутое имя (Ф10; note удалён)"
+    bool locked "единый мягкий замок"
+    int procurement_id FK
+    int project_id FK
+    date date "подписание / оформление"
+    int user_id FK "автор"
   }
   PURCHASELINE {
     int id PK
@@ -303,15 +303,15 @@ erDiagram
   STOCKDOCUMENT {
     int id PK "единый id ордера — ОДНА таблица на все семь видов (Ф14: MTI снят)"
     string kind "receipt/kitting/inventory/requisition/transfer/writeoff/relocation — дискриминатор"
-    bool locked "единый мягкий замок"
-    int project_id FK "общий, поднят с 6 детей (Ф2c); реверс project.documents"
-    int user_id FK "автор — общий, поднят с 6 детей (Ф2c)"
-    date date "общая, поднята (Ф2c); nullable (Kitting-черновик мог быть без даты)"
-    string number "№ документа (внешний, юридический) — общий, поднят (Ф2c); blank у Kitting"
     string code "наш ярлык (напр. Нева ДЗЗ 1), uniq, nullable — общий (Ф10)"
     string description "развёрнутое имя — общее (Ф10; note удалён)"
-    int contractor_id FK "Ф14, nullable: поставщик у receipt / заказчик у transfer (направление = kind)"
+    bool locked "единый мягкий замок"
+    int project_id FK "общий, поднят с 6 детей (Ф2c); реверс project.documents"
     int purchase_id FK "Ф14, nullable: закрываемый заказ — только у receipt"
+    int contractor_id FK "Ф14, nullable: поставщик у receipt / заказчик у transfer (направление = kind)"
+    string number "№ документа (внешний, юридический) — общий, поднят (Ф2c); blank у Kitting"
+    date date "общая, поднята (Ф2c); nullable (Kitting-черновик мог быть без даты)"
+    int user_id FK "автор — общий, поднят с 6 детей (Ф2c)"
     int target_item_id FK "Ф14, nullable: прибор-цель — только у kitting"
     decimal qty "Ф14, nullable: кол-во образцов — только у kitting"
     string reason "Ф14: причина — только у writeoff"
