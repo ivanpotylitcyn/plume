@@ -14,6 +14,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 
+from plume import admin
 from plume import models
 from plume import engine
 from plume import views
@@ -3114,10 +3115,10 @@ class UnifiedLockTests(EngineTestBase):
         self.assertTrue(engine.kitting_form(k)['locked'])
 
 
-class Wave13Fase1bTests(EngineTestBase):
-    """Волна 13 Ф1b (бэкенд-срез): обвязка post/unpost + edit-freeze для
-    Инвентаризации/Требования/Списания и единое правило удаления ордеров
-    (draft — свободно; posted — сперва расфиксировать; `PROTECT` бережёт лоты)."""
+class DocumentLockAndDeleteRulesTests(EngineTestBase):
+    """Фиксация/расфиксация ордера, заморозка правки под замком и единое правило
+    удаления: черновик — свободно, зафиксированный — сперва расфиксируй, `PROTECT`
+    бережёт потраченные лоты (волна 13, Ф1b; ось `locked` — волна 19, Ф1c)."""
 
     def _other_project(self):
         return models.Project.objects.create(
@@ -3262,10 +3263,14 @@ class Wave13Fase1bTests(EngineTestBase):
         self.assertTrue(models.Inventory.objects.filter(pk=inv.pk).exists())
 
 
-class Wave13Fase2aTests(EngineTestBase):
-    """Волна 13 Ф2a: MTI-ядро — `StockDoc` (миксин) → `StockDocument` (конкретный
-    родитель); 6 документов стали наследниками, id-пространство унифицировано,
-    дискриминатор `kind` штампуется. (Коллапс дуг в единый FK — Ф2b, ниже.)"""
+class DocumentKindStampTests(EngineTestBase):
+    """Вид ордера живёт дискриминатором `kind` в единой таблице `StockDocument`:
+    `save()` штампует его по классу, а менеджер proxy-вида сужает выборку до своего.
+
+    Класс родился в волне 13 (Ф2a) про MTI-ядро и после Ф14 (снос MTI) переписан:
+    три теста из четырёх проверяли равенство PK ребёнка и родителя — у proxy это
+    верно **по построению** и сломаться не может. Живое здесь — штамп вида и
+    `_KindManager`: на нём держатся 108 обращений `models.<Вид>.objects` в движке."""
 
     def _one_of_each(self):
         r = models.Receipt.objects.create(
@@ -3292,40 +3297,28 @@ class Wave13Fase2aTests(EngineTestBase):
             self.assertTrue(models.StockDocument.objects.filter(
                 pk=doc.pk, kind=kind).exists())
 
-    def test_child_pk_is_unified_stockdocument_id(self):
-        """PK каждого ребёнка = id `StockDocument`; id глобально уникальны между таблицами
-        (готовность к схлопыванию дуг `Lot.origin`/`Attachment.owner` в один FK)."""
+    def test_kind_manager_shows_only_own_kind(self):
+        """`_KindManager` держит иллюзию семи таблиц: менеджер вида видит только свои
+        документы, а базовая таблица — все. Иллюзия load-bearing: на ней пережил снос
+        MTI весь движок (`Receipt.objects.filter(...)` и per-kind функции)."""
         docs = self._one_of_each()
-        pks = [d.pk for d in docs.values()]
-        self.assertEqual(len(pks), len(set(pks)))          # глобально уникальны
-        for d in docs.values():
-            self.assertTrue(models.StockDocument.objects.filter(pk=d.pk).exists())
-        # ровно один родитель на каждого ребёнка, ничего лишнего
         self.assertEqual(models.StockDocument.objects.count(), len(docs))
-
-    def test_origin_arc_points_at_unified_parent_id(self):
-        """Дуга `Lot.origin` теперь указывает на единый id (= PK ребёнка = id родителя)."""
-        r = models.Receipt.objects.create(
-            number='У-2', date='2026-05-01', contractor=self.supplier,
-            project=self.prj, user=self.user)
-        lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        self.assertEqual(lot.origin_id, r.pk)
-        self.assertTrue(models.StockDocument.objects.filter(pk=lot.origin_id).exists())
-
-    def test_mti_delete_removes_parent_row(self):
-        """Удаление ребёнка-черновика сносит и строку родителя (MTI-каскад вверх)."""
-        w = models.Writeoff.objects.create(
-            project=self.prj, user=self.user, number='С-2', date='2026-05-01')
-        pk = w.pk
-        w.delete()
-        self.assertFalse(models.Writeoff.objects.filter(pk=pk).exists())
-        self.assertFalse(models.StockDocument.objects.filter(pk=pk).exists())
+        for kind, doc in docs.items():
+            proxy = type(doc)
+            self.assertEqual([d.pk for d in proxy.objects.all()], [doc.pk],
+                             f'{proxy.__name__}.objects видит чужие виды')
+        # и наоборот: чужой вид по своему же id не находится
+        self.assertFalse(
+            models.Receipt.objects.filter(pk=docs['writeoff'].pk).exists())
 
 
-class Wave13Fase2bTests(EngineTestBase):
-    """Волна 13 Ф2b: коллапс дуг в единый FK на `StockDocument`. `Lot.origin` и
-    `StockLine.document` — по одному FK (Check «ровно один» умер); `Attachment` —
-    двухпутный владелец (Item ↔ ордер). Инвариант проекции движений сохранён."""
+class DocumentOwnershipFkTests(EngineTestBase):
+    """Владение — по одному FK на `StockDocument`, а не дугой из типизированных FK.
+
+    `Lot.origin` и `StockLine.document` — единственный FK каждый (Check «ровно один
+    origin» умер вместе с дугой); у `Attachment` дуга жива, но ордера в ней занимают
+    один путь из шести. Проекция движений при этом читает вид из `document.kind`
+    (волна 13, Ф2b; шесть путей владельца вложения — волна 19, Ф12b)."""
 
     def _constraint_names(self, model):
         return {c.name for c in model._meta.constraints}
@@ -3372,7 +3365,7 @@ class Wave13Fase2bTests(EngineTestBase):
         self.assertEqual(issue.source_type, models.StockDocument.Kind.WRITEOFF)
         self.assertEqual(issue.source_id, w.pk)
 
-    def test_attachment_owner_arc_through_mti(self):
+    def test_attachment_owner_is_one_path_of_six(self):
         """Шесть видов ордера схлопнуты в один FK `document`, остальные владельцы держат
         своё поле: 'receipt' → `document`, 'item' → `item`; API-строки owner_type те же;
         ровно один задан (Check жив, теперь на шесть путей — волна 19, Ф12b)."""
@@ -3400,8 +3393,8 @@ class Wave13Fase2bTests(EngineTestBase):
         self.assertIn('attachment_exactly_one_owner',
                       self._constraint_names(models.Attachment))
 
-    def test_reverse_accessors_resolve_through_mti(self):
-        """Реверсы дуг живут на родителе, но доступны с ребёнка через MTI:
+    def test_reverse_accessors_read_from_document(self):
+        """Реверсы дуг объявлены на `StockDocument`, но читаются с любого вида:
         `receipt.lots`, `writeoff.lines`, `receipt.attachments`."""
         r = models.Receipt.objects.create(
             number='У-3', date='2026-05-01', contractor=self.supplier,
@@ -3416,11 +3409,13 @@ class Wave13Fase2bTests(EngineTestBase):
         self.assertEqual(list(r.attachments.all()), [att])
 
 
-class Wave13Fase2cTests(EngineTestBase):
-    """Волна 13 Ф2c: общие поля `project`/`user`/`date`/`number` подняты с 6 детей в
-    MTI-родителя `StockDocument` (дедуп; волна 19 Ф10 добавила туда же `code`/`description`,
-    убрала `note`). Прямой доступ с ребёнка прозрачен через MTI; специфика осталась на
-    детях; реверс — `project.documents`."""
+class DocumentHeaderFieldsTests(EngineTestBase):
+    """Все колонки ордера — общая шапка И специфика вида — живут в ОДНОЙ таблице.
+
+    Волна 13 (Ф2c) подняла общие поля `project`/`user`/`date`/`number` с шести детей
+    в родителя, волна 19 добавила туда `code`/`description` (Ф10) и увела туда же
+    специфику видов (Ф14, снос MTI). Своих колонок у видов не осталось вовсе —
+    именно это здесь и проверяется; реверс общего поля — `project.documents`."""
 
     def _one_of_each(self):
         r = models.Receipt.objects.create(
@@ -3442,37 +3437,25 @@ class Wave13Fase2cTests(EngineTestBase):
         return {'receipt': r, 'kitting': k, 'inventory': inv,
                 'requisition': req, 'transfer': t, 'writeoff': w}
 
-    def test_common_fields_live_on_parent(self):
-        """`project`/`user`/`date`/`number`/`code`/`description` — поля StockDocument, НЕ детей."""
+    def test_all_columns_live_on_one_table(self):
+        """Шапка и специфика — колонки `StockDocument`; у видов своих колонок НЕТ.
+
+        До Ф14 второй половиной этого теста было «специфика осталась на детях» — она
+        осталась зелёной и после сноса MTI (proxy наследует поля родителя), продолжая
+        утверждать снесённое. Проверка перевёрнута: своих полей у вида ноль — регресс,
+        вернувший детскую колонку, теперь виден.
+        """
         parent = {f.name for f in models.StockDocument._meta.get_fields()}
-        for name in ('project', 'user', 'date', 'number', 'code', 'description'):
+        for name in ('project', 'user', 'date', 'number', 'code', 'description',
+                     'contractor', 'purchase', 'target_item', 'qty', 'reason'):
             self.assertIn(name, parent)
-        # у детей своих копий этих полей больше нет (только своя специфика)
         for child in (models.Receipt, models.Kitting, models.Inventory,
-                      models.Requisition, models.Transfer, models.Writeoff):
+                      models.Requisition, models.Transfer, models.Writeoff,
+                      models.Relocation):
             own = {f.name for f in child._meta.get_fields()
                    if getattr(f, 'model', None) is child}
-            self.assertFalse({'project', 'user', 'date', 'number', 'code', 'description'} & own,
-                             f'{child.__name__} держит поднятое поле: {own}')
-
-    def test_child_specifics_stay(self):
-        """Специфика осталась на детях: Receipt.contractor/purchase, Kitting.target_item/
-        qty, Writeoff.reason."""
-        self.assertIn('contractor', {f.name for f in models.Receipt._meta.get_fields()})
-        self.assertIn('target_item', {f.name for f in models.Kitting._meta.get_fields()})
-        self.assertIn('reason', {f.name for f in models.Writeoff._meta.get_fields()})
-
-    def test_mti_transparent_read_and_create(self):
-        """Создание с общими kwargs и чтение полей прозрачны через MTI на каждом типе."""
-        for kind, doc in self._one_of_each().items():
-            doc.refresh_from_db()
-            self.assertEqual(doc.project_id, self.prj.id)
-            self.assertEqual(doc.user_id, self.user.id)
-            self.assertIsNotNone(doc.date)
-            # то же значение видно на строке родителя
-            sd = models.StockDocument.objects.get(pk=doc.pk)
-            self.assertEqual((sd.project_id, sd.user_id, sd.date),
-                             (doc.project_id, doc.user_id, doc.date))
+            self.assertFalse(own, f'{child.__name__} завёл свою колонку: {own}')
+            self.assertTrue(child._meta.proxy, f'{child.__name__} перестал быть proxy')
 
     def test_reverse_accessor_is_documents(self):
         """Реверс общего `project` — `project.documents` (единый по всем видам),
@@ -3484,8 +3467,8 @@ class Wave13Fase2cTests(EngineTestBase):
         self.assertEqual(
             self.prj.documents.filter(kind=models.StockDocument.Kind.TRANSFER).count(), 1)
 
-    def test_filter_by_parent_field_on_child_manager(self):
-        """Дочерний менеджер фильтрует/сортирует по поднятому полю прозрачно
+    def test_kind_manager_filters_and_orders_by_header(self):
+        """Менеджер вида фильтрует/сортирует по полю шапки прозрачно
         (как в движке `Writeoff.objects.filter(project=…)`)."""
         self._one_of_each()
         r2 = models.Receipt.objects.create(
@@ -3495,13 +3478,14 @@ class Wave13Fase2cTests(EngineTestBase):
         self.assertEqual(latest, r2)
 
 
-class Wave13Fase2dTests(EngineTestBase):
-    """Волна 13 Ф2d: условная валидация специфики по виду — восстановление per-kind
-    обязательности `date`/`number`, ослабленной подъёмом полей в родителя (Ф2c).
-    Единый kind-driven источник (`StockDocument.REQUIRED_HEADER_BY_KIND`/`clean`)
-    гейтит и админ-форму (`full_clean → clean`), и проведение (`_require_header`)."""
+class HeaderRequiredByKindTests(EngineTestBase):
+    """Обязательность шапки — по виду: строгим видам нужны дата и номер, комплектации
+    не нужно ничего. Единый kind-driven источник (`REQUIRED_HEADER_BY_KIND`/`clean`)
+    гейтит и админ-форму (`full_clean → clean`), и фиксацию (`_require_header`);
+    правило восстанавливает per-kind NOT NULL, ослабленный подъёмом полей в общую
+    таблицу (волна 13, Ф2c/Ф2d)."""
 
-    def test_required_map_mirrors_pre_2c_notnull(self):
+    def test_strict_kinds_require_date_and_number(self):
         """Строгие виды требуют дату+номер; kitting свободен. Ф2e: relocation стал
         строгим (реальный документ с номером), только kitting остаётся свободным."""
         req = models.StockDocument.REQUIRED_HEADER_BY_KIND
@@ -3563,10 +3547,9 @@ class Wave13Fase2dTests(EngineTestBase):
         self.assertTrue(r.locked)
 
 
-class Wave13Fase2eTests(EngineTestBase):
-    """Волна 13 Ф2e: перемещение (`Relocation`) + мультисклад. Движок считает остаток
-    по паре `(лот, локация)`; ход перемещения = пара знаковых `StockLine`
-    (`−q`@источник, `+q`@приёмник), сохраняющая тотал лота."""
+class RelocationAndLocationStockTests(EngineTestBase):
+    """Остаток считается по паре `(лот, локация)`, а ход перемещения — пара знаковых
+    строк (`−q`@источник, `+q`@приёмник), сохраняющая тотал лота (волна 13, Ф2e)."""
 
     def setUp(self):
         super().setUp()
@@ -3728,10 +3711,10 @@ class Wave13Fase2eTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(self.lot, self.sold), D(0))
 
 
-class Wave13Fase2fTests(EngineTestBase):
-    """Волна 13 Ф2f: два идентификатора партии — `lot_name` (человеческий) и
-    `part_number` (машинный, MPN/децимальный). Пришли на смену `received_name`/
-    `serial_number`; писатели/формы/метка разводят их независимо."""
+class LotIdentifiersTests(EngineTestBase):
+    """У партии два независимых идентификатора: `lot_name` (человеческий, из УПД) и
+    `part_number` (машинный — MPN/децимальный). Писатели, формы и метка лота разводят
+    их порознь и не подменяют один другим (волна 13, Ф2f)."""
 
     def setUp(self):
         super().setUp()
@@ -3790,10 +3773,10 @@ class Wave13Fase2fTests(EngineTestBase):
         self.assertEqual(born.part_number, 'PN-SRC')
 
 
-class Wave13Fase2gTests(EngineTestBase):
-    """Волна 13 Ф2f+: `Supplier → Counterparty` (единая сущность с ролями) +
-    структурный контрагент на приходе (`Receipt.contractor`, поставщик) и передаче
-    (`Transfer.contractor`, заказчик). Пикеры фильтруют по роли."""
+class CounterpartyRolesTests(EngineTestBase):
+    """Контрагент — одна сущность с ролями (поставщик/заказчик), а не два справочника:
+    у поставки он поставщик, у передачи заказчик, направление читается из вида;
+    пикеры фильтруют по роли (волна 13, Ф2f+; одна колонка — волна 19, Ф14)."""
 
     def test_supplier_role_default(self):
         # унаследованный `self.supplier` (без явных ролей) — поставщик по умолчанию
@@ -3861,61 +3844,156 @@ class Wave13Fase2gTests(EngineTestBase):
         self.assertFalse(created['is_supplier'])
 
 
-class Wave13Fase2hTests(EngineTestBase):
-    """Волна 13 Ф2h: admin-гибрид. Родитель `StockDocument` — read-only обзор «все
-    ордера» (смешанный список видов, некликабельный, без add/change); правка —
-    в дочерних админках. Удаление РОДИТЕЛЯ делегирует правам (WAVE14 Ф0.2: нужно для
-    MTI-каскада из детей), но массовое «удалить выбранные» с витрины снято."""
+class OrderAdminTests(EngineTestBase):
+    """Админка ордера — ОДИН пункт на семь видов, и она не подменяет движок.
 
-    def test_stockdocument_admin_view_only_delete_delegates(self):
+    До Ф16 здесь было восемь регистраций на одну таблицу (read-only обзор + семь
+    per-kind админок) — пережиток MTI, который Ф14 сделала бессмысленным. Теперь
+    список и форма одни, вид рулит составом полей и инлайнов, а всё, что двигает
+    склад (замок, удаление, строки, партии), из админки недоступно: инвариант
+    «движения ⟺ документ зафиксирован» держит движок, и молча обойти его нельзя.
+    """
+
+    def _admin(self):
         from django.contrib import admin as dj_admin
+        return dj_admin.site._registry[models.StockDocument]
+
+    def _request(self):
         from django.test import RequestFactory
-        ma = dj_admin.site._registry[models.StockDocument]
-        su = get_user_model().objects.create_superuser('su_del', 'a@a.tld', 'x')
-        req = RequestFactory().get('/admin/'); req.user = su
-        # витрина смотровая: без add/change, строки некликабельны
-        self.assertFalse(ma.has_add_permission(req))
-        self.assertFalse(ma.has_change_permission(req))
-        self.assertIsNone(ma.list_display_links)
-        # НО удаление делегирует правам (MTI-каскад из детей): суперюзеру можно
-        self.assertTrue(ma.has_delete_permission(req))
-        # массовое «удалить выбранные» с витрины снято
+        su = get_user_model().objects.create_superuser('su_adm', 'a@a.tld', 'x')
+        req = RequestFactory().get('/admin/')
+        req.user = su
+        return req
+
+    def test_seven_kind_admins_collapsed_to_one(self):
+        """В сайдбаре ордер ровно один: proxy-виды не зарегистрированы."""
+        from django.contrib import admin as dj_admin
+        self.assertIn(models.StockDocument, dj_admin.site._registry)
+        for proxy in (models.Receipt, models.Kitting, models.Inventory,
+                      models.Requisition, models.Transfer, models.Writeoff,
+                      models.Relocation):
+            self.assertNotIn(proxy, dj_admin.site._registry,
+                             f'{proxy.__name__} снова отдельным пунктом сайдбара')
+
+    def test_form_shape_follows_kind(self):
+        """Поля и инлайны формы зависят от вида: специфика чужого вида не показывается
+        (её колонка обязана быть пустой — CHECK `doc_*_only_*`)."""
+        ma, req = self._admin(), self._request()
+        r = models.Receipt.objects.create(
+            number='ПР-f', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        k = models.Kitting.objects.create(
+            project=self.prj, user=self.user, qty=D(1),
+            target_item=self.make_item('DEV-f', manufactured=True))
+        w = models.Writeoff.objects.create(
+            project=self.prj, user=self.user, number='СП-f', date='2026-05-02')
+
+        receipt_fields = ma.get_fields(req, r)
+        self.assertIn('contractor', receipt_fields)
+        self.assertIn('purchase', receipt_fields)
+        self.assertNotIn('target_item', receipt_fields)
+        self.assertNotIn('reason', receipt_fields)
+
+        kitting_fields = ma.get_fields(req, k)
+        self.assertIn('target_item', kitting_fields)
+        self.assertIn('qty', kitting_fields)
+        self.assertNotIn('contractor', kitting_fields)
+        self.assertNotIn('number', kitting_fields)      # у комплектации номера нет
+
+        self.assertIn('reason', ma.get_fields(req, w))
+
+        # инлайны: строки — у видов, которые расходуют; born-лоты — у рождающих
+        self.assertEqual(ma.get_inlines(req, r), [admin.BornLotsInline])
+        self.assertEqual(ma.get_inlines(req, k),
+                         [admin.KittingLinesInline, admin.BornLotsInline])
+        self.assertEqual(ma.get_inlines(req, w), [admin.StockLinesInline])
+        self.assertEqual(ma.get_inlines(req, None), [])   # на форме добавления вида нет
+
+    def test_lock_and_delete_belong_to_engine(self):
+        """Замок read-only, удаления нет, вид у существующего ордера не меняется."""
+        ma, req = self._admin(), self._request()
+        r = models.Receipt.objects.create(
+            number='ПР-g', date='2026-05-01', contractor=self.supplier,
+            project=self.prj, user=self.user)
+        self.assertIn('locked', ma.get_readonly_fields(req, r))
+        self.assertIn('kind', ma.get_readonly_fields(req, r))
+        self.assertIn('locked', ma.get_readonly_fields(req, None))
+        self.assertNotIn('kind', ma.get_readonly_fields(req, None))  # при заводе — выбор
+        self.assertFalse(ma.has_delete_permission(req, r))
         self.assertNotIn('delete_selected', ma.get_actions(req))
 
-    def test_overview_lists_all_kinds_mixed(self):
-        # два разных вида ордера рождаются детьми — оба видны в родительском обзоре
-        models.Receipt.objects.create(
-            number='ПР-h', date='2026-05-01', contractor=self.supplier,
+    def test_engine_owned_tables_are_read_only(self):
+        """Партии, движения, строки и вложения админка только показывает."""
+        from django.contrib import admin as dj_admin
+        req = self._request()
+        for model in (models.Lot, models.StockMovement, models.StockLine,
+                      models.Attachment):
+            ma = dj_admin.site._registry[model]
+            self.assertFalse(ma.has_add_permission(req), model.__name__)
+            self.assertFalse(ma.has_change_permission(req), model.__name__)
+            self.assertFalse(ma.has_delete_permission(req), model.__name__)
+
+    def test_changelist_and_form_http(self):
+        """HTTP-путь: смешанный список видит все виды, форма вида открывается."""
+        r = models.Receipt.objects.create(
+            number='ПР-http', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         models.Writeoff.objects.create(
-            number='СП-h', date='2026-05-02', reason='порча',
-            project=self.prj, user=self.user)
-        qs = models.StockDocument.objects.all()
-        kinds = {d.kind for d in qs}
-        self.assertEqual(kinds, {models.StockDocument.Kind.RECEIPT,
-                                 models.StockDocument.Kind.WRITEOFF})
-        numbers = {d.number for d in qs}
-        self.assertEqual(numbers, {'ПР-h', 'СП-h'})
-
-    def test_overview_changelist_http(self):
-        models.Receipt.objects.create(
-            number='ПР-http', date='2026-05-01', contractor=self.supplier,
+            number='СП-http', date='2026-05-02', reason='порча',
             project=self.prj, user=self.user)
         su = get_user_model().objects.create_superuser(
             username='root', email='r@e.x', password='x')
         c = Client()
         c.force_login(su)
-        resp = c.get('/admin/plume/stockdocument/')
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, 'ПР-http')            # ордер виден в обзоре
-        # добавления быть не должно — кнопки «Добавить» нет
-        self.assertNotContains(resp, 'stockdocument/add/')
+        lst = c.get('/admin/plume/stockdocument/')
+        self.assertEqual(lst.status_code, 200)
+        self.assertContains(lst, 'ПР-http')              # оба вида вперемешку
+        self.assertContains(lst, 'СП-http')
+        form = c.get(f'/admin/plume/stockdocument/{r.pk}/change/')
+        self.assertEqual(form.status_code, 200)
+        self.assertContains(form, 'ПР-http')
+        # удалять ордер из админки нельзя — кнопки нет
+        self.assertNotContains(form, f'/admin/plume/stockdocument/{r.pk}/delete/')
+
+    def test_change_form_renders_for_every_kind(self):
+        """Форма открывается у всех семи видов. Инлайн-витрина ломается конфигом
+        (поля/`readonly_fields`/`max_num`), и ломается она в РЕНДЕРЕ — 500 админки
+        сюита не видит, пока страницу не запросили."""
+        su = get_user_model().objects.create_superuser(
+            username='root2', email='r2@e.x', password='x')
+        c = Client()
+        c.force_login(su)
+        Kind = models.StockDocument.Kind
+        docs = {
+            Kind.RECEIPT: models.Receipt.objects.create(
+                number='ПР-r', date='2026-05-01', contractor=self.supplier,
+                project=self.prj, user=self.user),
+            Kind.KITTING: models.Kitting.objects.create(
+                project=self.prj, user=self.user, qty=D(1),
+                target_item=self.make_item('DEV-r', manufactured=True)),
+            Kind.INVENTORY: models.Inventory.objects.create(
+                number='ИН-r', date='2026-05-01', project=self.prj, user=self.user),
+            Kind.REQUISITION: models.Requisition.objects.create(
+                number='ТР-r', date='2026-05-01', project=self.prj, user=self.user),
+            Kind.TRANSFER: models.Transfer.objects.create(
+                number='НК-r', date='2026-05-01', project=self.prj, user=self.user),
+            Kind.WRITEOFF: models.Writeoff.objects.create(
+                number='СП-r', date='2026-05-01', project=self.prj, user=self.user),
+            Kind.RELOCATION: models.Relocation.objects.create(
+                number='ПМ-r', date='2026-05-01', project=self.prj, user=self.user),
+        }
+        for kind, doc in docs.items():
+            resp = c.get(f'/admin/plume/stockdocument/{doc.pk}/change/')
+            self.assertEqual(resp.status_code, 200, f'форма вида {kind} не открылась')
+        # и форма заведения нового ордера (вида ещё нет — специфики на ней тоже)
+        self.assertEqual(c.get('/admin/plume/stockdocument/add/').status_code, 200)
 
 
-class Wave13Fase2jTests(EngineTestBase):
-    """Волна 13 Ф2j: авторство `user` редактируемо под замком на всех ордерах
-    (+ Purchase/Procurement). Формы несут `user_id`/`user_name`; `update_*`
-    принимают `user=_UNSET` (часовой), гейтятся замком; `/api/users/` — пикер."""
+class DocumentAuthorTests(EngineTestBase):
+    """Автор — поле документа, а не системный штамп: переназначается на всех ордерах
+    (плюс заказ и закупка), пока документ расфиксирован. Формы несут `user_id`/
+    `user_name`, `update_*` принимают часового `_UNSET`, `/api/users/` кормит пикер
+    (волна 13, Ф2j)."""
 
     def setUp(self):
         super().setUp()
@@ -4000,12 +4078,11 @@ class Wave13Fase2jTests(EngineTestBase):
         self.assertEqual(bad.status_code, 400)
 
 
-class Wave13Fase2kTests(EngineTestBase):
-    """Волна 13 Ф2k: структурные якоря шапки под замком (вторая связка «Свода
-    расхождений #A»). `project` — на всех ордерах/заказе; `target_item` —
-    комплектация; `procurement` — заказ. Проект — якорь: лоты/строки следуют за
-    ним, поэтому менять можно только у «пустого» ордера, иначе дружелюбный отказ.
-    Часовой `_UNSET`, `None`-отказ (FK NOT NULL), gate замком `_require_draft`."""
+class OrderAnchorTests(EngineTestBase):
+    """Структурные якоря шапки (`project` у всех ордеров и заказа, `target_item` у
+    комплектации, `procurement` у заказа) меняются только у «пустого» документа:
+    за якорем следуют лоты и строки, поэтому при непустом — дружелюбный отказ.
+    Часовой `_UNSET`, `None`-отказ (FK NOT NULL), гейт замком (волна 13, Ф2k)."""
 
     def setUp(self):
         super().setUp()
@@ -4137,13 +4214,11 @@ class Wave13Fase2kTests(EngineTestBase):
         self.assertEqual(resp.json()['target_id'], dev2.id)
 
 
-class Wave13Fase3HttpTests(EngineTestBase):
-    """Волна 13 Ф3: HTTP-слой перемещения (relocation) + справочник мест.
-
-    Движок/модель готовы с Ф2e — здесь проверяем эндпойнты жизненного цикла:
-    создание → пикер лотов/мест → добавление хода → правка → провести/расфиксировать
-    → удалить. Инвариант: тотал лота сохранён (перемещение двигает распределение
-    по (лот,локация), не остаток)."""
+class RelocationHttpTests(EngineTestBase):
+    """HTTP-слой перемещения и справочника мест: создание → пикер лотов/мест →
+    добавление хода → правка → фиксация/расфиксация → удаление. Инвариант тот же,
+    что у движка: тотал лота сохранён — перемещение двигает распределение по
+    `(лот, локация)`, а не остаток (волна 13, Ф3)."""
 
     def setUp(self):
         super().setUp()
@@ -4279,8 +4354,9 @@ class Wave13Fase3HttpTests(EngineTestBase):
         self.assertEqual(moved.json()['project_id'], other.id)
 
 
-class Wave13Fase4Tests(EngineTestBase):
-    """Волна 13 Ф4: место хранения как сущность «Склады» — что на нём лежит + ДНК."""
+class LocationEntityTests(EngineTestBase):
+    """Место хранения — полноценная сущность «Склады»: что на нём лежит и его ДНК
+    (код/описание/вид), включая guard на дубль кода (волна 13, Ф4)."""
 
     def setUp(self):
         super().setUp()
