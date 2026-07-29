@@ -12,6 +12,7 @@ import { api, type LocationRow, type RelocationForm, type RelocationMove,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LotGlyph, count, num, sumByUom } from './status'
 
@@ -117,21 +118,19 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
       </td>
       <td className="uom">{m.uom}</td>
       <td className="c-fit">
-        <select className="lot-sel" value={m.from_location_id ?? ''} disabled={locked || busy}
-          onChange={e => run(api.updateRelocationLine(relocationId, m.lot_id,
-            { from_location_id: Number(e.target.value) }))}>
-          {locs.map(l => <option key={l.id} value={l.id}>{l.code}</option>)}
-        </select>{' '}
+        <Dropdown value={m.from_location_id ?? ''} disabled={locked || busy}
+          options={locs.map(l => ({ value: l.id, label: l.code }))}
+          onPick={v => run(api.updateRelocationLine(relocationId, m.lot_id,
+            { from_location_id: Number(v) }))} />{' '}
         <span className={negative ? 'anomaly' : ''} style={{ color: 'var(--fg-dim)' }}>
           ({num(m.from_live_qty)}){negative && <span className="anomaly" title="источник в минусе">▲</span>}
         </span>
       </td>
       <td className="c-fit">
-        <select className="lot-sel" value={m.to_location_id ?? ''} disabled={locked || busy}
-          onChange={e => run(api.updateRelocationLine(relocationId, m.lot_id,
-            { to_location_id: Number(e.target.value) }))}>
-          {locs.map(l => <option key={l.id} value={l.id}>{l.code}</option>)}
-        </select>{' '}
+        <Dropdown value={m.to_location_id ?? ''} disabled={locked || busy}
+          options={locs.map(l => ({ value: l.id, label: l.code }))}
+          onPick={v => run(api.updateRelocationLine(relocationId, m.lot_id,
+            { to_location_id: Number(v) }))} />{' '}
         <span style={{ color: 'var(--fg-dim)' }}>({num(m.to_live_qty)})</span>
       </td>
       {!locked && <td className="act">
@@ -178,15 +177,11 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
     <tr className="row ghost">
       <td className="gl" />
       <td className="c-key" colSpan={2}>
-        <select className="lot-sel" value={lotId} disabled={busy}
-          onChange={e => pick(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">＋ лот…</option>
-          {lots.map(l => (
-            <option key={l.lot_id} value={l.lot_id}>
-              #{l.lot_id} {l.item_code}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
-            </option>
-          ))}
-        </select>
+        <Dropdown value={lotId} disabled={busy} placeholder="＋ лот…"
+          onPick={v => pick(Number(v))}
+          options={lots.map(l => ({ value: l.lot_id,
+            label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
+              + ` · ${num(l.live_qty)} ${l.uom}` }))} />
       </td>
       <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
         {picked?.item_description ?? ''}</td>
@@ -197,23 +192,17 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
       </td>
       <td className="uom">{picked?.uom ?? ''}</td>
       <td className="c-fit">
-        <select className="lot-sel" value={from} disabled={busy || !lotId}
-          onChange={e => setFrom(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">откуда…</option>
-          {locs.map(l => {
+        <Dropdown value={from} disabled={busy || !lotId} placeholder="откуда…"
+          onPick={v => setFrom(Number(v))}
+          options={locs.map(l => {
             const at = picked?.by_location.find(b => b.location_id === l.id)
-            return <option key={l.id} value={l.id}>
-              {l.code}{at ? ` (${num(at.qty)})` : ''}
-            </option>
-          })}
-        </select>
+            return { value: l.id, label: l.code + (at ? ` (${num(at.qty)})` : '') }
+          })} />
       </td>
       <td className="c-fit">
-        <select className="lot-sel" value={to} disabled={busy || !lotId}
-          onChange={e => setTo(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">куда…</option>
-          {locs.map(l => <option key={l.id} value={l.id} disabled={l.id === from}>{l.code}</option>)}
-        </select>
+        <Dropdown value={to} disabled={busy || !lotId} placeholder="куда…"
+          onPick={v => setTo(Number(v))}
+          options={locs.filter(l => l.id !== from).map(l => ({ value: l.id, label: l.code }))} />
       </td>
       <td className="act">
         <button className="btn sm"

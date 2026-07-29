@@ -7,6 +7,7 @@ import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
   type InventoryRow, type RelocationRow, type LocationRow } from './api'
 import { Login } from './Login'
+import { Dropdown } from './Dropdown'
 import { CommandPalette, type PaletteEntry } from './CommandPalette'
 import { ProjectView } from './ProjectView'
 import { ItemView } from './ItemView'
@@ -499,15 +500,13 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
         <input className="list-filter" value={q} placeholder="фильтр — код или название"
           onChange={e => setQ(e.target.value)} />
         {projectFilter && projOptions.length > 1 &&
-          <select className="list-proj" value={proj} onChange={e => setProj(e.target.value)}>
-            <option value="">все проекты</option>
-            {projOptions.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>}
+          <Dropdown className="list-proj" value={proj} onPick={v => setProj(String(v))}
+            options={[{ value: '', label: 'все проекты' },
+              ...projOptions.map(p => ({ value: p, label: p }))]} />}
         {categoryFilter && catOptions.length > 1 &&
-          <select className="list-proj" value={cat} onChange={e => setCat(e.target.value)}>
-            <option value="">все категории</option>
-            {catOptions.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>}
+          <Dropdown className="list-proj" value={cat} onPick={v => setCat(String(v))}
+            options={[{ value: '', label: 'все категории' },
+              ...catOptions.map(c => ({ value: c, label: c }))]} />}
       </div>
       <div className="list-scroll">
         {extraTop}
@@ -586,15 +585,13 @@ function OrderList({ entries, selKey, onSelect, onNew }: {
         <input className="list-filter" value={q} placeholder="фильтр — № или название"
           onChange={e => setQ(e.target.value)} />
         <div className="list-filter-row">
-          <select className="list-proj" value={kind} onChange={e => setKind(e.target.value)}>
-            <option value="">все типы</option>
-            {kindOptions.map(k => <option key={k.kind} value={k.kind}>{k.label}</option>)}
-          </select>
+          <Dropdown className="list-proj" value={kind} onPick={v => setKind(String(v))}
+            options={[{ value: '', label: 'все типы' },
+              ...kindOptions.map(k => ({ value: k.kind, label: k.label }))]} />
           {projOptions.length > 1 &&
-            <select className="list-proj" value={proj} onChange={e => setProj(e.target.value)}>
-              <option value="">все проекты</option>
-              {projOptions.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>}
+            <Dropdown className="list-proj" value={proj} onPick={v => setProj(String(v))}
+              options={[{ value: '', label: 'все проекты' },
+                ...projOptions.map(p => ({ value: p, label: p }))]} />}
         </div>
       </div>
       <div className="list-scroll">

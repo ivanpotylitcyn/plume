@@ -197,7 +197,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (договор, ТЗ) — появится в табе «Файлы»', disabled: att.busy }]}
       fields={<>
-        <TextField label="Код" mono value={phead?.code ?? code} locked={locked}
+        <TextField label="Код" value={phead?.code ?? code} locked={locked}
           busy={busy || !phead}
           onCommit={v => runP(api.updateProject(projectId, { code: v }))}
           validate={v => v.trim() !== ''} />
@@ -206,12 +206,12 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
           onCommit={v => runP(api.updateProject(projectId, { description: v }))}
           validate={v => v.trim() !== ''} />
         {external && <>
-          <TextField label="Бюджет" mono locked={locked} busy={busy || !phead}
+          <TextField label="Бюджет" locked={locked} busy={busy || !phead}
             value={phead?.budget != null ? String(phead.budget) : ''}
             view={phead?.budget != null ? money(phead.budget) : ''}
             onCommit={v => runP(api.updateProject(projectId, { budget: v.trim() === '' ? null : Number(v) }))}
             validate={v => v.trim() === '' || Number(v) >= 0} />
-          <TextField label="Начат" mono type="date" value={phead?.started ?? ''}
+          <TextField label="Начат" type="date" value={phead?.started ?? ''}
             locked={locked} busy={busy || !phead}
             onCommit={v => runP(api.updateProject(projectId, { started: v || null }))} />
         </>}

@@ -86,10 +86,14 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
   }))
 
   // Коды охвата — ссылки на проекты; в правке стоят рядом с пикером, в просмотре
-  // остаются одни (§5). Моно, как всякий код; разделены отступом, не запятыми.
-  const scopeLinks = c.projects.map(pr => (
-    <a key={pr.id} className="link scope-chip" title={pr.description}
-      onClick={() => openProject(pr.id)}>{pr.code}</a>
+  // остаются одни (§5). Разделитель — ЗАПЯТАЯ вне ссылки (правка Ивана 2026-07-29):
+  // так видно, что перечислено несколько проектов, а не один длинный код.
+  const scopeLinks = c.projects.map((pr, i) => (
+    <span key={pr.id}>
+      {i > 0 && ', '}
+      <a className="link scope-chip" title={pr.description}
+        onClick={() => openProject(pr.id)}>{pr.code}</a>
+    </span>
   ))
 
   const tabs: FormTab[] = [
@@ -154,11 +158,11 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
           title: 'Загрузить файл (КП, счёт) — появится в табе «Файлы»', disabled: att.busy },
       ]}
       fields={<>
-        <TextField label="Код" mono value={c.code ?? ''} locked={locked} busy={busy}
+        <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
           onCommit={v => run(api.updateProcurement(c.id, { code: v }))} />
         <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
           onCommit={v => run(api.updateProcurement(c.id, { description: v }))} />
-        <TextField label="Дата" mono type="date" value={c.date ?? ''} locked={locked}
+        <TextField label="Дата" type="date" value={c.date ?? ''} locked={locked}
           busy={busy} onCommit={v => run(api.updateProcurement(c.id, { date: v }))} />
         <Field label="Контрагент" locked={locked} view={c.contractor_name}>
           <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
@@ -175,7 +179,9 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
           view={c.projects.length ? scopeLinks : ''}>
           <ProjectScopePicker projects={scopeCandidates} selected={scopeIds}
             disabled={busy} onToggle={toggleScope} />
-          {scopeLinks}
+          {/* Отступ — только в ПРАВКЕ, где ссылки стоят рядом с пикером. В просмотре
+              пикера нет, и тот же отступ выбивал значение из общей левой кромки. */}
+          <span className="scope-links">{scopeLinks}</span>
         </Field>
         <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />

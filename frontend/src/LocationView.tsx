@@ -90,7 +90,7 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
       fields={<>
-        <TextField label="Код" mono value={d.code} locked={locked} busy={busy}
+        <TextField label="Код" value={d.code} locked={locked} busy={busy}
           onCommit={v => run(api.updateLocation(d.id, { code: v }))}
           validate={v => v.trim() !== ''} />
         <TextField label="Описание" wide value={d.description} locked={locked} busy={busy}

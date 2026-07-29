@@ -345,12 +345,12 @@ body { overflow: hidden; }
   gap: var(--row-gap) 14px; flex: 1; min-width: 0; }
 .props dt { color: var(--fg-dim); text-align: right; }   /* метки по правому краю — к инпутам */
 .props dd { margin: 0; color: var(--fg); min-width: 0; }
-/* Кегль и шрифт значения — ОТ СМЫСЛА ПОЛЯ (§3), а не от режима: `mono` у кодов,
-   номеров, дат и чисел, Inter у описаний и имён. Правило накрывает и текст просмотра,
-   и контрол правки, поэтому переключение замка не меняет облик значения — только
-   рамку вокруг него. */
+/* Шрифт шапки — ТОЛЬКО Inter (решение Ивана 2026-07-29, отменяет «mono у кодов и дат»
+   того же дня): моноширинный вперемешку с литературным внутри одной панели сбивает —
+   значения полей читаются как разнородные, хотя это одна колонка. Моно остаётся там,
+   где оно про сканирование колонок: титул формы, списки, мета. Один кегль на все
+   значения, поэтому просмотр и правка отличаются только рамкой. */
 .props dd, .props dd :is(input, select) { font-family: var(--font-base); font-size: 13px; }
-.props dd.mono, .props dd.mono :is(input, select) { font-family: var(--font-mono); }
 /* Ширина поля — две ступени, заданные ОДНИМ токеном на всю тему (§13.3): обычное и
    длинное (Описание). Высота — единица строки, одна на инпут, дату, селект и пикер.
    Выключка ВЛЕВО: числовой `.qty-in` правит её вправо — в таблице это верно, в шапке
@@ -363,11 +363,12 @@ body { overflow: hidden; }
 .props dd .picker { display: inline-flex; align-items: center; width: var(--field-w); }
 .props dd.wide .picker { width: var(--field-w-wide); }
 .props dd .picker input { width: 100%; min-width: 0; }
-/* Охват закупки (Ф13): отмеченные проекты — ссылки рядом с пикером, в одной строке
-   поля (форма растёт ровно на одно поле). Моно, как всякий код; разделены отступом,
-   а не запятыми — сводка запятых уже стоит в самом поле. */
-.props dd a.scope-chip { font-family: var(--font-mono); font-size: 11px;
-  margin-left: 10px; white-space: nowrap; }
+/* Охват закупки (Ф13): отмеченные проекты — ссылки в строке своего поля. Шрифт и
+   кегль — как у всех значений шапки (правка Ивана 2026-07-29: моно 11px выбивалось из
+   ряда и не вставало на общую базовую линию). Ссылки разделены ЗАПЯТОЙ, и запятая —
+   не ссылка: так видно, что перечислено несколько проектов, а не один длинный. */
+.props dd .scope-links { margin-left: 10px; }
+.props dd a.scope-chip { white-space: nowrap; }
 
 /* legacy-заголовок (постепенно вытесняется .form-head) */
 h1.title { font-size: 16px; font-weight: 500; margin: 0 0 2px; color: var(--fg-bright); }
@@ -610,6 +611,20 @@ tr.row.ghost .glyph { opacity: 1; }
 /* Обёртка пикера: даёт меню точку отсчёта, поэтому он одинаково работает и в ячейке
    таблицы (призрачная строка), и в `dd` формы. */
 .picker { position: relative; display: inline-block; }
+/* Выпадающий список (`Dropdown`): то же поле и то же меню, что у пикера, но набирать
+   в нём нечего — поэтому единственное отличие знака — шеврон закрытого списка.
+   Он декоративен (клик ловит само поле), поэтому не перехватывает указатель; под
+   замком формы поле становится чистым текстом, и шеврону там делать нечего. */
+.dd { display: inline-flex; align-items: center; }
+.dd input { padding-right: 18px; cursor: pointer; caret-color: transparent; }
+/* Фильтр списка режима — тот же контрол, но своим кеглем и тоном (он служебный, а не
+   поле формы). Класс поля (`.lot-sel`) стоит в файле ниже `.list-proj`, поэтому тон
+   задаём с той же специфичностью, что и он. */
+.dd input.list-proj { font-size: 11px; color: var(--fg-dim); padding: 2px 18px 2px 6px; }
+.dd-chev { position: absolute; right: 4px; font-size: 13px; color: var(--fg-dim);
+  pointer-events: none; }
+.form-locked .dd-chev { display: none; }
+.form-locked .dd input { cursor: default; }
 .picker-empty { position: fixed; z-index: 20; white-space: nowrap;
   padding: 3px 12px; font-size: 12px; color: var(--fg-dim); background: var(--bg-widget);
   border: 1px solid var(--border-strong); border-radius: 4px; }

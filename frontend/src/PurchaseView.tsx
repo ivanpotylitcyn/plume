@@ -173,9 +173,13 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       fields={
         <OrderFields c={c} locked={locked} busy={busy} openProject={openProject}
           patch={b => run(api.updatePurchase(c.id, b))}>
-          <AnchorSelect label="Закупка" id={c.procurement_id} currentLabel={`#${c.procurement_id}`}
+          {/* Подпись якоря — КОД закупки, а не её id ([[code-identity-principle]]):
+              «#1» ничего не говорит, а в просмотре это единственное, что видно. */}
+          <AnchorSelect label="Закупка" id={c.procurement_id}
+            currentLabel={procs.find(p => p.id === c.procurement_id)?.code
+              || `Закупка #${c.procurement_id}`}
             options={procs.map(p => ({ id: p.id, label: p.code || `Закупка #${p.id}` }))}
-            locked={locked} busy={busy} mono
+            locked={locked} busy={busy}
             onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))} />
         </OrderFields>}
       tabs={tabs}

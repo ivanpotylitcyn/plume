@@ -11,6 +11,7 @@ import { api, type AvailableLot, type CounterpartyRow, type TransferForm,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { Dropdown } from './Dropdown'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LotGlyph, count, num, sumByUom } from './status'
@@ -166,15 +167,11 @@ function GhostRow({ transferId, lots, busy, run }: {
     <tr className="row ghost">
       <td className="gl" />
       <td className="c-key" colSpan={2}>
-        <select className="lot-sel" value={lotId} disabled={busy}
-          onChange={e => setLotId(e.target.value ? Number(e.target.value) : '')}>
-          <option value="">＋ партия…</option>
-          {lots.map(l => (
-            <option key={l.lot_id} value={l.lot_id}>
-              #{l.lot_id} {l.item_code}{l.lot_name ? ` (${l.lot_name})` : ''} · {num(l.live_qty)} {l.uom}
-            </option>
-          ))}
-        </select>
+        <Dropdown value={lotId} disabled={busy} placeholder="＋ партия…"
+          onPick={v => setLotId(Number(v))}
+          options={lots.map(l => ({ value: l.lot_id,
+            label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
+              + ` · ${num(l.live_qty)} ${l.uom}` }))} />
       </td>
       <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
         {picked?.item_description ?? ''}</td>

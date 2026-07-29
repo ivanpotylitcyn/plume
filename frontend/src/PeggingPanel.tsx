@@ -14,6 +14,7 @@
 // Наводка сузилась до охвата закупки — раньше сюда лезли проекты всей организации.
 // Пег кладётся в ЯВНО выбранный заказ (Р2): под проектом их может быть несколько.
 import { useEffect, useState } from 'react'
+import { Dropdown } from './Dropdown'
 import { api, type Pegging, type PeggingRow, type PeggingProject } from './api'
 import { Chevron, Glyph, StatusGlyph, num } from './status'
 
@@ -190,12 +191,11 @@ function ProjectRow({ bp, item_id, editable, busy, procurementId, run }: {
             {/* Куда лечь — раньше «сколько»: заказ рождается лениво (пустых призраков
                 не заводим), поэтому «＋ новый заказ» — выбор на будущий пег, а не
                 создание сейчас. */}
-            <select className="lot-sel peg-into" value={target}
-              disabled={busy} title="В какой заказ проекта класть привязку"
-              onChange={e => setInto(e.target.value === 'new' ? 'new' : Number(e.target.value))}>
-              {drafts.map(pu => <option key={pu.id} value={pu.id}>{pu.code}</option>)}
-              <option value="new">＋ новый заказ</option>
-            </select>
+            <Dropdown className="peg-into" value={target} disabled={busy}
+              title="В какой заказ проекта класть привязку"
+              options={[...drafts.map(pu => ({ value: pu.id, label: pu.code ?? `Заказ #${pu.id}` })),
+                { value: 'new', label: '＋ новый заказ' }]}
+              onPick={v => setInto(v === 'new' ? 'new' : Number(v))} />
             <input className="qty-in" value={qty} disabled={busy} placeholder="+кол-во"
               style={{ marginLeft: 6 }}
               onChange={e => setQty(e.target.value)}

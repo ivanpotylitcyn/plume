@@ -8,10 +8,10 @@
 // **текст везде**, буквально по §5: «закрыт → вся форма чистый текст без единого поля
 // ввода». Развилку решает ЭТОТ модуль, вьюхи о ней больше не знают.
 //
-// Второе, что здесь централизовано, — ШРИФТ значения. Он идёт от смысла поля (§3:
-// mono для кодов/номеров/дат/чисел, Inter для описаний), а НЕ от режима: иначе одно
-// и то же описание читалось бы в правке моноширинным, а в просмотре — литературным.
-// Класс садится на `dd`, оттуда CSS красит и текст, и контрол — оба одинаково.
+// Второе, что здесь централизовано, — ШРИФТ значения: он ОДИН на всю шапку (Inter,
+// решение Ивана 2026-07-29). Прежняя попытка вести шрифт «от смысла поля» (mono у
+// кодов и дат) дала в одной панели два шрифта вперемешку и сбивала чтение колонки
+// значений. Моно остаётся там, где оно про сканирование: титул, списки, мета.
 import type { ReactNode } from 'react'
 import { CommitInput } from './CommitInput'
 
@@ -26,7 +26,6 @@ export interface FieldProps {
   label: string
   locked: boolean           // замок формы закрыт → показываем текст
   view?: ReactNode          // значение в просмотре; пустое → прочерк
-  mono?: boolean            // значение — код/номер/дата/число (§3)
   wide?: boolean            // длинная ступень ширины (§13.3)
 }
 
@@ -36,13 +35,12 @@ function dash(view: ReactNode): ReactNode {
   return view === null || view === undefined || view === '' ? '—' : view
 }
 
-export function Field({ label, locked, view, mono, wide, children }:
+export function Field({ label, locked, view, wide, children }:
   FieldProps & { children?: ReactNode }) {
-  const cls = [wide ? 'wide' : '', mono ? 'mono' : ''].filter(Boolean).join(' ')
   return (
     <>
       <dt>{label}</dt>
-      <dd className={cls || undefined}>{locked ? dash(view) : children}</dd>
+      <dd className={wide ? 'wide' : undefined}>{locked ? dash(view) : children}</dd>
     </>
   )
 }

@@ -97,12 +97,12 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (скан УПД) — появится в табе «Файлы»', disabled: att.busy }]}
       fields={<>
-        <TextField label="Код" mono value={c.code ?? ''} locked={locked} busy={busy}
+        <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
           onCommit={v => run(api.updateReceipt(c.id, { code: v }))} />
         {/* Единственное длинное поле шапки (§13.3). */}
         <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
           onCommit={v => run(api.updateReceipt(c.id, { description: v }))} />
-        <TextField label="№ УПД" mono value={c.number} locked={locked} busy={busy}
+        <TextField label="№ УПД" value={c.number} locked={locked} busy={busy}
           onCommit={v => run(api.updateReceipt(c.id, { number: v }))}
           validate={v => v.trim().length > 0} />
         {/* Ф12e: поставщик обязателен к ФИКСАЦИИ, а не к рождению — значит его
@@ -117,7 +117,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
               .then(cp => { reloadSuppliers()
                 run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} />
         </Field>
-        <TextField label="Дата" mono type="date" value={c.date} locked={locked} busy={busy}
+        <TextField label="Дата" type="date" value={c.date} locked={locked} busy={busy}
           onCommit={v => run(api.updateReceipt(c.id, { date: v }))}
           validate={v => v.trim().length > 0} />
         <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
@@ -129,7 +129,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
             документа, а не список — в теле он висел отдельной строкой `.kit-actions`.
             Под замком поле = САМА ССЫЛКА на заказ (отдельная кнопка «открыть ›» не
             нужна: кликабельно то, что названо). */}
-        <Field label="Заказ" mono locked={locked}
+        <Field label="Заказ" locked={locked}
           view={c.purchase_id
             ? <a className="link" onClick={() => openPurchase(c.purchase_id!)}>{purchaseLabel}</a>
             : ''}>

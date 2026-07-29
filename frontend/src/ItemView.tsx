@@ -13,6 +13,7 @@ import { ItemPicker } from './Picker'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CommitInput } from './CommitInput'
 import { Field, TextField } from './FormField'
+import { Dropdown } from './Dropdown'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
@@ -251,31 +252,29 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
           disabled: att.busy },
       ]}
       fields={<>
-        <TextField label="Код" mono value={d.code} locked={metaLocked} busy={busy}
+        <TextField label="Код" value={d.code} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { code: v }))}
           validate={v => v.trim() !== ''} />
         {/* Единственное длинное поле шапки (§13.3) — описание бывает в строку и больше. */}
         <TextField label="Описание" wide value={d.description} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { description: v }))}
           validate={v => v.trim() !== ''} />
-        <Field label="Категория" locked={metaLocked} view={d.category?.description}>
-          <select className="lot-sel" value={d.category?.id ?? ''} disabled={busy}
-            onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
-            {/* Ф12e: изделие рождается по клику без категории. Пустой пункт —
-                честное «ещё не выбрана»; фиксация без категории не пройдёт. */}
-            {!d.category && <option value="">— не выбрана —</option>}
-            {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
-          </select>
+        <Field label="Категория" locked={metaLocked} view={d.category?.code}>
+          {/* Ф12e: изделие рождается по клику без категории — пустое поле честно
+              говорит «ещё не выбрана» (фиксация без неё не пройдёт). */}
+          <Dropdown options={categories.map(c => ({ value: c.id, label: c.code }))}
+            value={d.category?.id ?? ''} disabled={busy} placeholder="— не выбрана —"
+            onPick={v => run(api.updateItem(d.id, { category_id: Number(v) }))} />
         </Field>
         {/* Поля «Производимое» нет (снято 2026-07-26): `native` — не свойство на правку,
             а ОСЬ РЕЖИМА (Изделия / Компоненты). Заводится вместе с сущностью в том
             режиме, где нажали «＋ Новое», и дальше не переключается. */}
-        <TextField label="Температура" mono value={d.temperature} locked={metaLocked} busy={busy}
+        <TextField label="Температура" value={d.temperature} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
-        <TextField label="Единицы" mono value={d.uom} locked={metaLocked} busy={busy}
+        <TextField label="Единицы" value={d.uom} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
         {/* «Оценка» без «₽» в подписи: рубль приезжает со значением в просмотре. */}
-        <TextField label="Оценка" mono locked={locked} busy={busy}
+        <TextField label="Оценка" locked={locked} busy={busy}
           value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
           view={d.estimated_cost != null ? money(d.estimated_cost) : ''}
           onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}

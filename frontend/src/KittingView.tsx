@@ -12,6 +12,7 @@ import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
 import { AnchorSelect, OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
+import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Glyph, Segment, count, num } from './status'
 
@@ -83,11 +84,11 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
           patch={b => run(api.updateKitting(c.id, b))}>
           {/* Ширина поля — токеном темы, не пикселями в JSX (Ф12d: инлайн-стиль
               сильнее любого класса и выбивал поле из общей сетки шапки). */}
-          <TextField label="Образцов" mono value={String(c.qty)} locked={locked} busy={busy}
+          <TextField label="Образцов" value={String(c.qty)} locked={locked} busy={busy}
             onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
             validate={v => Number(v) > 0} />
           <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
-            options={items.map(i => ({ id: i.id, label: `${i.code} — ${i.description}` }))}
+            options={items.map(i => ({ id: i.id, label: i.code }))}
             locked={locked} busy={busy}
             onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
         </OrderFields>}
@@ -167,14 +168,10 @@ function GhostRow({ row, ghost, form, busy, run }: {
               <Segment status="on_order" value={ghost.on_order} />
               <Segment status="to_order" value={ghost.to_order} />
             </span>
-          : <select className="lot-sel" value={lotId}
-              onChange={e => setLotId(Number(e.target.value))} disabled={busy}>
-              {lots.map(l => (
-                <option key={l.lot_id} value={l.lot_id}>
-                  #{l.lot_id} · остаток {num(l.live_qty)}{l.lot_name ? ` · ${l.lot_name}` : ''}
-                </option>
-              ))}
-            </select>}
+          : <Dropdown value={lotId} disabled={busy} onPick={v => setLotId(Number(v))}
+              options={lots.map(l => ({ value: l.lot_id,
+                label: `#${l.lot_id} · остаток ${num(l.live_qty)}`
+                  + (l.lot_name ? ` · ${l.lot_name}` : '') }))} />}
       </td>
       <td className="num">
         {lots.length > 0 &&
