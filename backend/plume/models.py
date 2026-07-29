@@ -1,7 +1,10 @@
 """Модель данных plume (PLM).
 
-Строго соответствует технической ER-диаграмме в README.md (источник правды).
-Схема заморожена — при любом изменении сначала правится диаграмма.
+Строго соответствует технической ER-диаграмме в README.md (источник правды) — и по
+составу полей, и по их **порядку**: канон §13.4a UI_GUIDE («идентичность → замок →
+якори → внешние атрибуты → автор → специфика вида») задаёт порядок объявлений здесь,
+а формы наследуют его от модели. Правка схемы — обычная работа (CLAUDE.md, «Три
+опоры»): диаграммы правятся в том же изменении, что и код.
 
 Сквозные принципы, влияющие на код (см. README / docs/JOURNAL.md):
 - `Lot` — главная учётная единица; склад двигается только по `Lot`.
@@ -163,44 +166,49 @@ class StockDocument(models.Model):
         Kind.KITTING:     (),
     }
 
+    # Порядок объявлений — канон §13.4a: идентичность → замок → якори → внешние
+    # атрибуты → автор → специфика вида. Формы читают порядок отсюда (Ф17).
     kind = models.CharField('вид ордера', max_length=16, choices=Kind.choices,
                             blank=True, default='')
-    locked = models.BooleanField('зафиксирован', default=False)
-
-    # Ф2c — общие поля подняты с 6 детей в родителя (дедуп). Специфика (contractor/
-    # purchase/target_item/qty/reason) осталась на детях. `project` строкой ('Project'
-    # определён ниже), `user` — settings-строкой. `date` nullable (Kitting-черновик
-    # мог быть без даты; строгий per-kind NOT NULL — условная валидация, Ф2c #2).
-    # `number` blank (Kitting без номера) — его видимость по `kind` рулит форма/матрица.
-    # Реверс-аксессор — `documents`.
-    #
     # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description` у ВСЕХ
     # сущностей, включая документы. `code` («Нева ДЗЗ 1») — наш ярлык в списки; `number`
     # — внешний номер накладной (юридическое поле, заполняем по необходимости);
     # `description` — развёрнутое имя. `code` вводится человеком (авто-фолбэка нет) →
     # `null=True, unique=True`. Мёртвое `note` удалено везде (ни разу не пригодилось).
-    project = models.ForeignKey('Project', on_delete=models.PROTECT,
-                                related_name='documents', verbose_name='проект')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='documents', verbose_name='автор')
     code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
     description = models.CharField('описание', max_length=255, blank=True, default='')
-    date = models.DateField('дата', null=True, blank=True)
-    number = models.CharField('номер', max_length=64, blank=True, default='')
+    locked = models.BooleanField('зафиксирован', default=False)
 
-    # ------------------------------------------------------------------ #
-    #  Специфика видов (Ф14): шесть полей на семь видов, все nullable.
-    #  Применимость стережёт CHECK по `kind` (см. Meta.constraints), а
-    #  обязательность — ФИКСАЦИЯ, а не рождение: черновик имеет право быть
-    #  неполным (решение Ивана 2026-07-27, см. `REQUIRED_HEADER_BY_KIND`).
-    # ------------------------------------------------------------------ #
+    # --- якори: связи документа одним блоком сразу под идентичностью (§13.4a) --- #
+    # Ф2c — общие поля подняты с 6 детей в родителя (дедуп). `project` строкой
+    # ('Project' определён ниже), `user` — settings-строкой. Реверс-аксессор —
+    # `documents`.
+    #
+    # Специфика видов (Ф14): шесть полей на семь видов, все nullable. Применимость
+    # стережёт CHECK по `kind` (см. Meta.constraints), а обязательность — ФИКСАЦИЯ,
+    # а не рождение: черновик имеет право быть неполным (решение Ивана 2026-07-27,
+    # см. `REQUIRED_HEADER_BY_KIND`). Якори вида стоят здесь же, в блоке связей;
+    # атрибуты вида (`target_item`/`qty`/`reason`) — хвостом, как в форме.
+    project = models.ForeignKey('Project', on_delete=models.PROTECT,
+                                related_name='documents', verbose_name='проект')
+    # Поставка: заказ, который она закрывает.
+    purchase = models.ForeignKey('Purchase', on_delete=models.SET_NULL, null=True,
+                                 blank=True, related_name='receipts')
     # Поставка → поставщик, передача → заказчик. Направление задаёт `kind`.
     contractor = models.ForeignKey('Counterparty', on_delete=models.PROTECT,
                                    null=True, blank=True, related_name='documents',
                                    verbose_name='контрагент')
-    # Поставка: заказ, который она закрывает.
-    purchase = models.ForeignKey('Purchase', on_delete=models.SET_NULL, null=True,
-                                 blank=True, related_name='receipts')
+
+    # --- внешние атрибуты (юридическая обвязка) → автор --- #
+    # `number` blank (Kitting без номера) — его видимость по `kind` рулит форма/матрица.
+    # `date` nullable (Kitting-черновик мог быть без даты; строгий per-kind NOT NULL —
+    # условная валидация, Ф2c #2).
+    number = models.CharField('номер', max_length=64, blank=True, default='')
+    date = models.DateField('дата', null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name='documents', verbose_name='автор')
+
+    # --- атрибуты вида (хвостом) --- #
     # Комплектация: прибор-цель и сколько образцов собираем.
     target_item = models.ForeignKey('Item', on_delete=models.PROTECT, null=True,
                                     blank=True, related_name='kittings',
@@ -317,8 +325,13 @@ class Item(models.Model):
     2026-07-25) брали, чтобы не столкнуться с Django FK-PK аксессором `item_id`
     в рукописном JSON-API (JOURNAL 2026-07-12); `code` этой коллизии не создаёт."""
 
+    # Порядок объявлений — канон §13.4a (Ф17): идентичность → оси/замок → якорь →
+    # внешние атрибуты. Синхронно с блоком `ITEM` технической диаграммы README.
     code = models.CharField('код', max_length=128, unique=True)
     description = models.CharField('описание', max_length=255)
+    native = models.BooleanField('производимое', default=False)
+    locked = models.BooleanField('зафиксировано', default=False)
+    synced = models.BooleanField('из библиотеки', default=False)
     # Волна 19, Ф12e: категория nullable — но обязательность не исчезла, а
     # переехала с РОЖДЕНИЯ на ФИКСАЦИЮ (тот же приём, что у `contractor`/
     # `target_item` в Ф14). Фолбэк «первая запись справочника» отвергнут: это не
@@ -330,9 +343,6 @@ class Item(models.Model):
     temperature = models.CharField('температурный диапазон', max_length=64,
                                    blank=True, default='')
     estimated_cost = money(verbose_name='оценочная стоимость', null=True, blank=True)
-    native = models.BooleanField('производимое', default=False)
-    synced = models.BooleanField('из библиотеки', default=False)
-    locked = models.BooleanField('зафиксировано', default=False)
 
     class Meta:
         verbose_name = 'изделие'
@@ -499,25 +509,18 @@ class Procurement(models.Model):
     """Закупка — планирование (что и сколько решили купить; один поток общения с
     контрагентом). Ведётся под **охват проектов** (`projects`), а не «без проекта»."""
 
-    # Замок — общая ось `locked` (волна 19: Ф1 свела enum к draft/posted, Ф1c сделала
-    # его bool): тот же замок, что у ордеров и изделия. Отмена = удаление (Р1).
-    # Подпись («Зафиксирована») — забота представления, живёт во фронте.
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
-                             related_name='procurements', verbose_name='автор')
+    # Порядок объявлений — канон §13.4a (Ф17): идентичность → замок → якори (охват,
+    # контрагент) → внешние атрибуты → автор. Синхронно с блоком `PROCUREMENT` в README.
+    #
     # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`
     # (`code` = «Нева ДЗЗ 1» в списки; вводится человеком → `null=True, unique=True`).
     # Мёртвое `note` удалено.
     code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
     description = models.CharField('описание', max_length=255, blank=True, default='')
+    # Замок — общая ось `locked` (волна 19: Ф1 свела enum к draft/posted, Ф1c сделала
+    # его bool): тот же замок, что у ордеров и изделия. Отмена = удаление (Р1).
+    # Подпись («Зафиксирована») — забота представления, живёт во фронте.
     locked = models.BooleanField('зафиксирована', default=False)
-    # Контрагент-поставщик (волна 19, Ф4, Р3): закупка = «один поток общения» с
-    # поставщиком; отсюда берётся сторона при «Заказ → УПД» (Ф6) и шапка xlsx-бланка
-    # (Ф4b). `SET_NULL` (не `PROTECT`, как у `Receipt.contractor`) осознанно: закупка —
-    # план/черновик, удаление контрагента её не должно ронять — поле просто опустеет.
-    contractor = models.ForeignKey(Counterparty, on_delete=models.SET_NULL, null=True,
-                                   blank=True, related_name='procurements',
-                                   verbose_name='контрагент')
-    date = models.DateField('дата (начало переговоров)', null=True, blank=True)
     # Волна 19, Ф13: **охват** — набор проектов, под которые закупка ведётся.
     # Раньше охват выражался через *отсутствие* проекта («командная высота») — тот
     # самый «общее через NULL», который склад изжил внутренними проектами. Теперь он
@@ -527,6 +530,21 @@ class Procurement(models.Model):
     # Пусто = пусто (решение 2026-07-29): ноль проектов → ноль наводки, а не «все».
     projects = models.ManyToManyField(Project, blank=True, related_name='procurements',
                                       verbose_name='охват (проекты)')
+    # Контрагент-поставщик закупки (волна 19, Ф4) — **намерение плана**: у кого мы
+    # собираемся это купить. Ф17 отменила развилку Р3: источником поставщика для
+    # «Заказ → УПД» он больше НЕ является (там читается `Purchase.contractor`).
+    # Наследование — копией при рождении: нарезая план в заказ, движок копирует это
+    # значение в `Purchase.contractor`, дальше поля живут независимо (одна закупка
+    # законно уходит нескольким поставщикам). Здесь он может быть NULL: при подсчёте
+    # компонентов до контрагента ещё не дошли. `SET_NULL` (не `PROTECT`, как у заказа
+    # и поставки) осознанно: закупка — план/черновик, удаление контрагента её не
+    # должно ронять — поле просто опустеет.
+    contractor = models.ForeignKey(Counterparty, on_delete=models.SET_NULL, null=True,
+                                   blank=True, related_name='procurements',
+                                   verbose_name='контрагент')
+    date = models.DateField('дата (начало переговоров)', null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name='procurements', verbose_name='автор')
 
     class Meta:
         verbose_name = 'закупка (план)'
@@ -551,27 +569,60 @@ class ProcurementLine(models.Model):
 
 
 class Purchase(models.Model):
-    """Заказ — проектное исполнение (документальное обязательство)."""
+    """Заказ — проектное исполнение (документальное обязательство).
 
+    **Заказ = У КОГО купить** (волна 19, Ф17): средний уровень закупочного контура
+    между планом («ЧТО купить», `Procurement`) и приёмкой («КТО привёз», `Receipt`).
+    Контрагент есть у всех трёх уровней, каждый свой; ссылка наверх опциональна на
+    каждом. До Ф17 контрагента у заказа не было, и «Заказ → УПД» читал его сквозь
+    цепочку `purchase.procurement.contractor` (развилка Р3, **отменена**) — заказ,
+    оформленный без закупки, своего поставщика физически не знал. Заодно снят платёж
+    за отсутствующий nullable: `procurement` был NOT NULL, поэтому одиночный заказ
+    тихо рождал закупку-пустышку (`_solo_procurement`), а список закупок прятал их
+    эвристикой (`_plan_procurements`) — обе конструкции удалены.
+    """
+
+    # Порядок объявлений — канон §13.4a (Ф17): идентичность → замок → якори →
+    # внешние атрибуты → автор. Синхронно с блоком `PURCHASE` в README.
+    # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`.
+    code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
+    description = models.CharField('описание', max_length=255, blank=True, default='')
     # Замок — общая ось `locked` (волна 19: Ф1 + Ф1c). Мёртвые `partial`/`received`
     # убраны: «получено» — величина ВЫЧИСЛЯЕМАЯ из приходов (`_line_received`), а не
     # замок. Две оси не путать: замок (`locked`) и покрытие (▲/●/✓).
     # У заказа замок проявляется СИЛЬНО: зафиксированный заказ считается в «заказано».
-    procurement = models.ForeignKey(Procurement, on_delete=models.PROTECT,
-                                    related_name='purchases')
+    locked = models.BooleanField('зафиксирован', default=False)
+    # Проект — верхний якорь всего закупочного контура (как у ордера): заказ проектный
+    # по определению, поле NOT NULL.
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
-                                related_name='purchases')
+                                related_name='purchases', verbose_name='проект')
+    # Ф17: закупка-план **опциональна** — заказ бывает и без плана (мелкая покупка,
+    # срочный доп). `PROTECT` остаётся: план с живыми заказами не удаляется молча.
+    procurement = models.ForeignKey(Procurement, on_delete=models.PROTECT, null=True,
+                                    blank=True, related_name='purchases',
+                                    verbose_name='закупка-план')
+    # Ф17: контрагент заказа — у кого купили. `PROTECT` (обязательство, как у поставки).
+    # Обязателен к ФИКСАЦИИ, а не к рождению (канон Ф12e/Ф14): нарезанному пеггингом
+    # заказу копировать нечего, если у плана контрагента ещё нет. Держат CHECK
+    # `purchase_locked_has_contractor` + прикладной гейт в `engine.lock_purchase`.
+    contractor = models.ForeignKey(Counterparty, on_delete=models.PROTECT, null=True,
+                                   blank=True, related_name='purchases',
+                                   verbose_name='контрагент')
+    date = models.DateField('дата (оформление)', null=True, blank=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name='purchases', verbose_name='автор')
-    # Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`.
-    code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
-    description = models.CharField('описание', max_length=255, blank=True, default='')
-    locked = models.BooleanField('зафиксирован', default=False)
-    date = models.DateField('дата (оформление)', null=True, blank=True)
 
     class Meta:
         verbose_name = 'заказ'
         verbose_name_plural = 'заказы'
+        constraints = [
+            # Ф17: зафиксированного заказа без контрагента не существует — черновик
+            # имеет право быть неполным. Тот же приём, что у `Item.category` (Ф12e)
+            # и специфики ордера (Ф14).
+            models.CheckConstraint(
+                condition=Q(locked=False) | Q(contractor__isnull=False),
+                name='purchase_locked_has_contractor'),
+        ]
 
     def __str__(self):
         return f'Заказ #{self.pk} ({self.project.code})' + (' 🔒' if self.locked else '')
@@ -720,10 +771,12 @@ class Lot(models.Model):
     # строгий машинный (MPN с datasheet / децимальный номер; для станка
     # автомонтажа). PN живёт на `Lot`, а не на `Item`: упаковка/исполнение
     # варьируются от поставки; `Item.code` — абстрактный артикул.
-    lot_name = models.CharField('название партии', max_length=255,
-                                blank=True, default='')
+    # Порядок — от диаграммы (§13.4a): машинный PN, затем человеческое имя. Так же
+    # идут колонки в строках формы поставки.
     part_number = models.CharField('part number', max_length=128,
                                    blank=True, default='')
+    lot_name = models.CharField('название партии', max_length=255,
+                                blank=True, default='')
 
     class Meta:
         verbose_name = 'партия'

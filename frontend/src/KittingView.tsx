@@ -82,15 +82,22 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
         <OrderFields c={c} locked={locked} busy={busy}
           openProject={openProject}
           patch={b => run(api.updateKitting(c.id, b))}>
-          {/* Ширина поля — токеном темы, не пикселями в JSX (Ф12d: инлайн-стиль
+          {/* Атрибуты вида — хвостом, в порядке модели (§13.4a): `target_item`, затем
+              `qty`. Ширина поля — токеном темы, не пикселями в JSX (Ф12d: инлайн-стиль
               сильнее любого класса и выбивал поле из общей сетки шапки). */}
-          <TextField label="Образцов" value={String(c.qty)} locked={locked} busy={busy}
-            onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
-            validate={v => Number(v) > 0} />
+          {/* Под замком поле = САМА ССЫЛКА на прибор-цель (§8: кликабельно то, что
+              названо) — как якори «Проект» здесь же, «Заказ» поставки и «Закупка»
+              заказа. Последний якорь формы, который ею не был. */}
           <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
             options={items.map(i => ({ id: i.id, label: i.code }))}
             locked={locked} busy={busy}
+            view={c.target_id
+              ? <a className="link" onClick={() => openItem(c.target_id!)}>{c.target_code}</a>
+              : ''}
             onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
+          <TextField label="Образцов" value={String(c.qty)} locked={locked} busy={busy}
+            onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
+            validate={v => Number(v) > 0} />
         </OrderFields>}
       tabs={tabs}
     />

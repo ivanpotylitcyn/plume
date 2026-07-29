@@ -91,17 +91,19 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
       fields={
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ накладной"
           openProject={openProject}
-          patch={b => run(api.updateTransfer(c.id, b))}>
-          <Field label="Заказчик" locked={locked} view={c.contractor_name}>
-            <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
-              disabled={busy} placeholder="— не указан —"
-              onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
-              onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))}
-              onCreate={name => api.createCounterparty({ description: name, role: 'customer' })
-                .then(cp => { api.counterparties('customer').then(setCustomers)
-                  run(api.updateTransfer(c.id, { contractor_id: cp.id })) })} />
-          </Field>
-        </OrderFields>}
+          patch={b => run(api.updateTransfer(c.id, b))}
+          // Ф17: «Заказчик» — это `contractor`, то есть ЯКОРЬ, а не атрибут вида:
+          // его место сразу за Проектом, до номера накладной (§13.4a).
+          anchors={
+            <Field label="Заказчик" locked={locked} view={c.contractor_name}>
+              <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
+                disabled={busy} placeholder="— не указан —"
+                onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
+                onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))}
+                onCreate={name => api.createCounterparty({ description: name, role: 'customer' })
+                  .then(cp => { api.counterparties('customer').then(setCustomers)
+                    run(api.updateTransfer(c.id, { contractor_id: cp.id })) })} />
+            </Field>} />}
       tabs={tabs}
     />
   )

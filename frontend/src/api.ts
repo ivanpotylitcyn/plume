@@ -183,6 +183,7 @@ export interface ReceiptForm extends Authored {
   id: number; number: string; date: string
   code: string | null; description: string
   contractor_id: number | null; contractor_name: string
+  contractor_mismatch: boolean   // Ф17: «кто привёз» ≠ «у кого купили» (флаг от движка)
   project_id: number; project_code: string; project_name: string
   purchase_id: number | null
   locked: boolean; total_cost: number; lots: ReceiptLot[]
@@ -210,7 +211,10 @@ export interface PurchaseReceiptRow {
 }
 export interface PurchaseForm extends Authored {
   id: number; locked: boolean; project_id: number; project_code: string
-  project_name: string; procurement_id: number
+  // Ф17: закупка-план опциональна; контрагент — своё поле заказа («у кого купили»).
+  project_name: string; procurement_id: number | null
+  contractor_id: number | null; contractor_name: string
+  contractor_mismatch: boolean   // расхождение с контрагентом закупки — знак, не гейт
   code: string | null; description: string; date: string | null
   editable: boolean; worst_status: Status
   total_ordered: number; total_received: number
@@ -633,7 +637,7 @@ export const api = {
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseForm>(`/api/purchases/${id}/`),
   updatePurchase: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number
-      project_id: number; procurement_id: number }>) =>
+      project_id: number; procurement_id: number | null; contractor_id: number | null }>) =>
     send<PurchaseForm>('PATCH', `/api/purchases/${id}/`, b),
   deletePurchase: (id: number) => send<void>('DELETE', `/api/purchases/${id}/`),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>

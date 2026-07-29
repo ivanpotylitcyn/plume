@@ -162,18 +162,10 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
           onCommit={v => run(api.updateProcurement(c.id, { code: v }))} />
         <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
           onCommit={v => run(api.updateProcurement(c.id, { description: v }))} />
-        <TextField label="Дата" type="date" value={c.date ?? ''} locked={locked}
-          busy={busy} onCommit={v => run(api.updateProcurement(c.id, { date: v }))} />
-        <Field label="Контрагент" locked={locked} view={c.contractor_name}>
-          <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
-            disabled={busy} placeholder="— не указан —"
-            onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
-            onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))}
-            onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
-              .then(cp => { api.counterparties('supplier').then(setSuppliers)
-                run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
-        </Field>
-        {/* Охват (Ф13): отмеченные проекты — ссылки рядом с пикером; в просмотре
+        {/* Порядок — канон §13.4a (Ф17): идентичность → якори (охват, контрагент) →
+            внешние атрибуты → автор. Верхний якорь закупки — ОХВАТ: место, которое у
+            заказа и поставки занимает `project`.
+            Охват (Ф13): отмеченные проекты — ссылки рядом с пикером; в просмотре
             остаются одни ссылки, поле ввода исчезает вместе с остальными (§5). */}
         <Field label="Проекты" wide locked={locked}
           view={c.projects.length ? scopeLinks : ''}>
@@ -183,6 +175,20 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
               пикера нет, и тот же отступ выбивал значение из общей левой кромки. */}
           <span className="scope-links">{scopeLinks}</span>
         </Field>
+        {/* Контрагент закупки — НАМЕРЕНИЕ плана («у кого собираемся купить»). Ф17:
+            источником поставщика для «Заказ → УПД» он больше не является — заказ несёт
+            своего, унаследованного отсюда копией при нарезке. */}
+        <Field label="Контрагент" locked={locked} view={c.contractor_name}>
+          <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+            disabled={busy} placeholder="— не указан —"
+            onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
+            onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))}
+            onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+              .then(cp => { api.counterparties('supplier').then(setSuppliers)
+                run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
+        </Field>
+        <TextField label="Дата" type="date" value={c.date ?? ''} locked={locked}
+          busy={busy} onCommit={v => run(api.updateProcurement(c.id, { date: v }))} />
         <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
       </>}

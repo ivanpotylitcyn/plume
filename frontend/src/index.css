@@ -121,6 +121,7 @@ body { overflow: hidden; }
 .ci-lock::before         { content: '\ea75'; }  /* контрол шапки: зафиксировать */
 .ci-unlock::before       { content: '\eb74'; }  /* контрол шапки: расфиксировать */
 .ci-file::before         { content: '\ea7b'; }  /* контрол шапки: скачать xlsx */
+.ci-warning::before      { content: '\ea6c'; }  /* Ф17: расхождение контрагентов (не гейт) */
 .ci-arrow-swap::before   { content: '\ebcb'; }
 .ci-table::before        { content: '\ebb7'; }
 .ci-search::before       { content: '\ea6d'; }
@@ -517,6 +518,8 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .ci.sg-wip   { color: var(--st-wip); }
 .ci.sg-order { color: var(--st-order); }
 .ci.sg-none  { color: var(--fg-dim); }
+/* Ф17: глиф расхождения контрагентов стоит ПОСЛЕ значения поля — отбиваем от кода. */
+.ci.sg.mism { margin-left: 6px; }
 .seg { font-variant-numeric: tabular-nums; }
 .seg .glyph { margin-right: 2px; }
 .seg .ci.sg { margin-right: 3px; }   /* ось разбора на codicon layers (Ф1b) */

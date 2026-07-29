@@ -269,10 +269,11 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         {/* Поля «Производимое» нет (снято 2026-07-26): `native` — не свойство на правку,
             а ОСЬ РЕЖИМА (Изделия / Компоненты). Заводится вместе с сущностью в том
             режиме, где нажали «＋ Новое», и дальше не переключается. */}
-        <TextField label="Температура" value={d.temperature} locked={metaLocked} busy={busy}
-          onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
+        {/* Порядок — от модели (§13.4a, Ф17): `uom`, затем `temperature`. */}
         <TextField label="Единицы" value={d.uom} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { uom: v }))} />
+        <TextField label="Температура" value={d.temperature} locked={metaLocked} busy={busy}
+          onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
         {/* «Оценка» без «₽» в подписи: рубль приезжает со значением в просмотре. */}
         <TextField label="Оценка" locked={locked} busy={busy}
           value={d.estimated_cost != null ? String(d.estimated_cost) : ''}

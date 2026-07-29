@@ -423,7 +423,9 @@ export default function App() {
         {sel?.kind === 'purchase' &&
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
             isNew={isFresh('purchase', sel.id)}
-            openReceipt={openReceipt} openProject={openProject} onChanged={reloadPurchases}
+            openReceipt={openReceipt} openProject={openProject}
+            openProcurement={id => { reloadProcurements(); openProcurement(id) }}
+            onChanged={reloadPurchases}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'procurement' &&
           <ProcurementView procurementId={sel.id} items={items} projects={projects}

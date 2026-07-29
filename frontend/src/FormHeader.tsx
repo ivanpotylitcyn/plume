@@ -106,20 +106,28 @@ export function AuthorField({ userId, userName, locked, busy, onChange }: {
 // ловит отказ строкой ошибки (как у автора).
 // Ф12e: `id` может быть пустым — якорь (прибор-цель комплектации) выбирают в форме,
 // он обязателен к фиксации, а не к рождению.
+// Ф17: `onClear` — якорь можно СНЯТЬ (закупка-план у заказа стала опциональной).
+// Пустой выбор живёт первой строкой меню и подписан `placeholder` («— не выбрана —»),
+// как в пикере: очистка — такой же выбор, а не отдельная кнопка сбоку.
 export function AnchorSelect({ label, id, currentLabel, options, locked, busy, view,
-  onChange }: {
+  placeholder, onChange, onClear }: {
   label: string; id: number | null; currentLabel: string
   options: { id: number; label: string }[]
   locked: boolean; busy?: boolean
   view?: ReactNode              // просмотр иначе, чем текстом (ссылка на проект)
+  placeholder?: string          // подпись пустого значения (и пустого поля)
   onChange: (id: number) => void
+  onClear?: () => void          // задан → якорь снимается пустым пунктом меню
 }) {
   const known = options.some(o => o.id === id)
+  const empty = onClear ? [{ value: '' as const, label: placeholder ?? '—' }] : []
   return (
     <Field label={label} locked={locked} view={view ?? (id ? currentLabel : '')}>
-      <Dropdown options={[...(!known && id ? [{ value: id, label: currentLabel }] : []),
+      <Dropdown options={[...empty,
+        ...(!known && id ? [{ value: id, label: currentLabel }] : []),
         ...options.map(o => ({ value: o.id, label: o.label }))]}
-        value={id || ''} disabled={busy} onPick={v => onChange(Number(v))} />
+        value={id || ''} disabled={busy} placeholder={placeholder}
+        onPick={v => (v === '' ? onClear?.() : onChange(Number(v)))} />
     </Field>
   )
 }
@@ -151,10 +159,17 @@ export function ProjectField({ projectId, projectLabel, locked, busy, onChange, 
 }
 
 // Общие поля шапки ордера (волна 19, Ф12c). Все семь видов держат одну и ту же
-// пятёрку — `code` + `description` (§13.4), номер, дата, автор, проект-якорь — и
+// пятёрку — `code` + `description` (§13.4), проект-якорь, номер, дата, автор — и
 // раньше каждая вьюха выписывала её руками (пять копий, разъезжавшихся по ширинам и
-// подписям). Специфика вида приходит через `children` (Причина списания, Заказ
-// поставки, Прибор комплектации) и встаёт ПОСЛЕ общих полей.
+// подписям).
+//
+// **Два слота, не один** (волна 19, Ф17; канон §13.4a). Порядок полей формы = порядок
+// полей модели: идентичность → замок → якори → внешние атрибуты → автор → специфика
+// вида. Специфика расщепляется надвое ровно так, как расщеплена в модели: якори вида
+// (`purchase`+`contractor` поставки, `contractor` передачи) идут в слот `anchors`
+// СРАЗУ ЗА проектом, а атрибуты вида (`target_item`/`qty` комплектации, `reason`
+// списания) остаются хвостовым `children` после автора. Один слот «всё после общих
+// полей» этот порядок выразить не мог.
 export interface OrderHead extends Authored {
   id: number; code: string | null; description: string
   number?: string; date: string | null
@@ -167,14 +182,16 @@ export type OrderHeadPatch = Partial<{
   code: string | null; description: string
 }>
 
-export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, children }: {
+export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, anchors,
+  children }: {
   c: OrderHead
   locked: boolean
   busy: boolean
   patch: (b: OrderHeadPatch) => void
-  numberLabel?: string          // «№ УПД» / «№ акта» / «№» — у комплектации номера нет
+  numberLabel?: string          // «№ поставки» / «№ акта» / «№» — у комплектации номера нет
   openProject?: (id: number) => void
-  children?: ReactNode          // поля вида — после общих
+  anchors?: ReactNode           // якори вида — сразу за проектом (§13.4a)
+  children?: ReactNode          // атрибуты вида — хвостом, после автора
 }) {
   return (
     <>
@@ -183,6 +200,12 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
       {/* Единственное длинное поле шапки (§13.3). */}
       <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
         onCommit={v => patch({ description: v })} />
+      {/* Проект — ВЕРХНИЙ якорь всего закупочного контура (§13.4a): связи сущности
+          важнее её атрибутов, и порядок один на все три уровня. */}
+      <ProjectField projectId={c.project_id} projectLabel={c.project_code}
+        locked={locked} busy={busy} onOpen={openProject}
+        onChange={id => patch({ project_id: id })} />
+      {anchors}
       {numberLabel &&
         <TextField label={numberLabel} value={c.number ?? ''} locked={locked} busy={busy}
           onCommit={v => patch({ number: v })} validate={v => v.trim().length > 0} />}
@@ -190,9 +213,6 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
         onCommit={v => patch({ date: v })} />
       <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
         onChange={id => patch({ user_id: id })} />
-      <ProjectField projectId={c.project_id} projectLabel={c.project_code}
-        locked={locked} busy={busy} onOpen={openProject}
-        onChange={id => patch({ project_id: id })} />
       {children}
     </>
   )

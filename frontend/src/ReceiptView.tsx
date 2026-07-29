@@ -6,11 +6,11 @@ import { useEffect, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
-import { num, money, count, sumByUom, LotGlyph } from './status'
+import { num, money, count, sumByUom, LotGlyph, MismatchGlyph } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { AuthorField, ProjectField, useOrderForm } from './FormHeader'
+import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
-import { Field, TextField } from './FormField'
+import { Field } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
@@ -44,6 +44,10 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   // берём из списка заказов проекта (он же кормит пикер).
   const purchaseLabel = purchases.find(p => p.id === c.purchase_id)?.code
     ?? `Заказ #${c.purchase_id}`
+  // Ф17: расхождение с контрагентом заказа — предупреждение, не гейт (флаг от движка).
+  const mismatch = c.contractor_mismatch
+    ? <MismatchGlyph title="Не совпадает с контрагентом указанного заказа" />
+    : null
 
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
@@ -96,49 +100,43 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (скан УПД) — появится в табе «Файлы»', disabled: att.busy }]}
-      fields={<>
-        <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
-          onCommit={v => run(api.updateReceipt(c.id, { code: v }))} />
-        {/* Единственное длинное поле шапки (§13.3). */}
-        <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
-          onCommit={v => run(api.updateReceipt(c.id, { description: v }))} />
-        <TextField label="№ УПД" value={c.number} locked={locked} busy={busy}
-          onCommit={v => run(api.updateReceipt(c.id, { number: v }))}
-          validate={v => v.trim().length > 0} />
-        {/* Ф12e: поставщик обязателен к ФИКСАЦИИ, а не к рождению — значит его
-            место в шапке. «Завести» прямо из пикера: отдельной формы контрагента
-            в продукте нет (заведётся режимом «Контрагенты», волна 20). */}
-        <Field label="Поставщик" locked={locked} view={c.contractor_name}>
-          <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
-            disabled={busy} placeholder="— не указан —"
-            onPick={id => run(api.updateReceipt(c.id, { contractor_id: id }))}
-            onClear={() => run(api.updateReceipt(c.id, { contractor_id: null }))}
-            onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
-              .then(cp => { reloadSuppliers()
-                run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} />
-        </Field>
-        <TextField label="Дата" type="date" value={c.date} locked={locked} busy={busy}
-          onCommit={v => run(api.updateReceipt(c.id, { date: v }))}
-          validate={v => v.trim().length > 0} />
-        <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
-          onChange={id => run(api.updateReceipt(c.id, { user_id: id }))} />
-        <ProjectField projectId={c.project_id} projectLabel={c.project_code}
-          locked={locked} busy={busy} onOpen={openProject}
-          onChange={id => run(api.updateReceipt(c.id, { project_id: id }))} />
-        {/* Якорь-заказ переехал из тела формы в поля шапки (§13.3): это ссылка
-            документа, а не список — в теле он висел отдельной строкой `.kit-actions`.
-            Под замком поле = САМА ССЫЛКА на заказ (отдельная кнопка «открыть ›» не
-            нужна: кликабельно то, что названо). */}
-        <Field label="Заказ" locked={locked}
-          view={c.purchase_id
-            ? <a className="link" onClick={() => openPurchase(c.purchase_id!)}>{purchaseLabel}</a>
-            : ''}>
-          <PurchasePicker purchases={purchases} value={c.purchase_id ?? ''}
-            disabled={busy}
-            onPick={id => run(api.linkReceiptPurchase(c.id, id))}
-            onClear={() => run(api.linkReceiptPurchase(c.id, null))} />
-        </Field>
-      </>}
+      // Ф17: последняя рукописная шапка в проекте переехала на общий `OrderFields`
+      // (кастомных шапок не осталось). Якори вида — в слот `anchors` сразу за Проектом:
+      // Проект → Заказ → Поставщик, затем № поставки, Дата, Автор (§13.4a).
+      fields={
+        <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ поставки"
+          openProject={openProject}
+          patch={b => run(api.updateReceipt(c.id, b))}
+          anchors={<>
+            {/* Якорь-заказ переехал из тела формы в поля шапки (§13.3): это ссылка
+                документа, а не список — в теле он висел отдельной строкой `.kit-actions`.
+                Под замком поле = САМА ССЫЛКА на заказ (отдельная кнопка «открыть ›» не
+                нужна: кликабельно то, что названо). */}
+            <Field label="Заказ" locked={locked}
+              view={c.purchase_id
+                ? <a className="link" onClick={() => openPurchase(c.purchase_id!)}>{purchaseLabel}</a>
+                : ''}>
+              <PurchasePicker purchases={purchases} value={c.purchase_id ?? ''}
+                disabled={busy}
+                onPick={id => run(api.linkReceiptPurchase(c.id, id))}
+                onClear={() => run(api.linkReceiptPurchase(c.id, null))} />
+            </Field>
+            {/* Ф12e: поставщик обязателен к ФИКСАЦИИ, а не к рождению — значит его
+                место в шапке. «Завести» прямо из пикера: отдельной формы контрагента
+                в продукте нет (заведётся режимом «Контрагенты», волна 20).
+                Ф17: глиф расхождения — «кто привёз» ≠ «у кого купили». */}
+            <Field label="Поставщик" locked={locked}
+              view={c.contractor_id ? <>{c.contractor_name}{mismatch}</> : ''}>
+              <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+                disabled={busy} placeholder="— не указан —"
+                onPick={id => run(api.updateReceipt(c.id, { contractor_id: id }))}
+                onClear={() => run(api.updateReceipt(c.id, { contractor_id: null }))}
+                onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+                  .then(cp => { reloadSuppliers()
+                    run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} />
+              {mismatch}
+            </Field>
+          </>} />}
       tabs={tabs}
     />
   )

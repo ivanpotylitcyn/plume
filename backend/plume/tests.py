@@ -55,6 +55,16 @@ class EngineTestBase(TestCase):
             code=code, description=code, category=_cat(),
             native=manufactured)
 
+    def make_purchase(self, project=None, contractor=None, **kw):
+        """Заказ-черновик, готовый к фиксации: **с контрагентом**.
+
+        Ф17: контрагент обязателен к фиксации заказа («у кого купили»), поэтому фикстура
+        «настоящий заказ» его несёт. Тесты самого гейта заводят заказ голым
+        `engine.create_purchase` и контрагента не ставят.
+        """
+        p = engine.create_purchase(project or self.prj, self.user, **kw)
+        return engine.update_purchase(p, contractor=contractor or self.supplier)
+
     def receipt_lot(self, item, project, qty, purchase=None, locked=True):
         """Партия, приехавшая по УПД. Волна 19, Ф15: поставка **зафиксирована** —
         иначе её партия на складе не лежит (замок гейтит склад), а фикстура значит
@@ -193,10 +203,10 @@ class CoverageTests(EngineTestBase):
 class OnOrderTests(EngineTestBase):
     def test_purchased_open_order_minus_received(self):
         item = self.make_item('SCR', kind='material')
-        proc = models.Procurement.objects.create(user=self.user,
-                                                 locked=True)
+        # Ф17: заказ самодостаточен (закупка-план опциональна), контрагент обязателен
+        # к фиксации — CHECK `purchase_locked_has_contractor`.
         purchase = models.Purchase.objects.create(
-            procurement=proc, project=self.prj, user=self.user,
+            project=self.prj, user=self.user, contractor=self.supplier,
             locked=True)
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         # поступило 15 по этому заказу
@@ -205,10 +215,8 @@ class OnOrderTests(EngineTestBase):
 
     def test_draft_purchase_not_counted(self):
         item = self.make_item('SCR', kind='material')
-        proc = models.Procurement.objects.create(user=self.user)
         purchase = models.Purchase.objects.create(
-            procurement=proc, project=self.prj, user=self.user,
-            locked=False)
+            project=self.prj, user=self.user, locked=False)   # черновик — без контрагента
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))
 
@@ -231,11 +239,9 @@ class DeficitTests(EngineTestBase):
 
         # CASE: на складе 12 → ✓
         self.receipt_lot(case, self.prj, 12)
-        # SCR: заказано 25 (sent), склада нет → ●25 ▲15
-        proc = models.Procurement.objects.create(user=self.user,
-                                                 locked=True)
+        # SCR: заказано 25 (зафиксировано), склада нет → ●25 ▲15
         purchase = models.Purchase.objects.create(
-            procurement=proc, project=self.prj, user=self.user,
+            project=self.prj, user=self.user, contractor=self.supplier,
             locked=True)
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=D(25))
 
@@ -617,11 +623,18 @@ class PurchaseFormTests(EngineTestBase):
     """Волна 4: форма заказа — строки-обязательства, замок отправки, гашение
     приходом, мост «дефицит → заказ»."""
 
-    def test_create_purchase_autocreates_procurement(self):
+    def test_create_purchase_leaves_plan_and_contractor_empty(self):
+        """Ф17: заказ рождается БЕЗ закупки-плана (и без контрагента).
+
+        До Ф17 `procurement` был NOT NULL, и рождение тихо плодило закупку-пустышку;
+        теперь заказ — самостоятельная сущность, план и контрагент выбирают в форме.
+        """
         p = engine.create_purchase(self.prj, self.user)
         self.assertFalse(p.locked)
-        self.assertIsNotNone(p.procurement_id)          # авто-родитель
+        self.assertIsNone(p.procurement_id)
+        self.assertIsNone(p.contractor_id)
         self.assertEqual(p.project_id, self.prj.id)
+        self.assertFalse(models.Procurement.objects.exists())   # пустышек не бывает
 
     def test_add_line_and_form_totals(self):
         p = engine.create_purchase(self.prj, self.user)
@@ -657,19 +670,19 @@ class PurchaseFormTests(EngineTestBase):
 
     def test_post_counts_in_on_order(self):
         item = self.make_item('SCR', kind='material')
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         engine.add_purchase_line(p, item, D(40))
         self.assertEqual(engine.item_on_order(item, self.prj), D(0))  # draft не в счёте
         engine.lock_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(40))
 
     def test_post_rejects_empty(self):
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         with self.assertRaises(ValidationError):
             engine.lock_purchase(p)
 
     def test_lines_locked_after_post(self):
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         line = engine.add_purchase_line(p, self.make_item('A'), D(10))
         engine.lock_purchase(p)
         with self.assertRaises(ValidationError):
@@ -679,7 +692,7 @@ class PurchaseFormTests(EngineTestBase):
 
     def test_unpost_reenables_and_drops_from_on_order(self):
         item = self.make_item('SCR', kind='material')
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         line = engine.add_purchase_line(p, item, D(40))
         engine.lock_purchase(p)
         engine.unlock_purchase(p)
@@ -691,7 +704,7 @@ class PurchaseFormTests(EngineTestBase):
         """Отмена = удаление (волна 19, Р1): статуса `cancelled` больше нет, снять
         обязательство можно только удалив заказ — и сперва сняв замок."""
         item = self.make_item('SCR', kind='material')
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         engine.add_purchase_line(p, item, D(40))
         engine.lock_purchase(p)
         self.assertEqual(engine.item_on_order(item, self.prj), D(40))
@@ -704,7 +717,7 @@ class PurchaseFormTests(EngineTestBase):
 
     def test_linked_receipt_reduces_on_order_and_closes_line(self):
         item = self.make_item('SCR', kind='material')
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         line = engine.add_purchase_line(p, item, D(40))
         engine.lock_purchase(p)
         # приход 15, связанный с заказом → поступило 15, «заказано» 25
@@ -749,18 +762,17 @@ class ReceiptFromPurchaseTests(EngineTestBase):
         super().setUp()
         self.item = self.make_item('SCR', kind='material')
         self.other = self.make_item('CAP', kind='material')
-        self.p = engine.create_purchase(self.prj, self.user)
+        self.p = self.make_purchase()
         engine.add_purchase_line(self.p, self.item, D(40))
         engine.add_purchase_line(self.p, self.other, D(10))
-        # Р3: поставщик приезжает из закупки-плана, а не из заказа.
-        engine.update_procurement(self.p.procurement, contractor=self.supplier)
+        # Ф17: поставщик поставки приезжает из ЗАКАЗА (Р3 отменена) — он у заказа свой.
         engine.lock_purchase(self.p)
 
     def test_prefills_lines_from_order(self):
         r = engine.create_receipt_from_purchase(self.p, self.user)
         self.assertEqual(r.purchase_id, self.p.id)
         self.assertEqual(r.project_id, self.prj.id)
-        self.assertEqual(r.contractor_id, self.supplier.id)   # Р3
+        self.assertEqual(r.contractor_id, self.supplier.id)   # Ф17: из заказа
         self.assertFalse(r.locked)                            # черновик
         lots = {lot.item_id: lot for lot in r.lots.all()}
         self.assertEqual(lots[self.item.id].qty, D(40))
@@ -838,6 +850,119 @@ class ReceiptFromPurchaseTests(EngineTestBase):
         body = resp.json()
         self.assertEqual(body['purchase_id'], self.p.id)
         self.assertEqual(len(body['lots']), 2)
+
+
+class PurchaseContractorTests(EngineTestBase):
+    """Волна 19, Ф17: контрагент у всех трёх уровней контура.
+
+    Закупка = ЧТО купить · Заказ = У КОГО купить · Поставка = КТО привёз. Каждый уровень
+    знает своего контрагента и не зависит от того, есть ли над ним родитель.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('SCR', kind='material')
+        self.other_cp = models.Counterparty.objects.create(description='Другой поставщик')
+
+    # ── обязательность на фиксации, а не при рождении ──────────────────────
+    def test_lock_without_contractor_refuses_friendly(self):
+        """Внятный отказ движка, а не `IntegrityError 3819` от CHECK (урок Ф12e)."""
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, self.item, D(5))
+        with self.assertRaises(ValidationError) as cm:
+            engine.lock_purchase(p)
+        self.assertIn('контрагента', cm.exception.messages[0])
+        p.refresh_from_db()
+        self.assertFalse(p.locked)
+
+    def test_lock_passes_once_contractor_chosen(self):
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, self.item, D(5))
+        engine.update_purchase(p, contractor=self.supplier)
+        engine.lock_purchase(p)
+        self.assertTrue(p.locked)
+
+    # ── самостоятельность уровней ─────────────────────────────────────────
+    def test_purchase_without_plan_goes_the_whole_way_to_receipt(self):
+        """Заказ без закупки проходит путь целиком — до Ф17 он не знал поставщика."""
+        p = self.make_purchase()
+        self.assertIsNone(p.procurement_id)
+        engine.add_purchase_line(p, self.item, D(7))
+        engine.lock_purchase(p)
+        r = engine.create_receipt_from_purchase(p, self.user)
+        self.assertEqual(r.contractor_id, self.supplier.id)   # из ЗАКАЗА, не сквозь план
+        self.assertEqual(r.lots.get(item=self.item).qty, D(7))
+
+    def test_peg_copies_plan_contractor_then_fields_live_apart(self):
+        """Наследование — копией при рождении: дальше поля независимы."""
+        plan = engine.create_procurement(self.user)
+        engine.set_procurement_scope(plan, [self.prj])
+        engine.add_procurement_line(plan, self.item, D(10))
+        engine.update_procurement(plan, contractor=self.supplier)
+        engine.peg_procurement_line(plan, self.item, self.prj, D(10), self.user)
+        pu = plan.purchases.get()
+        self.assertEqual(pu.contractor_id, self.supplier.id)
+        # правка заказа план не трогает…
+        engine.update_purchase(pu, contractor=self.other_cp)
+        plan.refresh_from_db()
+        self.assertEqual(plan.contractor_id, self.supplier.id)
+        # …и наоборот
+        engine.update_procurement(plan, contractor=None)
+        pu.refresh_from_db()
+        self.assertEqual(pu.contractor_id, self.other_cp.id)
+
+    # ── расхождение: флаг, а не гейт ──────────────────────────────────────
+    def test_mismatch_flag_is_advisory_and_does_not_block_lock(self):
+        plan = engine.create_procurement(self.user)
+        engine.update_procurement(plan, contractor=self.supplier)
+        p = engine.create_purchase(self.prj, self.user)
+        engine.add_purchase_line(p, self.item, D(3))
+        engine.update_purchase(p, procurement=plan, contractor=self.other_cp)
+        self.assertTrue(engine.purchase_form(p)['contractor_mismatch'])
+        engine.lock_purchase(p)                    # предупреждение не останавливает
+        self.assertTrue(p.locked)
+
+    def test_no_mismatch_when_either_side_empty_or_equal(self):
+        """Пустой сверху/снизу — это «не выбран», а не расхождение."""
+        plan = engine.create_procurement(self.user)          # у плана контрагента нет
+        p = engine.create_purchase(self.prj, self.user)
+        engine.update_purchase(p, procurement=plan, contractor=self.supplier)
+        self.assertFalse(engine.purchase_form(p)['contractor_mismatch'])
+        engine.update_purchase(p, contractor=None)           # нет и у заказа
+        self.assertFalse(engine.purchase_form(p)['contractor_mismatch'])
+        engine.update_procurement(plan, contractor=self.supplier)
+        engine.update_purchase(p, contractor=self.supplier)  # совпали
+        self.assertFalse(engine.purchase_form(p)['contractor_mismatch'])
+
+    def test_receipt_mismatch_compares_with_its_purchase(self):
+        """У поставки тот же флаг — «кто привёз» против «у кого купили»."""
+        p = self.make_purchase()
+        engine.add_purchase_line(p, self.item, D(4))
+        engine.lock_purchase(p)
+        r = engine.create_receipt_from_purchase(p, self.user)
+        self.assertFalse(engine.receipt_form(r)['contractor_mismatch'])
+        engine.update_receipt(r, contractor=self.other_cp)
+        self.assertTrue(engine.receipt_form(r)['contractor_mismatch'])
+
+    # ── HTTP-срез ─────────────────────────────────────────────────────────
+    def test_patch_contractor_and_null_plan_http(self):
+        p = engine.create_purchase(self.prj, self.user)
+        c = Client()
+        c.force_login(self.user)
+        resp = c.patch(f'/api/purchases/{p.id}/',
+                       {'contractor_id': self.supplier.id},
+                       content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['contractor_id'], self.supplier.id)
+        # `procurement_id: null` — законное «закупка не выбрана», а не 400
+        resp = c.patch(f'/api/purchases/{p.id}/', {'procurement_id': None},
+                       content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.json()['procurement_id'])
+        # несуществующий контрагент → дружелюбный 400 (не 500)
+        bad = c.patch(f'/api/purchases/{p.id}/', {'contractor_id': 99999},
+                      content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
 
 
 class TransferFormTests(EngineTestBase):
@@ -1505,12 +1630,16 @@ class PeggingTests(EngineTestBase):
         self.plan = engine.create_procurement(self.user, description='свод')   # need 40 + 20
         # Ф13: наводка живёт по охвату — без него плану нечего раскладывать
         engine.set_procurement_scope(self.plan, [self.prj, self.prj2])
+        # Ф17: намерение плана — «у кого собираемся купить»; рождённые пеггингом заказы
+        # наследуют его копией, иначе их нечем зафиксировать.
+        engine.update_procurement(self.plan, contractor=self.supplier)
         engine.add_procurement_line(self.plan, self.scr, D(60))
 
     def test_peg_creates_project_purchase_under_plan(self):
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
         pu = self.plan.purchases.get(project=self.prj)
-        self.assertEqual(pu.procurement_id, self.plan.id)   # под планом, не solo-заглушка
+        self.assertEqual(pu.procurement_id, self.plan.id)   # заказ висит на плане
+        self.assertEqual(pu.contractor_id, self.supplier.id)   # Ф17: контрагент копией
         self.assertFalse(pu.locked)
         self.assertEqual(pu.lines.get(item=self.scr).qty, D(40))
         # повторный пег — инкремент в тот же заказ
@@ -1559,11 +1688,19 @@ class PeggingTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
 
-    def test_plan_list_includes_pegged_excludes_solo(self):
+    def test_plan_list_shows_every_procurement(self):
+        """Ф17: список закупок = ВСЕ закупки — прятать больше нечего.
+
+        Раньше одиночный заказ рождал закупку-пустышку, и список отсекал её эвристикой
+        «есть заказы, но нет строк». `procurement` стал nullable — пустышки не рождаются,
+        эвристика умерла вместе с ними.
+        """
         engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
-        engine.create_purchase(self.prj, self.user)         # solo-заглушка (purchases, без строк)
-        ids = {p.id for p in engine._plan_procurements()}
-        self.assertEqual(ids, {self.plan.id})               # пегнутый план виден, заглушка — нет
+        engine.create_purchase(self.prj, self.user)         # заказ без плана
+        c = Client()
+        c.force_login(self.user)
+        ids = {row['id'] for row in c.get('/api/procurements/').json()}
+        self.assertEqual(ids, {self.plan.id})               # заказ пустышки не создал
 
     # --- Ф13: охват задаёт область расчёта --------------------------------- #
 
@@ -4187,6 +4324,15 @@ class OrderAnchorTests(EngineTestBase):
         self.assertEqual(p.procurement_id, proc2.id)
         self.assertEqual(engine.purchase_form(p)['procurement_id'], proc2.id)
 
+    def test_purchase_procurement_clears_to_none(self):
+        """Ф17: закупка-план опциональна — якорь снимается, заказ живёт дальше."""
+        p = engine.create_purchase(self.prj, self.user)
+        engine.update_purchase(p, procurement=engine.create_procurement(self.user))
+        engine.update_purchase(p, procurement=None)
+        p.refresh_from_db()
+        self.assertIsNone(p.procurement_id)
+        self.assertIsNone(engine.purchase_form(p)['procurement_id'])
+
     # ── HTTP-срез ──────────────────────────────────────────────────────────
     def test_patch_project_id_http(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-k7', date='2026-05-01')
@@ -4483,7 +4629,7 @@ class EntityDeleteTests(EngineTestBase):
         self.assertFalse(models.PurchaseLine.objects.filter(purchase_id=pid).exists())
 
     def test_delete_purchase_blocked_when_sent(self):
-        p = engine.create_purchase(self.prj, self.user)
+        p = self.make_purchase()
         engine.add_purchase_line(p, self.make_item('A'), D(4))
         engine.lock_purchase(p)
         with self.assertRaises(ValidationError):
@@ -4505,8 +4651,9 @@ class EntityDeleteTests(EngineTestBase):
         self.assertFalse(models.ProcurementLine.objects.filter(procurement_id=pid).exists())
 
     def test_delete_procurement_blocked_by_purchase(self):
-        p = engine.create_purchase(self.prj, self.user)   # авто-создаёт procurement-родителя
-        proc = p.procurement
+        proc = engine.create_procurement(self.user)
+        p = engine.create_purchase(self.prj, self.user)
+        engine.update_purchase(p, procurement=proc)      # Ф17: план выбирают, а не плодят
         with self.assertRaises(ValidationError):
             engine.delete_procurement(proc)          # привязан заказ
 

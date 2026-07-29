@@ -63,8 +63,9 @@
   распределение по проектам охвата (наводка из `scope_deficit`, применения из
   `_project_usage_map` — обратное разузлование) + веер проектных `Purchase`.
 - `peg_procurement_line` / `unpeg_procurement_line` / `autopeg_procurement` — раскладка
-  строки плана в проектные заказы под **этим** планом-родителем (ломает 1:1-заглушку
-  `_solo_procurement`: план теперь родитель веера `Purchase`, а не только своих строк).
+  строки плана в проектные заказы под **этим** планом-родителем (план — родитель веера
+  `Purchase`, а не только своих строк; рождённый заказ наследует контрагента плана
+  копией — `_born_purchase_under`, Ф17).
 
 Волна 10 (бюджет/экономия — north-star окупаемости линзы):
 - `project_budget(project)` — проекция денег проекта: **потрачено** (факт по
@@ -104,7 +105,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -1210,6 +1211,10 @@ def receipt_form(receipt):
         # поэтому проекция больше не опирается на прежний NOT NULL.
         'contractor_name': (receipt.contractor.description
                             if receipt.contractor_id else ''),
+        # Ф17: «кто привёз» ≠ «у кого купили» — расхождение с контрагентом заказа
+        # считает движок, форма только рисует оранжевый глиф (не гейт).
+        'contractor_mismatch': _contractor_mismatch(receipt.contractor_id,
+                                                    receipt.purchase),
         'project_id': receipt.project_id, 'project_code': receipt.project.code,
         'project_name': receipt.project.description,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
@@ -1321,9 +1326,11 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
     вместо полного количества даёт «поставку частями» бесплатно: повторный вызов на
     частично закрытом заказе рождает вторую накладную ровно на недостающее.
 
-    Поставщик — `purchase.procurement.contractor` (Р3): контрагент живёт у закупки-плана,
-    она и есть «один поток общения». Заказ проставляется сразу (`purchase`), поэтому
-    руками связывать в форме УПД больше не нужно.
+    Поставщик — `purchase.contractor` (волна 19, Ф17): «кто привёз» наследуется от «у
+    кого купили», копией при рождении. До Ф17 он читался сквозь цепочку
+    `purchase.procurement.contractor` (Р3, отменена), и заказ без плана поставщика не
+    знал вовсе. Заказ проставляется сразу (`purchase`), поэтому руками связывать в форме
+    УПД больше не нужно.
 
     **Цена ставится в 0, а не в `item.estimated_cost`** (решение Ивана 2026-07-29):
     `Lot` по канону хранит цену ИЗ УПД, а `_project_spent` считает факт трат по
@@ -1353,7 +1360,7 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
 
     receipt = _born_order(
         models.Receipt, purchase.project, user, number, date,
-        contractor=purchase.procurement.contractor, purchase=purchase)
+        contractor=purchase.contractor, purchase=purchase)
     for line, rest in remaining:
         add_receipt_lot(receipt, line.item, rest, unit_cost=ZERO,
                         lot_name=line.item.description)
@@ -1363,25 +1370,19 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
 # --------------------------------------------------------------------------- #
 #  Форма заказа / Purchase (волна 4): строки-обязательства + гашение приходом
 # --------------------------------------------------------------------------- #
-def _solo_procurement(user):
-    """Тонкий расфиксированный `Procurement` под одиночный проектный заказ.
-
-    `Purchase.procurement` — обязательный FK, но командный свод отложен: пока каждый
-    проектный заказ получает свою закупку-родителя (вырожденный 1:1). Будущая
-    командная волна введёт общие Procurement, веерно нарезаемые на проектные Purchase.
-    """
-    return models.Procurement.objects.create(
-        user=user, locked=False,
-        description='авто (проектный заказ)')
-
-
 def create_purchase(project, user, date=None, code=None, description=''):
-    """Создать заказ проекта (черновик) с авто-`Procurement`-родителем.
-    Пустой код — фолбэком «Заказ 12» (Ф12e)."""
+    """Создать заказ проекта (черновик) — **без закупки-плана**. Пустой код — фолбэком
+    «Заказ 12» (Ф12e).
+
+    Волна 19, Ф17: `procurement` стал nullable, и заказ рождается с `None`. Прежний
+    `_solo_procurement` плодил закупку-пустышку на каждый одиночный заказ только чтобы
+    удовлетворить NOT NULL, а список закупок прятал эти пустышки эвристикой
+    (`_plan_procurements`) — обе конструкции удалены вместе. План выбирают в форме, если
+    он есть; контрагента — тоже (он обязателен к фиксации, `lock_purchase`).
+    """
     require_unique_code(models.Purchase, code)
-    proc = _solo_procurement(user)
     p = models.Purchase.objects.create(
-        procurement=proc, project=project, user=user,
+        project=project, user=user,
         locked=False, date=date, code=code, description=description or '')
     return p if code else fallback_code(p, 'Заказ')
 
@@ -1412,6 +1413,23 @@ def _purchase_closure(purchase):
             rows.append({'receipt_id': lot.origin_id, 'number': lot.origin.number,
                          'date': lot.origin.date, 'qty': lot.qty})
     return out
+
+
+def _contractor_mismatch(own_contractor_id, parent):
+    """Расхождение контрагента с уровнем НАД ним (волна 19, Ф17) — флаг для формы.
+
+    Контрагент есть у всех трёх уровней контура (закупка = ЧТО купить, заказ = У КОГО,
+    поставка = КТО привёз) и наследуется копией при рождении, после чего живёт своей
+    жизнью. Расхождение — законная ситуация («одна закупка точно может пойти от разных
+    поставщиков»), поэтому это **не гейт фиксации**, а оранжевый глиф-warning в форме:
+    в случае ошибки она кричит и подсказывает, в редком законном случае не мешает.
+
+    Считаем только когда **оба** контрагента заданы и различаются: пустой снизу — это
+    «не выбран», а не расхождение. Флаг считает движок, знак выбирает вью
+    ([[engine-view-seam]]) — иначе форма сравнивала бы два id сама.
+    """
+    parent_id = parent.contractor_id if parent is not None else None
+    return bool(own_contractor_id and parent_id and own_contractor_id != parent_id)
 
 
 def purchase_form(purchase):
@@ -1468,7 +1486,15 @@ def purchase_form(purchase):
         'id': purchase.id, **_author(purchase), 'locked': purchase.locked,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
         'project_name': purchase.project.description,
+        # Ф17: закупка-план опциональна (`None` = заказ без плана — законное состояние).
         'procurement_id': purchase.procurement_id,   # якорь #A: закупка-план (Ф2k)
+        'contractor_id': purchase.contractor_id,     # Ф17: у кого купили
+        'contractor_name': (purchase.contractor.description
+                            if purchase.contractor_id else ''),
+        # Расхождение с намерением плана считает ДВИЖОК, вью только выбирает знак
+        # ([[engine-view-seam]]): отдаём готовый флаг, а не два id на сравнение во фронте.
+        'contractor_mismatch': _contractor_mismatch(purchase.contractor_id,
+                                                    purchase.procurement),
         'code': purchase.code, 'description': purchase.description,
         'date': purchase.date,
         'editable': editable,                       # строки правятся только пока не зафиксировано
@@ -1514,9 +1540,16 @@ def lock_purchase(purchase):
 
     Волна 19 (Ф1): бывший `send_purchase`. Отмены больше нет — отмена = удаление
     (развилка Р1), поэтому проверять «отменённый нельзя отправить» стало нечего.
+
+    Ф17: контрагент обязателен к ФИКСАЦИИ (CHECK `purchase_locked_has_contractor`).
+    Прикладной гейт дублирует инвариант БД, чтобы пользователь получил внятный отказ,
+    а не `IntegrityError 3819` (урок Ф12e: CHECK без гейта — это 500 в лицо).
     """
     if not purchase.lines.exists():
         raise ValidationError('Нельзя утвердить пустой заказ — добавьте строку.')
+    if purchase.contractor_id is None:
+        raise ValidationError(
+            'Перед фиксацией выберите контрагента — у кого заказано.')
     purchase.locked = True
     purchase.save(update_fields=['locked'])
     return purchase
@@ -1552,9 +1585,9 @@ def delete_purchase(purchase):
 def add_to_project_purchase(project, item, qty, user):
     """Мост «дефицит → заказ»: положить позицию в расфиксированный заказ проекта.
 
-    Находит последний черновик-заказ проекта (или создаёт новый с авто-`Procurement`)
-    и добавляет строку; если строка item уже есть — инкрементит её `qty`. Возвращает
-    заказ (UI ведёт в форму). Оживляет ▲-член «заказано» дашборда дефицита.
+    Находит последний черновик-заказ проекта (или создаёт новый — с Ф17 уже без
+    закупки-пустышки) и добавляет строку; если строка item уже есть — инкрементит её
+    `qty`. Возвращает заказ (UI ведёт в форму). Оживляет ▲-член «заказано» дефицита.
     """
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
@@ -2535,15 +2568,20 @@ def update_receipt(receipt, **kw):
 
 
 def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UNSET,
-                    project=_UNSET, procurement=_UNSET):
-    """Правка шапки заказа (дата / код / описание / автор / проект / закупка). Только в черновике.
+                    project=_UNSET, procurement=_UNSET, contractor=_UNSET):
+    """Правка шапки заказа (дата / код / описание / автор / проект / закупка /
+    контрагент). Только в черновике.
 
     Дата заказа nullable — пустая строка очищает её в NULL (в отличие от
     документов с обязательной датой). `code` — часовой `_UNSET` (пустой → NULL, чтобы
-    несколько заказов без кода не конфликтовали по unique). `project`/`procurement` —
-    якоря #A (Ф2k): заказ — проектное исполнение закупки-плана. Смена проекта у заказа
-    со связанными приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный отказ
-    (сперва отвязать приходы). Оба поля NOT NULL → `None` отклоняем.
+    несколько заказов без кода не конфликтовали по unique).
+
+    Якоря #A (Ф2k): `project` обязателен — заказ проектный по определению, `None`
+    отклоняем. `procurement` и `contractor` — часовые (Ф17): не переданы → не трогаем,
+    сущность → выставить, `None` → снять. Закупка-план опциональна (заказ бывает и без
+    плана), контрагент обязателен к ФИКСАЦИИ, а не к правке черновика. Смена проекта у
+    заказа со связанными приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный
+    отказ (сперва отвязать приходы).
     """
     _require_unlocked(purchase, PURCHASE_LOCKED)
     _set_author(purchase, user)
@@ -2558,10 +2596,11 @@ def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UN
         purchase.project = project
         fields.append('project')
     if procurement is not _UNSET:
-        if procurement is None:
-            raise ValidationError('Закупка-план заказа обязательна.')
         purchase.procurement = procurement
         fields.append('procurement')
+    if contractor is not _UNSET:
+        purchase.contractor = contractor
+        fields.append('contractor')
     if date is not None:
         purchase.date = date or None
         fields.append('date')
@@ -2882,20 +2921,11 @@ def delete_procurement(procurement):
         raise ValidationError('Закупка связана с другими записями — удаление заблокировано.')
 
 
-def _plan_procurements():
-    """Закупки-планы = `Procurement`, записанные на командной высоте (волна 7+).
-
-    После pegging (волна 8) план становится родителем веера проектных `Purchase`, поэтому
-    старый признак «нет привязанных заказов» больше не годится (пегнутый план исчезал бы
-    из списка). Различаем структурно: **solo-заглушка** `_solo_procurement` (родитель
-    одиночного проектного заказа, волна 4) — это `Procurement` с ≥1 `Purchase` и **без**
-    строк плана (`ProcurementLine`); план же всегда либо имеет строки, либо пуст-и-без-
-    заказов (свежесозданный). Отсекаем ровно заглушки — веер пегнутого плана остаётся.
-    """
-    return (models.Procurement.objects
-            .annotate(_n_purch=Count('purchases', distinct=True),
-                      _n_lines=Count('lines', distinct=True))
-            .exclude(_n_purch__gt=0, _n_lines=0))
+# Волна 19, Ф17: `_plan_procurements` удалён — список закупок = ВСЕ закупки.
+# Эвристика «есть заказы, но нет строк плана» существовала ровно затем, чтобы прятать
+# закупки-пустышки, которые `_solo_procurement` плодил на каждый одиночный заказ (плата
+# за NOT NULL у `Purchase.procurement`). Стал nullable — пустышек не бывает, и прятать
+# нечего: фильтр и заглушка умерли одной правкой.
 
 
 def add_to_procurement(procurement, item, qty):
@@ -3051,19 +3081,29 @@ def procurement_pegging(procurement):
     }
 
 
+def _born_purchase_under(procurement, project, user):
+    """Родить проектный заказ под планом, унаследовав контрагента плана (Ф17).
+
+    Наследование — **копией при рождении**, не чтением сквозь цепочку: намерение плана
+    («у кого собирались купить») становится начальным значением заказа, дальше поля
+    живут независимо — одна закупка законно уходит нескольким поставщикам. Тот же приём,
+    которым живёт `Lot` (хранит цену и имя ИЗ УПД копией, а не читает их из документа).
+    """
+    return models.Purchase.objects.create(
+        procurement=procurement, project=project, user=user, locked=False,
+        contractor=procurement.contractor)
+
+
 def _project_purchase_under(procurement, project, user):
     """Найти-или-создать **черновиковый** проектный заказ под этим планом-родителем.
 
-    Ломает 1:1-заглушку `_solo_procurement`: заказ рождается с `procurement=<план>`
-    (веер проектных обязательств висит на общем плане), а не с throwaway-родителем.
+    Веер проектных обязательств висит на общем плане (`procurement=<план>`).
     """
     pu = (procurement.purchases
           .filter(project=project, locked=False)
           .order_by('-id').first())
     if pu is None:
-        pu = models.Purchase.objects.create(
-            procurement=procurement, project=project, user=user,
-            locked=False)
+        pu = _born_purchase_under(procurement, project, user)
     return pu
 
 
@@ -3116,8 +3156,7 @@ def peg_procurement_line(procurement, item, project, qty, user, purchase=None,
         # «＋ новый заказ»: отдельное обязательство под тот же проект (вторая поставка,
         # другой срок). Ленивое рождение сохранено — заказ появляется вместе с первым
         # пегом, пустых заказов-призраков в веере не заводим.
-        pu = models.Purchase.objects.create(
-            procurement=procurement, project=project, user=user, locked=False)
+        pu = _born_purchase_under(procurement, project, user)
     else:
         pu = _project_purchase_under(procurement, project, user)
     line = pu.lines.filter(item=item).first()

@@ -73,10 +73,14 @@ def _resolve_item(d, key='target_id'):
 
 def _resolve_procurement(d):
     """Закупка-план якорь из PATCH-тела (Ф2k #A, заказ): `procurement_id` прислан →
-    `Procurement`; нет → `_UNSET`. `DoesNotExist` ловит вызывающий (→ 400)."""
+    `Procurement`; нет → `_UNSET`. `DoesNotExist` ловит вызывающий (→ 400).
+
+    Ф17: `procurement_id: null` — законное значение («закупка не выбрана»), поле стало
+    nullable. Отличаем «не прислали» (часовой) от «прислали пусто» (снять)."""
     if 'procurement_id' not in d:
         return engine._UNSET
-    return models.Procurement.objects.get(pk=d['procurement_id'])
+    pid = d['procurement_id']
+    return models.Procurement.objects.get(pk=pid) if pid else None
 
 
 def _code_kw(d):
@@ -107,12 +111,14 @@ def _anchor_project(data):
         raise ValidationError('Неизвестный проект.')
 
 
-def _contractor_kw(data):
+def _resolve_contractor(data):
     """Контрагент для PATCH шапки — часовой `_UNSET`, если поле не прислали.
 
     Ф12e: тот же разбор нужен теперь и поставке (её поставщик задавался ТОЛЬКО в
     форме создания и в самой форме не правился — после Ф12e так поставку было бы
-    не зафиксировать вовсе). Была копия у передачи; теперь одна на оба вида."""
+    не зафиксировать вовсе). Была копия у передачи; теперь одна на оба вида.
+    Ф17: с ней же ходят заказ и закупка — контрагент теперь у всех трёх уровней, и
+    разбор у них буквально один (у закупки была третья копия инлайном)."""
     if 'contractor_id' not in data:
         return engine._UNSET
     cid = data['contractor_id']
@@ -734,7 +740,7 @@ def receipt_detail(request, pk):
         try:
             engine.update_receipt(
                 r, number=d['number'] if 'number' in d else None,
-                contractor=_contractor_kw(d),
+                contractor=_resolve_contractor(d),
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
                 project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
@@ -874,11 +880,14 @@ def purchase_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                project=_resolve_project(d), procurement=_resolve_procurement(d))
+                project=_resolve_project(d), procurement=_resolve_procurement(d),
+                contractor=_resolve_contractor(d))    # Ф17: у кого заказано
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except models.Procurement.DoesNotExist:
             return _bad('Закупка-план не найдена.')
+        except models.Counterparty.DoesNotExist:
+            return _bad('Контрагент не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -1032,7 +1041,7 @@ def transfer_detail(request, pk):
         try:
             engine.update_transfer(
                 t, number=d['number'] if 'number' in d else None,
-                contractor=_contractor_kw(d),
+                contractor=_resolve_contractor(d),
                 date=d['date'] if 'date' in d else None,
                 user=_resolve_author(d), project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
@@ -1667,9 +1676,9 @@ def procurements(request):
                                       description=(d.get('description') or '').strip())
         return Response(engine.procurement_form(p), status=http.HTTP_201_CREATED)
 
-    # только закупки-планы (без 1:1-заглушек проектных заказов, см. engine)
+    # Ф17: ВСЕ закупки — прятать нечего (закупок-пустышек больше не бывает, см. engine)
     rows = [_procurement_row(p)
-            for p in engine._plan_procurements().order_by('-id')]
+            for p in models.Procurement.objects.order_by('-id')]
     return Response(rows)
 
 
@@ -1684,17 +1693,12 @@ def procurement_detail(request, pk):
     if request.method == 'PATCH':
         d = request.data
         try:
-            contractor = engine._UNSET
-            if 'contractor_id' in d:
-                cid = d['contractor_id']
-                contractor = (models.Counterparty.objects.get(pk=cid)
-                              if cid else None)
             engine.update_procurement(
                 p, date=d['date'] if 'date' in d else None,
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                contractor=contractor)
+                contractor=_resolve_contractor(d))
             # Охват (Ф13) — M2M, отдельным входом движка. Пустой список = снять охват
             # («пусто = пусто»), поэтому смотрим на наличие ключа, а не на истинность.
             if 'project_ids' in d:

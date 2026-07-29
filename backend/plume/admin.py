@@ -189,14 +189,15 @@ class LocationAdmin(admin.ModelAdmin):
 # --- закупки -------------------------------------------------------------- #
 @admin.register(models.Procurement)
 class ProcurementAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'locked', 'date', 'user')
+    list_display = ('__str__', 'locked', 'contractor', 'date', 'user')
     list_filter = ('locked',)
     inlines = [ProcurementLineInline]
 
 
 @admin.register(models.Purchase)
 class PurchaseAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'project', 'locked', 'date', 'user')
+    # Ф17: контрагент — у всех трёх уровней контура; у заказа он и есть «у кого купили».
+    list_display = ('__str__', 'project', 'locked', 'contractor', 'date', 'user')
     list_filter = ('locked', 'project')
     inlines = [PurchaseLineInline]
 
