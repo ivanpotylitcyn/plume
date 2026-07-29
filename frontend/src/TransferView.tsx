@@ -95,7 +95,10 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
             <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
               disabled={locked || busy} placeholder="— не указан —"
               onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
-              onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))} />
+              onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))}
+              onCreate={name => api.createCounterparty({ description: name, role: 'customer' })
+                .then(cp => { api.counterparties('customer').then(setCustomers)
+                  run(api.updateTransfer(c.id, { contractor_id: cp.id })) })} />
           </dd>
         </OrderFields>}
       tabs={tabs}

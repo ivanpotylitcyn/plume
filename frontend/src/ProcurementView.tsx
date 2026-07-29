@@ -137,7 +137,10 @@ export function ProcurementView({ procurementId, items, isNew, openItem, openPur
           <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
             disabled={!editable || busy} placeholder="— не указан —"
             onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
-            onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))} />
+            onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))}
+            onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+              .then(cp => { api.counterparties('supplier').then(setSuppliers)
+                run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
         </dd>
         <AuthorField userId={c.user_id} userName={c.user_name} disabled={!editable || busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />

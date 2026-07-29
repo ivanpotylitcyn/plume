@@ -67,7 +67,11 @@ ATTACHMENT_OWNER_FIELDS = ('item', 'document', 'project', 'procurement',
 # ссылаться на конкретные виды. Внутри модели остаётся привычный алиас
 # `StockDocument.Kind` — все обращения в коде продолжают читаться как раньше.
 class DocumentKind(models.TextChoices):
-    RECEIPT = 'receipt', 'Приход (УПД)'
+    # Ярлыки — источник правды и для админки, и для фолбэка кода («Поставка 12»,
+    # Ф12e): человекочитаемое имя вида живёт в ОДНОМ месте и совпадает с
+    # `ORDER_KINDS` во фронте. «Приход (УПД)» → «Поставка» по глоссарию волны 14
+    # (долг Ф8: подпись отстала от словаря на пять волн).
+    RECEIPT = 'receipt', 'Поставка'
     KITTING = 'kitting', 'Комплектация'
     INVENTORY = 'inventory', 'Инвентаризация'
     REQUISITION = 'requisition', 'Требование'
@@ -315,8 +319,13 @@ class Item(models.Model):
 
     code = models.CharField('код', max_length=128, unique=True)
     description = models.CharField('описание', max_length=255)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT,
-                                 related_name='items', verbose_name='категория')
+    # Волна 19, Ф12e: категория nullable — но обязательность не исчезла, а
+    # переехала с РОЖДЕНИЯ на ФИКСАЦИЮ (тот же приём, что у `contractor`/
+    # `target_item` в Ф14). Фолбэк «первая запись справочника» отвергнут: это не
+    # пустота, а ложные данные, которые выглядят заполненными.
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, null=True,
+                                 blank=True, related_name='items',
+                                 verbose_name='категория')
     uom = models.CharField('ед. изм.', max_length=32, default='шт')
     temperature = models.CharField('температурный диапазон', max_length=64,
                                    blank=True, default='')
@@ -336,6 +345,11 @@ class Item(models.Model):
             models.CheckConstraint(
                 condition=models.Q(synced=False) | models.Q(locked=False),
                 name='item_synced_implies_not_locked'),
+            # Ф12e: категория обязательна у ЗАФИКСИРОВАННОГО изделия. Черновик
+            # имеет право быть неполным — гейт на фиксации, а не на рождении.
+            models.CheckConstraint(
+                condition=models.Q(locked=False) | models.Q(category__isnull=False),
+                name='item_locked_has_category'),
         ]
 
     def __str__(self):

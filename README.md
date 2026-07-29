@@ -140,7 +140,7 @@ flowchart TD
 
 ```mermaid
 erDiagram
-  CATEGORY ||--o{ ITEM : "класс (PROTECT)"
+  CATEGORY |o--o{ ITEM : "класс (PROTECT, nullable в черновике)"
   ITEM ||--o{ BOMLINE : "как parent"
   ITEM ||--o{ BOMLINE : "как component"
   ITEM ||--o{ LOT : "партии"
@@ -192,7 +192,7 @@ erDiagram
     int id PK
     string code "заказной PN (канон библиотеки Altium, колонка «Design Item Id»), uniq"
     string description
-    int category_id FK "→ Category, класс изделия (PROTECT)"
+    int category_id FK "→ Category, класс изделия (PROTECT); Ф12e — nullable в черновике, обязательна к фиксации (CHECK item_locked_has_category)"
     string uom "ед. изм."
     string temperature "предельная T компонента (напр. -40-125°C)"
     decimal estimated_cost "оценочная стоимость / роллап по BOM (nullable)"

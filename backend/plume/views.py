@@ -93,6 +93,46 @@ def _bad(exc):
     return Response({'detail': str(exc)}, status=http.HTTP_400_BAD_REQUEST)
 
 
+def _anchor_project(data):
+    """Проект-якорь ордера из тела запроса или фолбэком (Ф12e).
+
+    «＋ Новый» шлёт пустое тело — рождение больше не спрашивает ничего заранее.
+    Явный `project_id` (мост «дефицит → заказ», тесты, будущие сценарии) остаётся
+    в силе и по-прежнему отбивается 400, если указан несуществующий проект."""
+    if not data.get('project_id'):
+        return engine.default_document_project()
+    try:
+        return models.Project.objects.get(pk=data['project_id'])
+    except (models.Project.DoesNotExist, ValueError, TypeError):
+        raise ValidationError('Неизвестный проект.')
+
+
+def _contractor_kw(data):
+    """Контрагент для PATCH шапки — часовой `_UNSET`, если поле не прислали.
+
+    Ф12e: тот же разбор нужен теперь и поставке (её поставщик задавался ТОЛЬКО в
+    форме создания и в самой форме не правился — после Ф12e так поставку было бы
+    не зафиксировать вовсе). Была копия у передачи; теперь одна на оба вида."""
+    if 'contractor_id' not in data:
+        return engine._UNSET
+    cid = data['contractor_id']
+    return models.Counterparty.objects.get(pk=cid) if cid else None
+
+
+def _optional_contractor(data):
+    """Контрагент из тела запроса — необязательный (Ф12e).
+
+    У поставки он обязателен к ФИКСАЦИИ (CHECK `doc_locked_receipt_has_contractor`),
+    но не к рождению: подставлять «первого поставщика справочника» нельзя — это не
+    пустота, а ложные данные, которые уедут в УПД незамеченными."""
+    if not data.get('contractor_id'):
+        return None
+    try:
+        return models.Counterparty.objects.get(pk=data['contractor_id'])
+    except (models.Counterparty.DoesNotExist, ValueError, TypeError):
+        raise ValidationError('Неизвестный контрагент.')
+
+
 def _safe_filename(code):
     """`code` сущности → безопасное имя файла (без разделителей путей и мусора).
 
@@ -272,6 +312,10 @@ def location_detail(request, pk):
 
 
 def _category_row(c):
+    # Ф12e: у изделия-черновика категории может не быть вовсе (она обязательна к
+    # фиксации, а не к рождению) — отдаём `null`, а не выдуманную запись.
+    if c is None:
+        return None
     return {'id': c.id, 'code': c.code, 'description': c.description}
 
 
@@ -466,9 +510,15 @@ def bom_line_detail(request, pk):
 @api_view(['POST'])
 def item_lock(request, pk):
     """Зафиксировать изделие (draft → posted): форма read-only, правки гейтятся.
-    Волна 17 — по образцу `receipt_lock`."""
+    Волна 17 — по образцу `receipt_lock`.
+
+    Ф12e: фиксация научилась ОТКАЗЫВАТЬ (категория обязательна к ней, а не к
+    рождению) — без обёртки отказ уходил бы 500-й, а не строкой в форме."""
     item = get_object_or_404(models.Item, pk=pk)
-    engine.lock_item(item)
+    try:
+        engine.lock_item(item)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
     return Response(_item_detail_payload(item))
 
 
@@ -487,25 +537,31 @@ def _kitting_row(k):
     """Строка списка комплектаций для дерева навигации."""
     return {
         'id': k.id, 'code': k.code, 'project_code': k.project.code,
-        'target_code': k.target_item.code,
-        'target_description': k.target_item.description,
+        # Ф12e: прибор-цель выбирают в форме, у черновика его может не быть.
+        'target_code': k.target_item.code if k.target_item_id else '',
+        'target_description': (k.target_item.description
+                               if k.target_item_id else ''),
         'qty': k.qty, 'locked': k.locked, 'date': k.date,
     }
 
 
 @api_view(['GET', 'POST'])
 def kittings(request):
-    """Список комплектаций (дерево) / создание новой (призрачная строка)."""
+    """Список комплектаций (дерево) / рождение новой по клику «＋ Новый» (Ф12e)."""
     if request.method == 'POST':
         d = request.data
+        target = None
+        if d.get('target_item_id'):
+            try:
+                target = models.Item.objects.get(pk=d['target_item_id'])
+            except (models.Item.DoesNotExist, ValueError, TypeError):
+                return _bad('Неизвестный прибор-цель.')
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
-            target = models.Item.objects.get(pk=d['target_item_id'])
-            k = models.Kitting.objects.create(
-                project=project, target_item=target, user=_actor(request),
-                qty=d.get('qty') or 1, date=timezone.localdate())
-        except (KeyError, models.Project.DoesNotExist, models.Item.DoesNotExist) as e:
-            return _bad(f'Нужны project_id и target_item_id ({e}).')
+            k = engine.create_kitting(
+                _anchor_project(d), _actor(request),
+                target_item=target, qty=d.get('qty') or (1 if target else None))
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
         return Response(engine.kitting_form(k), status=http.HTTP_201_CREATED)
 
     rows = [_kitting_row(k) for k in models.Kitting.objects
@@ -635,31 +691,30 @@ def counterparties(request):
 
 
 def _receipt_row(r):
-    """Строка списка приходов для дерева навигации."""
+    """Строка списка поставок для дерева навигации.
+
+    Ф12e: поставщика у черновика может не быть (он обязателен к фиксации) — та же
+    терпимость, что у `_kitting_row` и `receipt_form`."""
     return {
         'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
-        'contractor_name': r.contractor.description, 'project_code': r.project.code,
+        'contractor_name': (r.contractor.description if r.contractor_id else ''),
+        'project_code': r.project.code,
         'locked': r.locked, 'lines': r.lots.count(),
     }
 
 
 @api_view(['GET', 'POST'])
 def receipts(request):
-    """Список приходов (дерево) / создание нового УПД (призрачная строка)."""
+    """Список поставок (дерево) / рождение новой по клику «＋ Новый» (Ф12e)."""
     if request.method == 'POST':
         d = request.data
-        number = (d.get('number') or '').strip()
-        if not number:
-            return _bad('Нужен № УПД.')
         try:
-            contractor = models.Counterparty.objects.get(pk=d['contractor_id'])
-            project = models.Project.objects.get(pk=d['project_id'])
-            r = models.Receipt.objects.create(
-                number=number, date=d.get('date') or timezone.localdate(),
-                contractor=contractor, project=project, user=_actor(request))
-        except (KeyError, models.Counterparty.DoesNotExist,
-                models.Project.DoesNotExist) as e:
-            return _bad(f'Нужны contractor_id, project_id, number ({e}).')
+            r = engine.create_receipt(
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None,
+                contractor=_optional_contractor(d))
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
         return Response(engine.receipt_form(r), status=http.HTTP_201_CREATED)
 
     rows = [_receipt_row(r) for r in models.Receipt.objects
@@ -669,8 +724,8 @@ def receipts(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def receipt_detail(request, pk):
-    """Форма прихода: строки-лоты УПД + живой остаток + сумма.
-    PATCH — правка шапки (№ УПД / дата) прямо в форме. DELETE — удаление."""
+    """Форма поставки: строки-лоты УПД + живой остаток + сумма.
+    PATCH — правка шапки (№ УПД / дата / поставщик) прямо в форме. DELETE — удаление."""
     r = get_object_or_404(models.Receipt, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(r)
@@ -679,10 +734,13 @@ def receipt_detail(request, pk):
         try:
             engine.update_receipt(
                 r, number=d['number'] if 'number' in d else None,
+                contractor=_contractor_kw(d),
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
                 project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
+        except models.Counterparty.DoesNotExist:
+            return _bad('Контрагент не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:
@@ -782,17 +840,17 @@ def _purchase_row(p):
 
 @api_view(['GET', 'POST'])
 def purchases(request):
-    """Список заказов (дерево) / создание нового (призрачная строка)."""
+    """Список заказов (дерево) / рождение нового по клику «＋ Новый» (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
-        except (KeyError, models.Project.DoesNotExist) as e:
-            return _bad(f'Нужен project_id ({e}).')
-        p = engine.create_purchase(project, _actor(request),
-                                   date=d.get('date') or None,
-                                   code=(d.get('code') or '').strip() or None,
-                                   description=(d.get('description') or '').strip())
+            p = engine.create_purchase(
+                _anchor_project(d), _actor(request),
+                date=d.get('date') or None,
+                code=(d.get('code') or '').strip() or None,
+                description=(d.get('description') or '').strip())
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
         return Response(engine.purchase_form(p), status=http.HTTP_201_CREATED)
 
     rows = [_purchase_row(p) for p in models.Purchase.objects
@@ -927,20 +985,13 @@ def _transfer_row(t):
 
 @api_view(['GET', 'POST'])
 def transfers(request):
-    """Список передач (дерево) / создание новой накладной (призрачная строка)."""
+    """Список передач (дерево) / рождение новой накладной по клику (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
-            contractor = None
-            if d.get('contractor_id'):
-                contractor = models.Counterparty.objects.get(pk=d['contractor_id'])
             t = engine.create_transfer(
-                project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate(), contractor=contractor)
-        except (KeyError, models.Project.DoesNotExist,
-                models.Counterparty.DoesNotExist) as e:
-            return _bad(f'Нужны project_id, number ({e}).')
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None, contractor=_optional_contractor(d))
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.transfer_form(t), status=http.HTTP_201_CREATED)
@@ -960,14 +1011,10 @@ def transfer_detail(request, pk):
     if request.method == 'PATCH':
         d = request.data
         try:
-            contractor = engine._UNSET
-            if 'contractor_id' in d:
-                cid = d['contractor_id']
-                contractor = (models.Counterparty.objects.get(pk=cid)
-                              if cid else None)
             engine.update_transfer(
                 t, number=d['number'] if 'number' in d else None,
-                date=d['date'] if 'date' in d else None, contractor=contractor,
+                contractor=_contractor_kw(d),
+                date=d['date'] if 'date' in d else None,
                 user=_resolve_author(d), project=_resolve_project(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
@@ -1058,16 +1105,13 @@ def _relocation_row(r):
 
 @api_view(['GET', 'POST'])
 def relocations(request):
-    """Список перемещений (дерево) / создание нового (внутри проекта)."""
+    """Список перемещений (дерево) / рождение нового по клику (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
             r = engine.create_relocation(
-                project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate())
-        except (KeyError, models.Project.DoesNotExist) as e:
-            return _bad(f'Нужны project_id, number ({e}).')
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.relocation_form(r), status=http.HTTP_201_CREATED)
@@ -1188,17 +1232,13 @@ def _writeoff_row(w):
 
 @api_view(['GET', 'POST'])
 def writeoffs(request):
-    """Список списаний (дерево) / создание нового акта (призрачная строка)."""
+    """Список списаний (дерево) / рождение нового акта по клику (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
             w = engine.create_writeoff(
-                project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate(),
-                reason=d.get('reason') or '')
-        except (KeyError, models.Project.DoesNotExist) as e:
-            return _bad(f'Нужны project_id, number ({e}).')
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None, reason=d.get('reason') or '')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.writeoff_form(w), status=http.HTTP_201_CREATED)
@@ -1294,16 +1334,13 @@ def _requisition_row(r):
 
 @api_view(['GET', 'POST'])
 def requisitions(request):
-    """Список требований (дерево) / создание нового (проект-получатель)."""
+    """Список требований (дерево) / рождение нового по клику (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
             r = engine.create_requisition(
-                project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate())
-        except (KeyError, models.Project.DoesNotExist) as e:
-            return _bad(f'Нужны project_id, number ({e}).')
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
@@ -1399,16 +1436,13 @@ def _inventory_row(i):
 
 @api_view(['GET', 'POST'])
 def inventories(request):
-    """Список инвентаризаций (дерево) / создание нового акта (проект-дом)."""
+    """Список инвентаризаций (дерево) / рождение нового акта по клику (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            project = models.Project.objects.get(pk=d['project_id'])
             i = engine.create_inventory(
-                project, _actor(request), d.get('number') or '',
-                date=d.get('date') or timezone.localdate())
-        except (KeyError, models.Project.DoesNotExist) as e:
-            return _bad(f'Нужны project_id, number ({e}).')
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.inventory_form(i), status=http.HTTP_201_CREATED)

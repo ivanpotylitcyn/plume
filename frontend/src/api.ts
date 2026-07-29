@@ -27,7 +27,7 @@ export interface Category {
 }
 export interface ItemRow {
   // `id` — PK (FK-ссылки/мутации); `code` — бизнес-ключ (канон библиотеки).
-  id: number; code: string; description: string; category: Category
+  id: number; code: string; description: string; category: Category | null
   uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
 }
 
@@ -88,7 +88,7 @@ export interface ItemMovement {
   lot_id: number; lot_name: string; qty: number
 }
 export interface ItemDetail {
-  id: number; code: string; description: string; category: Category
+  id: number; code: string; description: string; category: Category | null
   uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
   estimated_cost: number | null
   bom: { id: number; component_id: number; component_code: string;
@@ -158,8 +158,8 @@ export interface BornLot {
 export interface KittingForm extends Authored {
   id: number; locked: boolean; code: string | null; description: string
   project_id: number; project_code: string
-  target_id: number; target_code: string; target_description: string; uom: string
-  qty: number; date: string | null; worst_status: Status
+  target_id: number | null; target_code: string; target_description: string; uom: string
+  qty: number | null; date: string | null; worst_status: Status
   rows: KittingFormRow[]; born_lots: BornLot[]
 }
 
@@ -182,7 +182,7 @@ export interface ReceiptLot {
 export interface ReceiptForm extends Authored {
   id: number; number: string; date: string
   code: string | null; description: string
-  contractor_id: number; contractor_name: string
+  contractor_id: number | null; contractor_name: string
   project_id: number; project_code: string; project_name: string
   purchase_id: number | null
   locked: boolean; total_cost: number; lots: ReceiptLot[]
@@ -519,14 +519,18 @@ export const api = {
   // Справочник пользователей — пикер авторства шапки ордера (Ф2j).
   users: () => get<UserRow[]>('/api/users/'),
 
+  // ── Рождение сущности по клику (волна 19, Ф12e) ──
+  // Двенадцать `create*` со своими телами схлопнулись в один вызов: форм создания
+  // больше нет, «＋ Новый» рождает пустую сущность, а обязательные поля добирает
+  // фолбэком бэкенд («Поставка 12») или требует к фиксации. Тело — только там, где
+  // клик несёт смысл сверх «создай» (режим «Изделия» → `native`).
+  // Ответ проекции нам не нужен целиком: открываем форму по `id`, она грузит себя.
+  born: (path: string, body: object = {}) =>
+    send<{ id: number }>('POST', `/api/${path}/`, body),
+
   projects: () => get<ProjectRow[]>('/api/projects/'),
-  createProject: (b: { code: string; description: string; budget?: number; started?: string }) =>
-    send<ProjectRow>('POST', '/api/projects/', b),
   items: () => get<ItemRow[]>('/api/items/'),
   categories: () => get<Category[]>('/api/categories/'),
-  createItem: (b: { code: string; description: string; category_id: number;
-    uom?: string; temperature?: string; native?: boolean; estimated_cost?: number }) =>
-    send<ItemRow>('POST', '/api/items/', b),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
   updateProject: (id: number, b: Partial<{ code: string; description: string; budget: number | null; started: string | null }>) =>
     send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),
@@ -573,8 +577,6 @@ export const api = {
   updateKitting: (id: number, b: Partial<{ qty: number; date: string; user_id: number
       project_id: number; target_id: number; code: string | null; description: string }>) =>
     send<KittingForm>('PATCH', `/api/kittings/${id}/`, b),
-  createKitting: (b: { project_id: number; target_item_id: number; qty: number }) =>
-    send<KittingForm>('POST', '/api/kittings/', b),
   pierce: (id: number, b: { component_id: number; lot_id: number; qty: number }) =>
     send<KittingForm>('POST', `/api/kittings/${id}/lines/`, b),
   updateLine: (id: number, qty: number) =>
@@ -590,10 +592,8 @@ export const api = {
     send<CounterpartyRow>('POST', '/api/counterparties/', b),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptForm>(`/api/receipts/${id}/`),
-  updateReceipt: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
+  updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<ReceiptForm>('PATCH', `/api/receipts/${id}/`, b),
-  createReceipt: (b: { contractor_id: number; project_id: number; number: string; date: string }) =>
-    send<ReceiptForm>('POST', '/api/receipts/', b),
   addReceiptLot: (id: number, b: {
     item_id: number; qty: number; unit_cost?: number
     lot_name?: string; part_number?: string
@@ -614,8 +614,6 @@ export const api = {
       project_id: number; procurement_id: number }>) =>
     send<PurchaseForm>('PATCH', `/api/purchases/${id}/`, b),
   deletePurchase: (id: number) => send<void>('DELETE', `/api/purchases/${id}/`),
-  createPurchase: (b: { project_id: number; date?: string; code?: string; description?: string }) =>
-    send<PurchaseForm>('POST', '/api/purchases/', b),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
     send<PurchaseForm>('POST', `/api/purchases/${id}/lines/`, b),
   updatePurchaseLine: (id: number, qty: number) =>
@@ -632,8 +630,6 @@ export const api = {
   transfer: (id: number) => get<TransferForm>(`/api/transfers/${id}/`),
   updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<TransferForm>('PATCH', `/api/transfers/${id}/`, b),
-  createTransfer: (b: { project_id: number; number: string; date?: string; contractor_id?: number }) =>
-    send<TransferForm>('POST', '/api/transfers/', b),
   addTransferLine: (id: number, b: { lot_id: number; qty: number; display_name?: string }) =>
     send<TransferForm>('POST', `/api/transfers/${id}/lines/`, b),
   updateTransferLine: (id: number, b: Partial<{ qty: number; display_name: string }>) =>
@@ -650,8 +646,6 @@ export const api = {
   writeoff: (id: number) => get<WriteoffForm>(`/api/writeoffs/${id}/`),
   updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<WriteoffForm>('PATCH', `/api/writeoffs/${id}/`, b),
-  createWriteoff: (b: { project_id: number; number: string; date?: string; reason?: string }) =>
-    send<WriteoffForm>('POST', '/api/writeoffs/', b),
   addWriteoffLine: (id: number, b: { lot_id: number; qty: number }) =>
     send<WriteoffForm>('POST', `/api/writeoffs/${id}/lines/`, b),
   updateWriteoffLine: (id: number, qty: number) =>
@@ -666,8 +660,6 @@ export const api = {
   requisition: (id: number) => get<RequisitionForm>(`/api/requisitions/${id}/`),
   updateRequisition: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<RequisitionForm>('PATCH', `/api/requisitions/${id}/`, b),
-  createRequisition: (b: { project_id: number; number: string; date?: string }) =>
-    send<RequisitionForm>('POST', '/api/requisitions/', b),
   addRequisitionLine: (id: number, b: { source_lot_id: number; qty: number }) =>
     send<RequisitionForm>('POST', `/api/requisitions/${id}/lines/`, b),
   updateRequisitionLine: (id: number, qty: number) =>
@@ -683,8 +675,6 @@ export const api = {
   inventory: (id: number) => get<InventoryForm>(`/api/inventories/${id}/`),
   updateInventory: (id: number, b: Partial<{ number: string; date: string; code: string | null; description: string; user_id: number; project_id: number }>) =>
     send<InventoryForm>('PATCH', `/api/inventories/${id}/`, b),
-  createInventory: (b: { project_id: number; number: string; date?: string }) =>
-    send<InventoryForm>('POST', '/api/inventories/', b),
   addInventoryLot: (id: number, b: {
     item_id?: number; predecessor_id?: number; qty: number
     unit_cost?: number; lot_name?: string; part_number?: string
@@ -702,8 +692,6 @@ export const api = {
   // ── Места хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
   locations: () => get<LocationRow[]>('/api/locations/'),
   location: (id: number) => get<LocationForm>(`/api/locations/${id}/`),
-  createLocation: (b: { code: string; description: string; kind?: string }) =>
-    send<LocationRow>('POST', '/api/locations/', b),
   updateLocation: (id: number, b: Partial<{ code: string; description: string; kind: string }>) =>
     send<LocationForm>('PATCH', `/api/locations/${id}/`, b),
   deleteLocation: (id: number) => send<void>('DELETE', `/api/locations/${id}/`),
@@ -713,8 +701,6 @@ export const api = {
   relocation: (id: number) => get<RelocationForm>(`/api/relocations/${id}/`),
   updateRelocation: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<RelocationForm>('PATCH', `/api/relocations/${id}/`, b),
-  createRelocation: (b: { project_id: number; number: string; date?: string }) =>
-    send<RelocationForm>('POST', '/api/relocations/', b),
   addRelocationLine: (id: number, b: {
     lot_id: number; qty: number; from_location_id: number; to_location_id: number
   }) => send<RelocationForm>('POST', `/api/relocations/${id}/lines/`, b),
@@ -738,8 +724,6 @@ export const api = {
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
   updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; contractor_id: number | null }>) =>
     send<ProcurementForm>('PATCH', `/api/procurements/${id}/`, b),
-  createProcurement: (b: { code?: string; description?: string; date?: string }) =>
-    send<ProcurementForm>('POST', '/api/procurements/', b),
   addProcurementLine: (id: number, b: { item_id: number; qty: number }) =>
     send<ProcurementForm>('POST', `/api/procurements/${id}/lines/`, b),
   updateProcurementLine: (id: number, qty: number) =>

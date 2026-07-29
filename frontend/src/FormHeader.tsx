@@ -104,8 +104,10 @@ export function AuthorField({ userId, userName, disabled, onChange }: {
 // пропадёт под замком). Опции — {id,label}; `onChange` срабатывает только на реальном
 // изменённом выборе. Движок сам откажет в смене якоря у непустого ордера — форма
 // ловит отказ строкой ошибки (как у автора).
+// Ф12e: `id` может быть пустым — якорь (прибор-цель комплектации) выбирают в форме,
+// он обязателен к фиксации, а не к рождению.
 export function AnchorSelect({ label, id, currentLabel, options, disabled, onChange }: {
-  label: string; id: number; currentLabel: string
+  label: string; id: number | null; currentLabel: string
   options: { id: number; label: string }[]
   disabled: boolean; onChange: (id: number) => void
 }) {

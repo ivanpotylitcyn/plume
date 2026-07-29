@@ -2,15 +2,15 @@
 // Строки УПД = лоты (в модели отдельной ReceiptLine нет): изделие + кол-во +
 // цена + название, автосейв по blur/Enter. Добавление строки = рождение партии
 // (+RECEIPT). Замок «сверено со сканом» (approved) делает форму read-only.
-import { useState } from 'react'
-import { api, type ItemRow, type ProjectPurchaseRow, type ReceiptForm,
-  type ReceiptLot } from './api'
+import { useEffect, useState } from 'react'
+import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
+  type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
 import { num, money, count, sumByUom, LotGlyph } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AuthorField, ProjectField, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
-import { ItemPicker, PurchasePicker } from './Picker'
+import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
   onChanged, onDeleted }: {
@@ -20,6 +20,11 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   onChanged: () => void; onDeleted: () => void
 }) {
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
+  // Ф12e: поставщик задавался ТОЛЬКО в форме создания и в шапке не жил — после её
+  // сноса поставку было бы нечем укомплектовать до фиксации.
+  const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
+  const reloadSuppliers = () => api.counterparties('supplier').then(setSuppliers)
+  useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
   const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     receiptId, api.receipt, {
       onChanged, onDeleted,
@@ -102,6 +107,17 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
         <dd><CommitInput value={c.number} disabled={locked || busy}
           onCommit={v => run(api.updateReceipt(c.id, { number: v }))}
           validate={v => v.trim().length > 0} /></dd>
+        {/* Ф12e: поставщик обязателен к ФИКСАЦИИ, а не к рождению — значит его
+            место в шапке. «Завести» прямо из пикера: отдельной формы контрагента
+            в продукте нет (заведётся режимом «Контрагенты», волна 20). */}
+        <dt>Поставщик</dt>
+        <dd><CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+          disabled={locked || busy} placeholder="— не указан —"
+          onPick={id => run(api.updateReceipt(c.id, { contractor_id: id }))}
+          onClear={() => run(api.updateReceipt(c.id, { contractor_id: null }))}
+          onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+            .then(cp => { reloadSuppliers()
+              run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} /></dd>
         <dt>Дата</dt>
         <dd><CommitInput value={c.date} type="date" disabled={locked || busy}
           onCommit={v => run(api.updateReceipt(c.id, { date: v }))}

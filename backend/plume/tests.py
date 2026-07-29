@@ -782,9 +782,15 @@ class TransferFormTests(EngineTestBase):
         line = engine.add_transfer_line(t, self.lot, D(1))
         self.assertIn('ЗН-42', line.display_name)               # авто-метка лота
 
-    def test_create_rejects_empty_number(self):
+    def test_number_required_at_lock_not_at_birth(self):
+        """Ф12e: накладная рождается без номера, но не фиксируется без него."""
+        t = engine.create_transfer(self.prj, self.user)
+        engine.add_transfer_line(t, self.lot, D(1))
         with self.assertRaises(ValidationError):
-            engine.create_transfer(self.prj, self.user, '   ')
+            engine.lock_transfer(t)
+        engine.update_transfer(t, number='Н-7')
+        engine.lock_transfer(t)
+        self.assertTrue(models.Transfer.objects.get(pk=t.pk).locked)
 
     def test_add_line_rejects_foreign_project_lot(self):
         other = models.Project.objects.create(
@@ -902,9 +908,15 @@ class WriteoffFormTests(EngineTestBase):
         self.assertEqual(c['total_qty'], D(4))
         self.assertEqual(c['lines'][0]['lot_live_qty'], D(6))
 
-    def test_create_rejects_empty_number(self):
+    def test_number_required_at_lock_not_at_birth(self):
+        """Ф12e: акт рождается без номера, но не фиксируется без него."""
+        w = engine.create_writeoff(self.prj, self.user)
+        engine.add_writeoff_line(w, self.lot, D(1))
         with self.assertRaises(ValidationError):
-            engine.create_writeoff(self.prj, self.user, '  ')
+            engine.lock_writeoff(w)
+        engine.update_writeoff(w, number='СП-7')
+        engine.lock_writeoff(w)
+        self.assertTrue(models.Writeoff.objects.get(pk=w.pk).locked)
 
     def test_add_line_rejects_foreign_project(self):
         other = models.Project.objects.create(
@@ -1584,13 +1596,18 @@ class ProcurementHttpTests(TestCase):
         cd = self.c.get(f'/api/procurements/{pid}/xlsx/')['Content-Disposition']
         self.assertIn("filename*=utf-8''", cd)
         self.assertIn(quote('Нева ДЗЗ 1.xlsx'), cd)
-        # пустой код → фолбэк по id, ASCII-имени «order-*» больше нет
+        # Ф12e: рождённая без кода закупка получает фолбэк «Закупка 42» ещё в движке,
+        # поэтому имя файла осмысленно уже здесь.
         r2 = self.c.post('/api/procurements/', {'description': 'без кода'},
             content_type='application/json')
         pid2 = r2.json()['id']
         cd2 = self.c.get(f'/api/procurements/{pid2}/xlsx/')['Content-Disposition']
-        self.assertIn(quote(f'закупка-{pid2}.xlsx'), cd2)
-        self.assertNotIn('order', cd2)
+        self.assertIn(quote(f'Закупка {pid2}.xlsx'), cd2)
+        # Код можно очистить руками — тогда работает страховочный фолбэк по id.
+        engine.update_procurement(models.Procurement.objects.get(pk=pid2), code='')
+        cd3 = self.c.get(f'/api/procurements/{pid2}/xlsx/')['Content-Disposition']
+        self.assertIn(quote(f'закупка-{pid2}.xlsx'), cd3)
+        self.assertNotIn('order', cd3)
 
 
 class PeggingHttpTests(TestCase):
@@ -1668,7 +1685,7 @@ class ReferenceCreateTests(EngineTestBase):
         self.assertEqual(j.uom, 'шт')
         self.assertFalse(j.native)
 
-    def test_create_item_rejects_dup_empty_and_bad_category(self):
+    def test_create_item_rejects_dup_and_bad_category(self):
         cat = _cat()
         engine.create_item('R100', 'Резистор', category_id=cat.id)
         # Ф3b: дубль кода ловит ОБЩИЙ `require_unique_code` (тот же, что у закупок/
@@ -1676,12 +1693,6 @@ class ReferenceCreateTests(EngineTestBase):
         with self.assertRaises(ValidationError) as ctx:
             engine.create_item('R100', 'Дубль', category_id=cat.id)   # дубль ключа
         self.assertIn('уже занят', ctx.exception.messages[0])
-        with self.assertRaises(ValidationError):
-            engine.create_item('', 'Без ключа', category_id=cat.id)
-        with self.assertRaises(ValidationError):
-            engine.create_item('X1', '', category_id=cat.id)          # без описания
-        with self.assertRaises(ValidationError):
-            engine.create_item('X2', 'Без категории')                 # категория обязательна
         with self.assertRaises(ValidationError):
             engine.create_item('X3', 'Плохая', category_id=999999)    # неизвестная категория
 
@@ -1691,14 +1702,10 @@ class ReferenceCreateTests(EngineTestBase):
         self.assertFalse(p.locked)
         self.assertEqual(p.budget, D('100000'))
 
-    def test_create_project_rejects_dup_and_empty(self):
+    def test_create_project_rejects_dup(self):
         engine.create_project('НИР-1', 'Тема')
         with self.assertRaises(ValidationError):
             engine.create_project('НИР-1', 'Дубль')    # дубль кода
-        with self.assertRaises(ValidationError):
-            engine.create_project('', 'Без кода')
-        with self.assertRaises(ValidationError):
-            engine.create_project('НИР-2', '')         # без названия
 
 
 class ReferenceCreateHttpTests(TestCase):
@@ -1732,9 +1739,149 @@ class ReferenceCreateHttpTests(TestCase):
         body = r.json()
         self.assertEqual(body['kind'], 'external')
         self.assertFalse(body['locked'])
-        bad = self.c.post('/api/projects/', {'code': '', 'description': 'X'},
-            content_type='application/json')
-        self.assertEqual(bad.status_code, 400)
+
+
+class BornByClickTests(EngineTestBase):
+    """Волна 19, Ф12e: «＋ Новый» рождает сущность СРАЗУ, поэтому обязательные поля
+    обязаны пережить рождение пустыми.
+
+    Правило не «поля стали необязательными», а «обязательность переехала с рождения
+    на ФИКСАЦИЮ» — каждый тест проверяет обе половины: родилось пустым И не
+    фиксируется, пока не заполнено. Пустой `code` — исключение: он идентичность,
+    его добирает фолбэк «Поставка 12» (решение Ивана 2026-07-28)."""
+
+    def test_item_born_without_code_category_description(self):
+        i = engine.create_item()
+        self.assertEqual(i.code, f'Изделие {i.id}')
+        self.assertEqual(i.description, '')
+        self.assertIsNone(i.category_id)
+
+    def test_item_without_category_does_not_lock(self):
+        i = engine.create_item()
+        with self.assertRaises(ValidationError) as ctx:
+            engine.lock_item(i)
+        self.assertIn('категорию', ctx.exception.messages[0])
+        engine.update_item(i, {'category_id': _cat().id})
+        engine.lock_item(i)
+        self.assertTrue(models.Item.objects.get(pk=i.pk).locked)
+
+    def test_item_lock_refusal_is_400_not_500(self):
+        """Отказ фиксации должен доехать до формы строкой, а не пятисоткой.
+
+        `lock_item` до Ф12e не умел отказывать вовсе, поэтому вьюха его не
+        оборачивала — новый гейт вылезал `ValidationError` наружу."""
+        i = engine.create_item()
+        c = Client()
+        c.force_login(self.user)
+        r = c.post(f'/api/items/{i.id}/lock/')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('категорию', r.json()['detail'])
+
+    def test_project_and_location_born_with_fallback_code(self):
+        p = engine.create_project()
+        self.assertEqual(p.code, f'Проект {p.id}')
+        loc = engine.create_location()
+        self.assertEqual(loc.code, f'Место {loc.id}')
+
+    def test_fallback_code_steps_aside_from_taken_one(self):
+        """Человек мог руками занять ровно тот код, который сгенерит фолбэк."""
+        p = engine.create_project()
+        engine.update_project(p, {'code': 'своё имя'})       # освободили фолбэк-код
+        engine.create_project(f'Проект {p.id}', 'чужак')     # и заняли его руками
+        engine.fallback_code(p, 'Проект')
+        self.assertEqual(p.code, f'Проект {p.id}-2')
+
+    def test_orders_born_without_number_and_get_kind_code(self):
+        for create, label in (
+                (engine.create_receipt, 'Поставка'),
+                (engine.create_transfer, 'Передача'),
+                (engine.create_writeoff, 'Списание'),
+                (engine.create_requisition, 'Требование'),
+                (engine.create_inventory, 'Инвентаризация'),
+                (engine.create_relocation, 'Перемещение')):
+            doc = create(self.prj, self.user)
+            self.assertEqual(doc.number, '', label)
+            self.assertEqual(doc.code, f'{label} {doc.id}', label)
+
+    def test_order_code_space_is_shared_across_kinds(self):
+        """Код ордера уникален на ВСЕ семь видов, а `Receipt.objects` фильтрует по
+        `kind` — фолбэк обязан искать по родителю, иначе выдаст занятый код."""
+        r = engine.create_receipt(self.prj, self.user)
+        engine.update_receipt(r, code='своё имя')            # освободили фолбэк-код
+        engine.update_writeoff(engine.create_writeoff(self.prj, self.user),
+                               code=f'Поставка {r.id}')      # занял ордер ДРУГОГО вида
+        engine.fallback_code(r, 'Поставка')
+        self.assertEqual(r.code, f'Поставка {r.id}-2')
+
+    def test_receipt_without_contractor_does_not_lock(self):
+        r = engine.create_receipt(self.prj, self.user, 'УПД-1')
+        engine.add_receipt_lot(r, self.make_item('R1'), D(1), D(1))
+        with self.assertRaises(ValidationError):
+            engine.lock_receipt(r)              # контрагент обязателен к фиксации
+
+    def test_kitting_born_without_target(self):
+        k = engine.create_kitting(self.prj, self.user)
+        self.assertIsNone(k.target_item_id)
+        self.assertIsNone(k.qty)
+        self.assertEqual(k.code, f'Комплектация {k.id}')
+
+    def test_every_list_endpoint_survives_empty_drafts(self):
+        """Родить пустой черновик КАЖДОЙ сущности и прочитать ВСЕ списки.
+
+        Пробел, который это закрывает: проверялись detail-проекции, а падали
+        СПИСОЧНЫЕ (`_receipt_row` разыменовывал контрагента) — их читает сайдбар,
+        то есть 500 ловил бы любой пользователь сразу после клика."""
+        c = Client()
+        c.force_login(self.user)
+        paths = ['projects', 'items', 'locations', 'purchases', 'procurements',
+                 'receipts', 'kittings', 'transfers', 'writeoffs',
+                 'requisitions', 'inventories', 'relocations']
+        for path in paths:
+            self.assertEqual(
+                c.post(f'/api/{path}/', {}, content_type='application/json')
+                .status_code, 201, path)
+        for path in paths:                      # каждый список после каждого рождения
+            self.assertEqual(c.get(f'/api/{path}/').status_code, 200, path)
+
+    def test_kitting_form_survives_missing_target(self):
+        """Форма пустой комплектации открывается: разузловывать пока нечего."""
+        form = engine.kitting_form(engine.create_kitting(self.prj, self.user))
+        self.assertIsNone(form['target_id'])
+        self.assertEqual(form['rows'], [])
+
+    def test_kitting_without_target_does_not_lock(self):
+        k = engine.create_kitting(self.prj, self.user)
+        with self.assertRaises(ValidationError) as ctx:
+            engine.lock_kitting(k)
+        self.assertIn('прибор-цель', ctx.exception.messages[0])
+
+    def test_receipt_contractor_is_editable_in_form(self):
+        """Поставщик правится В ФОРМЕ, а не только при рождении (Ф12e).
+
+        До Ф12e он задавался лишь в форме создания и в шапке не жил вовсе — после
+        сноса той формы поставку было бы не зафиксировать никогда."""
+        r = engine.create_receipt(self.prj, self.user, 'УПД-1')
+        cp = models.Counterparty.objects.create(description='ООО Поставщик',
+                                                is_supplier=True)
+        c = Client()
+        c.force_login(self.user)
+        body = c.patch(f'/api/receipts/{r.id}/', {'contractor_id': cp.id},
+                       content_type='application/json').json()
+        self.assertEqual(body['contractor_id'], cp.id)
+        engine.add_receipt_lot(r, self.make_item('R1'), D(1), D(1))
+        engine.lock_receipt(models.Receipt.objects.get(pk=r.pk))   # теперь пускает
+
+    def test_order_born_anchored_to_own_stock_when_project_unset(self):
+        """Проект-якорь NOT NULL: фолбэк — белый «Собственный склад», не чужой НИР."""
+        anchor = engine.default_document_project()
+        self.assertEqual(anchor.kind, models.Project.Kind.INTERNAL_STOCK)
+        r = self.client_post_document()
+        self.assertEqual(r['project_id'], anchor.id)
+
+    def client_post_document(self):
+        c = Client()
+        c.force_login(self.user)
+        return c.post('/api/receipts/', {}, content_type='application/json').json()
 
 
 class InventoryFormTests(EngineTestBase):
@@ -1770,9 +1917,15 @@ class InventoryFormTests(EngineTestBase):
         self.assertEqual(c['total_cost'], D(8))                # 4 × 2
         self.assertEqual(c['lots'][0]['live_qty'], D(4))
 
-    def test_create_rejects_empty_number(self):
+    def test_number_required_at_lock_not_at_birth(self):
+        """Ф12e: акт рождается без номера, но не фиксируется без него."""
+        inv = engine.create_inventory(self.prj, self.user)
+        engine.add_inventory_lot(inv, self.item, D(1), unit_cost=D('1.00'))
         with self.assertRaises(ValidationError):
-            engine.create_inventory(self.prj, self.user, '  ')
+            engine.lock_inventory(inv)
+        engine.update_inventory(inv, number='ИНВ-7')
+        engine.lock_inventory(inv)
+        self.assertTrue(models.Inventory.objects.get(pk=inv.pk).locked)
 
     def test_add_lot_rejects_nonpositive_and_negative_cost(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
@@ -2540,15 +2693,18 @@ class ItemProjectUpdateTests(EngineTestBase):
         it.refresh_from_db()
         self.assertIsNone(it.estimated_cost)
 
-    def test_update_item_rejects_dup_key_empty_desc_bad_category(self):
+    def test_update_item_rejects_dup_key_and_bad_category(self):
         self.make_item('A')
         it = self.make_item('B')
         with self.assertRaises(ValidationError):
             engine.update_item(it, {'code': 'A'})  # дубль ключа
         with self.assertRaises(ValidationError):
-            engine.update_item(it, {'description': '   '})   # пустое описание
-        with self.assertRaises(ValidationError):
             engine.update_item(it, {'category_id': 999999})  # неизвестная категория
+        # Ф12e: очистка описания/категории легальна — заполнить можно, передумать тоже.
+        engine.update_item(it, {'description': '   ', 'category_id': None})
+        it.refresh_from_db()
+        self.assertEqual(it.description, '')
+        self.assertIsNone(it.category_id)
 
     def test_update_item_partial_leaves_others(self):
         it = self.make_item('X')
@@ -2570,9 +2726,11 @@ class ItemProjectUpdateTests(EngineTestBase):
         self.prj.refresh_from_db()
         self.assertIsNone(self.prj.budget)
 
-    def test_update_project_rejects_empty_name(self):
-        with self.assertRaises(ValidationError):
-            engine.update_project(self.prj, {'description': '  '})
+    def test_update_project_allows_clearing_name(self):
+        """Ф12e: описание не идентичность (её держит `code`) — очистка легальна."""
+        engine.update_project(self.prj, {'description': '  '})
+        self.prj.refresh_from_db()
+        self.assertEqual(self.prj.description, '')
 
     def test_update_project_code_rename_and_guards(self):
         # WAVE14 Ф1: код правится в форме, guard как у изделия (не PK — безопасно).

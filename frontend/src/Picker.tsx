@@ -18,7 +18,7 @@ import type { ItemRow, CounterpartyRow, ProjectPurchaseRow } from './api'
 import { ItemGlyph, StatusGlyph } from './status'
 
 export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, renderRow,
-  placeholder, disabled, width, onEnter, onClear, notFound }: {
+  placeholder, disabled, width, onEnter, onClear, notFound, onCreate }: {
   options: T[]
   value: number | ''
   onPick: (id: number) => void
@@ -32,6 +32,10 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
   onEnter?: () => void
   onClear?: () => void          // задан → у выбранного появляется «×» (поле обнуляемо)
   notFound?: string
+  // Ф12e: «нет в справочнике» перестало быть тупиком. Форм создания больше нет, и
+  // заводить справочную мелочь (контрагента) надо оттуда, где о ней вспомнили —
+  // из самого поля. Задан → плашка «не найдено» становится кнопкой.
+  onCreate?: (text: string) => void
 }) {
   const t = useTypeahead({ options, value, onPick, keyOf, textOf, searchOf, onEnter })
   const menu = useRef<HTMLDivElement>(null)
@@ -66,10 +70,18 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
             </div>
           ))}
         </AnchoredMenu>}
-      {t.empty &&
-        <AnchoredMenu anchor={field} className="picker-empty">
-          {notFound ?? 'ничего не найдено'}
-        </AnchoredMenu>}
+      {t.empty && (onCreate
+        ? <AnchoredMenu anchor={field} className="typeahead-menu">
+            <div className="typeahead-item active"
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => { const s = t.text.trim(); t.close(); onCreate(s) }}>
+              <span className="ci ci-add" />
+              <span>Завести «{t.text.trim()}»</span>
+            </div>
+          </AnchoredMenu>
+        : <AnchoredMenu anchor={field} className="picker-empty">
+            {notFound ?? 'ничего не найдено'}
+          </AnchoredMenu>)}
     </span>
   )
 }
@@ -104,15 +116,17 @@ export function ItemPicker({ items, value, onPick, disabled, placeholder, width,
 const cpText = (c: CounterpartyRow) => c.code ? `${c.code} — ${c.description}` : c.description
 
 export function CounterpartyPicker({ counterparties, value, onPick, disabled, placeholder,
-  width, onClear }: {
+  width, onClear, onCreate }: {
   counterparties: CounterpartyRow[]
   value: number | ''
   onPick: (id: number) => void
   disabled?: boolean; placeholder?: string; width?: number; onClear?: () => void
+  onCreate?: (name: string) => void
 }) {
   return <Picker options={counterparties} value={value} onPick={onPick} keyOf={c => c.id}
     textOf={cpText} searchOf={c => `${c.code ?? ''} ${c.description} ${c.inn}`}
     disabled={disabled} placeholder={placeholder} width={width} onClear={onClear}
+    onCreate={onCreate}
     notFound="ничего не найдено — контрагента можно завести рядом."
     renderRow={c => <>
       {c.code && <span className="code">{c.code}</span>}

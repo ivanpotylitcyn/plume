@@ -94,6 +94,7 @@ import io
 import os
 from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import ROUND_HALF_UP, Decimal
+from uuid import uuid4
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -154,8 +155,21 @@ def _require_header(doc):
     """Гейт полноты шапки на фиксации — условная валидация специфики по виду
     (волна 13, Ф2d). Единый kind-driven источник правила живёт на модели
     (`StockDocument.clean` + `REQUIRED_HEADER_BY_KIND`); фиксация не выпускает
-    неполный ордер независимо от пути его создания (API/админ/прямой ORM)."""
+    неполный ордер независимо от пути его создания (API/админ/прямой ORM).
+
+    Ф12e добавила сюда специфику вида. Обязательность `contractor`/`target_item`
+    Ф14 выразила CHECK'ами по `locked` — но прикладного гейта у них не было, и до
+    Ф12e это не проявлялось: до неё оба поля требовались при рождении, и дойти до
+    фиксации с пустым было неоткуда. Теперь это штатное состояние черновика, и без
+    гейта пользователь получал бы `IntegrityError 3819` вместо внятного отказа.
+    """
     doc.clean()
+    kind = doc.KIND or doc.kind
+    if kind == models.DocumentKind.RECEIPT and doc.contractor_id is None:
+        raise ValidationError('Перед фиксацией выберите поставщика.')
+    if kind == models.DocumentKind.KITTING and (
+            doc.target_item_id is None or doc.qty is None):
+        raise ValidationError('Перед фиксацией выберите прибор-цель и кол-во.')
 
 
 def rebuild_document_movements(doc):
@@ -384,23 +398,26 @@ def location_form(location):
     }
 
 
-def create_location(code, description, kind=''):
-    """Завести место хранения (В13 Ф4). Код уникален (дружелюбная проверка до IntegrityError)."""
+def create_location(code=None, description='', kind=''):
+    """Завести место хранения (В13 Ф4). Код уникален (дружелюбная проверка до
+    IntegrityError); пустой — фолбэком «Место 12» (Ф12e)."""
     code = (code or '').strip()
-    description = (description or '').strip()
-    if not code:
-        raise ValidationError('Нужен код места хранения.')
-    if not description:
-        raise ValidationError('Нужно описание места хранения.')
-    if models.Location.objects.filter(code=code).exists():
+    if code and models.Location.objects.filter(code=code).exists():
         raise ValidationError('Место с таким кодом уже есть.')
-    return models.Location.objects.create(
-        code=code, description=description, kind=(kind or '').strip())
+    fields = dict(description=(description or '').strip(),
+                  kind=(kind or '').strip())
+    if code:
+        return models.Location.objects.create(code=code, **fields)
+    return create_with_fallback_code(models.Location, 'Место', **fields)
 
 
 def update_location(location, code=None, description=None, kind=None):
     """Правка ДНК места хранения (В13 Ф4) — мутабельная, под интерфейсным замком.
-    Часовые `None` (поле не передано); пустой код/описание отклоняем."""
+    Часовые `None` (поле не передано); пустой код отклоняем.
+
+    Ф12e: описание разрешено пустым — сущность рождается по клику незаполненной, и
+    запрет очистки означал бы, что заполнить поле можно, а передумать нельзя.
+    Идентичность держит `code` (он и остался обязательным)."""
     if code is not None:
         code = code.strip()
         if not code:
@@ -409,10 +426,7 @@ def update_location(location, code=None, description=None, kind=None):
             raise ValidationError('Место с таким кодом уже есть.')
         location.code = code
     if description is not None:
-        description = description.strip()
-        if not description:
-            raise ValidationError('Описание места хранения обязательно.')
-        location.description = description
+        location.description = description.strip()
     if kind is not None:
         location.kind = kind.strip()
     location.save()
@@ -925,6 +939,17 @@ def available_lots(item, project, location=None):
     return result
 
 
+def create_kitting(project, user, target_item=None, qty=None, date=None):
+    """Создать комплектацию — рождение переехало из вьюхи в движок (Ф12e).
+
+    `target_item`/`qty` необязательны при рождении: их требует ФИКСАЦИЯ (CHECK
+    `doc_locked_kitting_has_target`), потому что до выбора прибора форма всё равно
+    пуста — BOM разузловать не от чего. Номера у комплектации нет
+    (`REQUIRED_HEADER_BY_KIND[KITTING] = ()`), но `code` она получает общий."""
+    return _born_order(models.Kitting, project, user, date=date,
+                       target_item=target_item, qty=qty)
+
+
 def kitting_form(kitting):
     """Проекция формы сборки (1 уровень BOM целевого прибора).
 
@@ -933,12 +958,14 @@ def kitting_form(kitting):
     доступности компонента в проекте (`_coverage`, тот же словарь ✓/●/▲) с лотами-
     кандидатами под пайку. Ничего не хранит — чистая проекция.
     """
+    # Ф12e: комплектация рождается по клику, прибор-цель выбирают уже в форме —
+    # до выбора разузловывать нечего, и это не ошибка, а нормальный черновик.
     target = kitting.target_item
     project = kitting.project
     rows = []
     statuses = []
     is_wip = not kitting.locked
-    for bl in target.bom_lines.select_related('component'):
+    for bl in (target.bom_lines.select_related('component') if target else ()):
         component = bl.component
         need = bl.qty * kitting.qty
         real_lines = []
@@ -979,8 +1006,10 @@ def kitting_form(kitting):
         'id': kitting.id, **_author(kitting), 'locked': kitting.locked,
         'code': kitting.code, 'description': kitting.description,
         'project_id': project.id, 'project_code': project.code,
-        'target_id': target.id, 'target_code': target.code,
-        'target_description': target.description, 'uom': target.uom,
+        'target_id': target.id if target else None,
+        'target_code': target.code if target else '',
+        'target_description': target.description if target else '',
+        'uom': target.uom if target else '',
         'qty': kitting.qty, 'date': kitting.date,
         'worst_status': _worst_of(statuses),   # worst-of призрачных строк
         'rows': rows,
@@ -1045,6 +1074,9 @@ def lock_kitting(kitting):
     компоненты списывались сразу.
     """
     _require_unlocked(kitting)
+    # Ф12e: комплектация рождается без прибора-цели — гейт здесь (своей дорогой
+    # мимо `lock_document`, поэтому зовём явно).
+    _require_header(kitting)
     if kitting.lots.exists():
         raise ValidationError('У комплектации уже есть рождённый лот-прибор.')
     models.Lot.objects.create(
@@ -1087,6 +1119,17 @@ def _lot_consumed_downstream(lot):
     """
     return (lot.movements.filter(qty__lt=0).exists() or lot.successors.exists()
             or lot.stock_lines.exists())
+
+
+def create_receipt(project, user, number='', date=None, contractor=None):
+    """Создать поставку (УПД) — рождение переехало из вьюхи в движок (Ф12e).
+
+    Раньше `views.receipts` строила `Receipt` сырым `objects.create` и требовала
+    `contractor_id` + непустой `number`: артефакт формы создания. Оба поля теперь
+    обязательны к ФИКСАЦИИ (`REQUIRED_HEADER_BY_KIND` + CHECK
+    `doc_locked_receipt_has_contractor`), а не к рождению."""
+    return _born_order(models.Receipt, project, user, number, date,
+                       contractor=contractor)
 
 
 def receipt_form(receipt):
@@ -1229,12 +1272,14 @@ def _solo_procurement(user):
 
 
 def create_purchase(project, user, date=None, code=None, description=''):
-    """Создать заказ проекта (черновик) с авто-`Procurement`-родителем."""
+    """Создать заказ проекта (черновик) с авто-`Procurement`-родителем.
+    Пустой код — фолбэком «Заказ 12» (Ф12e)."""
     require_unique_code(models.Purchase, code)
     proc = _solo_procurement(user)
-    return models.Purchase.objects.create(
+    p = models.Purchase.objects.create(
         procurement=proc, project=project, user=user,
         locked=False, date=date, code=code, description=description or '')
+    return p if code else fallback_code(p, 'Заказ')
 
 
 def purchase_form(purchase):
@@ -1499,17 +1544,14 @@ def item_movements(item):
     return rows
 
 
-def create_transfer(project, user, number, date=None, contractor=None):
+def create_transfer(project, user, number='', date=None, contractor=None):
     """Создать передачу (накладную) проекта. Строки добавляются в форме.
 
-    `Transfer.date` не nullable — пустую дату замыкаем на сегодня. `contractor` —
-    контрагент-заказчик (опционален: получатель может быть проставлен позже в форме).
-    """
-    if not (number or '').strip():
-        raise ValidationError('Нужен № накладной.')
-    return models.Transfer.objects.create(
-        project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate(), contractor=contractor)
+    `contractor` — контрагент-заказчик (опционален: получатель может быть проставлен
+    позже в форме). Ф12e: номер тоже опционален — он обязателен к ФИКСАЦИИ
+    (`REQUIRED_HEADER_BY_KIND`), а не к рождению."""
+    return _born_order(models.Transfer, project, user, number, date,
+                       contractor=contractor)
 
 
 def add_transfer_line(transfer, lot, qty, display_name=''):
@@ -1575,6 +1617,16 @@ def unlock_transfer(transfer):
 # --------------------------------------------------------------------------- #
 #  Закрытие проекта (волна 6): списание / требование + панель + мягкий замок
 # --------------------------------------------------------------------------- #
+def default_document_project():
+    """Проект-якорь для ордера, рождённого по клику (Ф12e).
+
+    `StockDocument.project` — NOT NULL (якорь Ф2k), фолбэк нужен обязательно.
+    Берём белый «Собственный склад»: он всегда существует (синглтон сида), и это
+    не ложные данные — документ и правда пока ничей, а не приписан чужому НИР.
+    Меняется в шапке, пока ордер пуст (`_set_project`)."""
+    return _internal_project(models.Project.Kind.INTERNAL_STOCK)
+
+
 def _internal_project(kind):
     """Найти-или-создать внутренний проект-склад (белый/серый) — синглтон.
 
@@ -1652,13 +1704,10 @@ def writeoff_form(writeoff):
     }
 
 
-def create_writeoff(project, user, number, date=None, reason=''):
+def create_writeoff(project, user, number='', date=None, reason=''):
     """Создать акт списания проекта. Строки добавляются в форме."""
-    if not (number or '').strip():
-        raise ValidationError('Нужен № акта списания.')
-    return models.Writeoff.objects.create(
-        project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate(), reason=(reason or '').strip())
+    return _born_order(models.Writeoff, project, user, number, date,
+                       reason=(reason or '').strip())
 
 
 def add_writeoff_line(writeoff, lot, qty, location=None):
@@ -1755,13 +1804,9 @@ def requisition_form(requisition):
     }
 
 
-def create_requisition(project, user, number, date=None):
+def create_requisition(project, user, number='', date=None):
     """Создать требование в проект-получатель (`project` = куда кладём потомков)."""
-    if not (number or '').strip():
-        raise ValidationError('Нужен № требования.')
-    return models.Requisition.objects.create(
-        project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate())
+    return _born_order(models.Requisition, project, user, number, date)
 
 
 def add_requisition_line(requisition, source_lot, qty, location=None):
@@ -1886,13 +1931,9 @@ def relocation_form(relocation):
     }
 
 
-def create_relocation(project, user, number, date=None):
+def create_relocation(project, user, number='', date=None):
     """Создать перемещение внутри проекта (`project` — где двигаем лоты по местам)."""
-    if not (number or '').strip():
-        raise ValidationError('Нужен № перемещения.')
-    return models.Relocation.objects.create(
-        project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate())
+    return _born_order(models.Relocation, project, user, number, date)
 
 
 def add_relocation_line(relocation, lot, qty, from_location, to_location):
@@ -2183,6 +2224,62 @@ def require_unique_code(model, code, pk=None):
     code = (code or '').strip()
     if code and model.objects.filter(code=code).exclude(pk=pk).exists():
         raise ValidationError(f'Код «{code}» уже занят — выберите уникальный.')
+
+
+def fallback_code(instance, label):
+    """Проставить код-фолбэк «Поставка 12» только что рождённой сущности (Ф12e).
+
+    «＋ Новый» больше не открывает форму создания — сущность рождается по клику, а
+    `code` у половины сущностей `unique NOT NULL`: пустым его оставить нельзя.
+    Решение Ивана 2026-07-28 — **единый шаблон везде** (`«{вид} {id}»`), включая
+    ордера, где колонка допустила бы NULL: правило одно на всех, и титул формы
+    (`code`, Ф11) нигде не вычисляется в обход данных.
+
+    Код заведомо временный — человек перебьёт его своим жаргоном
+    ([[code-identity-principle]]), поэтому уникальность добираем суффиксом, а не
+    ошибкой: `id` уникален внутри сущности, но человек мог руками занять ровно
+    «Изделие 12» раньше. Зовётся ПОСЛЕ `create` — до вставки `id` не существует.
+    """
+    base = f'{label} {instance.pk}'
+    code, n = base, 1
+    # Через `concrete_model` — у ордера это `StockDocument` (единое пространство
+    # кода на семь видов); `Receipt.objects` фильтрует по `kind` и «Списание 12»
+    # не увидел бы. У остальных сущностей proxy нет, и это тот же класс.
+    model = instance._meta.concrete_model
+    while model._default_manager.filter(code=code).exclude(pk=instance.pk).exists():
+        n += 1
+        code = f'{base}-{n}'
+    instance.code = code
+    instance.save(update_fields=['code'])
+    return instance
+
+
+def create_with_fallback_code(model, label, **fields):
+    """Родить сущность, чей `code` — `unique NOT NULL`, без кода от человека (Ф12e).
+
+    Шаблон фолбэка опирается на `id`, а `id` появляется только после вставки —
+    отсюда два шага. Временный код — случайный: транзакция не даёт ему стать
+    видимым снаружи, но защищает от коллизии двух одновременных рождений (пустая
+    строка на этом месте оставила бы дыру шириной в один `INSERT`).
+    """
+    with transaction.atomic():
+        obj = model.objects.create(code=uuid4().hex, **fields)
+        return fallback_code(obj, label)
+
+
+def _born_order(model, project, user, number='', date=None, **specifics):
+    """Родить ордер любого вида (Ф12e) — одна точка на семь `create_*`.
+
+    Что раньше отличало семь рождений — только вид и своя строка «Нужен № акта».
+    Ф12e эти проверки снимает (номер обязателен к ФИКСАЦИИ, `REQUIRED_HEADER_BY_KIND`,
+    а не к рождению), и различий не остаётся вовсе. `date` — не фолбэк-ложь, а факт:
+    сегодня документ и правда заводят; к фиксации человек поправит его на дату УПД.
+    Код — общий шаблон («Поставка 12»), пространство кода одно на все виды.
+    """
+    doc = model.objects.create(
+        project=project, user=user, number=(number or '').strip(),
+        date=date or timezone.localdate(), **specifics)
+    return fallback_code(doc, models.DocumentKind(doc.kind).label)
 
 
 def _set_code(instance, code):
@@ -2479,11 +2576,13 @@ def procurement_form(procurement):
 
 
 def create_procurement(user, date=None, code=None, description=''):
-    """Создать закупку-план (черновик) без проекта."""
+    """Создать закупку-план (черновик) без проекта.
+    Пустой код — фолбэком «Закупка 12» (Ф12e)."""
     require_unique_code(models.Procurement, code)
-    return models.Procurement.objects.create(
+    p = models.Procurement.objects.create(
         user=user, locked=False,
         date=date, code=code, description=(description or '').strip())
+    return p if code else fallback_code(p, 'Закупка')
 
 
 PROCUREMENT_LOCKED = (
@@ -2857,14 +2956,10 @@ def inventory_form(inventory):
     }
 
 
-def create_inventory(project, user, number, date=None):
+def create_inventory(project, user, number='', date=None):
     """Создать акт инвентаризации в проект-дом (куда рождаются найденные лоты).
-    `code`/`description` (Ф10) заполняются в детальной форме под замком, не при создании."""
-    if not (number or '').strip():
-        raise ValidationError('Нужен № акта инвентаризации.')
-    return models.Inventory.objects.create(
-        project=project, user=user, number=number.strip(),
-        date=date or timezone.localdate())
+    `description` (Ф10) заполняется в детальной форме под замком, не при создании."""
+    return _born_order(models.Inventory, project, user, number, date)
 
 
 def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, lot_name='',
@@ -2998,25 +3093,27 @@ def item_is_used(item):
             or models.ProcurementLine.objects.filter(item=item).exists())
 
 
-def create_item(code, description, category_id=None, uom='шт',
+def create_item(code=None, description='', category_id=None, uom='шт',
                 native=False, estimated_cost=None, temperature=''):
-    """Создать изделие справочника из мини-формы «＋ Новое». `code` (заказной PN,
-    канон библиотеки — колонка CSV «Design Item Id») уникален; категория обязательна
-    (FK-справочник). Ручное изделие рождается `synced=False` (руками, не из библиотеки)."""
+    """Создать изделие справочника. `code` (заказной PN, канон библиотеки — колонка
+    CSV «Design Item Id») уникален.
+
+    Волна 19, Ф12e: рождается по клику «＋ Новое», поэтому пустым может быть всё —
+    код добирается фолбэком «Изделие 12», описание остаётся пустым, категория
+    остаётся `NULL` и требуется только к фиксации (`lock_item`). Ручное изделие
+    рождается `synced=False` (руками, не из библиотеки)."""
     code = (code or '').strip()
-    description = (description or '').strip()
-    if not code:
-        raise ValidationError('Нужен код изделия.')
-    if not description:
-        raise ValidationError('Нужно описание изделия.')
     require_unique_code(models.Item, code)
-    category = _resolve_category(category_id)
-    return models.Item.objects.create(
-        code=code, description=description, category=category,
+    fields = dict(
+        description=(description or '').strip(),
+        category=_resolve_category(category_id) if category_id else None,
         uom=(uom or '').strip() or 'шт',
         temperature=(temperature or '').strip(),
         native=bool(native),
         estimated_cost=estimated_cost)
+    if code:
+        return models.Item.objects.create(code=code, **fields)
+    return create_with_fallback_code(models.Item, 'Изделие', **fields)
 
 
 def _require_item_unlocked(item):
@@ -3031,7 +3128,13 @@ def _require_item_unlocked(item):
 
 def lock_item(item):
     """Зафиксировать изделие: форма становится read-only, мутации
-    гейтятся. Идемпотентно."""
+    гейтятся. Идемпотентно.
+
+    Ф12e: категория обязательна ЗДЕСЬ, а не при рождении (изделие заводится по
+    клику пустым). Дружелюбный отказ до CHECK `item_locked_has_category` — тот
+    остаётся страховкой от прямого ORM/админки."""
+    if item.category_id is None:
+        raise ValidationError('Перед фиксацией выберите категорию изделия.')
     if not item.locked:
         item.locked = True
         item.save(update_fields=['locked'])
@@ -3072,13 +3175,14 @@ def update_item(item, changes):
         item.code = v
         fields.append('code')
     if 'description' in changes:
-        v = (changes['description'] or '').strip()
-        if not v:
-            raise ValidationError('Нужно описание изделия.')
-        item.description = v
+        # Ф12e: пустое описание легально (см. `update_location`) — идентичность
+        # держит `code`, а изделие рождается по клику незаполненным.
+        item.description = (changes['description'] or '').strip()
         fields.append('description')
     if 'category_id' in changes:
-        item.category = _resolve_category(changes['category_id'])
+        # Пустая категория легальна в черновике; гейт — на фиксации (`lock_item`).
+        item.category = (_resolve_category(changes['category_id'])
+                         if changes['category_id'] else None)
         fields.append('category')
     if 'uom' in changes:
         item.uom = (changes['uom'] or '').strip() or 'шт'
@@ -3215,6 +3319,11 @@ def parse_library(files):
 _DIFF_ORDER = {'new': 0, 'changed': 1, 'mark': 2, 'gone': 3, 'orphan': 4, 'same': 5}
 
 
+def _category_code(item):
+    """Код категории изделия или `None` (Ф12e: у черновика её может не быть)."""
+    return item.category.code if item.category_id else None
+
+
 def _library_changes(item, row):
     """Что изменилось у существующего изделия против библиотеки: сравниваем только
     синкаемые поля (`description`/`category`/`temperature`). Категорию — по `code`
@@ -3222,8 +3331,10 @@ def _library_changes(item, row):
     changes = {}
     if item.description != row['description']:
         changes['description'] = {'old': item.description, 'new': row['description']}
-    if item.category.code != row['category']:
-        changes['category'] = {'old': item.category.code, 'new': row['category']}
+    # Ф12e: у изделия-черновика категории может не быть — тогда это тоже
+    # изменение («было пусто → станет `capacitors`»), а не падение.
+    if _category_code(item) != row['category']:
+        changes['category'] = {'old': _category_code(item), 'new': row['category']}
     if item.temperature != row['temperature']:
         changes['temperature'] = {'old': item.temperature, 'new': row['temperature']}
     return changes
@@ -3238,7 +3349,8 @@ def _diff_row(status, row, item, changes=None):
                            'temperature': row['temperature'], 'category': row['category']}
     if item is not None:
         out['current'] = {'description': item.description,
-                          'temperature': item.temperature, 'category': item.category.code,
+                          'temperature': item.temperature,
+                          'category': _category_code(item),
                           'native': item.native, 'synced': item.synced,
                           'locked': item.locked}
     if changes:
@@ -3283,7 +3395,9 @@ def library_diff(parsed):
             status = 'same'
         result.append(_diff_row(status, row, item, changes))
     for key, item in existing.items():
-        if key in by_key or item.category.code not in categories:
+        # Изделие без категории (Ф12e, черновик) не принадлежит ни одному
+        # синкаемому классу — сиротой библиотеки объявлять его не за что.
+        if key in by_key or _category_code(item) not in categories:
             continue
         result.append(_diff_row('orphan' if item_is_used(item) else 'gone', None, item))
     result.sort(key=lambda d: (_DIFF_ORDER[d['status']], d['code']))
@@ -3406,23 +3520,22 @@ def rollup_estimated_cost(item):
     return {'estimated_cost': cost, 'updated': updated, 'incomplete': incomplete}
 
 
-def create_project(code, description, budget=None, started=None):
-    """Создать внешний проект (НИР/контракт) из мини-формы «＋ Новый». Код уникален.
+def create_project(code=None, description='', budget=None, started=None):
+    """Создать внешний проект (НИР/контракт). Код уникален; пустой — фолбэком
+    «Проект 12» (Ф12e: сущность рождается по клику, а не из формы создания).
 
     Только `kind=external`: внутренние склады (WHITE/GREY) — синглтоны из сида
-    (`Project.clean`), формой «＋ Новый» не заводятся.
+    (`Project.clean`), кнопкой «＋ Новый» не заводятся.
     """
     code = (code or '').strip()
-    description = (description or '').strip()
-    if not code:
-        raise ValidationError('Нужен код проекта.')
-    if not description:
-        raise ValidationError('Нужно описание проекта.')
-    if models.Project.objects.filter(code=code).exists():
+    if code and models.Project.objects.filter(code=code).exists():
         raise ValidationError(f'Проект с кодом {code} уже есть.')
-    return models.Project.objects.create(
-        code=code, description=description, kind=models.Project.Kind.EXTERNAL,
-        budget=budget, started=started or None)
+    fields = dict(description=(description or '').strip(),
+                  kind=models.Project.Kind.EXTERNAL,
+                  budget=budget, started=started or None)
+    if code:
+        return models.Project.objects.create(code=code, **fields)
+    return create_with_fallback_code(models.Project, 'Проект', **fields)
 
 
 def update_project(project, changes):
@@ -3439,10 +3552,8 @@ def update_project(project, changes):
         project.code = code
         fields.append('code')
     if 'description' in changes:
-        description = (changes['description'] or '').strip()
-        if not description:
-            raise ValidationError('Нужно описание проекта.')
-        project.description = description
+        # Ф12e: пустое описание легально (см. `update_location`).
+        project.description = (changes['description'] or '').strip()
         fields.append('description')
     if 'budget' in changes:
         project.budget = changes['budget']                 # Decimal или None (сброс)

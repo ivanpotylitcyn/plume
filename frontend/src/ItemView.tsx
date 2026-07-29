@@ -264,11 +264,14 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
           : d.description}</dd>
         <dt>Категория</dt>
         <dd>{!metaLocked
-          ? <select className="lot-sel" value={d.category.id} disabled={busy}
+          ? <select className="lot-sel" value={d.category?.id ?? ''} disabled={busy}
               onChange={e => run(api.updateItem(d.id, { category_id: Number(e.target.value) }))}>
+              {/* Ф12e: изделие рождается по клику без категории. Пустой пункт —
+                  честное «ещё не выбрана»; фиксация без категории не пройдёт. */}
+              {!d.category && <option value="">— не выбрана —</option>}
               {categories.map(c => <option key={c.id} value={c.id}>{c.description}</option>)}
             </select>
-          : d.category.description}</dd>
+          : d.category?.description ?? '—'}</dd>
         {/* Поля «Производимое» нет (снято 2026-07-26): `native` — не свойство на правку,
             а ОСЬ РЕЖИМА (Изделия / Компоненты). Заводится вместе с сущностью в том
             режиме, где нажали «＋ Новое», и дальше не переключается. */}
