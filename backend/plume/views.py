@@ -10,7 +10,8 @@
 import json
 from decimal import Decimal, InvalidOperation
 
-from django.contrib.auth import authenticate, get_user_model, login, logout
+from django.contrib.auth import (authenticate, get_user_model, login, logout,
+                                update_session_auth_hash)
 from django.core.exceptions import ValidationError
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
@@ -202,11 +203,17 @@ def users(request):
 @permission_classes([AllowAny])
 def me(request):
     """Текущий пользователь (или 401). Заодно ставит CSRF-cookie — фронт зовёт
-    этот эндпоинт на старте, чтобы получить токен до POST-логина/мутаций."""
+    этот эндпоинт на старте, чтобы получить токен до POST-логина/мутаций.
+
+    Волна 21: сюда добавлена `theme` — тема применяется на первом же запросе старта,
+    без второго round-trip (и заодно здесь профиль рождается лениво). В `_user_payload`
+    её НЕТ намеренно: тот же словарь отдаёт `users()` — пикер авторства, и чужие
+    настройки интерфейса ему знать неоткуда и незачем."""
     if not request.user.is_authenticated:
         return Response({'detail': 'not authenticated'},
                         status=http.HTTP_401_UNAUTHORIZED)
-    return Response(_user_payload(request.user))
+    return Response({**_user_payload(request.user),
+                     'theme': engine.profile_of(request.user).theme})
 
 
 @api_view(['POST'])
@@ -228,6 +235,54 @@ def login_view(request):
 def logout_view(request):
     """Выход — гасит сессию (требует логина; CSRF форсится SessionAuth)."""
     logout(request)
+    return Response(status=http.HTTP_204_NO_CONTENT)
+
+
+@api_view(['GET', 'PATCH'])
+def account(request):
+    """Форма аккаунта (волна 21): ДНК Django + тема интерфейса + три ленты «своих».
+
+    **Эндпойнт БЕЗ `pk` — и это не лаконичность, а гарантия.** Формы всех остальных
+    сущностей адресуются по `pk`, и вопрос «а могу ли я открыть чужую» решался бы
+    правами. Здесь объекта в URL нет вовсе: движок работает с `request.user`. Нет
+    адреса — нет и подмены чужого профиля.
+
+    PATCH частичный, как везде: имя / фамилия / почта — ДНК Django (`update_user`),
+    тема — своя приставка (`set_theme`, единственный вход). Фиксации у пользователя
+    нет (он не документ), поэтому и `lock`-маршрутов у аккаунта не бывает.
+    """
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            if {'first_name', 'last_name', 'email'} & set(d):
+                engine.update_user(
+                    request.user,
+                    first_name=d.get('first_name'), last_name=d.get('last_name'),
+                    email=d.get('email'))
+            if 'theme' in d:
+                engine.set_theme(request.user, d['theme'])
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.user_form(request.user))
+
+
+@api_view(['POST'])
+def account_password(request):
+    """Смена пароля: `{current, new, repeat}` → 204 либо 400 с человеческим текстом.
+
+    `update_session_auth_hash` — обязательная часть сценария: `set_password` меняет
+    хэш, а сессия подписана им, и без обновления человек вылетел бы на логин сразу
+    после успешной смены. Успех МОЛЧИТ (204, без тела): инфраструктуры уведомлений в
+    продукте нет, и заводить её ради одного случая значит делать запас на будущее —
+    молчание после успеха это та же культура, что автосейв.
+    """
+    d = request.data
+    try:
+        engine.change_password(request.user, d.get('current'), d.get('new'),
+                               d.get('repeat'))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    update_session_auth_hash(request, request.user)
     return Response(status=http.HTTP_204_NO_CONTENT)
 
 

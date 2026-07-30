@@ -93,6 +93,12 @@
   (партии документа + партии-источники его строк). Деньги: `_project_spent` считает
   только лоты зафиксированных поставок (единственное чтение денег мимо движений).
 
+Волна 21 (аккаунт + тема интерфейса):
+- `profile_of(user)` — ленивая приставка настроек (`UserProfile`), `set_theme` —
+  единственный вход к теме (движок знает СЛАГ и список допустимых, про цвета не знает).
+- `user_form(user)` — проекция формы аккаунта: ДНК Django + тема + три ленты «своих»
+  документов; `update_user` / `change_password` — правка ДНК и пароля.
+
 Следующие волны: логин-экран, UI вложений (`Attachment`).
 """
 import csv
@@ -103,7 +109,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.validators import EmailValidator
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Sum
 from django.db.models.deletion import ProtectedError
@@ -3511,10 +3519,15 @@ def _counterparty_shipment(counterparty):
     }
 
 
-def _cp_procurement_rows(counterparty):
-    """Таб «Закупки»: планы, где контрагент — намерение («у кого собираемся купить»)."""
+def _procurement_rows(queryset):
+    """Строки ленты закупок-планов — таб «Закупки» ЛЮБОЙ формы, где эта лента нужна.
+
+    Волна 21: функция берёт **queryset**, а не контрагента. У формы контрагента лента
+    отвечает «у кого собираемся купить», у формы аккаунта — «что я планировал»; строка
+    одна и та же, и второго словаря под тот же смысл заводить незачем.
+    """
     rows = []
-    for p in counterparty.procurements.prefetch_related('lines').order_by('-id'):
+    for p in queryset.prefetch_related('lines').order_by('-id'):
         lines = list(p.lines.all())
         rows.append({
             'id': p.id, 'code': p.code, 'description': p.description,
@@ -3524,14 +3537,14 @@ def _cp_procurement_rows(counterparty):
     return rows
 
 
-def _cp_purchase_rows(counterparty):
-    """Таб «Заказы»: обязательства этому контрагенту («у кого купили», Ф17).
+def _purchase_rows(queryset):
+    """Строки ленты заказов — таб «Заказы» любой формы (контрагент, аккаунт).
 
     Закрытость строки красит тем же словарём ✓/●/▲, что список режима «Заказы»
     (`purchase_coverage`) — знак выбирает вью.
     """
     rows = []
-    qs = (counterparty.purchases.select_related('project')
+    qs = (queryset.select_related('project')
           .prefetch_related('lines').order_by('-id'))
     for p in qs:
         lines = list(p.lines.all())
@@ -3596,8 +3609,8 @@ def counterparty_form(counterparty):
         # и два источника одной правды в одной проекции разошлись бы (Ф3).
         'supply': _counterparty_supply(counterparty),
         'shipment': _counterparty_shipment(counterparty),
-        'procurements': _cp_procurement_rows(counterparty),
-        'purchases': _cp_purchase_rows(counterparty),
+        'procurements': _procurement_rows(counterparty.procurements),
+        'purchases': _purchase_rows(counterparty.purchases),
         'receipts': _cp_receipt_rows(counterparty),
         'transfers': _cp_transfer_rows(counterparty),
     }
@@ -4573,3 +4586,132 @@ def delete_attachment(att):
     """Удалить вложение: строку в БД и физический файл с диска."""
     att.file.delete(save=False)
     att.delete()
+
+
+# --------------------------------------------------------------------------- #
+#  Аккаунт: форма пользователя + тема интерфейса (волна 21)
+# --------------------------------------------------------------------------- #
+# Пользователь становится сущностью со своей каноничной формой. Три вещи, которые
+# здесь важнее кода:
+#
+# 1. **Фиксации у пользователя нет.** `locked` в продукте значит «документ стал фактом,
+#    движок дальше не даст его менять». Человек не документ — он не рождает факта,
+#    который движок считает, и замораживать нечего. Остаётся личный замок ФОРМЫ
+#    (интерфейсный, живёт во вью). Прецедент — контрагент (волна 20).
+# 2. **Титул формы = `username`, и полем он не рисуется.** Пара `code`+`description`
+#    не нарушена, а расщеплена по ДНК Django: идентичность — `username`, литературное
+#    имя — `first_name`+`last_name` (`get_full_name` склеивает обратно). `username`
+#    задаётся админкой, значит степенью свободы формы не является — и полем не бывает
+#    (тот же приём, что снял `Item.native`).
+# 3. **Про темы движок знает ровно слаг и список допустимых** (`models.THEMES`). Ярлык
+#    («Тёмная»), палитра, набор CSS-файлов — знание ВЬЮ: `core/theme.ts` +
+#    `themes/registry.ts`. Движок не знает даже, какая из тем светлая.
+
+
+def profile_of(user):
+    """Приставка настроек пользователя (`UserProfile`), рождаемая ЛЕНИВО.
+
+    Сигнала на `post_save` пользователя намеренно нет: сигнал — магия на расстоянии
+    ради экономии одной строки, и он ломает `loaddata` (снимки прода). Единственный
+    вход к профилю — эта функция, поэтому «профиля ещё нет» состоянием продукта не
+    является: первый же запрос его создаёт.
+    """
+    profile, _ = models.UserProfile.objects.get_or_create(user=user)
+    return profile
+
+
+def _document_rows(queryset):
+    """Строки ленты ордеров — СМЕШАННЫЙ фид семи видов с колонкой типа.
+
+    Один таб, а не семь (как список режима «Ордера»): вид ордера здесь колонка, а не
+    раздел. Счётчиков в строке нет намеренно — общей меры у семи видов не существует
+    (у поставки объём это партии, у передачи — строки), а счёт, который человеку нужен
+    («сколько всего»), живёт в мете формы.
+    """
+    return [{
+        'id': d.id, 'kind': d.kind, 'code': d.code, 'number': d.number,
+        'description': d.description, 'date': d.date, 'locked': d.locked,
+        'project_code': d.project.code,
+    } for d in queryset.select_related('project').order_by('-id')]
+
+
+def user_form(user):
+    """Проекция формы аккаунта: ДНК Django + тема + три ленты «своих» документов.
+
+    Ленты — теми же строками, что отдаёт форма контрагента (`_procurement_rows` /
+    `_purchase_rows` берут queryset именно для этого). «Своих» — буквально: реверс
+    `user.procurements` / `user.purchases` / `user.documents`, то есть авторство, а не
+    права. Модели «кто чьи документы видит» в продукте нет и не нужно.
+
+    Списка допустимых тем здесь нет: дропдаун наполняет `themes/registry.ts` (ярлыки —
+    знание вью), а движок стережёт слаг в `set_theme`. Два источника одного словаря
+    разошлись бы.
+    """
+    return {
+        # ДНК Django. `username` идёт в титул формы и полем не рисуется (см. шапку).
+        'username': user.username,
+        'first_name': user.first_name,
+        'last_name': user.last_name,
+        'email': user.email,
+        'full_name': user.get_full_name() or user.username,
+        'theme': profile_of(user).theme,
+        'procurements': _procurement_rows(user.procurements),
+        'purchases': _purchase_rows(user.purchases),
+        'documents': _document_rows(user.documents),
+    }
+
+
+def update_user(user, first_name=None, last_name=None, email=None):
+    """Правка ДНК пользователя (имя / фамилия / почта) — под замком формы.
+
+    Пустые значения законны (Django своё пустое имя и почту допускает), поэтому
+    часового `_UNSET` здесь нет: `None` = «ключа в PATCH не было», пустая строка =
+    «очистили», и запрет очистки означал бы «заполнить можно, передумать нельзя».
+    """
+    if first_name is not None:
+        user.first_name = first_name.strip()
+    if last_name is not None:
+        user.last_name = last_name.strip()
+    if email is not None:
+        email = email.strip()
+        if email:
+            EmailValidator(message='Почта задана неверно.')(email)
+        user.email = email
+    user.save()
+    return user
+
+
+def set_theme(user, slug):
+    """Единственный вход к теме интерфейса. Неизвестный слаг — отказ.
+
+    Валидация живёт ЗДЕСЬ, а не `CheckConstraint`'ом в БД (единственное осознанное
+    исключение из привычки продукта стеречь `choices` схемой): тема — это набор файлов
+    вью, и требовать под новую тему миграцию значило бы вписать вью в схему.
+    """
+    slug = (slug or '').strip()
+    if slug not in models.THEMES:
+        raise ValidationError(f'Неизвестная тема интерфейса: «{slug}».')
+    profile = profile_of(user)
+    profile.theme = slug
+    profile.save(update_fields=['theme'])
+    return profile
+
+
+def change_password(user, current, new, repeat):
+    """Смена пароля: текущий → повтор → штатные валидаторы Django → запись.
+
+    Своих правил стойкости не изобретаем — `AUTH_PASSWORD_VALIDATORS` уже настроены и
+    те же, что у админки. Порядок проверок = порядок, в котором человек ошибается.
+    Сессию после смены пароля поддерживает вьюха (`update_session_auth_hash`): это
+    знание про HTTP-сессию, а не про пользователя.
+    """
+    if not user.check_password(current or ''):
+        raise ValidationError('Текущий пароль неверен.')
+    if not new:
+        raise ValidationError('Новый пароль пуст.')
+    if new != repeat:
+        raise ValidationError('Новый пароль и повтор не совпадают.')
+    validate_password(new, user)
+    user.set_password(new)
+    user.save(update_fields=['password'])
+    return user

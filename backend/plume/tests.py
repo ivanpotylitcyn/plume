@@ -5942,3 +5942,154 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         c = self.receipt_lot(self.make_item('R300'), self.prj, 2)
         w3 = engine.writeoff_lot(self.prj, c, D(2), self.user)
         self.assertNotEqual(w3.id, w1.id)                 # под замком — новый акт
+
+
+class AccountTests(TestCase):
+    """Волна 21, Ф1 — аккаунт: профиль-приставка, ДНК, тема, пароль, «свои» документы.
+
+    Форма адресуется БЕЗ `pk` (`/api/account/`), поэтому «а вдруг откроет чужую» здесь
+    не сценарий, а структурная невозможность: движок работает с `request.user`.
+    """
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='ivan', password='k7-Plume-pass', first_name='Иван')
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    # ── профиль-приставка ──
+
+    def test_profile_is_born_lazily(self):
+        """Сигнала на рождение пользователя нет (он ломает `loaddata`) — профиль
+        появляется при первом обращении и ровно один."""
+        self.assertEqual(models.UserProfile.objects.count(), 0)
+        self.assertEqual(engine.profile_of(self.user).theme, models.DEFAULT_THEME)
+        engine.profile_of(self.user)
+        self.assertEqual(models.UserProfile.objects.count(), 1)
+
+    def test_me_carries_theme(self):
+        """Тема приезжает первым же запросом старта — без второго round-trip."""
+        me = self.client.get('/api/auth/me/').json()
+        self.assertEqual(me['theme'], models.DEFAULT_THEME)
+        # …но не в справочнике пикера авторства: чужие настройки вью знать незачем.
+        self.assertNotIn('theme', self.client.get('/api/users/').json()[0])
+
+    # ── ДНК Django ──
+
+    def test_form_shows_dna_and_no_username_field_to_patch(self):
+        form = self.client.get('/api/account/').json()
+        self.assertEqual(form['username'], 'ivan')
+        self.assertEqual(form['full_name'], 'Иван')
+        self.assertEqual(form['documents'], [])
+
+    def test_patch_name_and_email(self):
+        form = self.client.patch(
+            '/api/account/',
+            {'first_name': 'Иван', 'last_name': 'Потылицын', 'email': 'i@example.com'},
+            content_type='application/json').json()
+        self.assertEqual(form['last_name'], 'Потылицын')
+        self.assertEqual(form['full_name'], 'Иван Потылицын')
+        self.assertEqual(form['email'], 'i@example.com')
+
+    def test_patch_bad_email_is_friendly_400(self):
+        bad = self.client.patch('/api/account/', {'email': 'не почта'},
+                                content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('Почта', bad.json()['detail'])
+
+    def test_empty_email_is_legal(self):
+        """Django свою пустую почту допускает — «заполнить можно, передумать нельзя»
+        продукт не заводит нигде."""
+        self.client.patch('/api/account/', {'email': 'i@example.com'},
+                          content_type='application/json')
+        form = self.client.patch('/api/account/', {'email': ''},
+                                 content_type='application/json').json()
+        self.assertEqual(form['email'], '')
+
+    # ── тема интерфейса ──
+
+    def test_theme_patch_and_unknown_slug_is_400(self):
+        form = self.client.patch('/api/account/', {'theme': 'light'},
+                                 content_type='application/json').json()
+        self.assertEqual(form['theme'], 'light')
+        bad = self.client.patch('/api/account/', {'theme': 'ide-dark'},
+                                content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('Неизвестная тема', bad.json()['detail'])
+        # отказ ничего не записал
+        self.assertEqual(engine.profile_of(self.user).theme, 'light')
+
+    def test_theme_slug_is_guarded_by_engine_not_by_check(self):
+        """Схема слаг НЕ стережёт (сознательно: тема = набор файлов вью, и новая тема
+        не должна стоить миграции) — стережёт движок, единственным входом."""
+        models.UserProfile.objects.create(user=self.user, theme='что-угодно')
+        with self.assertRaises(ValidationError):
+            engine.set_theme(self.user, 'что-угодно')
+
+    # ── смена пароля ──
+
+    def test_password_change_keeps_session_alive(self):
+        ok = self.client.post('/api/account/password/',
+                              {'current': 'k7-Plume-pass', 'new': 'q9-Plume-next',
+                               'repeat': 'q9-Plume-next'},
+                              content_type='application/json')
+        self.assertEqual(ok.status_code, 204)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('q9-Plume-next'))
+        # сессия подписана хэшем пароля: без `update_session_auth_hash` человек
+        # вылетел бы на логин сразу после успешной смены.
+        self.assertEqual(self.client.get('/api/account/').status_code, 200)
+
+    def test_password_wrong_current_is_400(self):
+        bad = self.client.post('/api/account/password/',
+                               {'current': 'мимо', 'new': 'q9-Plume-next',
+                                'repeat': 'q9-Plume-next'},
+                               content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('Текущий пароль', bad.json()['detail'])
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('k7-Plume-pass'))
+
+    def test_password_repeat_mismatch_is_400(self):
+        bad = self.client.post('/api/account/password/',
+                               {'current': 'k7-Plume-pass', 'new': 'q9-Plume-next',
+                                'repeat': 'q9-Plume-nekst'},
+                               content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('не совпадают', bad.json()['detail'])
+
+    def test_password_weak_is_400_by_django_validators(self):
+        """Своих правил стойкости не изобретаем — отказывают штатные
+        `AUTH_PASSWORD_VALIDATORS`, те же, что у админки."""
+        bad = self.client.post('/api/account/password/',
+                               {'current': 'k7-Plume-pass', 'new': '12345678',
+                                'repeat': '12345678'},
+                               content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('k7-Plume-pass'))
+
+    # ── три ленты «своих» документов ──
+
+    def test_form_carries_only_own_documents(self):
+        """«Свои» — это авторство, а не права: реверс `user.documents` и родня. Модели
+        «кто чьи документы видит» в продукте нет."""
+        other = get_user_model().objects.create_user(username='petr')
+        prj = models.Project.objects.create(code='P1', description='Проект 1',
+                                            kind=models.Project.Kind.EXTERNAL)
+        cp = engine.create_counterparty(code='КОМПЭЛ', description='ООО Компэл')
+        mine = models.Receipt.objects.create(code='Поставка моя', number='У-1',
+                                             date='2026-05-01', contractor=cp,
+                                             project=prj, user=self.user)
+        models.Receipt.objects.create(code='Поставка чужая', number='У-2',
+                                      date='2026-05-02', contractor=cp,
+                                      project=prj, user=other)
+        engine.create_procurement(code='Закупка моя', user=self.user)
+        engine.create_purchase(prj, self.user, code='Заказ мой')
+
+        form = self.client.get('/api/account/').json()
+        self.assertEqual([d['id'] for d in form['documents']], [mine.id])
+        self.assertEqual(form['documents'][0]['kind'], 'receipt')
+        self.assertEqual(form['documents'][0]['project_code'], 'P1')
+        self.assertEqual([p['code'] for p in form['procurements']], ['Закупка моя'])
+        self.assertEqual([p['code'] for p in form['purchases']], ['Заказ мой'])

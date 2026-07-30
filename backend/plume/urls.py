@@ -13,6 +13,10 @@ urlpatterns = [
     path('auth/login/', views.login_view, name='auth-login'),
     path('auth/logout/', views.logout_view, name='auth-logout'),
     path('users/', views.users, name='users'),
+    # Аккаунт (волна 21): форма пользователя БЕЗ `pk` — движок работает с
+    # `request.user`, поэтому чужой профиль просто нечем адресовать.
+    path('account/', views.account, name='account'),
+    path('account/password/', views.account_password, name='account-password'),
     path('projects/', views.projects, name='projects'),
     path('projects/<int:pk>/', views.project_detail, name='project-detail'),
     path('projects/<int:pk>/deficit/', views.project_deficit, name='project-deficit'),

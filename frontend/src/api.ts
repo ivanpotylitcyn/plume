@@ -1,4 +1,7 @@
 // API-клиент витрин волны 1. Все эндпоинты — read-only проекции движка.
+import type { ThemeSlug } from './core/theme'
+import type { OrderKind } from './orders'
+
 export type Status = 'available' | 'on_order' | 'to_order'
 
 // Замок изделия (волна 17; строка → bool в волне 19, Ф1c): `locked` = форма
@@ -186,11 +189,15 @@ export interface CounterpartyShipment {
   transfers: number; draft_transfers: number
   lots: number; qty_by_uom: UomQty[]; total: number
 }
-export interface CpProcurementRow {
+// Волна 21: строки лент закупок и заказов стали ОБЩИМИ — их отдаёт и форма контрагента
+// («у кого покупаем»), и форма аккаунта («что я вёл»). Движок это уже так и считает
+// (`_procurement_rows` / `_purchase_rows` берут queryset), поэтому имена без приставки
+// `Cp`: смысл строки один, отличается только вопрос, который к ней задают.
+export interface FeedProcurementRow {
   id: number; code: string | null; description: string
   date: string | null; locked: boolean; lines: number; qty: number
 }
-export interface CpPurchaseRow extends CpProcurementRow {
+export interface FeedPurchaseRow extends FeedProcurementRow {
   project_code: string; coverage: Status
 }
 export interface CpReceiptRow {
@@ -206,7 +213,7 @@ export interface CounterpartyForm {
   id: number; code: string | null; description: string; inn: string
   supply: CounterpartySupply | null
   shipment: CounterpartyShipment | null
-  procurements: CpProcurementRow[]; purchases: CpPurchaseRow[]
+  procurements: FeedProcurementRow[]; purchases: FeedPurchaseRow[]
   receipts: CpReceiptRow[]; transfers: CpTransferRow[]
 }
 
@@ -489,8 +496,30 @@ export interface AttachmentRow {
 }
 
 // ── Аутентификация (волна 12) ──
+// `theme` (волна 21) приезжает первым же запросом старта (`me()`), чтобы тема
+// применилась без второго round-trip. В справочнике пикера (`UserRow`) её нет: чужие
+// настройки интерфейса вью знать незачем.
 export interface User {
   id: number; username: string; full_name: string; is_superuser: boolean
+  theme: ThemeSlug
+}
+
+// ── Форма аккаунта (волна 21 — «я сам») ──
+// Титула-поля здесь нет: `username` идёт в титул формы и полем не рисуется (он задаётся
+// админкой, значит степенью свободы этой формы не является). Пара `code`+`description`
+// не нарушена, а расщеплена по ДНК Django: идентичность — `username`, литературное
+// имя — `first_name`+`last_name`, `full_name` — их склейка (её считает движок).
+// Смешанный фид ордеров: вид ордера — КОЛОНКА, а не раздел (один таб вместо семи).
+export interface AccountDocumentRow {
+  id: number; kind: OrderKind; code: string | null; number: string
+  description: string; date: string | null; locked: boolean; project_code: string
+}
+export interface AccountForm {
+  username: string; first_name: string; last_name: string; email: string
+  full_name: string
+  theme: ThemeSlug
+  procurements: FeedProcurementRow[]; purchases: FeedPurchaseRow[]
+  documents: AccountDocumentRow[]
 }
 
 // Сессия истекла посреди работы → App перекинет на логин. get/send/upload зовут
@@ -585,6 +614,17 @@ export const api = {
   logout: () => send<void>('POST', '/api/auth/logout/'),
   // Справочник пользователей — пикер авторства шапки ордера (Ф2j).
   users: () => get<UserRow[]>('/api/users/'),
+
+  // ── Аккаунт (волна 21) ──
+  // Адреса без `pk` — не лаконичность, а гарантия: движок работает с `request.user`,
+  // и чужой профиль просто нечем указать. Пароль — отдельным POST: это единственная
+  // правка продукта, которую ПОДТВЕРЖДАЮТ, а не коммитят по уходу фокуса.
+  account: () => get<AccountForm>('/api/account/'),
+  updateAccount: (b: Partial<{
+    first_name: string; last_name: string; email: string; theme: ThemeSlug
+  }>) => send<AccountForm>('PATCH', '/api/account/', b),
+  changePassword: (b: { current: string; new: string; repeat: string }) =>
+    send<void>('POST', '/api/account/password/', b),
 
   // ── Рождение сущности по клику (волна 19, Ф12e) ──
   // Двенадцать `create*` со своими телами схлопнулись в один вызов: форм создания

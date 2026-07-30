@@ -16,13 +16,14 @@
 // РАВНЫМИ табами, а «чем строка закрыта» остаётся в форме заказа (Ф6), где связь
 // однозначна.
 import { useEffect, useState } from 'react'
-import { api, type CounterpartyForm, type CpProcurementRow,
-  type CpPurchaseRow, type CpReceiptRow, type CpTransferRow, type UomQty } from './api'
-import { count, money, num, StatusGlyph, statusTone } from './status'
+import { api, type CounterpartyForm, type CpReceiptRow, type CpTransferRow,
+  type UomQty } from './api'
+import { count, money, num, StatusGlyph } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField, viewDate } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { ProcurementFeed, PurchaseFeed } from './FeedTables'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import type { OrderKind } from './orders'
 
@@ -85,33 +86,14 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
 
   const tabs: FormTab[] = []
   if (buying) tabs.push(
+    // Ленты закупок и заказов — общие с формой аккаунта (`FeedTables`, волна 21):
+    // строка одна, отличается только вопрос, который к ней задают.
     { key: 'procurements', label: 'Закупки', icon: 'law',
-      content: c.procurements.length === 0
-        ? <div className="tab-empty">Закупок-планов на этого контрагента нет.</div>
-        : <table className="grid">
-            <thead><tr>
-              <th className="gl" /><th className="c-key">Закупка</th>
-              <th className="c-desc">Описание</th><th className="c-fit">Дата</th>
-              <th style={{ textAlign: 'right' }}>Строк</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th>
-            </tr></thead>
-            <tbody>{c.procurements.map(p => (
-              <ProcRow key={p.id} p={p} open={openProcurement} />))}</tbody>
-          </table> },
+      content: <ProcurementFeed rows={c.procurements} open={openProcurement}
+        empty="Закупок-планов на этого контрагента нет." /> },
     { key: 'purchases', label: 'Заказы', icon: 'package',
-      content: c.purchases.length === 0
-        ? <div className="tab-empty">Заказов у этого контрагента нет.</div>
-        : <table className="grid">
-            <thead><tr>
-              <th className="gl" /><th className="c-key">Заказ</th>
-              <th className="c-desc">Описание</th><th className="c-fit">Проект</th>
-              <th className="c-fit">Дата</th>
-              <th style={{ textAlign: 'right' }}>Строк</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th>
-            </tr></thead>
-            <tbody>{c.purchases.map(p => (
-              <PurchRow key={p.id} p={p} open={openPurchase} />))}</tbody>
-          </table> },
+      content: <PurchaseFeed rows={c.purchases} open={openPurchase}
+        empty="Заказов у этого контрагента нет." /> },
     { key: 'receipts', label: 'Поставки', icon: 'inbox',
       content: c.receipts.length === 0
         ? <div className="tab-empty">Этот контрагент ещё ничего не привозил.</div>
@@ -226,43 +208,6 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
       </>}
       tabs={tabs}
     />
-  )
-}
-
-// Строка закупки-плана: глиф-замок = фиксация плана (своей оси покрытия у него нет).
-function ProcRow({ p, open }: { p: CpProcurementRow; open: (id: number) => void }) {
-  return (
-    <tr className="row">
-      <td className="gl"><StatusGlyph locked={p.locked} /></td>
-      <td className="c-key">
-        <a className="link" onClick={() => open(p.id)}>{p.code || `Закупка #${p.id}`}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
-        <span className="cell-ellip" title={p.description}>{p.description}</span></td>
-      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
-        {p.date ? viewDate(p.date) : ''}</td>
-      <td className="num">{p.lines}</td>
-      <td className="num">{num(p.qty)}</td>
-    </tr>
-  )
-}
-
-// Строка заказа: глиф-замок, ЦВЕТ = покрытие лотами (тот же словарь, что в режиме
-// «Заказы») — видно, что этот контрагент ещё не довёз.
-function PurchRow({ p, open }: { p: CpPurchaseRow; open: (id: number) => void }) {
-  return (
-    <tr className="row">
-      <td className="gl">
-        <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} /></td>
-      <td className="c-key">
-        <a className="link" onClick={() => open(p.id)}>{p.code || `Заказ #${p.id}`}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
-        <span className="cell-ellip" title={p.description}>{p.description}</span></td>
-      <td className="c-fit">{p.project_code}</td>
-      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
-        {p.date ? viewDate(p.date) : ''}</td>
-      <td className="num">{p.lines}</td>
-      <td className="num">{num(p.qty)}</td>
-    </tr>
   )
 }
 

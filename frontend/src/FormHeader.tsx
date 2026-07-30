@@ -80,6 +80,14 @@ export function useOrderForm<C extends { id: number }>(
 let _usersCache: Promise<UserRow[]> | null = null
 function loadUsers() { return (_usersCache ??= api.users()) }
 
+// Волна 21: кэш не сбрасывался НИКОГДА — ни по времени, ни по событию, до перезагрузки
+// вкладки. В просмотре это не видно (подпись «Автор» рисуется из проекции документа,
+// `c.user_name`, и после перезагрузки формы имя верное), но протухал список опций
+// дропдауна В ПРАВКЕ: сменил «Вася» → «Василий», открыл поставку на правку — в авторах
+// по-прежнему «Вася». Единственное место, где имена меняются, — форма аккаунта, оттуда
+// и зовём.
+export function resetUsersCache() { _usersCache = null }
+
 export function AuthorField({ userId, userName, locked, busy, onChange }: {
   userId: number; userName: string; locked: boolean; busy?: boolean
   onChange: (id: number) => void

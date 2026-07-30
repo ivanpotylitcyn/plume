@@ -19,6 +19,8 @@ import { OrderForm } from './OrderForm'
 import { ORDER_KINDS, ORDER_LABEL, type OrderKind } from './orders'
 import { LocationView } from './LocationView'
 import { CounterpartyView } from './CounterpartyView'
+import { AccountView } from './AccountView'
+import { applyTheme } from './core/theme'
 import { StatusGlyph, SyncGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 
@@ -51,6 +53,12 @@ type Sel =
   | { kind: 'relocation'; id: number }
   | { kind: 'location'; id: number }
   | { kind: 'counterparty'; id: number }
+  // Волна 21: аккаунт — это `Sel` БЕЗ `Mode` (как `library-sync`), а не режим. `mode` и
+  // `sel` в этом компоненте независимы, поэтому сайдбар держит последний открытый
+  // список: аккаунт — «я сам», а не режим работы, и он не должен стоить человеку места
+  // в работе. Даром работают и `Alt+←`, и браузерный «Назад» — история пишет пару
+  // `{mode, sel}`.
+  | { kind: 'account' }
   | null
 
 // Виды ордера и их подписи живут рядом с типом (`./OrderForm`) — их читает и этот
@@ -114,7 +122,10 @@ export default function App() {
   // запросе → назад на логин). Регистрируем один раз.
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null))
-    api.me().then(setUser).catch(() => setUser(null))
+    // Волна 21: тема приезжает этим же ответом (без второго round-trip) и применяется
+    // до первого рендера приложения. Экран логина темы не знает и остаётся на
+    // дефолтной — у входа нет владельца, показывать чей-то вкус там неоткуда.
+    api.me().then(u => { if (u) applyTheme(u.theme); setUser(u) }).catch(() => setUser(null))
   }, [])
 
   // Данные грузим только под логином (и перезагружаем при смене пользователя).
@@ -330,8 +341,14 @@ export default function App() {
           </button>
         ))}
         <span className="spacer" />
-        <button className="logout" title={`${user.full_name} — выйти`}
-          onClick={doLogout}><span className="ci ci-sign-out" /></button>
+        {/* Волна 21: здесь стоял «Выход» — теперь «Аккаунт», а выход переехал в команды
+            его формы. Кнопка получает `.active` по `sel` (аккаунт — не режим), и строка
+            в списке подсветку теряет: это уже валидное состояние (так же после удаления
+            сущности). */}
+        <button className={sel?.kind === 'account' ? 'active' : ''}
+          title={`${user.full_name} — аккаунт, тема интерфейса, выход`}
+          onClick={() => setSel({ kind: 'account' })}>
+          <span className="ci ci-account" /></button>
       </div>
 
       <div className="sidebar">
@@ -473,6 +490,14 @@ export default function App() {
             openOrder={openOrder}
             onChanged={reloadCounterparties}
             onDeleted={() => { reloadCounterparties(); setSel(null) }} />}
+        {/* Аккаунт (волна 21): форма «я сам» — фиксации и корзины у неё нет, зато есть
+            тема интерфейса и выход. Смена имени тут же обновляет подпись в панели
+            режимов (и сбрасывает кэш справочника авторов — внутри вьюхи). */}
+        {sel?.kind === 'account' &&
+          <AccountView
+            openProcurement={openProcurement} openPurchase={openPurchase}
+            openOrder={openOrder} onLogout={doLogout}
+            onChanged={full_name => setUser(u => u && { ...u, full_name })} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}
       </div>
 
