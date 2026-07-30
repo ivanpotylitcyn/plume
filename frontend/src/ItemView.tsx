@@ -90,14 +90,14 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       {d.bom.length > 0 &&
         <table className="grid">
           <thead><tr><th className="gl" /><th className="c-key">Компонент</th><th className="c-desc">Описание</th>
-            <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+            <th className="num">Кол-во</th><th className="uom">Ед.</th>
             {!locked && <th className="act" />}</tr></thead>
           <tbody>{d.bom.map(b => (
             <tr key={b.id} className="row">
               <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
               <td className="c-key">
                 <a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
-              <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+              <td className="c-desc">
                 <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
               <td className="num">
                 {!locked
@@ -126,7 +126,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       ? <div className="tab-empty">Нигде (не входит в BOM)</div>
       : <table className="grid">
           <thead><tr><th className="gl" /><th className="c-key">Изделие</th><th className="c-desc">Описание</th>
-            <th style={{ textAlign: 'right' }}>Кол-во</th>
+            <th className="num">Кол-во</th>
             <th className="uom">Ед.</th></tr></thead>
           <tbody>{d.where_used.map(w => (
             <tr key={w.parent_id} className="row">
@@ -135,7 +135,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
                 locked={w.parent_locked} /></td>
               <td className="c-key">
                 <a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
-              <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+              <td className="c-desc">
                 <span className="cell-ellip" title={w.parent_description}>{w.parent_description}</span></td>
               <td className="num">{num(w.qty)}</td>
               <td className="uom">{d.uom}</td>
@@ -153,8 +153,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       : <table className="grid">
           <thead><tr><th className="gl" /><th className="c-key">Партия</th>
             <th className="c-fit">Проект</th>
-            <th style={{ textAlign: 'right' }}>Рожд.</th>
-            <th style={{ textAlign: 'right' }}>Остаток</th>
+            <th className="num">Рожд.</th>
+            <th className="num">Остаток</th>
             <th className="uom">Ед.</th>
             <th className="c-fit">Part number</th><th className="c-desc">Название</th>
           </tr></thead>
@@ -163,7 +163,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
               <td className="gl"><LotGlyph origin={l.origin} liveQty={l.live_qty}
                 draft={!l.origin_locked} /></td>
               <td className="c-key">#{l.id}</td>
-              <td className="c-fit">{l.project_code}</td>
+              <td className="c-fit code">{l.project_code}</td>
               <td className="num">{num(l.qty_born)}</td>
               {/* Ф15: у партии черновика остатка нет вовсе — прочерк, а не 0 (ноль
                   здесь читался бы как «израсходована»). Рождённое кол-во остаётся:
@@ -172,8 +172,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
                 : 'Партия ещё не на складе — зафиксируйте документ-origin'}>
                 {l.origin_locked ? num(l.live_qty) : '—'}</td>
               <td className="uom">{d.uom}</td>
-              <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{l.part_number || '—'}</td>
-              <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>{l.lot_name || '—'}</td>
+              <td className="c-fit">{l.part_number || '—'}</td>
+              <td className="c-desc">{l.lot_name || '—'}</td>
             </tr>))}</tbody>
         </table>,
   })
@@ -188,7 +188,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       : <table className="grid">
           <thead><tr><th className="gl" /><th className="c-key">Ордер</th><th>Вид</th><th>Дата</th><th>Проект</th>
             <th>Партия</th>
-            <th style={{ textAlign: 'right' }}>Кол-во</th>
+            <th className="num">Кол-во</th>
             <th className="uom">Ед.</th></tr></thead>
           <tbody>{d.movements.map((m, i) => (
             <tr key={`${m.kind}-${m.document_id}-${m.lot_id}-${i}`}
@@ -196,12 +196,12 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
               <td className="gl"><StatusGlyph locked={m.locked} /></td>
               <td className="c-key"><a className="link" onClick={() => openOrder(m.kind as OrderKind, m.document_id)}>
                 {m.code || m.number || `${ORDER_LABEL[m.kind as OrderKind]} #${m.document_id}`}</a></td>
-              <td style={{ color: 'var(--fg-dim)' }}>
+              <td>
                 {ORDER_LABEL[m.kind as OrderKind] ?? m.kind}
                 {m.event === 'born' && <span className="hint">партия рождена</span>}</td>
-              <td style={{ color: 'var(--fg-dim)' }}>{m.date ?? '—'}</td>
-              <td>{m.project_code}</td>
-              <td style={{ color: 'var(--fg-dim)' }}>#{m.lot_id}{m.lot_name && ` · ${m.lot_name}`}</td>
+              <td>{m.date ?? '—'}</td>
+              <td className="code">{m.project_code}</td>
+              <td>#{m.lot_id}{m.lot_name && ` · ${m.lot_name}`}</td>
               <td className="num">{m.qty > 0 ? `+${num(m.qty)}` : num(m.qty)}</td>
               <td className="uom">{d.uom}</td>
             </tr>))}</tbody>

@@ -23,8 +23,8 @@ export function ProcurementFeed({ rows, empty, open }: {
       <thead><tr>
         <th className="gl" /><th className="c-key">Закупка</th>
         <th className="c-desc">Описание</th><th className="c-fit">Дата</th>
-        <th style={{ textAlign: 'right' }}>Строк</th>
-        <th style={{ textAlign: 'right' }}>Кол-во</th>
+        <th className="num">Строк</th>
+        <th className="num">Кол-во</th>
       </tr></thead>
       <tbody>{rows.map(p => (
         <tr key={p.id} className="row">
@@ -32,9 +32,9 @@ export function ProcurementFeed({ rows, empty, open }: {
           <td className="c-key">
             <a className="link" onClick={() => open(p.id)}>
               {p.code || `Закупка #${p.id}`}</a></td>
-          <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+          <td className="c-desc">
             <span className="cell-ellip" title={p.description}>{p.description}</span></td>
-          <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+          <td className="c-fit">
             {p.date ? viewDate(p.date) : ''}</td>
           <td className="num">{p.lines}</td>
           <td className="num">{num(p.qty)}</td>
@@ -56,8 +56,8 @@ export function PurchaseFeed({ rows, empty, open }: {
         <th className="gl" /><th className="c-key">Заказ</th>
         <th className="c-desc">Описание</th><th className="c-fit">Проект</th>
         <th className="c-fit">Дата</th>
-        <th style={{ textAlign: 'right' }}>Строк</th>
-        <th style={{ textAlign: 'right' }}>Кол-во</th>
+        <th className="num">Строк</th>
+        <th className="num">Кол-во</th>
       </tr></thead>
       <tbody>{rows.map(p => (
         <tr key={p.id} className="row">
@@ -66,10 +66,10 @@ export function PurchaseFeed({ rows, empty, open }: {
           <td className="c-key">
             <a className="link" onClick={() => open(p.id)}>
               {p.code || `Заказ #${p.id}`}</a></td>
-          <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+          <td className="c-desc">
             <span className="cell-ellip" title={p.description}>{p.description}</span></td>
-          <td className="c-fit">{p.project_code}</td>
-          <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+          <td className="c-fit code">{p.project_code}</td>
+          <td className="c-fit">
             {p.date ? viewDate(p.date) : ''}</td>
           <td className="num">{p.lines}</td>
           <td className="num">{num(p.qty)}</td>
@@ -102,10 +102,10 @@ export function DocumentFeed({ rows, empty, open }: {
             <a className="link" onClick={() => open(d.kind, d.id)}>
               {d.code || `${ORDER_LABEL[d.kind]} #${d.id}`}</a></td>
           <td className="c-fit">{ORDER_LABEL[d.kind]}</td>
-          <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+          <td className="c-desc">
             <span className="cell-ellip" title={d.description}>{d.description}</span></td>
-          <td className="c-fit">{d.project_code}</td>
-          <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+          <td className="c-fit code">{d.project_code}</td>
+          <td className="c-fit">
             {d.date ? viewDate(d.date) : ''}</td>
         </tr>
       ))}</tbody>

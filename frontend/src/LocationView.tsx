@@ -61,7 +61,7 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
               <th className="gl" /><th className="c-key">Партия</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="c-fit">Проект</th>
-              <th style={{ textAlign: 'right' }}>Остаток</th><th className="uom">Ед.</th>
+              <th className="num">Остаток</th><th className="uom">Ед.</th>
             </tr></thead>
             <tbody>{d.stock.map(l => (
               <tr key={l.lot_id} className="row">
@@ -69,9 +69,9 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
                 <td className="c-key"><span className="pn">{l.lot_label}</span></td>
                 <td className="c-fit">
                   <a className="link" onClick={() => openItem(l.item_id)}>{l.item_code}</a></td>
-                <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+                <td className="c-desc">
                   <span className="cell-ellip" title={l.item_description}>{l.item_description}</span></td>
-                <td className="c-fit">{l.project_code}</td>
+                <td className="c-fit code">{l.project_code}</td>
                 <td className="num">{num(l.qty)}</td>
                 <td className="uom">{l.uom}</td>
               </tr>))}</tbody>

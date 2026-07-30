@@ -47,10 +47,10 @@ export function ScopeDeficitRows({ st, openItem, editable, onTake }: {
         <tr>
           <th className="gl" /><th className="c-key">Изделие</th>
           <th className="c-desc">Описание</th>
-          <th style={{ textAlign: 'right' }}>Надо</th><th className="uom">Ед.</th>
+          <th className="num">Надо</th><th className="uom">Ед.</th>
           <th>Разбор</th>
-          <th style={{ textAlign: 'right' }}>Закупить</th>
-          <th style={{ textAlign: 'right' }}>В плане</th>
+          <th className="num">Закупить</th>
+          <th className="num">В плане</th>
           <th className="act" />
         </tr>
       </thead>
@@ -80,7 +80,7 @@ function Row({ r, openItem, editable, onTake }: {
         <td className="gl"><Glyph status={r.status} /></td>
         <td className="c-key">
           <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a></td>
-        <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <td className="c-desc">
           <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
         <td className="num">{num(r.need)}</td>
         <td className="uom">{r.uom}</td>

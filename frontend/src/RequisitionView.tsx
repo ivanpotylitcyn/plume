@@ -52,8 +52,8 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
               <th className="gl" /><th className="c-key">Источник</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="c-fit">Откуда</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
-              <th style={{ textAlign: 'right' }}>Остаток ист.</th>
+              <th className="num">Кол-во</th><th className="uom">Ед.</th>
+              <th className="num">Остаток ист.</th>
               {!locked && <th className="act" />}
             </tr>
           </thead>
@@ -107,9 +107,9 @@ function LineRow({ ln, locked, busy, openItem, run }: {
       <td className="c-key"><span className="pn">{ln.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
-      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{ln.source_project_code}</td>
+      <td className="c-fit">{ln.source_project_code}</td>
       <td className="num">
         <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
           onCommit={v => run(api.updateRequisitionLine(ln.id, Number(v)))}
@@ -155,16 +155,16 @@ function GhostRow({ requisitionId, lots, busy, run }: {
             label: `${l.project_code} · #${l.lot_id} ${l.item_code}`
               + (l.lot_name ? ` (${l.lot_name})` : '') + ` · ${num(l.live_qty)} ${l.uom}` }))} />
       </td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         {picked?.item_description ?? ''}</td>
-      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{picked?.project_code ?? ''}</td>
+      <td className="c-fit">{picked?.project_code ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td className="uom">{picked?.uom ?? ''}</td>
-      <td className="num" style={{ color: 'var(--fg-dim)' }}>
+      <td className="num">
         {picked ? num(picked.live_qty) : ''}
       </td>
       <td className="act">

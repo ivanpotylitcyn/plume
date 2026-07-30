@@ -107,9 +107,9 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             <tr>
               <th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Заказано</th><th className="uom">Ед.</th>
-              <th style={{ textAlign: 'right' }}>Поступило</th>
-              <th style={{ textAlign: 'right' }}>Остаток</th>
+              <th className="num">Заказано</th><th className="uom">Ед.</th>
+              <th className="num">Поступило</th>
+              <th className="num">Остаток</th>
               {/* Ф6: обратная связь потока «Заказ → УПД» — чем строка закрыта.
                   У зафиксированного заказа она занимает слот команд строки. */}
               <th className="c-fit">Поставки</th>
@@ -134,7 +134,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               <th className="gl" /><th className="c-key">Поставка</th>
               <th className="c-fit">№ поставки</th><th className="c-fit">Дата</th>
               <th className="c-desc">Поставщик</th>
-              <th style={{ textAlign: 'right' }}>Строк</th>
+              <th className="num">Строк</th>
             </tr></thead>
             <tbody>
               {c.receipts.map(r => (
@@ -147,8 +147,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                   <td className="c-key">
                     <a className="link" onClick={() => openReceipt(r.id)}>
                       {r.code || `Поставка #${r.id}`}</a></td>
-                  <td className="c-fit">{r.number || <span className="hint">не задан</span>}</td>
-                  <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{r.date}</td>
+                  <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
+                  <td className="c-fit">{r.date}</td>
                   <td className="c-desc">{r.contractor_name}</td>
                   <td className="num">{r.lines}</td>
                 </tr>
@@ -239,7 +239,7 @@ function LineRow({ ln, editable, busy, openItem, openReceipt, run }: {
         locked={ln.item_locked} tone={statusTone(ln.status)} /></td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         {editable
@@ -259,7 +259,7 @@ function LineRow({ ln, editable, busy, openItem, openReceipt, run }: {
             {i > 0 && ', '}
             <a className="link" title={`${r.date} · поступило ${num(r.qty)} ${ln.uom}`}
               onClick={() => openReceipt(r.receipt_id)}>{r.number || `Поставка #${r.receipt_id}`}</a>
-            {r.qty !== ln.qty && <span style={{ color: 'var(--fg-dim)' }}> ({num(r.qty)})</span>}
+            {r.qty !== ln.qty && ` (${num(r.qty)})`}
           </span>
         ))}
       </td>

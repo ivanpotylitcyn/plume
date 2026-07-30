@@ -52,8 +52,8 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
             <tr>
               <th className="gl" /><th className="c-key">Партия</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
-              <th style={{ textAlign: 'right' }}>Остаток</th>
+              <th className="num">Кол-во</th><th className="uom">Ед.</th>
+              <th className="num">Остаток</th>
               <th className="c-fit">Имя в накладной</th>
               {!locked && <th className="act" />}
             </tr>
@@ -122,7 +122,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
       <td className="c-key"><span className="pn">{ln.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
@@ -176,7 +176,7 @@ function GhostRow({ transferId, lots, busy, run }: {
             label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
               + ` · ${num(l.live_qty)} ${l.uom}` }))} />
       </td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         {picked?.item_description ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
@@ -184,7 +184,7 @@ function GhostRow({ transferId, lots, busy, run }: {
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td className="uom">{picked?.uom ?? ''}</td>
-      <td className="num" style={{ color: 'var(--fg-dim)' }}>
+      <td className="num">
         {picked ? num(picked.live_qty) : ''}
       </td>
       <td className="c-fit">

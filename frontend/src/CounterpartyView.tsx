@@ -102,8 +102,8 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
               <th className="gl" /><th className="c-key">Поставка</th>
               <th className="c-fit">№ УПД</th><th className="c-fit">Проект</th>
               <th className="c-fit">Дата</th>
-              <th style={{ textAlign: 'right' }}>Партий</th>
-              <th style={{ textAlign: 'right' }}>Сумма</th>
+              <th className="num">Партий</th>
+              <th className="num">Сумма</th>
             </tr></thead>
             <tbody>{c.receipts.map(r => (
               <RecRow key={r.id} r={r} open={id => openOrder('receipt', id)} />))}</tbody>
@@ -118,9 +118,9 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
               <th className="gl" /><th className="c-key">Передача</th>
               <th className="c-fit">№ накладной</th><th className="c-fit">Проект</th>
               <th className="c-fit">Дата</th>
-              <th style={{ textAlign: 'right' }}>Строк</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th>
-              <th style={{ textAlign: 'right' }}>Сумма</th>
+              <th className="num">Строк</th>
+              <th className="num">Кол-во</th>
+              <th className="num">Сумма</th>
             </tr></thead>
             <tbody>{c.transfers.map(t => (
               <TransRow key={t.id} t={t} open={id => openOrder('transfer', id)} />))}</tbody>
@@ -219,9 +219,9 @@ function RecRow({ r, open }: { r: CpReceiptRow; open: (id: number) => void }) {
       <td className="gl"><StatusGlyph locked={r.locked} /></td>
       <td className="c-key">
         <a className="link" onClick={() => open(r.id)}>{r.code || `Поставка #${r.id}`}</a></td>
-      <td className="c-fit">{r.number || <span className="hint">не задан</span>}</td>
-      <td className="c-fit">{r.project_code}</td>
-      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
+      <td className="c-fit code">{r.project_code}</td>
+      <td className="c-fit">
         {r.date ? viewDate(r.date) : ''}</td>
       <td className="num">{r.lots}</td>
       <td className="num">{money(r.total)}</td>
@@ -235,9 +235,9 @@ function TransRow({ t, open }: { t: CpTransferRow; open: (id: number) => void })
       <td className="gl"><StatusGlyph locked={t.locked} /></td>
       <td className="c-key">
         <a className="link" onClick={() => open(t.id)}>{t.code || `Передача #${t.id}`}</a></td>
-      <td className="c-fit">{t.number || <span className="hint">не задан</span>}</td>
-      <td className="c-fit">{t.project_code}</td>
-      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-fit code">{t.number || <span className="hint">не задан</span>}</td>
+      <td className="c-fit code">{t.project_code}</td>
+      <td className="c-fit">
         {t.date ? viewDate(t.date) : ''}</td>
       <td className="num">{t.lines}</td>
       <td className="num">{num(t.qty)}</td>

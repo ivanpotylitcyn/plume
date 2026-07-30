@@ -57,9 +57,9 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
             <tr>
               <th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th>
+              <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
-              <th style={{ textAlign: 'right' }}>Цена, ₽</th>
+              <th className="num">Цена, ₽</th>
               <th className="c-fit">Part number</th>
               <th className="c-fit">Название из УПД</th><th className="act" />
             </tr>
@@ -159,7 +159,7 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
       <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>

@@ -46,8 +46,8 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
             <tr>
               <th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
-              <th style={{ textAlign: 'right' }}>Цена, ₽</th>
+              <th className="num">Кол-во</th><th className="uom">Ед.</th>
+              <th className="num">Цена, ₽</th>
               <th className="c-fit">Part number</th><th className="c-fit">Название</th>
               <th className="c-fit">Провенанс</th><th className="act" />
             </tr>
@@ -112,7 +112,7 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
       <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
@@ -139,7 +139,7 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
         {lot.predecessor_id
           ? <span className="hint" title="ре-материализовано из списанного лота">
               ← {lot.predecessor_label}</span>
-          : <span style={{ color: 'var(--fg-dim)' }}>излишек</span>}
+          : 'излишек'}
       </td>
       <td className="act">
         {!locked && !lot.consumed &&
@@ -204,7 +204,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
           placeholder="название" onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td className="c-fit"><span style={{ color: 'var(--fg-dim)' }}>излишек</span></td>
+      <td className="c-fit">излишек</td>
       <td className="act">
         <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>
@@ -237,7 +237,7 @@ function RematerializeTab({ inventoryId, busy, run }: {
           <th className="gl" /><th className="c-key">Изделие</th>
           <th className="c-desc">Описание</th>
           <th className="c-fit">Проект-источник</th>
-          <th style={{ textAlign: 'right' }}>Списано</th><th className="uom">Ед.</th>
+          <th className="num">Списано</th><th className="uom">Ед.</th>
           <th className="c-fit">Название</th><th className="act" />
         </tr>
       </thead>
@@ -247,9 +247,9 @@ function RematerializeTab({ inventoryId, busy, run }: {
             {/* Партия списана — живого остатка нет: глиф приглушён по определению. */}
             <td className="gl"><LotGlyph origin={null} liveQty={0} /></td>
             <td className="c-key">{l.item_code}</td>
-            <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+            <td className="c-desc">
               <span className="cell-ellip" title={l.item_description}>{l.item_description}</span></td>
-            <td className="c-fit">{l.project_code}</td>
+            <td className="c-fit code">{l.project_code}</td>
             <td className="num">{num(l.written_qty)}</td>
             <td className="uom">{l.uom}</td>
             <td className="c-fit">{l.lot_name || '—'}</td>

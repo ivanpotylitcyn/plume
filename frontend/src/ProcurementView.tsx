@@ -105,7 +105,7 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
             <tr>
               <th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              <th className="num">Кол-во</th><th className="uom">Ед.</th>
               {editable && <th className="act" />}
             </tr>
           </thead>
@@ -216,7 +216,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
         <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} /></td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         {editable

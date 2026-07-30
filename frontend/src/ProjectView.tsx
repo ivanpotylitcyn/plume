@@ -140,14 +140,14 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
                 {i > 0 && ' · '}
                 <a className="link" onClick={() => openOrder(d.kind as OrderKind, d.document_id)}>
                   {ORDER_LABEL[d.kind as OrderKind]} {d.code || d.number || `#${d.document_id}`}
-                </a>{' '}<span style={{ color: 'var(--fg-dim)' }}>({num(d.qty)})</span>
+                </a>{` (${num(d.qty)})`}
               </span>)}
             </div>}
             <table className="grid">
               <thead><tr>
                 <th className="gl" /><th className="c-key">Партия</th>
                 <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
-                <th style={{ textAlign: 'right' }}>Остаток</th><th className="uom">Ед.</th>
+                <th className="num">Остаток</th><th className="uom">Ед.</th>
                 {!locked && <th className="act" />}
               </tr></thead>
               <tbody>
@@ -236,7 +236,7 @@ function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
       <td className="c-key"><span className="pn">{r.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
       <td className="num">
         <span className={r.anomaly ? 'anomaly' : ''}>{num(r.live_qty)}</span>

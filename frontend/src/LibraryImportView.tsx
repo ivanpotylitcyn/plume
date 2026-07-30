@@ -151,13 +151,15 @@ export function LibraryImportView({ onApplied, openItem }:
                       {m.actionable
                         ? <input type="checkbox" checked={checked} disabled={busy}
                             onChange={() => toggle(r.code)} />
-                        : <span style={{ color: 'var(--fg-dim)' }}>—</span>}
+                        : '—'}
                     </td>
                     <td className="kind-chip">{m.label}</td>
-                    <td>{r.item_id
+                    {/* Код изделия — идентичность (`.code`): у уже заведённого он ссылка
+                        со своим цветом, у нового — просто код, и приглушать его нельзя. */}
+                    <td className="code">{r.item_id
                       ? <a className="link" onClick={() => openItem(r.item_id!)}>{r.code}</a>
                       : r.code}</td>
-                    <td style={{ color: 'var(--fg-dim)' }}><RowDetail row={r} verb={m.verb} /></td>
+                    <td><RowDetail row={r} verb={m.verb} /></td>
                   </tr>)
               })}</tbody>
             </table>}

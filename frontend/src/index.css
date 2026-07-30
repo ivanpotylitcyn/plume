@@ -6,6 +6,7 @@
    этот файл остался СТРУКТУРОЙ — он про то, из чего собран интерфейс, а не какого он
    цвета. `@import` обязан стоять до любых правил, поэтому он первым. */
 @import './themes/dark.css';
+@import './themes/light.css';
 
 /* ── Шрифты (самохост, OFL/MIT) ──
    Inter — литературное (названия, описания, подписи, кнопки);
@@ -75,9 +76,10 @@
   --row-h: 22px;
   --row-gap: 4px;
   /* Ширина колонки идентичности в списках формы (§7a): одна на все табы, чтобы
-     колонка описания не переезжала при переключении. Коды короткие — колонке хватает
-     ~160px, остальное отдаём описанию (ужато с 260px на приёмке 2026-07-26). */
-  --col-key: 160px;
+     колонка описания не переезжала при переключении. Остальное отдаём описанию.
+     200px ≈ 25 моно-знаков (Ф3, волна 21: было 160 — хватало part number'ам вроде
+     `MT9V024IA7XTM-DP`, но в `.c-key` лежат и коды закупок/заказов, а они прозаичнее). */
+  --col-key: 200px;
 
   font-family: var(--font-base);
   font-size: 13px;
@@ -404,6 +406,23 @@ table.grid { border-collapse: collapse; width: 100%; }
 table.grid th { text-align: left; color: var(--fg-dim); font-weight: 400;
   padding: 3px 10px; border-bottom: 1px solid var(--border); }
 table.grid td { padding: 3px 10px; border-bottom: 1px solid var(--border); }
+/* ОСЬ «ИДЕНТИЧНОСТЬ / КОНТЕКСТ» (Ф3, волна 21): цвет ячейки задаёт РОЛЬ, а не рука.
+   Правило сложилось само и давно (приглушены описание, дата, имя контрагента, имя
+   проекта, part_number, lot_name, автор; полным цветом — коды, номера, числа), но
+   жило 62 инлайнами. Разъехалось оно из ИМЕНИ КЛАССА: `.c-key`/`.c-desc` названы по
+   роли, а `.c-fit` — по вёрстке («жмётся по содержимому»), и в неё свалили и коды, и
+   даты, и имена — цвет каждой пришлось дописывать по одной ячейке (`lot_name` и
+   `contractor_name` встречались и приглушёнными, и нет — один смысл, два вида).
+   Инвертируем умолчание: КОНТЕКСТ — базовый цвет ячейки, ПОЛНЫЙ ЦВЕТ — свойство
+   идентичности и счёта. Та же ось, по которой уже разведены шрифты (§3).
+   Утилита `.dim` на 62 места отвергнута: она зацементировала бы расхождение в класс.
+   Не участвуют (и не должны): `a.link` — свой `--link` прямым правилом на элементе,
+   поля ввода — свой цвет, `.hint`/`.anomaly`/`.kind-chip` — свой смысл. Призрачная
+   строка (`tr.row.ghost td`, ниже в файле) приглушена ЦЕЛИКОМ: та же специфичность,
+   но правило позже — черновик остаётся черновиком во всех колонках. */
+table.grid td { color: var(--fg-dim); }
+table.grid td:is(.c-key, .num, .code),
+table.grid td :is(.code, .seg) { color: var(--fg); }
 /* Все строки одной высоты, включая заголовок: без общего `line-height` первая строка
    («Компонент · Описание…») оказывалась выше остальных и шумела (§7a). */
 table.grid :is(th, td) { line-height: 20px; }
@@ -421,8 +440,27 @@ table.grid .fh-ctl .ci { font-size: 14px; }
 table.grid .fh-del { position: static; }
 table.grid :is(th, td).act { width: 1%; white-space: nowrap; text-align: right; }
 /* Колонка идентичности (код / имя файла / номер ордера) — ОДНОЙ ширины во всех табах
-   формы (§7a): при переключении табов соседняя колонка описания не прыгает. */
-table.grid :is(th, td).c-key { width: var(--col-key); }
+   формы (§7a): при переключении табов соседняя колонка описания не прыгает.
+   Ф3 (волна 21) — токен наконец ДЕРЖИТСЯ. Раньше одного `width` не хватало на оба
+   симптома: при `table-layout: auto` width — пожелание, а рядом стоит
+   `td.c-desc { max-width: 0; width: 100% }` («беру весь остаток»), поэтому колонка кода
+   всегда проигрывала спор и садилась на min-content СВОЕЙ таблицы — отсюда разнобой
+   ширин по формам. А min-content был копеечным потому, что перенос идёт по ДЕФИСАМ:
+   `IIS3DWBG1TR` целый, а `3221-10-0200-00`, `M80-5400842`, `МНП-M7.2` рвались на 2–4
+   строки и распирали высоту. `min/max-width` снимают спор, `nowrap` — перенос.
+   Тултипа на обрезанном коде НЕТ намеренно: код — короткий жаргон, и многоточие на 25
+   знаках это сигнал «чини код, а не колонку» (code-identity).
+   `:not([colspan])` — потому что зажим относится к КОЛОНКЕ, а ячейка, накрывающая две
+   (призрачная строка кладёт пикер в `.c-key colSpan={2}`, 9 форм), этой колонкой не
+   является: 200px обрезали бы ей поле ввода вместе с кнопкой «×». */
+table.grid :is(th, td).c-key:not([colspan]) {
+  width: var(--col-key);
+  min-width: var(--col-key);
+  max-width: var(--col-key);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* Колонка описания забирает ВСЮ свободную ширину, служебные колонки (размер, даты,
    автор) жмутся по содержимому и уезжают вправо, к командам строки (§7a). Так между
    описанием и числами не остаётся мёртвого поля. */
@@ -436,7 +474,13 @@ table.grid :is(td.c-desc, td.c-key) :is(input, .picker) { width: 100%; text-alig
    значение выключено влево — примыкает к числу своей строки. */
 table.grid :is(th, td).uom { text-align: left; width: 1%; white-space: nowrap;
   color: var(--fg-dim); font-family: var(--font-mono); padding-left: 6px; }
-table.grid td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* Числовая колонка (Ф3, волна 21): ВЫКЛЮЧКА — свойство колонки, поэтому стоит и на
+   заголовке (тем же приёмом `:is(th, td)`, что у `.gl`, `.act`, `.c-key`); до этого её
+   43 раза дописывали инлайном в `<th>`, хотя ячейка той же колонки уже говорила то же
+   классом. МОНО и `tabular-nums` — свойство ЗНАЧЕНИЯ и остаются на `td`: заголовок
+   («Кол-во», «Цена, ₽») — литературная подпись, а не счётное (§3). */
+table.grid :is(th, td).num { text-align: right; }
+table.grid td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 /* Описание в одну строку с многоточием (волна 17): «допуск …».
    Сжимается ПЕРВЫМ во всех списках (Ф12d, долг Ф5): `max-width: 0` говорит
    auto-layout, что содержимое ячейки не задаёт минимум, поэтому лишнее уходит в
@@ -571,7 +615,13 @@ a.link:hover { text-decoration: underline; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.sm { padding: 1px 8px; font-size: 11px; }
 .btn.primary { background: var(--btn); color: var(--btn-fg); border-color: var(--btn); }
-.btn.primary:hover:not(:disabled) { filter: brightness(1.12); color: var(--btn-fg); }
+/* Ховер синей кнопки — шаг В СТОРОНУ `--fg-bright`, а не `brightness(1.12)` (Ф3, волна
+   21): осветление верно только на тёмном фоне, в светлой теме кнопка от него бледнела
+   вместо привычного «нажимаемого» потемнения. Через токен направление выбирает ТЕМА
+   (в тёмной `--fg-bright` белый, в светлой чёрный), а правило остаётся одно. */
+.btn.primary:hover:not(:disabled) { color: var(--btn-fg);
+  background: color-mix(in srgb, var(--btn) 88%, var(--fg-bright));
+  border-color: color-mix(in srgb, var(--btn) 88%, var(--fg-bright)); }
 
 .born { color: var(--fg-dim); margin: 6px 0 4px; font-size: 12px; }
 .born .seg { color: var(--st-ok); margin-left: 8px; }
@@ -614,7 +664,7 @@ tr.row.ghost .glyph { opacity: 1; }
   min-width: 320px; max-width: min(680px, calc(100vw - 64px));
   max-height: 240px; overflow-y: auto; background: var(--bg-widget);
   border: 1px solid var(--border-strong); border-radius: 4px;
-  box-shadow: 0 6px 20px #00000055; }
+  box-shadow: 0 6px 20px var(--shadow-popover); }
 .typeahead-item { display: flex; align-items: center; gap: 8px; padding: 3px 8px;
   cursor: pointer; white-space: nowrap; font-size: 12px; }
 .typeahead-item:hover, .typeahead-item.active { background: var(--bg-hover); }
@@ -668,11 +718,11 @@ tr.row.ghost .glyph { opacity: 1; }
 .form-locked select.lot-sel { background-image: none; }
 
 /* ---- палитра ⌘K (§8) ---- */
-.palette-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+.palette-scrim { position: fixed; inset: 0; background: var(--scrim);
   display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 50; }
 .palette { width: 560px; max-width: 92vw; background: var(--bg-widget);
   border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden;
-  box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  box-shadow: 0 12px 40px var(--shadow-modal); }
 .palette input { width: 100%; background: none; border: none; color: var(--fg-bright);
   font-family: var(--font-mono); font-size: 15px; padding: 14px 16px; outline: none;
   border-bottom: 1px solid var(--border); }

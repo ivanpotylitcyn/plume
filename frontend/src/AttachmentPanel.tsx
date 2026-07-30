@@ -79,7 +79,7 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
         <table className="grid">
           <thead><tr><th className="gl" /><th className="c-key">Файл</th>
             <th className="c-desc">Описание</th>
-            <th className="c-fit" style={{ textAlign: 'right' }}>Размер</th>
+            <th className="c-fit num">Размер</th>
             <th className="c-fit">Загружено</th><th className="c-fit">Загрузил</th>
             <th className="act" /></tr></thead>
           <tbody>{rows.map(a => (
@@ -89,9 +89,9 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
                 <a className="link" href={a.url} target="_blank" rel="noreferrer">{a.filename}</a></td>
               <td className="c-desc"><CommitInput value={a.description} disabled={locked || busy}
                 onCommit={v => run(api.updateAttachment(a.id, v))} /></td>
-              <td className="num c-fit" style={{ color: 'var(--fg-dim)' }}>{humanSize(a.size)}</td>
-              <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{shortDate(a.uploaded_at)}</td>
-              <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>{a.user || '—'}</td>
+              <td className="num c-fit">{humanSize(a.size)}</td>
+              <td className="c-fit">{shortDate(a.uploaded_at)}</td>
+              <td className="c-fit">{a.user || '—'}</td>
               {/* Команды строки — одними глифами (подписи есть в `title`): в списке
                   их много, и текст на каждой строке шумел бы (§7a). Удаление — только
                   в режиме ПРАВКИ, как корзина шапки (§5): просмотр чист и от случайного

@@ -55,9 +55,9 @@ export function PeggingRows({ st, procurementId }: {
           <tr>
             <th className="gl" /><th className="c-key">Изделие</th>
             <th className="c-desc">Описание</th>
-            <th style={{ textAlign: 'right' }}>В плане</th><th className="uom">Ед.</th>
-            <th style={{ textAlign: 'right' }}>Разложено</th>
-            <th style={{ textAlign: 'right' }}>Остаток</th>
+            <th className="num">В плане</th><th className="uom">Ед.</th>
+            <th className="num">Разложено</th>
+            <th className="num">Остаток</th>
             <th className="act" />
           </tr>
         </thead>
@@ -85,8 +85,8 @@ export function PurchaseFan({ st, openPurchase }: {
       <thead><tr>
         <th className="gl" /><th className="c-key">Заказ</th>
         <th className="c-fit">Проект</th><th className="c-desc">Описание проекта</th>
-        <th style={{ textAlign: 'right' }}>Строк</th>
-        <th style={{ textAlign: 'right' }}>Всего</th>
+        <th className="num">Строк</th>
+        <th className="num">Всего</th>
       </tr></thead>
       <tbody>
         {p.fan.map(f => (
@@ -96,7 +96,7 @@ export function PurchaseFan({ st, openPurchase }: {
               <a className="link" onClick={() => openPurchase(f.purchase_id)}>
                 Заказ #{f.purchase_id}</a></td>
             <td className="c-fit"><span className="code">{f.project_code}</span></td>
-            <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+            <td className="c-desc">
               <span className="cell-ellip" title={f.project_name}>{f.project_name}</span></td>
             <td className="num">{f.lines}</td>
             <td className="num">{num(f.total)}</td>
@@ -118,7 +118,7 @@ function LineRow({ r, editable, busy, procurementId, run }: {
       <tr className={`row s-${r.status}`}>
         <td className="gl"><Glyph status={r.status} /></td>
         <td className="c-key"><span className="code">{r.item_code}</span></td>
-        <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <td className="c-desc">
           <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
         <td className="num">{num(r.qty)}</td>
         <td className="uom">{r.uom}</td>

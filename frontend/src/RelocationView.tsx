@@ -51,7 +51,7 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
             <tr>
               <th className="gl" /><th className="c-key">Партия</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
-              <th style={{ textAlign: 'right' }}>Кол-во</th><th className="uom">Ед.</th>
+              <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="c-fit">Откуда</th><th className="c-fit">Куда</th>
               {!locked && <th className="act" />}
             </tr>
@@ -109,7 +109,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
       <td className="c-key"><span className="pn">{m.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(m.item_id)}>{m.item_code}</a></td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         <span className="cell-ellip" title={m.item_description}>{m.item_description}</span></td>
       <td className="num">
         <CommitInput value={String(m.qty)} width={60} disabled={locked || busy}
@@ -122,7 +122,10 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
           options={locs.map(l => ({ value: l.id, label: l.code }))}
           onPick={v => run(api.updateRelocationLine(relocationId, m.lot_id,
             { from_location_id: Number(v) }))} />{' '}
-        <span className={negative ? 'anomaly' : ''} style={{ color: 'var(--fg-dim)' }}>
+        {/* Остаток источника — контекст, приглушён умолчанием ячейки (§7a). Минус
+            остаётся `.anomaly`: раньше инлайновый dim перебивал класс, и красным был
+            только треугольник, а число рядом с ним — серым. */}
+        <span className={negative ? 'anomaly' : ''}>
           ({num(m.from_live_qty)}){negative && <span className="anomaly" title="источник в минусе">▲</span>}
         </span>
       </td>
@@ -131,7 +134,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
           options={locs.map(l => ({ value: l.id, label: l.code }))}
           onPick={v => run(api.updateRelocationLine(relocationId, m.lot_id,
             { to_location_id: Number(v) }))} />{' '}
-        <span style={{ color: 'var(--fg-dim)' }}>({num(m.to_live_qty)})</span>
+        {`(${num(m.to_live_qty)})`}
       </td>
       {!locked && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать ход перемещения"
@@ -183,7 +186,7 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
             label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
               + ` · ${num(l.live_qty)} ${l.uom}` }))} />
       </td>
-      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+      <td className="c-desc">
         {picked?.item_description ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"

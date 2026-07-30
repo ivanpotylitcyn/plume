@@ -127,12 +127,14 @@ function Component({ row, form, wip, busy, openItem, run }: {
         <tbody>
           {row.real_lines.map(ln => (
             <tr key={ln.id} className="row s-available">
-              <td><span className="glyph g-available">✓</span> {ln.lot_label}</td>
+              {/* Ведущая ячейка = идентичность лота, поэтому `.code`: цвет ячейки идёт
+                  по оси «идентичность / контекст» (§7a), а не инлайном. */}
+              <td className="code"><span className="glyph g-available">✓</span> {ln.lot_label}</td>
               <td className="num">
                 <QtyInput value={ln.qty} disabled={!wip || busy}
                   onCommit={q => run(api.updateLine(ln.id, q))} /> {row.uom}
               </td>
-              <td style={{ color: 'var(--fg-dim)' }}>{ln.date ?? ''}</td>
+              <td>{ln.date ?? ''}</td>
               <td className="act">
                 {wip && <button className="fh-ctl icon fh-del" title="Убрать пробитую строку"
                   disabled={busy} onClick={() => run(api.deleteLine(ln.id))}>
@@ -170,11 +172,11 @@ function GhostRow({ row, ghost, form, busy, run }: {
       <td>
         <Glyph status={ghost.status} />{' '}
         {lots.length === 0
-          ? <span style={{ color: 'var(--fg-dim)' }}>
+          ? <>
               нет своих лотов —{' '}
               <Segment status="on_order" value={ghost.on_order} />
               <Segment status="to_order" value={ghost.to_order} />
-            </span>
+            </>
           : <Dropdown value={lotId} disabled={busy} onPick={v => setLotId(Number(v))}
               options={lots.map(l => ({ value: l.lot_id,
                 label: `#${l.lot_id} · остаток ${num(l.live_qty)}`
@@ -186,7 +188,9 @@ function GhostRow({ row, ghost, form, busy, run }: {
             onChange={e => setQty(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') pierce() }} />} {row.uom}
       </td>
-      <td colSpan={2} style={{ textAlign: 'right' }}>
+      {/* Ячейка накрывает колонки «дата» и «команды» — кнопка садится под колонкой
+          команд реальных строк, поэтому это `.act`, а не инлайновая выключка. */}
+      <td className="act" colSpan={2}>
         {lots.length > 0 &&
           <button className="btn sm" disabled={busy} onClick={pierce}>спаять</button>}
       </td>
