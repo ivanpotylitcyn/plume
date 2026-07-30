@@ -89,14 +89,17 @@ function Row({ r, openItem, editable, onTake }: {
           <Segment status="on_order" value={r.on_order} />
           <Segment status="to_order" value={r.to_order} />
         </td>
-        <td className="num">{r.to_order > 0 ? num(r.to_order) : '—'}</td>
-        <td className="num" style={{ color: r.planned > 0 ? undefined : 'var(--fg-dim)' }}>
-          {r.planned > 0 ? num(r.planned) : '—'}</td>
+        {/* Прочерк — не значение, а его отсутствие: приглушаем ролью `.sub` (вторичное
+            в полноцветной колонке), одинаково в обеих числовых колонках. */}
+        <td className="num">
+          {r.to_order > 0 ? num(r.to_order) : <span className="sub">—</span>}</td>
+        <td className="num">
+          {r.planned > 0 ? num(r.planned) : <span className="sub">—</span>}</td>
         <td className="act">
           <button className="fh-ctl icon" title="Откуда нужда (по проектам охвата)"
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           {editable && r.to_order > 0 && !taken &&
-            <button className="btn sm" style={{ marginLeft: 6 }}
+            <button className="btn sm"
               title={`Взять в план ${num(r.to_order)} ${r.uom}`}
               onClick={() => onTake(r.item_id, r.to_order)}>＋ в план</button>}
         </td>
@@ -105,15 +108,15 @@ function Row({ r, openItem, editable, onTake }: {
         <tr key={bp.project_id} className={`row ghost s-${bp.status}`}>
           <td className="gl"><Glyph status={bp.status} /></td>
           <td className="c-key"><span className="code">{bp.project_code}</span></td>
-          <td className="c-desc"><span className="sub">{bp.project_name}</span></td>
-          <td className="num sub">{num(bp.need)}</td>
+          <td className="c-desc">{bp.project_name}</td>
+          <td className="num">{num(bp.need)}</td>
           <td className="uom" />
           <td>
             <Segment status="available" value={bp.have} />
             <Segment status="on_order" value={bp.on_order} />
             <Segment status="to_order" value={bp.to_order} />
           </td>
-          <td className="num sub">{bp.to_order > 0 ? num(bp.to_order) : '—'}</td>
+          <td className="num">{bp.to_order > 0 ? num(bp.to_order) : "—"}</td>
           <td className="num" />
           <td className="act" />
         </tr>

@@ -105,13 +105,13 @@ function LineRow({ ln, locked, busy, openItem, run }: {
   return (
     <tr className="row">
       <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
-      <td className="c-key"><span className="pn">{ln.lot_label}</span></td>
+      <td className="c-key"><span className="code">{ln.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
-        <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
+        <CommitInput value={String(ln.qty)} disabled={locked || busy}
           onCommit={v => run(api.updateWriteoffLine(ln.id, Number(v)))}
           validate={v => Number(v) > 0} />
       </td>

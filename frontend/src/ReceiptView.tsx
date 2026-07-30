@@ -60,8 +60,8 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
               <th className="num">Цена, ₽</th>
-              <th className="c-fit">Part number</th>
-              <th className="c-fit">Название из УПД</th><th className="act" />
+              <th className="c-txt">Part number</th>
+              <th className="c-txt">Название из УПД</th><th className="act" />
             </tr>
           </thead>
           <tbody>
@@ -164,22 +164,22 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
-        <CommitInput value={String(lot.qty)} width={60} disabled={locked || busy}
+        <CommitInput value={String(lot.qty)} disabled={locked || busy}
           onCommit={v => run(api.updateReceiptLot(lot.id, { qty: Number(v) }))}
           validate={v => Number(v) > 0} />
       </td>
       <td className="uom">{lot.uom}</td>
       <td className="num">
-        <CommitInput value={String(lot.unit_cost)} width={72} disabled={locked || busy}
+        <CommitInput value={String(lot.unit_cost)} disabled={locked || busy}
           onCommit={v => run(api.updateReceiptLot(lot.id, { unit_cost: Number(v) }))}
           validate={v => Number(v) >= 0} />
       </td>
-      <td>
-        <CommitInput value={lot.part_number} width={140} disabled={locked || busy}
+      <td className="c-txt">
+        <CommitInput value={lot.part_number} disabled={locked || busy}
           onCommit={v => run(api.updateReceiptLot(lot.id, { part_number: v }))} />
       </td>
-      <td>
-        <CommitInput value={lot.lot_name} width={160} disabled={locked || busy}
+      <td className="c-txt">
+        <CommitInput value={lot.lot_name} disabled={locked || busy}
           onCommit={v => run(api.updateReceiptLot(lot.id, { lot_name: v }))} />
       </td>
       <td className="act">
@@ -237,13 +237,13 @@ function GhostRow({ receiptId, items, busy, run }: {
           onChange={e => setCost(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td>
-        <input className="qty-in" style={{ width: 140 }} value={pn} disabled={busy}
+      <td className="c-txt">
+        <input className="qty-in" value={pn} disabled={busy}
           placeholder="part number" onChange={e => setPn(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td>
-        <input className="qty-in" style={{ width: 160 }} value={name} disabled={busy}
+      <td className="c-txt">
+        <input className="qty-in" value={name} disabled={busy}
           placeholder="название из УПД" onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>

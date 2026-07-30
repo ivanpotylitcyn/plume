@@ -66,7 +66,7 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
             <tbody>{d.stock.map(l => (
               <tr key={l.lot_id} className="row">
                 <td className="gl"><LotGlyph origin={l.origin} liveQty={l.qty} /></td>
-                <td className="c-key"><span className="pn">{l.lot_label}</span></td>
+                <td className="c-key"><span className="code">{l.lot_label}</span></td>
                 <td className="c-fit">
                   <a className="link" onClick={() => openItem(l.item_id)}>{l.item_code}</a></td>
                 <td className="c-desc">

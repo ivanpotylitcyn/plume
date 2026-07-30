@@ -123,14 +123,16 @@ function LineRow({ r, editable, busy, procurementId, run }: {
         <td className="num">{num(r.qty)}</td>
         <td className="uom">{r.uom}</td>
         <td className="num">{num(r.pegged)}</td>
-        <td className="num" style={{ color: r.remaining < 0 ? 'var(--st-order)' : undefined }}>
-          {num(r.remaining)}
+        {/* Перепег (остаток ушёл в минус) — смысл «нужна работа», знак выбирает тема:
+            тот же `.g-to_order`, что у глифов и аномалий, а не инлайн-цвет. */}
+        <td className="num">
+          <span className={r.remaining < 0 ? 'g-to_order' : undefined}>{num(r.remaining)}</span>
         </td>
         <td className="act">
           <button className="fh-ctl icon" title="Распределение по проектам"
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           {r.by_project.length === 0 &&
-            <span className="sub" style={{ marginLeft: 6 }}>нет нужды по проектам</span>}
+            <span className="sub">нет нужды по проектам</span>}
         </td>
       </tr>
       {open && r.by_project.map(bp => (
@@ -173,8 +175,8 @@ function ProjectRow({ bp, item_id, editable, busy, procurementId, run }: {
           <button className="fh-ctl icon" title="Зачем это проекту (применения)"
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           <span className="code">{bp.project_code}</span></td>
-        <td className="c-desc"><span className="sub">{bp.project_name}</span></td>
-        <td className="num sub" title="наводка по охвату (сколько проекту ещё надо)">
+        <td className="c-desc">{bp.project_name}</td>
+        <td className="num" title="наводка по охвату (сколько проекту ещё надо)">
           {bp.suggest > 0 ? num(bp.suggest) : '—'}
         </td>
         <td className="uom" />
@@ -197,7 +199,6 @@ function ProjectRow({ bp, item_id, editable, busy, procurementId, run }: {
                 { value: 'new', label: '＋ новый заказ' }]}
               onPick={v => setInto(v === 'new' ? 'new' : Number(v))} />
             <input className="qty-in" value={qty} disabled={busy} placeholder="+кол-во"
-              style={{ marginLeft: 6 }}
               onChange={e => setQty(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') peg(Number(qty)) }} />
             {/* Команды строки — одними глифами (§7a): текстовые «привязать» и
@@ -214,19 +215,19 @@ function ProjectRow({ bp, item_id, editable, busy, procurementId, run }: {
       </tr>
       {open && (bp.usage.length === 0
         ? <tr className="row ghost"><td className="gl" />
-            <td colSpan={7}><span className="sub">
+            <td colSpan={7}><span>
               Позиция не входит в изделия проекта — привязка ручная.</span></td></tr>
         : bp.usage.map(u => (
           <tr key={u.target_item_id} className="row ghost">
             <td className="gl" />
-            <td className="c-key" style={{ paddingLeft: 28 }}>
+            <td className="c-key ind">
               <span className="code">{u.target_code}</span></td>
-            <td className="c-desc"><span className="sub">{u.target_description}</span></td>
-            <td className="num sub"
+            <td className="c-desc">{u.target_description}</td>
+            <td className="num"
               title={`${num(u.per_unit)} на изделие × ${num(u.demand_qty)} изделий`}>
               {num(u.total)}</td>
             <td className="uom" />
-            <td className="num sub">×{num(u.per_unit)}</td>
+            <td className="num">×{num(u.per_unit)}</td>
             <td /><td className="act" />
           </tr>
         )))}

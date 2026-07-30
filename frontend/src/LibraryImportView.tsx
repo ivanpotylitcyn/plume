@@ -96,7 +96,7 @@ export function LibraryImportView({ onApplied, openItem }:
         пропавшие сверяются только в загруженных категориях.
       </div>
 
-      <div className="kit-actions" style={{ marginBottom: 12 }}>
+      <div className="kit-actions">
         <input type="file" multiple accept=".csv,text/csv"
           onChange={e => pickFiles(e.target.files)} />
         <button className="btn" disabled={busy || files.length === 0} onClick={runDiff}>
@@ -106,7 +106,7 @@ export function LibraryImportView({ onApplied, openItem }:
       </div>
 
       {summary && (
-        <div className="section-h" style={{ color: 'var(--st-ok)' }}>
+        <div className="section-h g-available">
           Применено: создано {summary.created} · обновлено {summary.updated} ·
           помечено {summary.marked} · удалено {summary.deleted}
         </div>
@@ -119,27 +119,27 @@ export function LibraryImportView({ onApplied, openItem }:
             пропавших {counts.gone} · сирот {counts.orphan} · совпадений {counts.same}
           </span>
         </div>
-        <div style={{ color: 'var(--fg-dim)', fontSize: 12, marginBottom: 8 }}>
+        <div className="hint-row">
           Загруженные категории: {diff.categories.join(', ') || '—'}
         </div>
 
-        <div className="kit-actions" style={{ marginBottom: 8 }}>
+        <div className="kit-actions">
           <button className="btn sm" disabled={busy || actionable.length === 0}
             onClick={() => bulk(actionable, !allActionableOn)}>
             {allActionableOn ? 'снять все действия' : 'отметить все действия'}
           </button>
           {counts.same > 0 &&
-            <label style={{ color: 'var(--fg-dim)', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <label>
               <input type="checkbox" checked={showSame} onChange={e => setShowSame(e.target.checked)} />
               показывать совпадения
             </label>}
         </div>
 
         {shown.length === 0
-          ? <div style={{ color: 'var(--fg-dim)' }}>Расхождений нет — справочник совпадает с библиотекой.</div>
-          : <table className="grid" style={{ maxWidth: 920 }}>
+          ? <div className="tab-empty">Расхождений нет — справочник совпадает с библиотекой.</div>
+          : <table className="grid lib-diff">
               <thead><tr>
-                <th style={{ width: 24 }} />
+                <th className="pick" />
                 <th>Статус</th><th>Изделие</th><th>Действие / изменения</th>
               </tr></thead>
               <tbody>{shown.map(r => {
@@ -147,7 +147,7 @@ export function LibraryImportView({ onApplied, openItem }:
                 const checked = confirmed.has(r.code)
                 return (
                   <tr key={r.code} className={'row ' + m.cls}>
-                    <td style={{ textAlign: 'center' }}>
+                    <td className="pick">
                       {m.actionable
                         ? <input type="checkbox" checked={checked} disabled={busy}
                             onChange={() => toggle(r.code)} />
@@ -164,12 +164,12 @@ export function LibraryImportView({ onApplied, openItem }:
               })}</tbody>
             </table>}
 
-        <div className="kit-actions" style={{ marginTop: 12 }}>
+        <div className="kit-actions">
           <button className="btn" disabled={busy || confirmed.size === 0} onClick={apply}>
             Применить подтверждённое ({confirmed.size})
           </button>
           {confirmed.size > 0 &&
-            <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>
+            <span className="lbl">
               будет применено строк: {confirmed.size}
             </span>}
         </div>
@@ -187,10 +187,10 @@ function RowDetail({ row, verb }: { row: LibraryDiffRow; verb: string }) {
         {row.incoming.temperature ? ` · ${row.incoming.temperature}` : ''}</span></>
   if (row.status === 'changed' && row.changes)
     return <>{Object.entries(row.changes).map(([f, ch]) => (
-      <div key={f}>{FIELD_RU[f] || f}: <s>{ch!.old || '—'}</s> → <b style={{ color: 'var(--fg)' }}>{ch!.new || '—'}</b></div>
+      <div key={f}>{FIELD_RU[f] || f}: <s>{ch!.old || '—'}</s> → <b>{ch!.new || '—'}</b></div>
     ))}</>
   if (row.status === 'mark')
-    return <>не помечено → <b style={{ color: 'var(--st-ok)' }}>пометить библиотечным ✓</b>
+    return <>не помечено → <b className="g-available">пометить библиотечным ✓</b>
       <span className="kind-chip"> · совпадает с библиотекой</span></>
   if ((row.status === 'gone' || row.status === 'orphan') && row.current)
     return <>{verb}

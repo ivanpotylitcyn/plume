@@ -48,7 +48,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="num">Цена, ₽</th>
-              <th className="c-fit">Part number</th><th className="c-fit">Название</th>
+              <th className="c-txt">Part number</th><th className="c-txt">Название</th>
               <th className="c-fit">Провенанс</th><th className="act" />
             </tr>
           </thead>
@@ -117,22 +117,22 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
       </td>
       <td className="num">
-        <CommitInput value={String(lot.qty)} width={60} disabled={locked || busy}
+        <CommitInput value={String(lot.qty)} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { qty: Number(v) }))}
           validate={v => Number(v) > 0} />
       </td>
       <td className="uom">{lot.uom}</td>
       <td className="num">
-        <CommitInput value={String(lot.unit_cost)} width={72} disabled={locked || busy}
+        <CommitInput value={String(lot.unit_cost)} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { unit_cost: Number(v) }))}
           validate={v => Number(v) >= 0} />
       </td>
-      <td className="c-fit">
-        <CommitInput value={lot.part_number} width={140} disabled={locked || busy}
+      <td className="c-txt">
+        <CommitInput value={lot.part_number} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { part_number: v }))} />
       </td>
-      <td className="c-fit">
-        <CommitInput value={lot.lot_name} width={160} disabled={locked || busy}
+      <td className="c-txt">
+        <CommitInput value={lot.lot_name} disabled={locked || busy}
           onCommit={v => run(api.updateInventoryLot(lot.id, { lot_name: v }))} />
       </td>
       <td className="c-fit">
@@ -194,13 +194,13 @@ function GhostRow({ inventoryId, items, busy, run }: {
           onChange={e => setCost(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td className="c-fit">
-        <input className="qty-in" style={{ width: 140 }} value={pn} disabled={busy}
+      <td className="c-txt">
+        <input className="qty-in" value={pn} disabled={busy}
           placeholder="part number" onChange={e => setPn(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      <td className="c-fit">
-        <input className="qty-in" style={{ width: 160 }} value={name} disabled={busy}
+      <td className="c-txt">
+        <input className="qty-in" value={name} disabled={busy}
           placeholder="название" onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>

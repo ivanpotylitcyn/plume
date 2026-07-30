@@ -233,7 +233,7 @@ function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
   return (
     <tr className={'row' + (r.anomaly ? ' s-to_order' : '')}>
       <td className="gl"><LotGlyph origin={r.origin} liveQty={r.live_qty} /></td>
-      <td className="c-key"><span className="pn">{r.lot_label}</span></td>
+      <td className="c-key"><span className="code">{r.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a></td>
       <td className="c-desc">
@@ -337,7 +337,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
         <span className="name">{d.target_description}</span>
         <span className="pnum">
           {editable
-            ? <CommitInput value={String(d.qty)} width={56} disabled={busy}
+            ? <CommitInput value={String(d.qty)} disabled={busy}
                 onCommit={v => run(api.updateDemand(d.demand_id, Number(v)))}
                 validate={v => Number(v) > 0} />
             : num(d.qty)}
@@ -358,8 +358,8 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
         </span>
       </div>
       {open && (d.tree.length === 0
-        ? <div className="prow prow--comp" style={{ color: 'var(--fg-dim)' }}>
-            <span style={{ gridColumn: '1 / -1' }}>Состав пуст — задайте BOM прибора.</span>
+        ? <div className="prow prow--comp prow--empty">
+            <span>Состав пуст — задайте BOM прибора.</span>
           </div>
         : <DeviceTree tree={d.tree} openItem={openItem} />)}
     </>
@@ -402,7 +402,10 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   n: DeficitTreeNode; hasChildren: boolean; expanded: boolean
   onToggle: () => void; openItem: (id: number) => void
 }) {
-  const indent = (n.depth + 1) * 18   // +1: дерево живёт под строкой прибора-цели (стаж-ступень)
+  // +1: дерево живёт под строкой прибора-цели (стаж-ступень). Единственная законная
+  // инлайн-ширина во всех вью (Б2а, 2026-07-30): значение ВЫЧИСЛЯЕТСЯ из глубины узла,
+  // классом такое не выразить — правил под каждый уровень не заводим.
+  const indent = (n.depth + 1) * 18
   return (
     <div className={`prow prow--comp s-${n.status}`}>
       <span className="tree-cell" style={{ paddingLeft: indent }}>
@@ -427,7 +430,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
           {n.anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
         </span>
       </> : <>
-        <span style={{ color: 'var(--fg-dim)', fontSize: 11 }}>подсборка</span>
+        <span className="lbl">подсборка</span>
         <span />
       </>}
       <span className="act" />
@@ -488,13 +491,13 @@ function AddDevice({ items, demands, busy, add }: {
   }
 
   if (options.length === 0)
-    return <div className="kit-actions" style={{ marginTop: 10, color: 'var(--fg-dim)', fontSize: 12 }}>
-      ＋ прибор: все изделия-приборы уже в потребности.</div>
+    return <div className="kit-actions">
+      <span className="lbl">＋ прибор: все изделия-приборы уже в потребности.</span></div>
   return (
-    <div className="kit-actions" style={{ marginTop: 10 }}>
-      <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ прибор</span>
+    <div className="kit-actions">
+      <span className="lbl">＋ прибор</span>
       <ItemPicker items={options} value={targetId} onPick={setTargetId} disabled={busy}
-        width={240} onEnter={submit}
+        onEnter={submit}
         notFound="ничего не найдено — прибор должен быть изделием (не компонентом)." />
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}

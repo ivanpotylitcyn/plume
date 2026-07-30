@@ -220,7 +220,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
         {editable
-          ? <CommitInput value={String(ln.qty)} width={72} disabled={busy}
+          ? <CommitInput value={String(ln.qty)} disabled={busy}
               onCommit={v => run(api.updateProcurementLine(ln.id, Number(v)))}
               validate={v => Number(v) > 0} />
           : num(ln.qty)}

@@ -18,7 +18,7 @@ import type { ItemRow, CounterpartyRow, ProjectPurchaseRow, ProjectRow } from '.
 import { ItemGlyph, StatusGlyph } from './status'
 
 export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, renderRow,
-  placeholder, disabled, width, onEnter, onClear, notFound, onCreate, multi, summary,
+  placeholder, disabled, onEnter, onClear, notFound, onCreate, multi, summary,
   eager }: {
   options: T[]
   value: number | ''
@@ -29,7 +29,6 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
   renderRow: (o: T) => ReactNode
   placeholder?: string
   disabled?: boolean
-  width?: number
   onEnter?: () => void
   onClear?: () => void          // задан → у выбранного появляется «×» (поле обнуляемо)
   notFound?: string
@@ -86,7 +85,7 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
 
   return (
     <span className="picker">
-      <input ref={field} className="lot-sel" style={width ? { width } : undefined} value={t.text}
+      <input ref={field} className="lot-sel" value={t.text}
         disabled={disabled} placeholder={placeholder ?? 'код или описание…'}
         onChange={e => t.type(e.target.value)} onKeyDown={t.onKeyDown} onBlur={t.close}
         // Множественный выбор раскрывается и по фокусу, и по КЛИКУ: после Esc поле
@@ -128,17 +127,17 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
 // сюда приходит готовый `options`.
 const itemText = (i: ItemRow) => `${i.code} — ${i.description}`
 
-export function ItemPicker({ items, value, onPick, disabled, placeholder, width, onEnter,
+export function ItemPicker({ items, value, onPick, disabled, placeholder, onEnter,
   onClear, notFound }: {
   items: ItemRow[]
   value: number | ''
   onPick: (id: number) => void
-  disabled?: boolean; placeholder?: string; width?: number
+  disabled?: boolean; placeholder?: string
   onEnter?: () => void; onClear?: () => void; notFound?: string
 }) {
   return <Picker options={items} value={value} onPick={onPick} keyOf={i => i.id}
     textOf={itemText} searchOf={itemText} disabled={disabled} placeholder={placeholder}
-    width={width} onEnter={onEnter} onClear={onClear}
+    onEnter={onEnter} onClear={onClear}
     notFound={notFound ?? 'ничего не найдено — изделие должно быть в справочнике.'}
     renderRow={i => <>
       <ItemGlyph native={i.native} synced={i.synced} locked={i.locked} />
@@ -149,7 +148,7 @@ export function ItemPicker({ items, value, onPick, disabled, placeholder, width,
 
 // ── Пикер контрагента ──
 // Глифа в строке нет намеренно: у контрагента нет оси состояния (ни замка, ни синка),
-// а глиф без смысла — декорация (UI_PRINCIPLES). Направление (`fold-*`) живёт в списке
+// а глиф без смысла — декорация (UI_GUIDE §0.4). Направление (`fold-*`) живёт в списке
 // режима, где строки сравнимы между собой; здесь список уже отобран стороной.
 //
 // **Выбор из СПИСКА, а не по памяти** (решение Ивана 2026-07-29): клик по полю
@@ -166,19 +165,19 @@ export function ItemPicker({ items, value, onPick, disabled, placeholder, width,
 const cpText = (c: CounterpartyRow) => c.code ? `${c.code} — ${c.description}` : c.description
 
 export function CounterpartyPicker({ counterparties, side, value, onPick, disabled,
-  placeholder, width, onClear, onCreate }: {
+  placeholder, onClear, onCreate }: {
   counterparties: CounterpartyRow[]
   side: 'supply' | 'shipment'
   value: number | ''
   onPick: (id: number) => void
-  disabled?: boolean; placeholder?: string; width?: number; onClear?: () => void
+  disabled?: boolean; placeholder?: string; onClear?: () => void
   onCreate?: (name: string) => void
 }) {
   const ours = (c: CounterpartyRow) => side === 'supply' ? c.has_supply : c.has_shipment
   const options = [...counterparties.filter(ours), ...counterparties.filter(c => !ours(c))]
   return <Picker options={options} value={value} onPick={onPick} keyOf={c => c.id}
     textOf={cpText} searchOf={c => `${c.code ?? ''} ${c.description} ${c.inn}`}
-    disabled={disabled} placeholder={placeholder} width={width} onClear={onClear}
+    disabled={disabled} placeholder={placeholder} onClear={onClear}
     onCreate={onCreate} eager
     notFound="ничего не найдено — контрагента можно завести рядом."
     renderRow={c => <>

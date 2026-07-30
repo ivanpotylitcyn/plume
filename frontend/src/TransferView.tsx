@@ -55,7 +55,7 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="num">Остаток</th>
-              <th className="c-fit">Имя в накладной</th>
+              <th className="c-txt">Имя в накладной</th>
               {!locked && <th className="act" />}
             </tr>
           </thead>
@@ -120,13 +120,13 @@ function LineRow({ ln, locked, busy, openItem, run }: {
   return (
     <tr className="row">
       <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
-      <td className="c-key"><span className="pn">{ln.lot_label}</span></td>
+      <td className="c-key"><span className="code">{ln.lot_label}</span></td>
       <td className="c-fit">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
-        <CommitInput value={String(ln.qty)} width={60} disabled={locked || busy}
+        <CommitInput value={String(ln.qty)} disabled={locked || busy}
           onCommit={v => run(api.updateTransferLine(ln.id, { qty: Number(v) }))}
           validate={v => Number(v) > 0} />
       </td>
@@ -135,8 +135,8 @@ function LineRow({ ln, locked, busy, openItem, run }: {
         <span className={negative ? 'anomaly' : ''}>{num(ln.lot_live_qty)}</span>
         {negative && <span className="anomaly" title="переотдали — источник в минусе">▲</span>}
       </td>
-      <td className="c-fit">
-        <CommitInput value={ln.display_name} width={200} disabled={locked || busy}
+      <td className="c-txt">
+        <CommitInput value={ln.display_name} disabled={locked || busy}
           onCommit={v => run(api.updateTransferLine(ln.id, { display_name: v }))} />
       </td>
       {!locked && <td className="act">
@@ -188,8 +188,8 @@ function GhostRow({ transferId, lots, busy, run }: {
       <td className="num">
         {picked ? num(picked.live_qty) : ''}
       </td>
-      <td className="c-fit">
-        <input className="qty-in" style={{ width: 200 }} value={name} disabled={busy}
+      <td className="c-txt">
+        <input className="qty-in" value={name} disabled={busy}
           placeholder="имя в накладной (авто)" onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>

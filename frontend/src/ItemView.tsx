@@ -101,7 +101,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
                 <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
               <td className="num">
                 {!locked
-                  ? <CommitInput value={String(b.qty)} width={56} disabled={busy}
+                  ? <CommitInput value={String(b.qty)} disabled={busy}
                       onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
                       validate={v => Number(v) > 0} />
                   : num(b.qty)}
@@ -323,13 +323,13 @@ function AddComponent({ items, parentId, bom, busy, add }: {
   }
 
   if (options.length === 0)
-    return <div className="kit-actions" style={{ marginTop: 10, color: 'var(--fg-dim)', fontSize: 12 }}>
-      ＋ компонент: нет доступных изделий.</div>
+    return <div className="kit-actions">
+      <span className="lbl">＋ компонент: нет доступных изделий.</span></div>
   return (
-    <div className="kit-actions" style={{ marginTop: 10 }}>
-      <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>＋ компонент</span>
+    <div className="kit-actions">
+      <span className="lbl">＋ компонент</span>
       <ItemPicker items={options} value={componentId} onPick={setComponentId}
-        disabled={busy} width={240} onEnter={submit}
+        disabled={busy} onEnter={submit}
         notFound="ничего не найдено — компонент должен быть в справочнике изделий." />
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}

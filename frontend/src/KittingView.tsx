@@ -116,7 +116,7 @@ function Component({ row, form, wip, busy, openItem, run }: {
         <Glyph status={status} />
         <span className="name">
           <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a>
-          {' '}<span style={{ color: 'var(--fg-dim)' }}>{row.component_description}</span>
+          {' '}<span>{row.component_description}</span>
         </span>
         <span className="triple">надо {num(row.need)} {row.uom} · пробито {num(row.pierced)}
           {row.remaining > 0 && <> · остаток <span className="g-to_order">{num(row.remaining)}</span></>}
