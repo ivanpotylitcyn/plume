@@ -481,7 +481,7 @@ def _item_detail_payload(item):
          'component_uom': bl.component.uom,
          'component_native': bl.component.native, 'component_synced': bl.component.synced,
          'component_locked': bl.component.locked,   # глиф строки по режиму (Ф3a)
-         'qty': bl.qty, 'position': bl.position}
+         'qty': bl.qty}
         for bl in item.bom_lines.select_related('component')
     ]
     # Ф15: партия черновика в этом табе ОСТАЁТСЯ (видно входящий поток: «10 едет, 0
@@ -566,8 +566,7 @@ def item_bom(request, pk):
     d = request.data
     try:
         component = models.Item.objects.get(pk=d['component_id'])
-        engine.add_bom_line(parent, component, _dec(d.get('qty')),
-                            position=d.get('position') or '')
+        engine.add_bom_line(parent, component, _dec(d.get('qty')))
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны component_id и qty ({e}).')
     except ValidationError as e:
@@ -577,7 +576,7 @@ def item_bom(request, pk):
 
 @api_view(['PATCH', 'DELETE'])
 def bom_line_detail(request, pk):
-    """Автосейв кол-ва/позиции строки состава (PATCH) / удаление (DELETE)."""
+    """Автосейв кол-ва строки состава (PATCH) / удаление (DELETE)."""
     line = get_object_or_404(models.BomLine.objects.select_related('parent'), pk=pk)
     parent = line.parent
     try:
@@ -586,9 +585,7 @@ def bom_line_detail(request, pk):
         else:
             d = request.data
             engine.update_bom_line(
-                line,
-                qty=_dec(d['qty']) if 'qty' in d else None,
-                position=d['position'] if 'position' in d else None)
+                line, qty=_dec(d['qty']) if 'qty' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(_item_detail_payload(parent))
@@ -1778,10 +1775,14 @@ def procurements(request):
     """Список закупок-планов (дерево) / создание новой (призрачная строка)."""
     if request.method == 'POST':
         d = request.data
-        p = engine.create_procurement(_actor(request),
-                                      date=d.get('date') or None,
-                                      code=(d.get('code') or '').strip() or None,
-                                      description=(d.get('description') or '').strip())
+        try:
+            p = engine.create_procurement(
+                _actor(request),
+                date=d.get('date') or None,
+                code=(d.get('code') or '').strip() or None,
+                description=(d.get('description') or '').strip())
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
         return Response(engine.procurement_form(p), status=http.HTTP_201_CREATED)
 
     # Ф17: ВСЕ закупки — прятать нечего (закупок-пустышек больше не бывает, см. engine)

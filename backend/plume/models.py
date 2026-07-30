@@ -374,7 +374,6 @@ class BomLine(models.Model):
     component = models.ForeignKey(Item, on_delete=models.PROTECT,
                                   related_name='used_in')
     qty = qty(verbose_name='кол-во')
-    position = models.CharField('позиция', max_length=64, blank=True, default='')
 
     class Meta:
         verbose_name = 'строка BOM'
@@ -813,9 +812,17 @@ class StockMovement(models.Model):
     `engine.rebuild_movements`, единственного писателя этой таблицы)."""
 
     class Type(models.TextChoices):
+        """Два типа, и оба выводятся из знака — третьего быть не может.
+
+        Аудит-1 (Б1а-2): `RETURN` жил здесь значением, которого движок никогда не
+        писал. Возврат — не отдельная природа движения, а знак: расфиксация ордера
+        просто убирает его строки из проекции, а физический возврат заводится
+        встречным документом и приходит в `RECEIPT`. Лишнее значение обещало
+        сценарий, которого нет, — снято.
+        """
+
         RECEIPT = 'RECEIPT', 'Приход'
         ISSUE = 'ISSUE', 'Расход'
-        RETURN = 'RETURN', 'Возврат'
 
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='movements')
     location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='+')

@@ -97,7 +97,7 @@ export interface ItemDetail {
   bom: { id: number; component_id: number; component_code: string;
          component_description: string; component_uom: string;
          component_native: boolean; component_synced: boolean; component_locked: boolean;
-         qty: number; position: string }[]
+         qty: number }[]
   where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number
                 parent_native: boolean; parent_synced: boolean; parent_locked: boolean }[]
   // `origin_locked` (Ф15): партия черновика лежит в этом списке, но НЕ на складе —
@@ -660,9 +660,9 @@ export const api = {
   // на всех сущностях — approve/unapprove и close/reopen из API ушли.
   lockItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/lock/`),
   unlockItem: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/unlock/`),
-  addBomLine: (itemId: number, b: { component_id: number; qty: number; position?: string }) =>
+  addBomLine: (itemId: number, b: { component_id: number; qty: number }) =>
     send<ItemDetail>('POST', `/api/items/${itemId}/bom/`, b),
-  updateBomLine: (lineId: number, b: Partial<{ qty: number; position: string }>) =>
+  updateBomLine: (lineId: number, b: Partial<{ qty: number }>) =>
     send<ItemDetail>('PATCH', `/api/bom-lines/${lineId}/`, b),
   deleteBomLine: (lineId: number) =>
     send<ItemDetail>('DELETE', `/api/bom-lines/${lineId}/`),

@@ -65,13 +65,13 @@ export function LibraryImportView({ onApplied, openItem }:
 
   const toggle = (key: string) => setConfirmed(prev => {
     const next = new Set(prev)
-    next.has(key) ? next.delete(key) : next.add(key)
+    if (next.has(key)) next.delete(key); else next.add(key)
     return next
   })
   // Массовое переключение по статусу (или сразу все действия): отметить/снять весь блок.
   const bulk = (rows: LibraryDiffRow[], on: boolean) => setConfirmed(prev => {
     const next = new Set(prev)
-    for (const r of rows) on ? next.add(r.code) : next.delete(r.code)
+    for (const r of rows) { if (on) next.add(r.code); else next.delete(r.code) }
     return next
   })
 

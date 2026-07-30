@@ -2320,22 +2320,43 @@ def unlock_project(project):
 
 
 # ── Мосты панели закрытия (один клик = свести остаточный лот в 0) ──
+def _require_no_closing_draft(lot):
+    """Отказать, если остаток лота уже разобран черновым закрывающим актом (Ф15).
+
+    Мосты панели «найти-или-создать»: лот, уже лежащий в черновике, раньше уводил
+    их в ветку «создать новый акт» — и повторный клик плодил ВТОРОЙ документ на тот
+    же остаток (после фиксации обоих лот ушёл бы в минус). Спровоцировать это легко:
+    после Ф15 остаток на панели не гаснет до фиксации, и клик выглядит «не
+    сработавшим». Правильный ответ — не второй документ, а напоминание, где лежит
+    первый: работа уже сделана, осталось её зафиксировать.
+    """
+    kinds = (models.StockDocument.Kind.WRITEOFF, models.StockDocument.Kind.REQUISITION)
+    doc = (models.StockDocument.objects
+           .filter(locked=False, kind__in=kinds, lines__lot=lot, lines__qty__lt=0)
+           .distinct().order_by('id').first())
+    if doc is not None:
+        raise ValidationError(
+            f'Остаток лота уже разобран черновиком «{doc.code}» — '
+            f'зафиксируйте его.')
+
+
 def writeoff_lot(project, lot, qty, user):
     """Мост «списать остаток»: найти-или-создать акт списания проекта + строка.
 
     Оживляет действие панели: один клик кладёт остаток лота в акт списания. Ф15:
     остаток уйдёт в 0 не сейчас, а на фиксации акта — панель показывает лот
     остаточным, пока акт черновик (это и есть «ответственно нажал Зафиксировать»).
-    Переиспользует последний **черновой** акт проекта (если этого лота в нём ещё нет);
-    зафиксированный не трогаем — правка под замком запрещена.
+    Переиспользует последний **черновой** акт проекта; зафиксированный не трогаем —
+    правка под замком запрещена.
     """
     if lot.project_id != project.id:
         raise ValidationError('Лот из другого проекта.')
+    _require_no_closing_draft(lot)
     # Ф2c: `project` поднят в StockDocument (реверс — `project.documents`); типизированный
     # доступ через дочерний менеджер (прозрачно фильтрует по родительскому полю).
     writeoff = (models.Writeoff.objects.filter(project=project, locked=False)
                 .order_by('-id').first())
-    if writeoff is None or writeoff.lines.filter(lot=lot).exists():
+    if writeoff is None:
         writeoff = create_writeoff(
             project, user, _auto_number('СПИС', project), reason='закрытие проекта')
     add_writeoff_line(writeoff, lot, qty)
@@ -2347,15 +2368,16 @@ def requisition_lot(project, lot, qty, user, dest_kind=None):
 
     Один клик панели кладёт остаток в требование: на фиксации он уйдёт в 0 у проекта
     (`−ISSUE`) и появится лотом-потомком на балансе (`+RECEIPT`) — до неё склад не
-    двигается (Ф15). Переиспользует последнее **черновое** требование в целевой склад
-    (если этого источника в нём ещё нет); зафиксированное не трогаем.
+    двигается (Ф15). Переиспользует последнее **черновое** требование в целевой склад;
+    зафиксированное не трогаем.
     """
     if lot.project_id != project.id:
         raise ValidationError('Лот из другого проекта.')
+    _require_no_closing_draft(lot)
     dest = _internal_project(dest_kind or models.Project.Kind.INTERNAL_STOCK)
     requisition = (models.Requisition.objects.filter(project=dest, locked=False)
                    .order_by('-id').first())
-    if requisition is None or requisition.lines.filter(lot=lot).exists():
+    if requisition is None:
         requisition = create_requisition(dest, user, _auto_number('ТРБ', dest))
     add_requisition_line(requisition, lot, qty)
     return requisition
@@ -3816,14 +3838,20 @@ def written_off_lots():
     физически, инвентаризация возвращает её на баланс лотом-потомком (`predecessor` →
     списанный, наследование item/цены/названия/зав.№). Показываем суммарно списанное
     с лота (сколько «серого» доступно вернуть).
+
+    Ф15: считаем только по **зафиксированным** актам — черновик списания это
+    намерение, а не факт, и предлагать вернуть ещё не списанное значило бы делать
+    склад из воздуха. Та же граница, что у остальных интегралов движка.
     """
     result = []
     wo = models.StockDocument.Kind.WRITEOFF
-    for lot in (models.Lot.objects.filter(stock_lines__document__kind=wo).distinct()
+    for lot in (models.Lot.objects
+                .filter(stock_lines__document__kind=wo,
+                        stock_lines__document__locked=True).distinct()
                 .select_related('item', 'project').order_by('project__code',
                                                             'item__code', 'id')):
         # qty знаковый (− расход) → магнитуда списанного = −Σ
-        written = -(lot.stock_lines.filter(document__kind=wo)
+        written = -(lot.stock_lines.filter(document__kind=wo, document__locked=True)
                     .aggregate(s=Sum('qty'))['s'] or ZERO)
         result.append({
             'lot_id': lot.id, 'item_id': lot.item_id,
@@ -4132,15 +4160,21 @@ def library_diff(parsed):
 
     - `new`     — ключа нет в БД → создать (`native=false`, `synced=true`, `locked=false`);
     - `changed` — есть, отличается description/category/temperature → обновить
-      (+ пометить `synced`; `locked` не трогаем — решение Ивана 2026-07-24);
+      (+ пометить `synced`, снять замок);
     - `mark`    — есть, содержимое совпадает, но ещё не помечено `synced` → пометить
-      библиотечным (`synced=true`, `locked` не трогаем). Путь бэкфилла после Ф3a: все
+      библиотечным (`synced=true`, замок снять). Путь бэкфилла после Ф3a: все
       существующие библиотечные приходят `synced=false` и помечаются первым же синком;
     - `same`    — есть, совпадает И уже `synced` → ничего;
     - `gone`    — в БД (в одном из загруженных классов), нет в загрузке, не
       используется → кандидат на удаление;
     - `orphan`  — то же, но используется (живые ссылки) → флаг «сирота, нет в
       библиотеке» (не действие: удалить нельзя, обновлять нечем).
+
+    Замок синк снимает всюду, где метит `synced` — этого требует инвариант 0008
+    (`synced ⟹ not locked`): библиотечное защищено матрицей «правь только цену», а
+    не фиксацией, и стухший замок на нём был бы вторым, противоречащим словарём.
+    (Раньше здесь стояло «`locked` не трогаем» — докстринг отстал от инварианта,
+    аудит-1 Б1а-6.)
 
     Scoping «пропавших» — по категории: изделие из класса, которого нет среди
     загруженных файлов, не считается пропавшим (его библиотеку просто не грузили)."""
@@ -4180,9 +4214,9 @@ def apply_library_diff(parsed, confirmed):
 
     - `new`     → создать `Item` (`native=false`, `synced=true`, `locked=false`,
       категория `ensure_category`);
-    - `changed` → обновить description/category/temperature (+ пометить `synced`;
-      `locked` не трогаем);
-    - `mark`    → пометить библиотечным (`synced=true`; `locked` не трогаем);
+    - `changed` → обновить description/category/temperature (+ пометить `synced`,
+      снять замок — инвариант 0008 `synced ⟹ not locked`);
+    - `mark`    → пометить библиотечным (`synced=true`, замок снять);
     - `gone`    → удалить (`delete_item` — guard добьёт, если стало используемым);
     - `orphan`/`same` → no-op даже если ключ подтверждён.
 
@@ -4412,9 +4446,16 @@ def _bom_would_cycle(parent, component):
     return False
 
 
-def add_bom_line(parent, component, qty, position=''):
+def add_bom_line(parent, component, qty):
     """Добавить компонент в состав изделия. Без самоссылки, циклов и дублей.
-    Гейт фиксации: у зафиксированного изделия состав не правят (волна 17)."""
+    Гейт фиксации: у зафиксированного изделия состав не правят (волна 17).
+
+    Аудит-1 (Б1а-3): `position` (позиционное обозначение — C1, R12) снят. Поле
+    приговорил ещё FIELD_MATRIX: год оно жило в схеме, движке и API, но форма
+    изделия его не показывала — а состав приезжает из библиотеки Altium, где
+    позиции живут в схемотехнике, а не в PLM. Хранить то, чего никто не вводит и
+    не видит, — не «задел», а расхождение схемы и вью.
+    """
     _require_item_unlocked(parent)
     if qty is None or qty <= ZERO:
         raise ValidationError('Кол-во должно быть больше нуля.')
@@ -4425,25 +4466,18 @@ def add_bom_line(parent, component, qty, position=''):
     if _bom_would_cycle(parent, component):
         raise ValidationError(f'Цикл в составе: {component.code} уже содержит {parent.code}.')
     return models.BomLine.objects.create(
-        parent=parent, component=component, qty=qty,
-        position=(position or '').strip())
+        parent=parent, component=component, qty=qty)
 
 
-def update_bom_line(line, qty=None, position=None):
-    """Правка строки состава (кол-во/позиция, автосейв). Гейт фиксации у изделия-
+def update_bom_line(line, qty=None):
+    """Правка строки состава (кол-во, автосейв). Гейт фиксации у изделия-
     владельца (волна 17)."""
     _require_item_unlocked(line.parent)
-    fields = []
     if qty is not None:
         if qty <= ZERO:
             raise ValidationError('Кол-во должно быть больше нуля.')
         line.qty = qty
-        fields.append('qty')
-    if position is not None:
-        line.position = (position or '').strip()
-        fields.append('position')
-    if fields:
-        line.save(update_fields=fields)
+        line.save(update_fields=['qty'])
     return line
 
 

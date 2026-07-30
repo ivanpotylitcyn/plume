@@ -159,7 +159,13 @@ function GhostRow({ row, ghost, form, busy, run }: {
   const lots = ghost.candidate_lots
   const [lotId, setLotId] = useState<number | ''>(lots[0]?.lot_id ?? '')
   const [qty, setQty] = useState(String(row.remaining))
-  useEffect(() => { setLotId(lots[0]?.lot_id ?? '') }, [lots.map(l => l.lot_id).join()])
+  // Кандидаты пересобираются на каждый ответ формы, а выбор живёт в локальном
+  // стейте — и мог пережить исчезновение своего лота (пробили, расфиксировали,
+  // кончился): пайка ушла бы по несуществующему lot_id. Сверяем выбор со свежим
+  // списком: свой остаётся, пропавший откатывается на первый (аудит-1, Б1а-7).
+  useEffect(() => {
+    setLotId(prev => (lots.some(l => l.lot_id === prev) ? prev : lots[0]?.lot_id ?? ''))
+  }, [lots])
 
   const pierce = () => {
     const n = Number(qty)

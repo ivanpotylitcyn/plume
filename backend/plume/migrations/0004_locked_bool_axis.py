@@ -34,7 +34,11 @@ def fill_locked(apps, schema_editor):
         model = apps.get_model('plume', model_name)
         n = model.objects.filter(status=posted).update(locked=True)
         total = model.objects.count()
-        print(f'  {model_name}: {n} из {total} → locked=True')
+        # Отчитываемся ТОЛЬКО когда есть о чём (та же оговорка, что в 0003): на
+        # чистой базе — а это каждый тест-ран — «Item: 0 из 0» был чистым шумом
+        # в stdout и мешал читать вывод прогонов (аудит-1, Б1а-9).
+        if n:
+            print(f'  {model_name}: {n} из {total} → locked=True')
         stuck = model.objects.exclude(
             status__in=(posted, UNLOCKED_FROM[model_name])).count()
         if stuck:

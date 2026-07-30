@@ -2646,6 +2646,9 @@ class InventoryHttpTests(TestCase):
             content_type='application/json').json()
         self.c.post(f"/api/writeoffs/{w['id']}/lines/",
             {'lot_id': self.lot.id, 'qty': 6}, content_type='application/json')
+        # Ф15: пока акт черновик, «серого» ещё нет — возвращать нечего
+        self.assertEqual(self.c.get('/api/written-off-lots/').json(), [])
+        self.assertEqual(self.c.post(f"/api/writeoffs/{w['id']}/lock/").status_code, 200)
         picker = self.c.get('/api/written-off-lots/')
         self.assertEqual(picker.status_code, 200)
         self.assertTrue(any(x['lot_id'] == self.lot.id and float(x['written_qty']) == 6.0
@@ -3198,9 +3201,8 @@ class BomEditTests(EngineTestBase):
     def test_add_update_remove_bom_line(self):
         dev = self.make_item('DEV', manufactured=True)
         comp = self.make_item('R')
-        line = engine.add_bom_line(dev, comp, D(3), position='C1')
+        line = engine.add_bom_line(dev, comp, D(3))
         self.assertEqual(line.qty, D(3))
-        self.assertEqual(line.position, 'C1')
         engine.update_bom_line(line, qty=D(5))
         line.refresh_from_db()
         self.assertEqual(line.qty, D(5))
@@ -5942,6 +5944,34 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         c = self.receipt_lot(self.make_item('R300'), self.prj, 2)
         w3 = engine.writeoff_lot(self.prj, c, D(2), self.user)
         self.assertNotEqual(w3.id, w1.id)                 # под замком — новый акт
+
+    def test_bridge_refuses_lot_already_in_closing_draft(self):
+        """Повторный клик по остатку не заводит ВТОРОЙ акт на тот же лот: после Ф15
+        остаток не гаснет до фиксации, клик выглядит несработавшим — и два акта
+        увели бы лот в минус. Вместо документа человек получает адрес первого."""
+        lot = self.receipt_lot(self.item, self.prj, 10)
+        w = engine.writeoff_lot(self.prj, lot, D(10), self.user)
+        with self.assertRaises(ValidationError) as e:
+            engine.writeoff_lot(self.prj, lot, D(10), self.user)
+        self.assertIn(w.code, e.exception.messages[0])
+        # и второй мост тоже: черновик один на лот, чьего бы вида он ни был
+        with self.assertRaises(ValidationError):
+            engine.requisition_lot(self.prj, lot, D(10), self.user)
+        self.assertEqual(models.Writeoff.objects.filter(project=self.prj).count(), 1)
+        engine.lock_writeoff(w)                            # зафиксировали — путь открыт
+        self.assertEqual(engine.lot_live_qty(lot), D(0))
+
+    def test_draft_writeoff_is_not_offered_for_rematerialization(self):
+        """Пикер инвентаризации предлагает вернуть только реально списанное:
+        черновой акт — намерение, а не факт (Ф15), и «серого» за ним ещё нет."""
+        lot = self.receipt_lot(self.item, self.prj, 10)
+        w = engine.create_writeoff(self.prj, self.user, 'СП-1')
+        engine.add_writeoff_line(w, lot, D(10))
+        self.assertEqual(engine.written_off_lots(), [])
+        engine.lock_writeoff(w)
+        rows = engine.written_off_lots()
+        self.assertEqual([r['lot_id'] for r in rows], [lot.id])
+        self.assertEqual(rows[0]['written_qty'], D(10))
 
 
 class AccountTests(TestCase):
