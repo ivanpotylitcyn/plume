@@ -545,6 +545,11 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
     return [...new Set(rows.map(r => r.category).filter((x): x is string => !!x))].sort()
   }, [rows, categoryFilter])
 
+  // Фильтр показываем, только когда выбирать есть из чего (одно значение на весь
+  // список — не выбор): признак нужен и разметке строки, и решению её рисовать.
+  const projFilterOn = projectFilter && projOptions.length > 1
+  const catFilterOn = categoryFilter && catOptions.length > 1
+
   const shown = useMemo(() => {
     const s = q.trim().toLowerCase()
     return rows.filter(r =>
@@ -559,14 +564,20 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
       <div className="list-filters">
         <input className="list-filter" value={q} placeholder="фильтр — код или название"
           onChange={e => setQ(e.target.value)} />
-        {projectFilter && projOptions.length > 1 &&
-          <Dropdown className="list-proj" value={proj} onPick={v => setProj(String(v))}
-            options={[{ value: '', label: 'все проекты' },
-              ...projOptions.map(p => ({ value: p, label: p }))]} />}
-        {categoryFilter && catOptions.length > 1 &&
-          <Dropdown className="list-proj" value={cat} onPick={v => setCat(String(v))}
-            options={[{ value: '', label: 'все категории' },
-              ...catOptions.map(c => ({ value: c, label: c }))]} />}
+        {/* Выпадающие — своей строкой, как у ордеров: один занимает её целиком, два
+            делят пополам. Пустая строка не рисуется (фильтр появляется, только когда
+            есть из чего выбирать). */}
+        {(projFilterOn || catFilterOn) &&
+          <div className="list-filter-row">
+            {projFilterOn &&
+              <Dropdown className="list-proj" value={proj} onPick={v => setProj(String(v))}
+                options={[{ value: '', label: 'все проекты' },
+                  ...projOptions.map(p => ({ value: p, label: p }))]} />}
+            {catFilterOn &&
+              <Dropdown className="list-proj" value={cat} onPick={v => setCat(String(v))}
+                options={[{ value: '', label: 'все категории' },
+                  ...catOptions.map(c => ({ value: c, label: c }))]} />}
+          </div>}
       </div>
       <div className="list-scroll">
         {extraTop}

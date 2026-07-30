@@ -211,7 +211,14 @@ body { overflow: hidden; }
 .sidebar h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--fg-dim); padding: 10px 12px 6px; margin: 0; font-weight: 500; }
 /* фильтр-строка + дропдаун проекта над списком */
+/* Фильтры списка режима: строка ввода во всю ширину, под ней — строка выпадающих
+   (один во всю ширину, два делят её пополам). Все контролы РОВНО по ширине списка —
+   разнобой краёв читался как поломка (ревизия 2026-07-30). Растягивать надо обёртку
+   `Dropdown` (`.dd`) И поле внутри неё: `.dd` — инлайновая по умолчанию, а поле имеет
+   собственную ширину `size`, и без этого оба останавливались, где им удобно. */
 .list-filters { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
+.list-filters .dd { display: flex; flex: 1 1 0; min-width: 0; }
+.list-filters .dd input.list-proj { width: 100%; min-width: 0; }
 .list-filter { background: var(--bg); color: var(--fg); border: 1px solid var(--border-strong);
   border-radius: 3px; padding: 3px 7px; font-family: var(--font-mono); font-size: 12px; }
 .list-filter:focus { outline: none; border-color: var(--accent); }
@@ -234,7 +241,6 @@ body { overflow: hidden; }
 .list-empty { color: var(--fg-dim); font-size: 11px; padding: 6px 12px; font-family: var(--font-base); }
 /* два фильтра в ряд (тип + проект) — единый список ордеров */
 .list-filter-row { display: flex; gap: 4px; }
-.list-filter-row .list-proj { flex: 1; min-width: 0; }
 /* подпись типа ордера справа в строке смешанного списка */
 .tree-item .row-tag { margin-left: auto; padding-left: 10px; flex: 0 0 auto;
   color: var(--fg-dim); font-family: var(--font-base); font-size: 10px; }
@@ -317,9 +323,11 @@ body { overflow: hidden; }
    `.fh-del`/`.fh-download` позиционируются от `.fs-head` (у неё position: relative). */
 .fs-head > .fh-del, .fs-head > .fh-download { right: 12px; bottom: 8px; }
 
-/* Мета (§13.6): по центру, между шапкой и табами; поля НЕ повторяет. */
+/* Мета (§13.6): по центру, НАД ПОЛОСОЙ ТАБОВ (ниже панелей-дополнений), поля НЕ
+   повторяет. Отступы несимметричны намеренно: мета — оглавление табов, поэтому к ним
+   прижата ближе, чем к тому, что над ней (решение Ивана 2026-07-30). */
 .fs-meta { text-align: center; font-family: var(--font-mono); font-size: 12px;
-  color: var(--fg-dim); font-variant-numeric: tabular-nums; margin: 10px 0 12px; }
+  color: var(--fg-dim); font-variant-numeric: tabular-nums; margin: 18px 0 12px; }
 .fs-meta .ci.sg { margin-right: 5px; }
 .fs-meta .sub { color: var(--fg-dim); }
 
@@ -327,7 +335,10 @@ body { overflow: hidden; }
    всегда, даже когда список один. Живут в СВЕТЛОЙ ПОЛОСЕ вверху панели-списка (образец
    — окно агентов VS Code): полоса отделяет их от меты, панель и её табы читаются как
    одно целое. Счётчиков в табах нет — числа шумели, они ушли в мету (§13.6). */
-.fs-body { padding: 0; overflow: hidden; }
+/* Воздух стека держат ВЕРХНИЕ отступы нижележащих блоков (и схлопывание соседних
+   margin'ов) — так набор слотов у формы может быть любым: без меты, без панелей, без
+   обоих, — а расстояния остаются одинаковыми. */
+.fs-body { padding: 0; overflow: hidden; margin-top: 12px; }
 .fs-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px;
   border-bottom: 1px solid var(--border); }
 .fs-tab { justify-content: flex-start; padding: 3px 10px; }
@@ -540,7 +551,7 @@ tr.row.s-available { border-left-color: var(--st-ok); }
    остаётся только раскладка статов. Имена классов нейтральные: панель перестала быть
    «бюджетной», когда второй формой её взял контрагент (`.budget` → `.stats`). */
 .stats { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 28px;
-  margin: 0 0 18px; }
+  margin: 18px 0 0; }
 /* Имя панели — когда их на форме несколько (поставки / передачи): во всю ширину,
    над статами, приглушённо (числа остаются главными). */
 .stats-caption { flex-basis: 100%; color: var(--fg-dim); font-size: 11px;
