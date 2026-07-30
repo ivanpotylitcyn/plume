@@ -478,6 +478,32 @@ def item_detail(request, pk):
     return Response(_item_detail_payload(item))
 
 
+@api_view(['GET'])
+def item_xlsx(request, pk):
+    """Выгрузка изделия в xlsx — снимок его вкладок (attachment).
+
+    `?scope=all` — все вкладки (кроме «Файлов»), иначе один лист «Состав»: два пункта
+    меню кнопки «Скачать». Неизвестное значение трактуем как «только состав» —
+    выгрузка не то место, где ругаться на опечатку в query.
+
+    **Имя файла = `code` изделия** — то же правило, что у бланка закупки (2026-07-26):
+    ярлык сущности едет наружу вместе с файлом. Кириллица и пробелы в коде — обычное
+    дело, поэтому заголовок собираем `content_disposition_header` (RFC 6266), а не
+    f-строкой.
+    """
+    item = get_object_or_404(models.Item, pk=pk)
+    scope = (engine.ITEM_XLSX_ALL if request.GET.get('scope') == engine.ITEM_XLSX_ALL
+             else engine.ITEM_XLSX_BOM)
+    resp = HttpResponse(
+        engine.item_xlsx(item, scope),
+        content_type=('application/vnd.openxmlformats-officedocument'
+                      '.spreadsheetml.sheet'))
+    resp['Content-Disposition'] = content_disposition_header(
+        as_attachment=True,
+        filename=f'{_safe_filename(item.code) or f"изделие-{item.id}"}.xlsx')
+    return resp
+
+
 @api_view(['POST'])
 def item_bom(request, pk):
     """Добавить компонент в состав изделия (редактор BOM). Возвращает экран изделия."""
@@ -667,25 +693,30 @@ def _counterparty_row(c):
 
 @api_view(['GET', 'POST'])
 def counterparties(request):
-    """Контрагенты (пикер) с фильтром по роли + быстрое создание.
+    """Контрагенты (список режима и пикеров) с фильтром по роли + рождение.
 
     GET `?role=supplier|customer` сужает список под пикер (приход → поставщики,
     передача → заказчики); без `role` — все. POST создаёт с ролью по контексту
     (`role`), по умолчанию поставщик (историческая роль сущности).
+
+    Волна 20 — два входа рождения в одной вьюхе:
+    — «＋ Новый контрагент» режима шлёт **пустое тело** (Ф12e) → всё фолбэком, включая
+      код («Контрагент 12»);
+    — «Завести "X"» из пикера шлёт имя → оно ложится и в `description`, и в `code`:
+      человек напечатал ровно тот короткий ярлык, которым потом ищет
+      ([[code-identity-principle]]), а развернуть его до юридического имени можно на
+      форме. Явный `code` в теле сильнее этого правила.
     """
     if request.method == 'POST':
-        description = (request.data.get('description') or '').strip()
-        if not description:
-            return _bad('Нужно описание контрагента.')
-        role = request.data.get('role') or 'supplier'
-        code = (request.data.get('code') or '').strip() or None
+        d = request.data
+        description = (d.get('description') or '').strip()
         try:
-            engine.require_unique_code(models.Counterparty, code)
+            c = engine.create_counterparty(
+                code=(d.get('code') or '').strip() or description,
+                description=description, inn=(d.get('inn') or '').strip(),
+                role=d.get('role'))
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        c = models.Counterparty.objects.create(
-            code=code, description=description, inn=(request.data.get('inn') or '').strip(),
-            is_supplier=(role == 'supplier'), is_customer=(role == 'customer'))
         return Response(_counterparty_row(c), status=http.HTTP_201_CREATED)
     qs = models.Counterparty.objects.all()
     role = request.GET.get('role')
@@ -694,6 +725,27 @@ def counterparties(request):
     elif role == 'customer':
         qs = qs.filter(is_customer=True)
     return Response([_counterparty_row(c) for c in qs])
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def counterparty_detail(request, pk):
+    """Форма контрагента (волна 20): ДНК + два интеграла сторон + четыре списка.
+    PATCH — правка кода/описания/ИНН/роли под интерфейсным замком. DELETE — удаление
+    (friendly-guard движка; поставки/передачи/заказы держат наглухо)."""
+    c = get_object_or_404(models.Counterparty, pk=pk)
+    if request.method == 'DELETE':
+        return _friendly_delete(engine.delete_counterparty, c)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_counterparty(
+                c, code=d['code'] if 'code' in d else engine._UNSET,
+                description=d['description'] if 'description' in d else None,
+                inn=d['inn'] if 'inn' in d else None,
+                role=d.get('role'))
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.counterparty_form(c))
 
 
 def _receipt_row(r):

@@ -34,6 +34,8 @@ urlpatterns = [
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),
     path('items/<int:pk>/recalc-cost/', views.item_recalc_cost, name='item-recalc-cost'),
+    # выгрузка изделия в xlsx: `?scope=all` — все вкладки, иначе один лист «Состав»
+    path('items/<int:pk>/xlsx/', views.item_xlsx, name='item-xlsx'),
     # фиксация изделия (волна 17). Волна 19 Ф1c: единый глагол замка
     # `lock`/`unlock` на ВСЕХ сущностях — approve/unapprove и close/reopen ушли.
     path('items/<int:pk>/lock/', views.item_lock, name='item-lock'),
@@ -51,6 +53,8 @@ urlpatterns = [
     path('kitting-lines/<int:pk>/', views.kitting_line_detail, name='kitting-line'),
     # приход / УПД (записываемое ядро, волна 3) + справочник контрагентов
     path('counterparties/', views.counterparties, name='counterparties'),
+    # режим «Контрагенты» (волна 20): форма стороны документооборота
+    path('counterparties/<int:pk>/', views.counterparty_detail, name='counterparty-detail'),
     path('receipts/', views.receipts, name='receipts'),
     path('receipts/<int:pk>/', views.receipt_detail, name='receipt-detail'),
     path('receipts/<int:pk>/lots/', views.receipt_lots, name='receipt-lots'),

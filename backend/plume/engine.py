@@ -2987,6 +2987,41 @@ def _doc_date(value):
     return value.strftime('%d.%m.%Y') if value else ''
 
 
+def _xlsx_sheet(ws, title, head, headers, rows, widths):
+    """Один лист выгрузки: шапка (B/C) → пустая строка → нумерованная таблица.
+
+    Форма листа поднята из `procurement_xlsx` (2026-07-30, выгрузка изделия): бланк
+    закупки и выгрузка изделия рисуют одно и то же — подписи шапки в колонке **B**,
+    значения в **C** (колонка A узкая, она под «№», подпись в ней Excel обрезал бы по
+    занятой соседке), жирные заголовки таблицы и сквозная нумерация строк.
+
+    `head` — пары `(подпись, значение)`; **пустые строки шапки не рисуются вовсе**:
+    пустая графа во внешнем документе читается как брак, а не как «не задано» (внутри
+    продукта правило обратное, §13 — там прочерк честнее). `rows` идут БЕЗ номера —
+    его проставляет лист.
+    """
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    bold = Font(bold=True)
+    ws.title = title
+    for label, value in head:
+        if value is None or value == '':
+            continue
+        ws.append([None, label, value])
+        ws.cell(row=ws.max_row, column=2).font = bold
+    if head:
+        ws.append([])                  # пустая строка отбивает шапку от таблицы
+    ws.append(headers)
+    for cell in ws[ws.max_row]:
+        cell.font = bold
+    for n, row in enumerate(rows, start=1):
+        ws.append([n, *row])
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    return ws
+
+
 def procurement_xlsx(procurement):
     """Сгенерировать xlsx-бланк закупки-плана (bytes) — файл поставщику.
 
@@ -3009,49 +3044,125 @@ def procurement_xlsx(procurement):
     Синхронно в запросе (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт
     ленивый (зависимость только ради экспорта).
     """
+    from openpyxl import Workbook
+
+    us = our_organization()
+    wb = Workbook()
+    _xlsx_sheet(
+        wb.active, 'Заказ',
+        head=[
+            ('Заказчик', _party_line(us) if us else ''),
+            ('Контрагент', _party_line(procurement.contractor)
+                           if procurement.contractor_id else ''),
+            ('Дата запроса', _doc_date(procurement.date)),
+            ('Автор', procurement.user.get_full_name() or procurement.user.get_username()),
+        ],
+        headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
+        rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
+              for line in procurement.lines.select_related('item').order_by('id')],
+        widths=[5, 22, 48, 12, 8])       # «№» узкая; остальные — по содержимому
+    return _xlsx_bytes(wb)
+
+
+def _xlsx_bytes(wb):
+    """Книга → bytes (в HTTP-ответ отдаём тело, файлов на диске не заводим)."""
     from io import BytesIO
 
-    from openpyxl import Workbook
-    from openpyxl.styles import Font
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'Заказ'
-
-    bold = Font(bold=True)
-    us = our_organization()
-    head = [
-        ('Заказчик', _party_line(us) if us else ''),
-        ('Контрагент', _party_line(procurement.contractor)
-                       if procurement.contractor_id else ''),
-        ('Дата запроса', _doc_date(procurement.date)),
-        ('Автор', procurement.user.get_full_name() or procurement.user.get_username()),
-    ]
-    # Шапка идёт колонками **B/C**, а не A/B: колонка A узкая (она под «№»), и подпись
-    # в ней Excel обрезал бы по границе — соседняя ячейка занята. В B/C подписи встают
-    # ровно под «Артикул», значения — под «Наименование» и свободно перетекают вправо
-    # (D/E в строках шапки пусты). Поймано глазами на реальном файле, не тестом.
-    for label, value in head:
-        if not value:
-            continue
-        ws.append([None, label, value])
-        ws.cell(row=ws.max_row, column=2).font = bold
-    ws.append([])                      # пустая строка отбивает шапку от таблицы
-
-    headers = ['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.']
-    ws.append(headers)
-    for cell in ws[ws.max_row]:
-        cell.font = bold
-    for n, line in enumerate(
-            procurement.lines.select_related('item').order_by('id'), start=1):
-        ws.append([n, line.item.code, line.item.description,
-                   float(line.qty), line.item.uom])
-    # «№» узкая; остальные — как были. Ширины идут по колонкам A…E.
-    for i, width in enumerate([5, 22, 48, 12, 8], start=1):
-        ws.column_dimensions[chr(64 + i)].width = width
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# Листы выгрузки изделия = ВКЛАДКИ его формы (кроме «Файлов» — вложения в книгу не
+# кладём). Порядок тот же, что на экране: состав → применение → склад → движения.
+ITEM_XLSX_BOM = 'bom'          # «Только состав» — одна вкладка
+ITEM_XLSX_ALL = 'all'          # «Все вкладки»
+
+
+def item_xlsx(item, scope=ITEM_XLSX_BOM):
+    """Сгенерировать xlsx-выгрузку изделия (bytes) — снимок его вкладок.
+
+    Решение Ивана 2026-07-30. Файл повторяет ЭКРАН: колонки названы так же, как в
+    табах формы, порядок листов — порядок вкладок. Два режима (пункты меню кнопки
+    «Скачать»): `bom` — один лист «Состав»; `all` — все вкладки, кроме «Файлов».
+
+    Лист «Состав» есть ВСЕГДА, даже у покупного компонента без BOM (у него и вкладки
+    такой нет): пустой лист с заголовками честнее отказа скачать — человек видит, что
+    состава нет, а не гадает, почему кнопка молчит. Он же первый — и потому несёт
+    **шапку изделия** (код, описание, категория, единицы, оценка); остальные листы
+    чистые таблицы, идентичность им даёт имя файла (= `code`).
+
+    **Состав — один уровень**, ровно как на вкладке: разузлование до листьев — другой
+    документ (сводная спецификация), и мешать их в одном файле нельзя.
+
+    Синхронно в запросе, openpyxl — ленивым импортом (как `procurement_xlsx`).
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    _xlsx_sheet(
+        wb.active, 'Состав',
+        head=[
+            ('Код', item.code),
+            ('Описание', item.description),
+            ('Категория', item.category.code if item.category_id else ''),
+            ('Единицы', item.uom),
+            ('Оценка', float(item.estimated_cost)
+                       if item.estimated_cost is not None else ''),
+        ],
+        headers=['№', 'Компонент', 'Описание', 'Кол-во', 'Ед.'],
+        rows=[(bl.component.code, bl.component.description,
+               float(bl.qty), bl.component.uom)
+              for bl in item.bom_lines.select_related('component')],
+        widths=[5, 22, 48, 12, 8])
+    if scope != ITEM_XLSX_ALL:
+        return _xlsx_bytes(wb)
+
+    _xlsx_sheet(
+        wb.create_sheet(), 'Применение',
+        head=[],
+        headers=['№', 'Изделие', 'Описание', 'Кол-во', 'Ед.'],
+        # Кол-во — вхождение изделия в родителя, единица поэтому НАША (как в табе).
+        rows=[(bl.parent.code, bl.parent.description, float(bl.qty), item.uom)
+              for bl in item.used_in.select_related('parent')],
+        widths=[5, 22, 48, 12, 8])
+    _xlsx_sheet(
+        wb.create_sheet(), 'Склад',
+        head=[],
+        headers=['№', 'Партия', 'Проект', 'Рожд.', 'Остаток', 'Ед.',
+                 'Part number', 'Название'],
+        # Остаток партии черновика — прочерк, а не 0 (Ф15: «едет, ещё не принято»).
+        rows=[(f'#{lot.id}', lot.project.code, float(lot.qty),
+               float(lot_live_qty(lot)) if lot.origin.locked else '—',
+               item.uom, lot.part_number, lot.lot_name)
+              for lot in item.lots.select_related('project', 'origin')],
+        widths=[5, 10, 16, 12, 12, 8, 22, 32])
+    _xlsx_sheet(
+        wb.create_sheet(), 'Движения',
+        head=[],
+        headers=['№', 'Ордер', 'Вид', 'Дата', 'Проект', 'Партия', 'Кол-во', 'Ед.'],
+        rows=[(_movement_order_label(m), _movement_kind_label(m), _doc_date(m['date']),
+               m['project_code'], _movement_lot_label(m), float(m['qty']), item.uom)
+              for m in item_movements(item)],
+        widths=[5, 22, 24, 12, 16, 28, 12, 8])
+    return _xlsx_bytes(wb)
+
+
+def _movement_order_label(m):
+    """Ярлык ордера в ленте — тот же фолбэк, что на экране: код → номер → «Вид #id»."""
+    return (m['code'] or m['number']
+            or f'{models.DocumentKind(m["kind"]).label} #{m["document_id"]}')
+
+
+def _movement_kind_label(m):
+    """Вид ордера; у рождения партии — с пометкой (на экране она идёт подсказкой)."""
+    label = models.DocumentKind(m['kind']).label
+    return f'{label} · партия рождена' if m['event'] == 'born' else label
+
+
+def _movement_lot_label(m):
+    """Партия в ленте: `#id`, плюс имя из УПД, когда оно есть."""
+    return f'#{m["lot_id"]} · {m["lot_name"]}' if m['lot_name'] else f'#{m["lot_id"]}'
 
 
 # --------------------------------------------------------------------------- #
@@ -3278,6 +3389,288 @@ def autopeg_procurement(procurement, user):
                 project = models.Project.objects.get(pk=bp['project_id'])
                 peg_procurement_line(procurement, line.item, project, delta, user)
     return procurement
+
+
+# --------------------------------------------------------------------------- #
+#  Волна 20 — контрагент: справочник + витрина двух сторон документооборота
+# --------------------------------------------------------------------------- #
+# `Counterparty` — единая внешняя сторона в двух ролях (`is_supplier` / `is_customer`),
+# и витрина устроена по этой же оси: **две стороны**, а не одна лента. Закупочная
+# сторона (мы платим, к нам едет) — закупки → заказы → поставки; передачная (мы
+# отдаём) — передачи заказчику. Роли не взаимоисключающие: одно юрлицо законно бывает
+# и поставщиком, и заказчиком, и тогда сторон две сразу.
+#
+# Каждая сторона отдаётся как **интеграл или `None`** (решение Ивана 2026-07-30):
+# «ноль движений — стороны нет». Тот же приём, что `project_health` (внутренний склад
+# → `None`, глиф нейтрален): пустоту решает ДВИЖОК, вью только не рисует панель. Роль
+# в решении не участвует — свежезаведённый поставщик без единого документа честно
+# показывает пустую форму, а не панель нулей.
+COUNTERPARTY_ROLE_FLAGS = {
+    'supplier': (True, False),
+    'customer': (False, True),
+    'both': (True, True),
+}
+
+
+def counterparty_role(counterparty):
+    """Пара флагов-ролей как ОДНО значение формы: supplier | customer | both | ''.
+
+    В модели роли — два независимых bool (так их читают пикеры: приход → поставщики,
+    передача → заказчики). Человеку же на форме нужна одна ручка, а не две галочки:
+    осмысленных состояний три, и они складываются в обычный дропдаун (§13, тот же
+    приём, что `Item.category`). Пустая строка — легальное «ни одной роли» у старых
+    записей: поле честно пустует, вместо того чтобы врать «поставщик».
+    """
+    if counterparty.is_supplier and counterparty.is_customer:
+        return 'both'
+    if counterparty.is_supplier:
+        return 'supplier'
+    if counterparty.is_customer:
+        return 'customer'
+    return ''
+
+
+def _qty_by_uom(pairs):
+    """`[(uom, qty)]` → `[{uom, qty}]` со сложением внутри единицы (по алфавиту).
+
+    Складывать штуки с метрами в одно число — ложь, поэтому «сколько привезли» это
+    вектор по единицам, а не скаляр. Тот же приём, что в мете формы склада.
+    """
+    total = {}
+    for uom, qty in pairs:
+        total[uom] = total.get(uom, ZERO) + qty
+    return [{'uom': uom, 'qty': total[uom]} for uom in sorted(total)]
+
+
+def _counterparty_receipt_lots(counterparty):
+    """Лоты, привезённые контрагентом: партии его **зафиксированных** поставок.
+
+    Гейт `origin__locked=True` — та же граница, что у «потрачено» проекта
+    (`_project_spent`, волна 19 Ф15): черновой УПД ещё не факт, и в интеграл он не
+    идёт. Список поставок в табе при этом показывает и черновики — интеграл считает
+    состоявшееся, таб показывает всё.
+    """
+    return (models.Lot.objects
+            .filter(origin__kind=models.StockDocument.Kind.RECEIPT,
+                    origin__contractor=counterparty, origin__locked=True)
+            .select_related('item'))
+
+
+def _counterparty_supply(counterparty):
+    """Интеграл закупочной стороны — «сколько у него куплено и что привёз».
+
+    Три счёта контура (закупок-планов / заказов / поставок) + материальный итог
+    (партий, штук по единицам, сумма). `open_purchases` — заказы, не закрытые
+    поставками целиком (`purchase_coverage` ≠ ✓): единственное число панели, которое
+    смотрит вперёд, а не назад. `None` — на этой стороне ни одного документа.
+    """
+    procurements = counterparty.procurements.count()
+    purchases = list(counterparty.purchases.all())
+    receipts = models.Receipt.objects.filter(contractor=counterparty)
+    receipt_count = receipts.count()
+    if not (procurements or purchases or receipt_count):
+        return None
+    lots = list(_counterparty_receipt_lots(counterparty))
+    return {
+        'procurements': procurements,
+        'purchases': len(purchases),
+        'open_purchases': sum(1 for p in purchases
+                              if purchase_coverage(p) != 'available'),
+        'receipts': receipt_count,
+        # Расхождение «поставок 4, а привёз 0 партий» законно и требует объяснения:
+        # черновые УПД считаются документами, но не фактом (Ф15). Отдаём их числом —
+        # вью подписывает панель, вместо того чтобы пользователь читал это как баг.
+        'draft_receipts': receipts.filter(locked=False).count(),
+        'lots': len(lots),
+        'qty_by_uom': _qty_by_uom((lot.item.uom, lot.qty) for lot in lots),
+        'total': sum((lot.qty * lot.unit_cost for lot in lots), ZERO),
+    }
+
+
+def _counterparty_shipment(counterparty):
+    """Интеграл передачной стороны — «сколько ему отдано» (роль заказчика).
+
+    Считается по строкам **зафиксированных** передач (тот же гейт Ф15, что у
+    закупочной стороны). `qty` строки знаковая (− расход) → берём магнитуду; деньги —
+    по цене лота-источника (единственная известная цена изделия: своей цены у передачи
+    нет, документооборот с заказчиком живёт вне PLM). `None` — передач не было.
+    """
+    lines = list(models.StockLine.objects
+                 .filter(document__kind=models.StockDocument.Kind.TRANSFER,
+                         document__contractor=counterparty, document__locked=True)
+                 .select_related('lot__item'))
+    transfers = models.Transfer.objects.filter(contractor=counterparty)
+    if not transfers.exists():
+        return None
+    return {
+        'transfers': transfers.count(),
+        'draft_transfers': transfers.filter(locked=False).count(),
+        'lots': len({line.lot_id for line in lines}),
+        'qty_by_uom': _qty_by_uom((line.lot.item.uom, -line.qty) for line in lines),
+        'total': sum((-line.qty * line.lot.unit_cost for line in lines), ZERO),
+    }
+
+
+def _cp_procurement_rows(counterparty):
+    """Таб «Закупки»: планы, где контрагент — намерение («у кого собираемся купить»)."""
+    rows = []
+    for p in counterparty.procurements.prefetch_related('lines').order_by('-id'):
+        lines = list(p.lines.all())
+        rows.append({
+            'id': p.id, 'code': p.code, 'description': p.description,
+            'date': p.date, 'locked': p.locked,
+            'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
+        })
+    return rows
+
+
+def _cp_purchase_rows(counterparty):
+    """Таб «Заказы»: обязательства этому контрагенту («у кого купили», Ф17).
+
+    Закрытость строки красит тем же словарём ✓/●/▲, что список режима «Заказы»
+    (`purchase_coverage`) — знак выбирает вью.
+    """
+    rows = []
+    qs = (counterparty.purchases.select_related('project')
+          .prefetch_related('lines').order_by('-id'))
+    for p in qs:
+        lines = list(p.lines.all())
+        rows.append({
+            'id': p.id, 'code': p.code, 'description': p.description,
+            'date': p.date, 'locked': p.locked,
+            'project_code': p.project.code,
+            'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
+            'coverage': purchase_coverage(p),
+        })
+    return rows
+
+
+def _cp_receipt_rows(counterparty):
+    """Таб «Поставки»: УПД, которые привёз этот контрагент («кто привёз», Ф17)."""
+    rows = []
+    qs = (models.Receipt.objects.filter(contractor=counterparty)
+          .select_related('project').prefetch_related('lots__item').order_by('-id'))
+    for r in qs:
+        lots = list(r.lots.all())
+        rows.append({
+            'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
+            'locked': r.locked, 'project_code': r.project.code,
+            'purchase_id': r.purchase_id,
+            'lots': len(lots),
+            'total': sum((lot.qty * lot.unit_cost for lot in lots), ZERO),
+        })
+    return rows
+
+
+def _cp_transfer_rows(counterparty):
+    """Таб «Передачи»: накладные, которыми ему отдавали (роль заказчика)."""
+    rows = []
+    qs = (models.Transfer.objects.filter(contractor=counterparty)
+          .select_related('project').prefetch_related('lines__lot__item').order_by('-id'))
+    for t in qs:
+        lines = list(t.lines.all())
+        rows.append({
+            'id': t.id, 'code': t.code, 'number': t.number, 'date': t.date,
+            'locked': t.locked, 'project_code': t.project.code,
+            'lines': len(lines),
+            'qty': sum((-ln.qty for ln in lines), ZERO),
+            'total': sum((-ln.qty * ln.lot.unit_cost for ln in lines), ZERO),
+        })
+    return rows
+
+
+def counterparty_form(counterparty):
+    """Проекция формы контрагента (волна 20): ДНК + два интеграла + четыре списка.
+
+    Аккордеона «закупка → накладные» здесь нет (решение Ивана 2026-07-30, отмена
+    формулировки семени): контрагент — не документ контура, а его сторона, и вложение
+    уровней врало бы про путь. Заказ живёт без плана (Ф17), поставка — без заказа,
+    поэтому уровни идут **тремя равными табами**, а связь «чем закрыто» остаётся там,
+    где она однозначна — в форме заказа (Ф6).
+    """
+    return {
+        'id': counterparty.id, 'code': counterparty.code,
+        'description': counterparty.description, 'inn': counterparty.inn,
+        'is_supplier': counterparty.is_supplier,
+        'is_customer': counterparty.is_customer,
+        'role': counterparty_role(counterparty),
+        # Стороны: интеграл или `None` («движений нет» решает движок, не вью).
+        'supply': _counterparty_supply(counterparty),
+        'shipment': _counterparty_shipment(counterparty),
+        'procurements': _cp_procurement_rows(counterparty),
+        'purchases': _cp_purchase_rows(counterparty),
+        'receipts': _cp_receipt_rows(counterparty),
+        'transfers': _cp_transfer_rows(counterparty),
+    }
+
+
+def create_counterparty(code=None, description='', inn='', role=None):
+    """Завести контрагента. Пустой код — фолбэком «Контрагент 12» (Ф12e).
+
+    Волна 19 (Ф10) оставила `code` контрагента без авто-фолбэка: заводили его только
+    из пикера, где человек вводил имя. Волна 20 дала сущности форму, а форма рождается
+    по клику (Ф12e) — титулу нужен код, и правило снова одно на всех.
+    """
+    code = (code or '').strip() or None
+    require_unique_code(models.Counterparty, code)
+    flags = COUNTERPARTY_ROLE_FLAGS.get(role or 'supplier', (True, False))
+    fields = dict(description=(description or '').strip(),
+                  inn=(inn or '').strip(),
+                  is_supplier=flags[0], is_customer=flags[1])
+    if code:
+        return models.Counterparty.objects.create(code=code, **fields)
+    return create_with_fallback_code(models.Counterparty, 'Контрагент', **fields)
+
+
+def update_counterparty(counterparty, code=_UNSET, description=None, inn=None,
+                        role=None):
+    """Правка ДНК контрагента под интерфейсным замком формы (волна 20).
+
+    `code` — часовой `_UNSET` (не прислали → не трогаем; пустой → NULL, как у
+    документов: колонка nullable, и очистка кода не должна ловить IntegrityError).
+    `description`/`inn` пустыми быть вправе (Ф12e: рождённое по клику незаполнено, и
+    запрет очистки означал бы «заполнить можно, передумать нельзя»). `role` меняет
+    пару флагов целиком — состояний три, и они не складываются по одному.
+    """
+    if code is not _UNSET:
+        require_unique_code(models.Counterparty, code, counterparty.pk)
+        counterparty.code = (code or '').strip() or None
+    if description is not None:
+        counterparty.description = description.strip()
+    if inn is not None:
+        counterparty.inn = inn.strip()
+    if role is not None:
+        if role not in COUNTERPARTY_ROLE_FLAGS:
+            raise ValidationError('Неизвестная роль контрагента.')
+        counterparty.is_supplier, counterparty.is_customer = \
+            COUNTERPARTY_ROLE_FLAGS[role]
+    counterparty.save()
+    return counterparty
+
+
+def delete_counterparty(counterparty):
+    """Удалить контрагента (долг, приехавший вместе с формой; волна 20).
+
+    До этой волны у контрагента не было пути удаления **вообще** — ни эндпойнта, ни
+    функции движка, только админка. Друзья-guard'ы:
+    — поставки/передачи (`StockDocument.contractor`, PROTECT) и заказы
+      (`Purchase.contractor`, PROTECT) держат наглухо: документ без стороны не бывает;
+    — закупки-планы (`Procurement.contractor`, SET_NULL) НЕ держат — так решено в Ф17
+      (план-черновик не должен падать из-за справочника), поле просто опустеет;
+    — вложения («карточка предприятия», Ф12b) сносим ЯВНО: каскад БД унёс бы строки и
+      оставил файлы сиротами на диске (та же беда, что у `delete_project`).
+    """
+    if counterparty.documents.exists():
+        raise ValidationError(
+            'У контрагента есть поставки или передачи — удаление заблокировано.')
+    if counterparty.purchases.exists():
+        raise ValidationError('На контрагента оформлены заказы — удаление заблокировано.')
+    for att in counterparty.attachments.all():   # физические файлы (каскад их сиротит)
+        delete_attachment(att)
+    try:
+        counterparty.delete()
+    except ProtectedError:
+        raise ValidationError('Контрагент связан с документами — удаление заблокировано.')
 
 
 # --------------------------------------------------------------------------- #

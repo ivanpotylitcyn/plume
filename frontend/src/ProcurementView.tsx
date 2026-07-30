@@ -149,7 +149,13 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
       onUnfix={() => {
         if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
       }}
-      download={{ href: api.xlsxUrl(c.id), title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }}
+      /* Бланк наружу отдаём только у ЗАФИКСИРОВАННОЙ закупки: до фиксации план ещё
+         не решение (правило переехало сюда 2026-07-30, когда «Скачать» перестала
+         быть исключительно «командой запертого» — у изделия она есть всегда). */
+      download={fixed
+        ? { href: api.xlsxUrl(c.id),
+            title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }
+        : undefined}
       actions={[
         ...(editable ? [{ onClick: peg.autopeg, label: 'Разрезать', icon: 'ci-git-branch',
           title: 'Разложить каждую строку плана по нуждающимся проектам охвата',

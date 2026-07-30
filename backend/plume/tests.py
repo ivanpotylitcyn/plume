@@ -1687,6 +1687,127 @@ class ProcurementFormTests(EngineTestBase):
             self.assertIsNone(engine.our_organization())
 
 
+class ItemXlsxTests(EngineTestBase):
+    """Выгрузка изделия в xlsx (2026-07-30): листы = вкладки формы, кроме «Файлов».
+
+    Живёт рядом с бланком закупки: обе выгрузки рисует один `_xlsx_sheet` (шапка B/C,
+    жирные заголовки, сквозной «№»), и расхождение между ними ловится здесь.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dev = self.make_item('DEV', manufactured=True)
+        self.scr = self.make_item('SCR')
+        models.BomLine.objects.create(parent=self.dev, component=self.scr, qty=D(4))
+
+    def _book(self, item, scope=engine.ITEM_XLSX_BOM):
+        """Книга словарём `{имя листа: [строки]}` — читаем файл как получатель."""
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+        data = engine.item_xlsx(item, scope)
+        self.assertTrue(data)
+        wb = load_workbook(BytesIO(data))
+        return {ws.title: [[c.value for c in row] for row in ws.iter_rows()]
+                for ws in wb.worksheets}
+
+    def test_bom_scope_is_one_sheet_with_direct_components(self):
+        """«Только состав» = один лист «Состав», один уровень BOM (не разузлование)."""
+        leaf = self.make_item('LEAF')
+        models.BomLine.objects.create(parent=self.scr, component=leaf, qty=D(2))
+        book = self._book(self.dev)
+        self.assertEqual(list(book), ['Состав'])
+        rows = book['Состав']
+        head = rows.index(['№', 'Компонент', 'Описание', 'Кол-во', 'Ед.'])
+        self.assertEqual([r[1] for r in rows[head + 1:]], ['SCR'])   # без LEAF
+        self.assertEqual(rows[head + 1][:4], [1, 'SCR', 'SCR', 4])
+
+    def test_first_sheet_carries_item_head_and_others_are_bare_tables(self):
+        """Шапка изделия — только на первом листе; остальные листы = чистые таблицы
+        (идентичность им даёт имя файла = `code`)."""
+        engine.update_item(self.dev, {'uom': 'шт', 'estimated_cost': D('12.50')})
+        book = self._book(self.dev, engine.ITEM_XLSX_ALL)
+        rows = book['Состав']
+        head = {r[1]: r[2] for r in rows if r[0] is None and r[1]}
+        self.assertEqual(head['Код'], 'DEV')
+        self.assertEqual(head['Единицы'], 'шт')
+        self.assertEqual(head['Оценка'], 12.5)
+        self.assertEqual(head['Категория'], self.dev.category.code)
+        for name in ('Применение', 'Склад', 'Движения'):
+            self.assertIsNotNone(book[name][0][0])       # первая же строка — заголовки
+            self.assertEqual(book[name][0][0], '№')
+
+    def test_all_scope_covers_every_tab_but_files(self):
+        """«Все вкладки»: состав · применение · склад · движения. Вложений в книге нет
+        (файл — снимок таблиц, а не архив)."""
+        lot = self.receipt_lot(self.scr, self.prj, 6)
+        t = engine.create_transfer(self.prj, self.user, 'Н-7')
+        engine.add_transfer_line(t, lot, D(2))
+        book = self._book(self.scr, engine.ITEM_XLSX_ALL)
+        self.assertEqual(list(book), ['Состав', 'Применение', 'Склад', 'Движения'])
+        self.assertNotIn('Файлы', book)
+        # применение: где используется покупной винт
+        self.assertEqual([r[1] for r in book['Применение'][1:]], ['DEV'])
+        # склад: партия с живым остатком (6 приехало − 2 отдано... передача не заперта)
+        self.assertEqual(book['Склад'][1][1:5], [f'#{lot.id}', 'P1', 6, 6])
+        # движения: рождение помечено, расход виден расходом (знак сохраняем)
+        moves = {r[2]: r for r in book['Движения'][1:]}
+        self.assertIn('Поставка · партия рождена', moves)
+        self.assertEqual(moves['Передача'][6], -2)
+
+    def test_draft_lot_has_no_live_qty_in_stock_sheet(self):
+        """Ф15: партия нефиксированного origin показывает прочерк, а не 0 — «едет,
+        ещё не принято» (ноль читался бы как «израсходована»)."""
+        lot = self.receipt_lot(self.scr, self.prj, 5, locked=False)
+        row = self._book(self.scr, engine.ITEM_XLSX_ALL)['Склад'][1]
+        self.assertEqual(row[1], f'#{lot.id}')
+        self.assertEqual(row[4], '—')
+
+    def test_component_without_bom_still_gets_an_empty_sheet(self):
+        """У покупного вкладки «Состав» нет вовсе, а лист есть: пустая таблица честнее
+        отказа скачать — видно, что состава нет, а не что кнопка сломалась."""
+        rows = self._book(self.make_item('R100'))['Состав']
+        self.assertEqual(rows[-1], ['№', 'Компонент', 'Описание', 'Кол-во', 'Ед.'])
+
+
+class ItemXlsxHttpTests(TestCase):
+    """HTTP-путь выгрузки изделия: scope из query, имя файла = `code` (RFC 5987)."""
+
+    def setUp(self):
+        get_user_model().objects.create(username='admin', is_superuser=True)
+        self.c = Client()
+        self.c.force_login(get_user_model().objects.get(is_superuser=True))
+        self.item = models.Item.objects.create(code='Нева БУ 1', description='Блок',
+            category=_cat(), native=True)
+
+    def test_download_is_xlsx_attachment_named_by_code(self):
+        r = self.c.get(f'/api/items/{self.item.id}/xlsx/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('spreadsheetml', r['Content-Type'])
+        self.assertTrue(r['Content-Disposition'].startswith('attachment'))
+        self.assertIn(quote('Нева БУ 1.xlsx'), r['Content-Disposition'])
+        self.assertEqual(r.content[:2], b'PK')            # zip-сигнатура xlsx
+
+    def test_scope_query_picks_sheet_set_and_unknown_falls_back_to_bom(self):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+        names = lambda resp: load_workbook(BytesIO(resp.content)).sheetnames
+        self.assertEqual(names(self.c.get(f'/api/items/{self.item.id}/xlsx/?scope=all')),
+                         ['Состав', 'Применение', 'Склад', 'Движения'])
+        self.assertEqual(names(self.c.get(f'/api/items/{self.item.id}/xlsx/?scope=bom')),
+                         ['Состав'])
+        # опечатка в query — не повод ругаться: отдаём состав
+        self.assertEqual(names(self.c.get(f'/api/items/{self.item.id}/xlsx/?scope=xx')),
+                         ['Состав'])
+
+    def test_empty_code_falls_back_to_id(self):
+        self.item.code = ''
+        self.item.save(update_fields=['code'])
+        cd = self.c.get(f'/api/items/{self.item.id}/xlsx/')['Content-Disposition']
+        self.assertIn(quote(f'изделие-{self.item.id}.xlsx'), cd)
+
+
 class PeggingTests(EngineTestBase):
     """Волна 8: нарезка плана (Procurement) на проектные заказы (Purchase)."""
 
@@ -4051,6 +4172,283 @@ class CounterpartyRolesTests(EngineTestBase):
                          content_type='application/json').json()
         self.assertTrue(created['is_customer'])
         self.assertFalse(created['is_supplier'])
+
+
+class CounterpartyFormTests(EngineTestBase):
+    """Волна 20 — витрина контрагента: две стороны документооборота, четыре списка.
+
+    Закупочная сторона (закупки → заказы → поставки) и передачная (передачи заказчику)
+    считаются раздельно; сторона без движений отдаётся `None` — «её нет», и вью не рисует
+    панель нулей. Материальный итог берёт только ЗАФИКСИРОВАННЫЕ документы (гейт Ф15,
+    как «потрачено» проекта).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.comp = self.make_item('C1')
+
+    def _receipt(self, qty, cost, locked=True, contractor=None, uom=None):
+        """Поставка с одной партией по цене — единица берётся из изделия."""
+        item = self.comp
+        if uom:
+            item = models.Item.objects.create(code=f'C-{uom}', description=uom,
+                                              category=_cat(), uom=uom)
+        r = models.Receipt.objects.create(
+            number=f'УПД-{qty}-{cost}', date='2026-05-01',
+            contractor=contractor or self.supplier,
+            project=self.prj, user=self.user, locked=locked)
+        lot = models.Lot.objects.create(item=item, project=self.prj, origin=r,
+                                        qty=D(qty), unit_cost=D(cost))
+        engine.rebuild_movements(lot)
+        return r, lot
+
+    def test_both_sides_none_without_documents(self):
+        """Свежий контрагент: движений нет ни на одной стороне — обе панели `None`."""
+        fresh = engine.create_counterparty(description='Пустой')
+        form = engine.counterparty_form(fresh)
+        self.assertIsNone(form['supply'])
+        self.assertIsNone(form['shipment'])
+        self.assertEqual(form['procurements'], [])
+        self.assertEqual(form['receipts'], [])
+
+    def test_supply_integral_counts_contour_and_material(self):
+        proc = engine.create_procurement(self.user)
+        engine.update_procurement(proc, contractor=self.supplier)
+        self.make_purchase()                       # заказ на self.supplier (пустой)
+        self._receipt(10, 100)                     # зафиксированная поставка
+        self._receipt(3, 50, uom='м')              # другая единица — вектор, не скаляр
+        supply = engine.counterparty_form(self.supplier)['supply']
+        self.assertEqual(supply['procurements'], 1)
+        self.assertEqual(supply['purchases'], 1)
+        self.assertEqual(supply['receipts'], 2)
+        self.assertEqual(supply['lots'], 2)
+        self.assertEqual(supply['qty_by_uom'],
+                         [{'uom': 'м', 'qty': D(3)}, {'uom': 'шт', 'qty': D(10)}])
+        self.assertEqual(supply['total'], D(10) * D(100) + D(3) * D(50))
+
+    def test_supply_material_ignores_draft_receipts(self):
+        """Черновой УПД — намерение, не факт: в интеграл он не идёт, в таб идёт."""
+        self._receipt(10, 100, locked=False)
+        form = engine.counterparty_form(self.supplier)
+        self.assertEqual(form['supply']['receipts'], 1)   # в счёте документов виден
+        self.assertEqual(form['supply']['lots'], 0)       # в материальном итоге — нет
+        self.assertEqual(form['supply']['total'], D(0))
+        # «поставок 1, привёз 0» без объяснения читалось бы как баг — панель подписана
+        self.assertEqual(form['supply']['draft_receipts'], 1)
+        self.assertEqual(len(form['receipts']), 1)        # таб показывает всё
+
+    def test_open_purchases_counts_unclosed_orders(self):
+        p = self.make_purchase()
+        engine.add_purchase_line(p, self.comp, D(5))
+        supply = engine.counterparty_form(self.supplier)['supply']
+        self.assertEqual(supply['open_purchases'], 1)     # ни одного лота
+        engine.lock_purchase(p)
+        _r, lot = self._receipt(5, 10)
+        lot.origin.purchase = p
+        lot.origin.save(update_fields=['purchase'])
+        supply = engine.counterparty_form(self.supplier)['supply']
+        self.assertEqual(supply['purchases'], 1)
+        self.assertEqual(supply['open_purchases'], 0)     # строка закрыта целиком
+
+    def test_shipment_integral_from_locked_transfers(self):
+        cust = engine.create_counterparty(description='Заказчик', role='customer')
+        device = self.make_item('DEV', manufactured=True)
+        r, lot = self._receipt(5, 200)
+        lot.item = device
+        lot.save(update_fields=['item'])
+        t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=cust)
+        engine.add_transfer_line(t, lot, D(2))
+        form = engine.counterparty_form(cust)
+        self.assertIsNone(form['supply'])                  # заказчик ничего не привозил
+        self.assertEqual(form['shipment']['transfers'], 1)
+        self.assertEqual(form['shipment']['lots'], 0)      # черновик ещё не отгрузил
+        self.assertEqual(form['shipment']['draft_transfers'], 1)
+        engine.lock_transfer(t)
+        shipment = engine.counterparty_form(cust)['shipment']
+        self.assertEqual(shipment['lots'], 1)
+        self.assertEqual(shipment['qty_by_uom'], [{'uom': 'шт', 'qty': D(2)}])
+        self.assertEqual(shipment['total'], D(2) * D(200))  # по цене лота-источника
+
+    def test_both_sides_live_together(self):
+        """Одно юрлицо в двух ролях — панелей две сразу (роли не исключают друг друга)."""
+        both = engine.create_counterparty(description='И то, и то', role='both')
+        self._receipt(4, 25, contractor=both)
+        _r, lot = self._receipt(4, 25)
+        t = engine.create_transfer(self.prj, self.user, 'Н-2', contractor=both)
+        engine.add_transfer_line(t, lot, D(1))
+        engine.lock_transfer(t)
+        form = engine.counterparty_form(both)
+        self.assertIsNotNone(form['supply'])
+        self.assertIsNotNone(form['shipment'])
+
+    def test_tabs_list_all_four_levels(self):
+        proc = engine.create_procurement(self.user, code='ЗАК-1')
+        engine.update_procurement(proc, contractor=self.supplier)
+        engine.add_procurement_line(proc, self.comp, D(7))
+        p = self.make_purchase(code='ЗАКАЗ-1')
+        engine.add_purchase_line(p, self.comp, D(7))
+        self._receipt(7, 11)
+        cust = engine.create_counterparty(description='Заказчик-2', role='customer')
+        _r, lot = self._receipt(2, 5)
+        t = engine.create_transfer(self.prj, self.user, 'Н-3', contractor=cust)
+        engine.add_transfer_line(t, lot, D(2))
+        engine.lock_transfer(t)
+
+        form = engine.counterparty_form(self.supplier)
+        self.assertEqual([r['code'] for r in form['procurements']], ['ЗАК-1'])
+        self.assertEqual(form['procurements'][0]['qty'], D(7))
+        self.assertEqual([r['code'] for r in form['purchases']], ['ЗАКАЗ-1'])
+        self.assertEqual(form['purchases'][0]['coverage'], 'to_order')  # ждём поставки
+        self.assertEqual(form['purchases'][0]['project_code'], self.prj.code)
+        self.assertEqual(len(form['receipts']), 2)
+        self.assertEqual(form['transfers'], [])            # передачи ушли заказчику
+        row = engine.counterparty_form(cust)['transfers'][0]
+        self.assertEqual(row['qty'], D(2))                 # магнитуда знаковой строки
+        self.assertEqual(row['total'], D(2) * D(5))
+
+    def test_role_is_one_value_over_two_flags(self):
+        self.assertEqual(engine.counterparty_role(self.supplier), 'supplier')
+        engine.update_counterparty(self.supplier, role='both')
+        self.supplier.refresh_from_db()
+        self.assertTrue(self.supplier.is_supplier and self.supplier.is_customer)
+        self.assertEqual(engine.counterparty_role(self.supplier), 'both')
+        engine.update_counterparty(self.supplier, role='customer')
+        self.supplier.refresh_from_db()
+        self.assertFalse(self.supplier.is_supplier)
+        naked = models.Counterparty.objects.create(
+            description='Без роли', is_supplier=False, is_customer=False)
+        self.assertEqual(engine.counterparty_role(naked), '')   # легальная пустота
+        with self.assertRaises(ValidationError):
+            engine.update_counterparty(self.supplier, role='bogus')
+
+    def test_birth_without_code_gets_fallback(self):
+        """Ф12e: рождение по клику — код фолбэком, титул формы не пустует."""
+        c = engine.create_counterparty()
+        self.assertEqual(c.code, f'Контрагент {c.pk}')
+        self.assertTrue(c.is_supplier)                      # роль по умолчанию
+        named = engine.create_counterparty(code='КОМПЭЛ', description='ООО Компэл')
+        self.assertEqual(named.code, 'КОМПЭЛ')
+        with self.assertRaises(ValidationError):
+            engine.create_counterparty(code='КОМПЭЛ')       # мягкая уникальность
+
+    def test_update_dna_under_lock(self):
+        engine.update_counterparty(self.supplier, code='  КОД  ',
+                                   description=' ООО Ромашка ', inn=' 7712345678 ')
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.supplier.code, 'КОД')
+        self.assertEqual(self.supplier.description, 'ООО Ромашка')
+        self.assertEqual(self.supplier.inn, '7712345678')
+        engine.update_counterparty(self.supplier, inn='')    # передумать вправе
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.supplier.inn, '')
+        engine.update_counterparty(self.supplier, code='')   # пустой код → NULL
+        self.supplier.refresh_from_db()
+        self.assertIsNone(self.supplier.code)
+        engine.update_counterparty(self.supplier, description='Тронули описание')
+        self.supplier.refresh_from_db()
+        self.assertIsNone(self.supplier.code)                # часовой не выдумал код
+
+    def test_delete_blocked_by_documents_and_orders(self):
+        with_receipt = engine.create_counterparty(description='С поставкой')
+        self._receipt(1, 1, contractor=with_receipt)
+        with self.assertRaises(ValidationError):
+            engine.delete_counterparty(with_receipt)
+        with_order = engine.create_counterparty(description='С заказом')
+        self.make_purchase(contractor=with_order)
+        with self.assertRaises(ValidationError):
+            engine.delete_counterparty(with_order)
+
+    def test_delete_empties_plan_contractor(self):
+        """`Procurement.contractor` — SET_NULL (Ф17): план не держит справочник."""
+        cp = engine.create_counterparty(description='Только план')
+        proc = engine.create_procurement(self.user)
+        engine.update_procurement(proc, contractor=cp)
+        engine.delete_counterparty(cp)
+        proc.refresh_from_db()
+        self.assertIsNone(proc.contractor_id)
+
+
+@override_settings(MEDIA_ROOT=_TEST_MEDIA)
+class CounterpartyDeleteSweepsFilesTests(EngineTestBase):
+    """Долг из семени волны 20: у контрагента не было пути удаления вообще, а «карточка
+    предприятия» — вложение (Ф12b). Каскад БД унёс бы строку и оставил файл сиротой."""
+
+    def test_delete_removes_attachment_files(self):
+        cp = engine.create_counterparty(description='С карточкой')
+        att = engine.add_attachment(
+            'counterparty', cp,
+            SimpleUploadedFile('card.pdf', b'%PDF-1.4 card', content_type='application/pdf'),
+            self.user)
+        path = att.file.path
+        self.assertTrue(os.path.exists(path))
+        engine.delete_counterparty(cp)
+        self.assertFalse(models.Attachment.objects.filter(pk=att.id).exists())
+        self.assertFalse(os.path.exists(path))
+
+
+class CounterpartyHttpTests(TestCase):
+    """Волна 20 — HTTP-контур режима «Контрагенты»: рождение → форма → правка → снос."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create(username='t')
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def test_born_by_click_then_form(self):
+        born = self.client.post('/api/counterparties/', {},
+                                content_type='application/json')
+        self.assertEqual(born.status_code, 201)
+        cid = born.json()['id']
+        self.assertEqual(born.json()['code'], f'Контрагент {cid}')
+        form = self.client.get(f'/api/counterparties/{cid}/').json()
+        self.assertEqual(form['role'], 'supplier')
+        self.assertIsNone(form['supply'])
+        self.assertEqual(form['transfers'], [])
+
+    def test_quick_create_uses_typed_name_as_code(self):
+        """«Завести "X"» из пикера: напечатанное имя — это и ярлык (`code`) тоже."""
+        created = self.client.post('/api/counterparties/',
+                                   {'description': 'Амети́ст', 'role': 'customer'},
+                                   content_type='application/json').json()
+        self.assertEqual(created['code'], 'Амети́ст')
+        self.assertTrue(created['is_customer'])
+
+    def test_patch_dna_and_role(self):
+        cid = self.client.post('/api/counterparties/', {},
+                               content_type='application/json').json()['id']
+        form = self.client.patch(
+            f'/api/counterparties/{cid}/',
+            {'code': 'КОМПЭЛ', 'description': 'ООО Компэл', 'inn': '7712345678',
+             'role': 'both'},
+            content_type='application/json').json()
+        self.assertEqual(form['code'], 'КОМПЭЛ')
+        self.assertEqual(form['description'], 'ООО Компэл')
+        self.assertEqual(form['inn'], '7712345678')
+        self.assertEqual(form['role'], 'both')
+
+    def test_patch_duplicate_code_is_friendly_400(self):
+        self.client.post('/api/counterparties/', {'code': 'ЗАНЯТО', 'description': 'Раз'},
+                         content_type='application/json')
+        cid = self.client.post('/api/counterparties/', {'description': 'Два'},
+                               content_type='application/json').json()['id']
+        bad = self.client.patch(f'/api/counterparties/{cid}/', {'code': 'ЗАНЯТО'},
+                                content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('занят', bad.json()['detail'])
+
+    def test_delete_empty_then_guarded(self):
+        cid = self.client.post('/api/counterparties/', {'description': 'На снос'},
+                               content_type='application/json').json()['id']
+        self.assertEqual(self.client.delete(f'/api/counterparties/{cid}/').status_code, 204)
+        # с поставкой — friendly-guard, а не 500
+        cp = engine.create_counterparty(description='Держит')
+        prj = models.Project.objects.create(code='P1', description='Проект 1',
+                                            kind=models.Project.Kind.EXTERNAL)
+        models.Receipt.objects.create(number='УПД-9', date='2026-05-01', contractor=cp,
+                                      project=prj, user=self.user)
+        blocked = self.client.delete(f'/api/counterparties/{cp.id}/')
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('удаление заблокировано', blocked.json()['detail'])
 
 
 class OrderAdminTests(EngineTestBase):

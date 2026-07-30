@@ -136,6 +136,11 @@ body { overflow: hidden; }
 .ci-flag::before         { content: '\ec3f'; }  /* Проекты (Ф3a) */
 .ci-notebook::before     { content: '\ebaf'; }  /* Ордера (Ф3a) */
 .ci-law::before          { content: '\eb12'; }  /* Закупки */
+.ci-call-outgoing::before{ content: '\eb93'; }  /* Контрагенты (волна 20) */
+/* Роль контрагента (волна 20): направление документооборота — к нам / от нас / в обе. */
+.ci-fold-down::before    { content: '\eaf3'; }  /* поставщик — привозит нам */
+.ci-fold-up::before      { content: '\eaf4'; }  /* заказчик — ему передаём */
+.ci-fold::before         { content: '\eaf5'; }  /* обе роли */
 .ci-layers::before       { content: '\ebd2'; }  /* Склады / ось разбора: не заказано */
 .ci-layers-dot::before   { content: '\ebd3'; }  /* ось разбора: заказано, ждём */
 .ci-layers-active::before{ content: '\ebd4'; }  /* ось разбора: на складе */
@@ -268,9 +273,9 @@ body { overflow: hidden; }
 .fh-del { position: absolute; right: 0; bottom: 0; }
 .fh-del:hover { color: var(--st-order);
   background: color-mix(in srgb, var(--st-order) 15%, transparent); }
-/* Скачать xlsx-бланк — в слоте корзины, но только у ЗАФИКСИРОВАННОЙ закупки (корзина
-   там только у расфиксированной — слоты не сталкиваются). По умолчанию серая; зелёный
-   тон-намёк на xlsx — при наведении (тот же принцип, что «Удалить»). */
+/* Скачать xlsx — нижний слот шапки, НАД корзиной (2026-07-30: у изделия обе команды
+   встречаются в одной форме — выгрузка есть всегда, корзина в правке). По умолчанию
+   серая; зелёный тон-намёк на xlsx — при наведении (тот же принцип, что «Удалить»). */
 .fh-download { position: absolute; right: 0; bottom: 0; text-decoration: none; }
 .fh-download:hover { color: var(--st-ok);
   background: color-mix(in srgb, var(--st-ok) 15%, transparent); }
@@ -304,6 +309,9 @@ body { overflow: hidden; }
 .fs-head .fh-right { gap: var(--row-gap); }
 .fs-head .fh-ctl { height: var(--row-h); padding-top: 0; padding-bottom: 0; }
 .fs-head :is(.fh-del, .fh-download) { position: static; margin-top: auto; }
+/* Когда в слоте обе команды («Скачать» + корзина у изделия в правке), свободное место
+   съедает ПЕРВАЯ: иначе `margin-top: auto` на обеих растащило бы их по колонке. */
+.fs-head .fh-download + .fh-del { margin-top: 0; }
 
 /* Корзина/«Скачать» (§5) внутри панели садятся по её паддингу, а не встык к рамке:
    `.fh-del`/`.fh-download` позиционируются от `.fs-head` (у неё position: relative). */
@@ -527,21 +535,27 @@ tr.row.s-available { border-left-color: var(--st-ok); }
 .anomaly { color: var(--st-order); margin-left: 8px; }
 .kind-chip { color: var(--fg-dim); font-size: 11px; }
 
-/* ---- панель бюджета (волна 10) ----
+/* ---- панель интеграла (волна 10 — бюджет проекта; волна 20 — стороны контрагента) ----
    Карточку (рамка/радиус/фон/паддинг) даёт общий `.panel` (§13.2, Ф12) — здесь
-   остаётся только раскладка статов. */
-.budget { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 28px;
+   остаётся только раскладка статов. Имена классов нейтральные: панель перестала быть
+   «бюджетной», когда второй формой её взял контрагент (`.budget` → `.stats`). */
+.stats { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 28px;
   margin: 0 0 18px; }
-.bgroup { display: flex; gap: 24px; }
-.bgroup.okup { margin-left: auto; padding-left: 28px; border-left: 1px solid var(--border); }
-.bstat { display: flex; flex-direction: column; gap: 2px; }
-.blabel { color: var(--fg-dim); font-size: 11px; }
-.bval { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+/* Имя панели — когда их на форме несколько (поставки / передачи): во всю ширину,
+   над статами, приглушённо (числа остаются главными). */
+.stats-caption { flex-basis: 100%; color: var(--fg-dim); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; }
+.stats-caption .ci.sg { margin-right: 6px; }
+.sgroup { display: flex; gap: 24px; }
+.sgroup.aside { margin-left: auto; padding-left: 28px; border-left: 1px solid var(--border); }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat-label { color: var(--fg-dim); font-size: 11px; }
+.stat-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   font-size: 15px; font-weight: 500; color: var(--fg-bright); }
-.bval.dim { color: var(--fg-dim); font-weight: 400; }
-.bval.t-ok { color: var(--st-ok); }
-.bval.t-bad { color: var(--st-order); }
-.bwarn { flex-basis: 100%; color: var(--st-order); font-size: 12px; }
+.stat-val.dim { color: var(--fg-dim); font-weight: 400; }
+.stat-val.t-ok { color: var(--st-ok); }
+.stat-val.t-bad { color: var(--st-order); }
+.stat-warn { flex-basis: 100%; color: var(--st-order); font-size: 12px; }
 
 .empty { color: var(--fg-dim); padding: 40px 0; text-align: center; }
 a.link { color: var(--link); cursor: pointer; text-decoration: none; }
@@ -610,6 +624,10 @@ tr.row.ghost .glyph { opacity: 1; }
 .typeahead-item > span:not(.code):not(.ci) { min-width: 0; overflow: hidden;
   text-overflow: ellipsis; }
 .typeahead-item .ci { flex: 0 0 auto; font-size: 13px; color: var(--fg-dim); }
+/* Меню кнопки «Скачать» (2026-07-30): слой и знак строки — от пикера, но пункты здесь
+   ССЫЛКИ (скачивание ведёт браузер). Браузерное оформление ссылки снимаем: строка
+   меню — команда, а у команд подчёркиваний нет нигде (§5). */
+.dl-menu a.typeahead-item { color: inherit; text-decoration: none; }
 
 /* Обёртка пикера: даёт меню точку отсчёта, поэтому он одинаково работает и в ячейке
    таблицы (призрачная строка), и в `dd` формы. */

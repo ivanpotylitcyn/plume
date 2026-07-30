@@ -18,6 +18,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
+import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 
 export function ProjectView({ projectId, items, isNew, openItem, openPurchase, openOrder,
   onChanged, onDeleted }:
@@ -259,6 +260,8 @@ function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
 }
 
 // Панель бюджета (north-star окупаемости): два числа денег + компас, себестоимость/экономия.
+// Волна 20: вёрстка статов уехала в общий `StatPanel` (её взяла вторая форма) — здесь
+// осталась только начинка, то есть сам смысл панели.
 function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
   const [b, setB] = useState<Budget | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -273,8 +276,8 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
 
   const over = b.compass !== null && b.compass < 0   // перерасход
   return (
-    <div className="panel budget">
-      <div className="bgroup">
+    <StatPanel>
+      <StatGroup>
         <Stat label="потрачено (факт)" value={money(b.spent)} />
         <Stat label="план (прогноз)" value={money(b.plan)} />
         {b.budget !== null
@@ -283,28 +286,17 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
         {b.compass !== null &&
           <Stat label={over ? 'перерасход' : 'запас бюджета'}
             value={money(Math.abs(b.compass))} tone={over ? 'bad' : 'ok'} />}
-      </div>
-      <div className="bgroup okup">
+      </StatGroup>
+      <StatGroup aside>
         <Stat label="себестоимость (для КП)" value={money(b.cost)} />
         <Stat label="экономия (польза заёма)" value={money(b.economy)}
           tone={b.economy > 0 ? 'ok' : b.economy < 0 ? 'bad' : undefined} />
-      </div>
+      </StatGroup>
       {b.unestimated.length > 0 &&
-        <div className="bwarn" title={`нет estimated_cost: ${b.unestimated.join(', ')}`}>
+        <StatWarn title={`нет estimated_cost: ${b.unestimated.join(', ')}`}>
           ▲ {b.unestimated.length} поз. без оценки — план неполон
-        </div>}
-    </div>
-  )
-}
-
-function Stat({ label, value, tone, dim }: {
-  label: string; value: string; tone?: 'ok' | 'bad'; dim?: boolean
-}) {
-  return (
-    <div className="bstat">
-      <div className="blabel">{label}</div>
-      <div className={'bval' + (tone ? ` t-${tone}` : '') + (dim ? ' dim' : '')}>{value}</div>
-    </div>
+        </StatWarn>}
+    </StatPanel>
   )
 }
 

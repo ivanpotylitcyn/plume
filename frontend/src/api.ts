@@ -169,6 +169,47 @@ export interface CounterpartyRow {
   is_supplier: boolean; is_customer: boolean
 }
 
+// ── Форма контрагента (волна 20 — режим «Контрагенты») ──
+// Роль — одно значение поверх пары флагов модели; '' — легальное «ни одной» у старых
+// записей. Обе стороны документооборота: `null` = «движений нет» (решает движок).
+export type CounterpartyRole = 'supplier' | 'customer' | 'both'
+export interface UomQty { uom: string; qty: number }
+// `draft_*` — сколько документов стороны ещё черновики: они считаются документами,
+// но в материальный итог не входят (замок гейтит склад, Ф15).
+export interface CounterpartySupply {
+  procurements: number; purchases: number; open_purchases: number
+  receipts: number; draft_receipts: number
+  lots: number; qty_by_uom: UomQty[]; total: number
+}
+export interface CounterpartyShipment {
+  transfers: number; draft_transfers: number
+  lots: number; qty_by_uom: UomQty[]; total: number
+}
+export interface CpProcurementRow {
+  id: number; code: string | null; description: string
+  date: string | null; locked: boolean; lines: number; qty: number
+}
+export interface CpPurchaseRow extends CpProcurementRow {
+  project_code: string; coverage: Status
+}
+export interface CpReceiptRow {
+  id: number; code: string | null; number: string; date: string | null
+  locked: boolean; project_code: string; purchase_id: number | null
+  lots: number; total: number
+}
+export interface CpTransferRow {
+  id: number; code: string | null; number: string; date: string | null
+  locked: boolean; project_code: string; lines: number; qty: number; total: number
+}
+export interface CounterpartyForm {
+  id: number; code: string | null; description: string; inn: string
+  is_supplier: boolean; is_customer: boolean; role: CounterpartyRole | ''
+  supply: CounterpartySupply | null
+  shipment: CounterpartyShipment | null
+  procurements: CpProcurementRow[]; purchases: CpPurchaseRow[]
+  receipts: CpReceiptRow[]; transfers: CpTransferRow[]
+}
+
 // ── Приход / УПД (волна 3 — записываемое ядро) ──
 export interface ReceiptRow {
   id: number; code: string | null; number: string; date: string; contractor_name: string
@@ -588,6 +629,10 @@ export const api = {
   // Пересчёт оценочной стоимости роллапом по BOM (кнопка у производимого изделия).
   recalcCost: (id: number) =>
     send<ItemDetailWithRollup>('POST', `/api/items/${id}/recalc-cost/`),
+  // Выгрузка изделия в xlsx (2026-07-30): 'bom' — один лист «Состав», 'all' — все
+  // вкладки, кроме «Файлов». Не запрос, а ссылка: скачивание ведёт браузер.
+  itemXlsxUrl: (id: number, scope: 'bom' | 'all') =>
+    `/api/items/${id}/xlsx/?scope=${scope}`,
 
   // ── Синхронизация с библиотекой Altium (волна 15) ──
   // diff — загрузить CSV, получить диф без записи; apply — те же файлы + список
@@ -616,6 +661,12 @@ export const api = {
     get<CounterpartyRow[]>(`/api/counterparties/${role ? `?role=${role}` : ''}`),
   createCounterparty: (b: { description: string; code?: string; inn?: string; role?: 'supplier' | 'customer' }) =>
     send<CounterpartyRow>('POST', '/api/counterparties/', b),
+  // Волна 20 — режим «Контрагенты»: форма стороны документооборота.
+  counterparty: (id: number) => get<CounterpartyForm>(`/api/counterparties/${id}/`),
+  updateCounterparty: (id: number, b: Partial<{
+    code: string | null; description: string; inn: string; role: CounterpartyRole
+  }>) => send<CounterpartyForm>('PATCH', `/api/counterparties/${id}/`, b),
+  deleteCounterparty: (id: number) => send<void>('DELETE', `/api/counterparties/${id}/`),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptForm>(`/api/receipts/${id}/`),
   updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string }>) =>

@@ -1,0 +1,318 @@
+// Форма КОНТРАГЕНТА (волна 20) — канон §13. Контрагент не документ контура, а его
+// ВНЕШНЯЯ СТОРОНА, и форма устроена по этой оси:
+//
+//   ДНК (код / описание / ИНН / роль)         ← шапка `.props`
+//   [ПОСТАВКИ:  закупок · заказов · поставок · партий · привезено · сумма]  ← интеграл
+//   [ПЕРЕДАЧИ:  передач · партий · передано · сумма]                        ← интеграл
+//   [Закупки] [Заказы] [Поставки] [Передачи] [Файлы]                        ← табы
+//
+// Две панели вместо одной (решение Ивана 2026-07-30): у поставщика видна только
+// закупочная, у заказчика — только передачная, у того, кто и поставляет, и принимает —
+// обе. Пустую сторону движок отдаёт как `null` («движений нет» — это смысл, а не
+// вёрстка), форма её просто не рисует. Аккордеона «закупка → накладные» здесь нет:
+// заказ живёт без плана (Ф17), поставка — без заказа, поэтому уровни идут тремя
+// РАВНЫМИ табами, а «чем строка закрыта» остаётся в форме заказа (Ф6), где связь
+// однозначна.
+import { useEffect, useState } from 'react'
+import { api, type CounterpartyForm, type CounterpartyRole, type CpProcurementRow,
+  type CpPurchaseRow, type CpReceiptRow, type CpTransferRow, type UomQty } from './api'
+import { count, money, num, StatusGlyph, statusTone } from './status'
+import { useFormLock } from './FormHeader'
+import { FormShell, type FormTab } from './FormShell'
+import { Field, TextField, viewDate } from './FormField'
+import { Dropdown } from './Dropdown'
+import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
+import type { OrderKind } from './orders'
+
+// Роль — ОДНА ручка поверх пары флагов модели (`is_supplier`/`is_customer`):
+// осмысленных состояний три, и дропдаун честнее двух галочек, из которых можно
+// собрать «никто». Пустое значение — легальная пустота старых записей.
+const ROLE_LABEL: Record<CounterpartyRole, string> = {
+  supplier: 'поставщик',
+  customer: 'заказчик',
+  both: 'поставщик и заказчик',
+}
+
+// Итог в натуре — вектор по единицам, а не одно число: штуки с метрами не складываем
+// (§13.6). Пустой вектор — прочерк, как у пустого поля шапки.
+function uoms(rows: UomQty[]): string {
+  return rows.length === 0 ? '—' : rows.map(r => `${num(r.qty)} ${r.uom}`).join(' · ')
+}
+
+export function CounterpartyView({ counterpartyId, isNew, openProcurement, openPurchase,
+  openOrder, onChanged, onDeleted }: {
+  counterpartyId: number
+  isNew: boolean
+  openProcurement: (id: number) => void
+  openPurchase: (id: number) => void
+  openOrder: (kind: OrderKind, id: number) => void
+  onChanged?: () => void
+  onDeleted?: () => void
+}) {
+  const [c, setC] = useState<CounterpartyForm | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const { unlocked, toggle } = useFormLock(counterpartyId, isNew)  // §5: существующее — в просмотре
+  const att = useAttachments('counterparty', counterpartyId)       // «карточка предприятия» (Ф12b)
+
+  useEffect(() => {
+    setC(null); setErr(null)
+    api.counterparty(counterpartyId).then(setC).catch(e => setErr(String(e)))
+  }, [counterpartyId])
+
+  const run = (p: Promise<CounterpartyForm>) => {
+    setBusy(true); setErr(null)
+    p.then(next => { setC(next); onChanged?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  // Удаление под замком: friendly-guard бэка (поставки/передачи/заказы держат наглухо,
+  // закупки-планы просто потеряют контрагента — `SET_NULL`, Ф17).
+  const del = () => {
+    if (!c || !confirm('Удалить контрагента? Действие необратимо.')) return
+    setBusy(true); setErr(null)
+    api.deleteCounterparty(c.id).then(() => { onChanged?.(); onDeleted?.() })
+      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+
+  if (err && !c) return <div className="empty">Ошибка: {err}</div>
+  if (!c) return <div className="empty">Загрузка…</div>
+
+  const locked = !unlocked          // фиксации у справочника нет (§5) — только замок формы
+  const supply = c.supply
+  const shipment = c.shipment
+  // Набор табов сужается по тому же правилу, что и панели: сторона без движений табов
+  // не даёт (как у внутреннего склада нет «Приборов»). Роль при этом ТОЖЕ открывает
+  // табы — свежезаведённому поставщику надо видеть, куда смотреть, даже пока пусто.
+  const buying = supply !== null || c.is_supplier
+  const selling = shipment !== null || c.is_customer
+
+  const tabs: FormTab[] = []
+  if (buying) tabs.push(
+    { key: 'procurements', label: 'Закупки', icon: 'law',
+      content: c.procurements.length === 0
+        ? <div className="tab-empty">Закупок-планов на этого контрагента нет.</div>
+        : <table className="grid">
+            <thead><tr>
+              <th className="gl" /><th className="c-key">Закупка</th>
+              <th className="c-desc">Описание</th><th className="c-fit">Дата</th>
+              <th style={{ textAlign: 'right' }}>Строк</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th>
+            </tr></thead>
+            <tbody>{c.procurements.map(p => (
+              <ProcRow key={p.id} p={p} open={openProcurement} />))}</tbody>
+          </table> },
+    { key: 'purchases', label: 'Заказы', icon: 'package',
+      content: c.purchases.length === 0
+        ? <div className="tab-empty">Заказов у этого контрагента нет.</div>
+        : <table className="grid">
+            <thead><tr>
+              <th className="gl" /><th className="c-key">Заказ</th>
+              <th className="c-desc">Описание</th><th className="c-fit">Проект</th>
+              <th className="c-fit">Дата</th>
+              <th style={{ textAlign: 'right' }}>Строк</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th>
+            </tr></thead>
+            <tbody>{c.purchases.map(p => (
+              <PurchRow key={p.id} p={p} open={openPurchase} />))}</tbody>
+          </table> },
+    { key: 'receipts', label: 'Поставки', icon: 'inbox',
+      content: c.receipts.length === 0
+        ? <div className="tab-empty">Этот контрагент ещё ничего не привозил.</div>
+        : <table className="grid">
+            <thead><tr>
+              <th className="gl" /><th className="c-key">Поставка</th>
+              <th className="c-fit">№ УПД</th><th className="c-fit">Проект</th>
+              <th className="c-fit">Дата</th>
+              <th style={{ textAlign: 'right' }}>Партий</th>
+              <th style={{ textAlign: 'right' }}>Сумма</th>
+            </tr></thead>
+            <tbody>{c.receipts.map(r => (
+              <RecRow key={r.id} r={r} open={id => openOrder('receipt', id)} />))}</tbody>
+          </table> },
+  )
+  if (selling) tabs.push(
+    { key: 'transfers', label: 'Передачи', icon: 'export',
+      content: c.transfers.length === 0
+        ? <div className="tab-empty">Этому контрагенту ещё ничего не передавали.</div>
+        : <table className="grid">
+            <thead><tr>
+              <th className="gl" /><th className="c-key">Передача</th>
+              <th className="c-fit">№ накладной</th><th className="c-fit">Проект</th>
+              <th className="c-fit">Дата</th>
+              <th style={{ textAlign: 'right' }}>Строк</th>
+              <th style={{ textAlign: 'right' }}>Кол-во</th>
+              <th style={{ textAlign: 'right' }}>Сумма</th>
+            </tr></thead>
+            <tbody>{c.transfers.map(t => (
+              <TransRow key={t.id} t={t} open={id => openOrder('transfer', id)} />))}</tbody>
+          </table> },
+  )
+  tabs.push(
+    { key: 'files', label: 'Файлы', icon: 'files',
+      content: <AttachmentList att={att} locked={locked} /> },
+  )
+
+  return (
+    <FormShell
+      id={c.id} code={c.code ?? ''} entity="контрагента" locked={locked} error={err}
+      // Мета (§13.6): счёт по табам в их порядке. Роль и ИНН не повторяем — они в полях;
+      // деньги живут в панелях (иначе одно и то же число читалось бы дважды).
+      meta={<>
+        {buying && <>
+          {count(c.procurements.length, 'закупка', 'закупки', 'закупок')}
+          {' · '}{count(c.purchases.length, 'заказ', 'заказа', 'заказов')}
+          {' · '}{count(c.receipts.length, 'поставка', 'поставки', 'поставок')}
+          {' · '}
+        </>}
+        {selling && <>
+          {count(c.transfers.length, 'передача', 'передачи', 'передач')}
+          {' · '}
+        </>}
+        {count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+      </>}
+      unlocked={unlocked} onToggleLock={toggle}
+      onDelete={del}
+      actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
+        title: 'Загрузить файл (карточка предприятия, договор) — появится в табе «Файлы»',
+        disabled: att.busy }]}
+      // Порядок полей — от модели (§13.4a): идентичность (код + описание) → внешние
+      // атрибуты (ИНН) → роль.
+      fields={<>
+        <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
+          onCommit={v => run(api.updateCounterparty(c.id, { code: v }))}
+          validate={v => v.trim() !== ''} />
+        <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
+          onCommit={v => run(api.updateCounterparty(c.id, { description: v }))} />
+        <TextField label="ИНН" value={c.inn} locked={locked} busy={busy}
+          onCommit={v => run(api.updateCounterparty(c.id, { inn: v }))} />
+        {/* Роль решает, в каких пикерах контрагент виден (приход → поставщики,
+            передача → заказчики) и какие стороны показывает эта форма. */}
+        <Field label="Роль" locked={locked}
+          view={c.role ? ROLE_LABEL[c.role] : ''}>
+          <Dropdown value={c.role} disabled={busy} placeholder="— не задана —"
+            options={(Object.keys(ROLE_LABEL) as CounterpartyRole[])
+              .map(r => ({ value: r, label: ROLE_LABEL[r] }))}
+            onPick={v => run(api.updateCounterparty(c.id, { role: v as CounterpartyRole }))} />
+        </Field>
+      </>}
+      extra={<>
+        {supply && <StatPanel caption="Поставки" icon="inbox">
+          <StatGroup>
+            <Stat label="закупок (план)" value={num(supply.procurements)} />
+            <Stat label="заказов" value={num(supply.purchases)} />
+            <Stat label="не закрыто" value={num(supply.open_purchases)}
+              title="заказы, которые поставки закрыли не полностью"
+              tone={supply.open_purchases > 0 ? undefined : 'ok'} />
+            <Stat label="поставок (УПД)" value={num(supply.receipts)} />
+          </StatGroup>
+          {/* Материальный итог — только по ЗАФИКСИРОВАННЫМ поставкам (гейт Ф15), как
+              «потрачено» проекта: черновой УПД ещё не факт. */}
+          <StatGroup aside>
+            <Stat label="привёз партий" value={num(supply.lots)} />
+            <Stat label="привезено" value={uoms(supply.qty_by_uom)} />
+            <Stat label="на сумму" value={money(supply.total)} />
+          </StatGroup>
+          {/* Иначе «поставок 4 · привёз 0 партий» читается как баг, а это Ф15. */}
+          {supply.draft_receipts > 0 &&
+            <StatWarn title="черновая поставка ещё не на складе — зафиксируйте её">
+              ▲ {count(supply.draft_receipts, 'поставка', 'поставки', 'поставок')}
+              {' в черновиках — в итог не входят'}
+            </StatWarn>}
+        </StatPanel>}
+        {shipment && <StatPanel caption="Передачи" icon="export">
+          <StatGroup>
+            <Stat label="передач" value={num(shipment.transfers)} />
+            <Stat label="партий" value={num(shipment.lots)} />
+          </StatGroup>
+          <StatGroup aside>
+            <Stat label="передано" value={uoms(shipment.qty_by_uom)} />
+            <Stat label="на сумму" value={money(shipment.total)}
+              title="по цене партий-источников: своей цены у передачи нет" />
+          </StatGroup>
+          {shipment.draft_transfers > 0 &&
+            <StatWarn title="черновая накладная ещё ничего не отгрузила — зафиксируйте её">
+              ▲ {count(shipment.draft_transfers, 'передача', 'передачи', 'передач')}
+              {' в черновиках — в итог не входят'}
+            </StatWarn>}
+        </StatPanel>}
+      </>}
+      tabs={tabs}
+    />
+  )
+}
+
+// Строка закупки-плана: глиф-замок = фиксация плана (своей оси покрытия у него нет).
+function ProcRow({ p, open }: { p: CpProcurementRow; open: (id: number) => void }) {
+  return (
+    <tr className="row">
+      <td className="gl"><StatusGlyph locked={p.locked} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => open(p.id)}>{p.code || `Закупка #${p.id}`}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={p.description}>{p.description}</span></td>
+      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+        {p.date ? viewDate(p.date) : ''}</td>
+      <td className="num">{p.lines}</td>
+      <td className="num">{num(p.qty)}</td>
+    </tr>
+  )
+}
+
+// Строка заказа: глиф-замок, ЦВЕТ = покрытие лотами (тот же словарь, что в режиме
+// «Заказы») — видно, что этот контрагент ещё не довёз.
+function PurchRow({ p, open }: { p: CpPurchaseRow; open: (id: number) => void }) {
+  return (
+    <tr className="row">
+      <td className="gl">
+        <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => open(p.id)}>{p.code || `Заказ #${p.id}`}</a></td>
+      <td className="c-desc" style={{ color: 'var(--fg-dim)' }}>
+        <span className="cell-ellip" title={p.description}>{p.description}</span></td>
+      <td className="c-fit">{p.project_code}</td>
+      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+        {p.date ? viewDate(p.date) : ''}</td>
+      <td className="num">{p.lines}</td>
+      <td className="num">{num(p.qty)}</td>
+    </tr>
+  )
+}
+
+// Строка поставки. Ссылка — по КОДУ (он есть всегда, фолбэк «Поставка 12»); № УПД у
+// только что рождённой пуст, и ссылка на него была бы пустотой (та же правка, что Ф6).
+function RecRow({ r, open }: { r: CpReceiptRow; open: (id: number) => void }) {
+  return (
+    <tr className="row">
+      <td className="gl"><StatusGlyph locked={r.locked} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => open(r.id)}>{r.code || `Поставка #${r.id}`}</a></td>
+      <td className="c-fit">{r.number || <span className="hint">не задан</span>}</td>
+      <td className="c-fit">{r.project_code}</td>
+      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+        {r.date ? viewDate(r.date) : ''}</td>
+      <td className="num">{r.lots}</td>
+      <td className="num">{money(r.total)}</td>
+    </tr>
+  )
+}
+
+function TransRow({ t, open }: { t: CpTransferRow; open: (id: number) => void }) {
+  return (
+    <tr className="row">
+      <td className="gl"><StatusGlyph locked={t.locked} /></td>
+      <td className="c-key">
+        <a className="link" onClick={() => open(t.id)}>{t.code || `Передача #${t.id}`}</a></td>
+      <td className="c-fit">{t.number || <span className="hint">не задан</span>}</td>
+      <td className="c-fit">{t.project_code}</td>
+      <td className="c-fit" style={{ color: 'var(--fg-dim)' }}>
+        {t.date ? viewDate(t.date) : ''}</td>
+      <td className="num">{t.lines}</td>
+      <td className="num">{num(t.qty)}</td>
+      <td className="num">{money(t.total)}</td>
+    </tr>
+  )
+}

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type Authored, type UserRow, type ProjectRow } from './api'
 import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
+import { AnchoredMenu } from './AnchoredMenu'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Канон §5 (Ф9): всё существующее открывается В ПРОСМОТРЕ; исключение ровно одно —
@@ -231,14 +232,26 @@ export interface FormCommandProps {
   fixateTitle?: string       // подсказка-последствие («…родить прибор») — слово в кнопке едино
   onUnfix?: () => void       // расфиксировать документ (locked→draft)
   onDelete?: () => void      // удалить документ (только расфиксированный; под замком корзины нет)
-  download?: { href: string; title?: string }  // скачать (xlsx) — в слоте корзины, но
-                             // только у ЗАФИКСИРОВАННОГО (слоты не сталкиваются с корзиной)
+  download?: Download        // скачать (xlsx) — нижний слот шапки; см. `Download`
+
   actions?: FormAction[]     // доп. действия формы в правой колонке («Переоценить»,
                              // «Загрузить») — чтобы кнопки не болтались между шапкой и телом
 }
 
 export interface FormAction {
   onClick: () => void; label: string; icon: string; title?: string; disabled?: boolean
+}
+
+// «Скачать» (2026-07-30). Целей у выгрузки бывает одна (бланк закупки — `href`) или
+// несколько (изделие: «Только состав» / «Все вкладки» — `options`). Во втором случае
+// кнопка та же, но открывает меню выбора. ВИДИМОСТЬ решает вызывающая форма: у
+// закупки бланк даём только у зафиксированной (документ наружу), у изделия — всегда.
+export interface Download {
+  title?: string
+  href?: string                                     // одна цель — прямая ссылка
+  // Выбор цели — меню; `icon` берём у ВКЛАДКИ, которую пункт выгружает (§2: одна
+  // сущность носит один знак, где бы ни встретилась).
+  options?: { label: string; href: string; title?: string; icon?: string }[]
 }
 
 // Верхние команды: вертикальная колонка справа-сверху. `children` — нижний слот
@@ -287,24 +300,76 @@ export function FormCommands({ unlocked, onToggleLock, fixed, onFixate, fixateTi
   )
 }
 
-// Нижний слот шапки (§5): корзина ИЛИ «Скачать» — у нижней границы зоны, справа.
-// Корзина только в режиме ПРАВКИ: просмотр чист, случайное удаление структурно
-// невозможно. У зафиксированного корзины нет — в её слоте живёт «Скачать».
-export function FormCornerCommand({ fixed, unlocked, onDelete, download }: FormCommandProps) {
-  if (!fixed && unlocked && onDelete)
-    return (
-      <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
-        <span className="lbl">Удалить</span><span className="ci ci-trash" />
-      </button>
-    )
-  if (fixed && download)
-    return (
-      <a className="fh-ctl fh-download" href={download.href} download
-         title={download.title ?? 'Скачать'}>
+// «Скачать» с несколькими целями (2026-07-30): та же кнопка, но открывает меню
+// выбора — знак строки берём у пикера (`.typeahead-item`), слой у `AnchoredMenu`
+// (портал в body: панель табов и прокрутка страницы режут обычный `absolute`).
+// «Отмена» — своя строка, а не только Esc/клик мимо: выбор из трёх пунктов человек
+// закрывает тем же движением, каким открыл.
+function DownloadMenu({ download }: { download: Download }) {
+  const [open, setOpen] = useState(false)
+  const btn = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+
+  // Клик мимо и Esc закрывают меню. Меню в портале, поэтому «мимо» = ни кнопка, ни
+  // сам слой (иначе первый же mousedown по пункту закрыл бы его до перехода по ссылке).
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!btn.current?.contains(t) && !menu.current?.contains(t)) setOpen(false)
+    }
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('mousedown', away)
+    window.addEventListener('keydown', esc)
+    return () => {
+      window.removeEventListener('mousedown', away)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button ref={btn} className="fh-ctl fh-download" title={download.title ?? 'Скачать'}
+        onClick={() => setOpen(v => !v)}>
         <span className="lbl">Скачать</span><span className="ci ci-file" />
-      </a>
-    )
-  return null
+      </button>
+      {open &&
+        <AnchoredMenu anchor={btn} boxRef={menu} className="typeahead-menu dl-menu">
+          {download.options!.map(o => (
+            <a key={o.label} className="typeahead-item" href={o.href} download
+              title={o.title} onClick={() => setOpen(false)}>
+              <span className={'ci ci-' + (o.icon ?? 'file')} /><span>{o.label}</span>
+            </a>
+          ))}
+          <div className="typeahead-item" onClick={() => setOpen(false)}>
+            <span className="ci ci-close" /><span>Отмена</span>
+          </div>
+        </AnchoredMenu>}
+    </>
+  )
+}
+
+// Нижний слот шапки (§5): «Скачать» и корзина — у нижней границы зоны, справа.
+// Корзина только в режиме ПРАВКИ: просмотр чист, случайное удаление структурно
+// невозможно. Выгрузка от неё не зависит и стоит НАД ней (корзина остаётся самой
+// нижней командой формы); показывать ли «Скачать» вообще — решает форма тем, даёт
+// она `download` или нет (у закупки бланк только у зафиксированной, у изделия —
+// всегда: состав нужен и до фиксации, а покупной компонент не фиксируется вовсе).
+export function FormCornerCommand({ fixed, unlocked, onDelete, download }: FormCommandProps) {
+  return (
+    <>
+      {download && (download.options
+        ? <DownloadMenu download={download} />
+        : <a className="fh-ctl fh-download" href={download.href} download
+             title={download.title ?? 'Скачать'}>
+            <span className="lbl">Скачать</span><span className="ci ci-file" />
+          </a>)}
+      {!fixed && unlocked && onDelete &&
+        <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>
+          <span className="lbl">Удалить</span><span className="ci ci-trash" />
+        </button>}
+    </>
+  )
 }
 
 // Шапка формы (§5, Ф9): контролы — вертикальной колонкой справа, подпись слева от

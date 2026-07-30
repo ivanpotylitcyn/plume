@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type KittingRow, type ReceiptRow, type PurchaseRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
-  type InventoryRow, type RelocationRow, type LocationRow } from './api'
+  type InventoryRow, type RelocationRow, type LocationRow,
+  type CounterpartyRow } from './api'
 import { Login } from './Login'
 import { Dropdown } from './Dropdown'
 import { CommandPalette, type PaletteEntry } from './CommandPalette'
@@ -17,6 +18,7 @@ import { ProcurementView } from './ProcurementView'
 import { OrderForm } from './OrderForm'
 import { ORDER_KINDS, ORDER_LABEL, type OrderKind } from './orders'
 import { LocationView } from './LocationView'
+import { CounterpartyView } from './CounterpartyView'
 import { StatusGlyph, SyncGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 
@@ -27,7 +29,10 @@ import { AnchoredMenu } from './AnchoredMenu'
 // справочник, фильтр по категории, синк с библиотекой; оставлен как есть). `products`
 // — «Изделия»: только производимые (`native=True`), без фильтра категорий и синка;
 // NewItem там по умолчанию `native=True` (снимает боль ручного выбора типа).
-type Mode = 'projects' | 'products' | 'items' | 'orders' | 'locations' | 'procurements' | 'purchases'
+// Волна 20: режим «Контрагенты» — внешняя сторона документооборота (поставщик/заказчик)
+// стала полноценной сущностью со своей формой, а не только записью в пикерах.
+type Mode = 'projects' | 'products' | 'items' | 'orders' | 'locations' | 'procurements'
+  | 'purchases' | 'counterparties'
 // Волна 19, Ф12e: тринадцати вариантов `new-*` больше нет. «＋ Новый» не открывает
 // форму создания (второй, параллельный скелет формы), а РОЖДАЕТ сущность и уводит в
 // её обычную каноничную форму — выбирать тут нечего.
@@ -45,6 +50,7 @@ type Sel =
   | { kind: 'inventory'; id: number }
   | { kind: 'relocation'; id: number }
   | { kind: 'location'; id: number }
+  | { kind: 'counterparty'; id: number }
   | null
 
 // Виды ордера и их подписи живут рядом с типом (`./OrderForm`) — их читает и этот
@@ -74,6 +80,7 @@ export default function App() {
   const [inventories, setInventories] = useState<InventoryRow[]>([])
   const [relocations, setRelocations] = useState<RelocationRow[]>([])
   const [locationRows, setLocationRows] = useState<LocationRow[]>([])
+  const [counterparties, setCounterparties] = useState<CounterpartyRow[]>([])
   const [sel, setSel] = useState<Sel>(null)
   // §5 (Ф9): «только что создан» — единственный документ, что открывается в правке.
   // Помечается в onCreated-потоках, гаснет как только выбор ушёл с него (эффект ниже).
@@ -98,6 +105,8 @@ export default function App() {
   const reloadInventories = useCallback(() => api.inventories().then(setInventories), [])
   const reloadRelocations = useCallback(() => api.relocations().then(setRelocations), [])
   const reloadLocations = useCallback(() => api.locations().then(setLocationRows), [])
+  const reloadCounterparties = useCallback(
+    () => api.counterparties().then(setCounterparties), [])
   const reloadProjects = useCallback(() => api.projects().then(setProjects), [])
   const reloadItems = useCallback(() => api.items().then(setItems), [])
 
@@ -131,9 +140,10 @@ export default function App() {
     reloadInventories()
     reloadRelocations()
     reloadLocations()
+    reloadCounterparties()
   }, [user, reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
       reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories,
-      reloadRelocations, reloadLocations])
+      reloadRelocations, reloadLocations, reloadCounterparties])
 
   // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
   // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
@@ -225,6 +235,7 @@ export default function App() {
   const openLocation = (id: number) => { setMode('locations'); setSel({ kind: 'location', id }) }
   const openPurchase = (id: number) => { setMode('purchases'); setSel({ kind: 'purchase', id }) }
   const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
+  const openCounterparty = (id: number) => { setMode('counterparties'); setSel({ kind: 'counterparty', id }) }
 
   // Единый фид ордеров: 6 списков нормализуются в общую строку. Новейшие сверху
   // (по дате, null — вниз, tiebreak id). Диспетчер открытия — по kind.
@@ -294,10 +305,14 @@ export default function App() {
       kind: 'Перемещение', open: () => openRelocation(r.id) }))
     locationRows.forEach(l => e.push({ key: `loc${l.id}`, code: l.code, name: l.description,
       kind: 'Склад', open: () => openLocation(l.id) }))
+    // Волна 20: контрагент ищется по коду-жаргону («КОМПЭЛ»), как и всё остальное;
+    // у старых записей кода может не быть — тогда в палитру идёт описание.
+    counterparties.forEach(cp => e.push({ key: `cp${cp.id}`, code: cp.code || cp.description,
+      name: cp.description, kind: 'Контрагент', open: () => openCounterparty(cp.id) }))
     return e
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, items, receipts, transfers, writeoffs, requisitions, inventories,
-      purchases, kittings, relocations, locationRows])
+      purchases, kittings, relocations, locationRows, counterparties])
 
   // Гейт аутентификации: загрузка → логин → приложение.
   if (user === undefined)
@@ -358,6 +373,19 @@ export default function App() {
             rows={[...items].sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
               id: i.id, code: i.code, name: i.description, category: i.category?.description,
               glyph: <SyncGlyph synced={i.synced} /> }))} />}
+
+        {/* Волна 20: глиф строки = РОЛЬ контрагента (своей оси фиксации у справочника
+            нет) — семейство `fold-*`, см. `RoleGlyph`. */}
+        {mode === 'counterparties' &&
+          <ModeList heading="Контрагенты" newLabel="＋ Новый контрагент"
+            onNew={() => born('counterparties', 'counterparty', reloadCounterparties,
+              openCounterparty)}
+            selId={sel?.kind === 'counterparty' ? sel.id : null}
+            onSelect={id => setSel({ kind: 'counterparty', id })}
+            rows={[...counterparties].map(cp => ({
+              id: cp.id, code: cp.code || cp.description, name: cp.description,
+              glyph: <RoleGlyph supplier={cp.is_supplier} customer={cp.is_customer} />,
+            }))} />}
 
         {mode === 'orders' &&
           <OrderList entries={orderEntries} selKey={orderSelKey}
@@ -438,6 +466,13 @@ export default function App() {
           <LocationView locationId={sel.id} openItem={openItem}
             isNew={isFresh('location', sel.id)} onChanged={reloadLocations}
             onDeleted={() => { reloadLocations(); setSel(null) }} />}
+        {sel?.kind === 'counterparty' &&
+          <CounterpartyView counterpartyId={sel.id}
+            isNew={isFresh('counterparty', sel.id)}
+            openProcurement={openProcurement} openPurchase={openPurchase}
+            openOrder={openOrder}
+            onChanged={reloadCounterparties}
+            onDeleted={() => { reloadCounterparties(); setSel(null) }} />}
         {!sel && <div className="empty">Выберите объект слева · {KBD} — быстрый переход</div>}
       </div>
 
@@ -449,15 +484,34 @@ export default function App() {
 
 // Панель режимов (§2): Codicons, монохром. Порядок = поток жизненного цикла изделия
 // (планирование → исполнение → приёмка → сборка → выбытие → сверка).
+// Волна 20: «Контрагенты» стоят на СТЫКЕ справочников и закупочного контура (решение
+// Ивана 2026-07-30) — это последний справочник «что и с кем», после которого начинается
+// поток денег и документов (Закупки → Заказы → Ордера).
 const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'projects',     icon: 'flag',          title: 'Проекты — дефицит, панель проекта' },
   { mode: 'products',     icon: 'rocket',        title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
   { mode: 'items',        icon: 'chip',          title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
+  { mode: 'counterparties', icon: 'call-outgoing', title: 'Контрагенты — поставщики и заказчики, что привезли и что им передали' },
   { mode: 'procurements', icon: 'law',           title: 'Закупки — командный свод, xlsx-бланк' },
   { mode: 'purchases',    icon: 'package',       title: 'Заказы — обязательства поставщику' },
   { mode: 'orders',       icon: 'notebook',      title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
   { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },
 ]
+
+// Глиф строки контрагента: ось РОЛИ (единственная его ось — замка у справочника нет).
+// Семейство `fold-*` (решение Ивана 2026-07-30): одна форма с направлением внутри —
+// `fold-down` (к нам едет), `fold-up` (от нас уходит), `fold` (в обе стороны). Роль
+// читается СРАВНЕНИЕМ строк списка, а не припоминанием иконки, и глифы не занимают
+// формы, уже говорящие о другом (`inbox`/`export` — виды ордера, `arrow-swap` —
+// требование). Роль не задана — тот же `fold` нейтральным: направления нет вовсе.
+function RoleGlyph({ supplier, customer }: { supplier: boolean; customer: boolean }) {
+  const [icon, tone, title] = supplier && customer
+    ? ['fold', 'sg-ok', 'поставщик и заказчик']
+    : supplier ? ['fold-down', 'sg-ok', 'поставщик — привозит нам']
+    : customer ? ['fold-up', 'sg-ok', 'заказчик — ему передаём']
+    : ['fold', 'sg-none', 'роль не задана — в пикерах не появится']
+  return <span className={`ci sg ci-${icon} ${tone}`} title={title} />
+}
 
 // Сочетание для палитры под ОС: мак — ⌘K, остальные — Ctrl+K (слушаем оба, см. эффект выше).
 const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
