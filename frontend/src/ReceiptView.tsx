@@ -24,8 +24,8 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   // Ф12e: поставщик задавался ТОЛЬКО в форме создания и в шапке не жил — после её
   // сноса поставку было бы нечем укомплектовать до фиксации.
   const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
-  const reloadSuppliers = () => api.counterparties('supplier').then(setSuppliers)
-  useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
+  const reloadSuppliers = () => api.counterparties().then(setSuppliers)
+  useEffect(() => { reloadSuppliers() }, [])
   const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     receiptId, api.receipt, {
       onChanged, onDeleted,
@@ -127,11 +127,12 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
                 Ф17: глиф расхождения — «кто привёз» ≠ «у кого купили». */}
             <Field label="Поставщик" locked={locked}
               view={c.contractor_id ? <>{c.contractor_name}{mismatch}</> : ''}>
-              <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+              <CounterpartyPicker counterparties={suppliers} side="supply"
+                value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"
                 onPick={id => run(api.updateReceipt(c.id, { contractor_id: id }))}
                 onClear={() => run(api.updateReceipt(c.id, { contractor_id: null }))}
-                onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+                onCreate={name => api.createCounterparty({ description: name })
                   .then(cp => { reloadSuppliers()
                     run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} />
               {mismatch}

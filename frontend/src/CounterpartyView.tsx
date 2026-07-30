@@ -1,7 +1,7 @@
 // Форма КОНТРАГЕНТА (волна 20) — канон §13. Контрагент не документ контура, а его
 // ВНЕШНЯЯ СТОРОНА, и форма устроена по этой оси:
 //
-//   ДНК (код / описание / ИНН / роль)         ← шапка `.props`
+//   ДНК (код / описание / ИНН)                ← шапка `.props`
 //   [ПОСТАВКИ:  закупок · заказов · поставок · партий · привезено · сумма]  ← интеграл
 //   [ПЕРЕДАЧИ:  передач · партий · передано · сумма]                        ← интеграл
 //   [Закупки] [Заказы] [Поставки] [Передачи] [Файлы]                        ← табы
@@ -9,30 +9,22 @@
 // Две панели вместо одной (решение Ивана 2026-07-30): у поставщика видна только
 // закупочная, у заказчика — только передачная, у того, кто и поставляет, и принимает —
 // обе. Пустую сторону движок отдаёт как `null` («движений нет» — это смысл, а не
-// вёрстка), форма её просто не рисует. Аккордеона «закупка → накладные» здесь нет:
+// вёрстка), форма её просто не рисует. Ф3: поля «Роль» нет — сторона это ФАКТ, и
+// свежезаведённый контрагент показывает голую ДНК с одним табом «Файлы»; заводят его
+// под первый заказ, так что пустым он живёт минуты. Аккордеона «закупка → накладные» нет:
 // заказ живёт без плана (Ф17), поставка — без заказа, поэтому уровни идут тремя
 // РАВНЫМИ табами, а «чем строка закрыта» остаётся в форме заказа (Ф6), где связь
 // однозначна.
 import { useEffect, useState } from 'react'
-import { api, type CounterpartyForm, type CounterpartyRole, type CpProcurementRow,
+import { api, type CounterpartyForm, type CpProcurementRow,
   type CpPurchaseRow, type CpReceiptRow, type CpTransferRow, type UomQty } from './api'
 import { count, money, num, StatusGlyph, statusTone } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
-import { Field, TextField, viewDate } from './FormField'
-import { Dropdown } from './Dropdown'
+import { TextField, viewDate } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import type { OrderKind } from './orders'
-
-// Роль — ОДНА ручка поверх пары флагов модели (`is_supplier`/`is_customer`):
-// осмысленных состояний три, и дропдаун честнее двух галочек, из которых можно
-// собрать «никто». Пустое значение — легальная пустота старых записей.
-const ROLE_LABEL: Record<CounterpartyRole, string> = {
-  supplier: 'поставщик',
-  customer: 'заказчик',
-  both: 'поставщик и заказчик',
-}
 
 // Итог в натуре — вектор по единицам, а не одно число: штуки с метрами не складываем
 // (§13.6). Пустой вектор — прочерк, как у пустого поля шапки.
@@ -85,10 +77,11 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
   const supply = c.supply
   const shipment = c.shipment
   // Набор табов сужается по тому же правилу, что и панели: сторона без движений табов
-  // не даёт (как у внутреннего склада нет «Приборов»). Роль при этом ТОЖЕ открывает
-  // табы — свежезаведённому поставщику надо видеть, куда смотреть, даже пока пусто.
-  const buying = supply !== null || c.is_supplier
-  const selling = shipment !== null || c.is_customer
+  // не даёт (как у внутреннего склада нет «Приборов»). Ф3: других источников правды у
+  // этого решения нет — раньше табы открывала ещё и заявленная роль, и «поставщик без
+  // единого документа» получал три пустых таба, которые нечем было наполнить с места.
+  const buying = supply !== null
+  const selling = shipment !== null
 
   const tabs: FormTab[] = []
   if (buying) tabs.push(
@@ -159,7 +152,7 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
   return (
     <FormShell
       id={c.id} code={c.code ?? ''} entity="контрагента" locked={locked} error={err}
-      // Мета (§13.6): счёт по табам в их порядке. Роль и ИНН не повторяем — они в полях;
+      // Мета (§13.6): счёт по табам в их порядке. ИНН не повторяем — он в полях;
       // деньги живут в панелях (иначе одно и то же число читалось бы дважды).
       meta={<>
         {buying && <>
@@ -180,7 +173,7 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
         title: 'Загрузить файл (карточка предприятия, договор) — появится в табе «Файлы»',
         disabled: att.busy }]}
       // Порядок полей — от модели (§13.4a): идентичность (код + описание) → внешние
-      // атрибуты (ИНН) → роль.
+      // атрибуты (ИНН). Больше в ДНК контрагента ничего и нет (Ф3).
       fields={<>
         <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
           onCommit={v => run(api.updateCounterparty(c.id, { code: v }))}
@@ -189,15 +182,6 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
           onCommit={v => run(api.updateCounterparty(c.id, { description: v }))} />
         <TextField label="ИНН" value={c.inn} locked={locked} busy={busy}
           onCommit={v => run(api.updateCounterparty(c.id, { inn: v }))} />
-        {/* Роль решает, в каких пикерах контрагент виден (приход → поставщики,
-            передача → заказчики) и какие стороны показывает эта форма. */}
-        <Field label="Роль" locked={locked}
-          view={c.role ? ROLE_LABEL[c.role] : ''}>
-          <Dropdown value={c.role} disabled={busy} placeholder="— не задана —"
-            options={(Object.keys(ROLE_LABEL) as CounterpartyRole[])
-              .map(r => ({ value: r, label: ROLE_LABEL[r] }))}
-            onPick={v => run(api.updateCounterparty(c.id, { role: v as CounterpartyRole }))} />
-        </Field>
       </>}
       extra={<>
         {supply && <StatPanel caption="Поставки" icon="inbox">

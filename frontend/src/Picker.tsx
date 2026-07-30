@@ -148,26 +148,35 @@ export function ItemPicker({ items, value, onPick, disabled, placeholder, width,
 }
 
 // ── Пикер контрагента ──
-// Глифа в строке нет намеренно: у контрагента пока нет оси состояния (ни замка, ни
-// синка), а глиф без смысла — декорация (UI_PRINCIPLES). Заведётся в волне 20.
+// Глифа в строке нет намеренно: у контрагента нет оси состояния (ни замка, ни синка),
+// а глиф без смысла — декорация (UI_PRINCIPLES). Направление (`fold-*`) живёт в списке
+// режима, где строки сравнимы между собой; здесь список уже отобран стороной.
 //
 // **Выбор из СПИСКА, а не по памяти** (решение Ивана 2026-07-29): клик по полю
-// раскрывает весь справочник поставщиков/заказчиков. Type-ahead хорош там, где
-// справочник большой и человек знает, что ищет (изделия — тысячи, код на руках);
-// контрагентов десятки, и держать их коды в голове никто не обязан — требовать
-// первую букву значило заставлять угадывать. Ввод продолжает фильтровать, а
-// «Завести «X»» из Ф12e работает как прежде.
+// раскрывает весь справочник. Type-ahead хорош там, где справочник большой и человек
+// знает, что ищет (изделия — тысячи, код на руках); контрагентов десятки, и держать
+// их коды в голове никто не обязан — требовать первую букву значило заставлять
+// угадывать. Ввод продолжает фильтровать, а «Завести «X»» из Ф12e работает как прежде.
+//
+// **`side` СОРТИРУЕТ, а не фильтрует** (волна 20, Ф3, решение Ивана 2026-07-30): наверх
+// идут «свои» для этого вида ордера — те, с кем такие документы уже были (`has_supply`
+// у закупочных, `has_shipment` у передач). Прежние роли-флаги список сужали, и нужный
+// контрагент просто исчезал — причину («роль не та») с места ошибки было не прочесть.
+// Порядок внутри групп сохраняем как пришёл (бэк отдаёт по описанию).
 const cpText = (c: CounterpartyRow) => c.code ? `${c.code} — ${c.description}` : c.description
 
-export function CounterpartyPicker({ counterparties, value, onPick, disabled, placeholder,
-  width, onClear, onCreate }: {
+export function CounterpartyPicker({ counterparties, side, value, onPick, disabled,
+  placeholder, width, onClear, onCreate }: {
   counterparties: CounterpartyRow[]
+  side: 'supply' | 'shipment'
   value: number | ''
   onPick: (id: number) => void
   disabled?: boolean; placeholder?: string; width?: number; onClear?: () => void
   onCreate?: (name: string) => void
 }) {
-  return <Picker options={counterparties} value={value} onPick={onPick} keyOf={c => c.id}
+  const ours = (c: CounterpartyRow) => side === 'supply' ? c.has_supply : c.has_shipment
+  const options = [...counterparties.filter(ours), ...counterparties.filter(c => !ours(c))]
+  return <Picker options={options} value={value} onPick={onPick} keyOf={c => c.id}
     textOf={cpText} searchOf={c => `${c.code ?? ''} ${c.description} ${c.inn}`}
     disabled={disabled} placeholder={placeholder} width={width} onClear={onClear}
     onCreate={onCreate} eager

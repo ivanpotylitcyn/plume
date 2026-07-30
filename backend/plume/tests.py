@@ -2474,8 +2474,7 @@ class BornByClickTests(EngineTestBase):
         До Ф12e он задавался лишь в форме создания и в шапке не жил вовсе — после
         сноса той формы поставку было бы не зафиксировать никогда."""
         r = engine.create_receipt(self.prj, self.user, 'УПД-1')
-        cp = models.Counterparty.objects.create(description='ООО Поставщик',
-                                                is_supplier=True)
+        cp = models.Counterparty.objects.create(description='ООО Поставщик')
         c = Client()
         c.force_login(self.user)
         body = c.patch(f'/api/receipts/{r.id}/', {'contractor_id': cp.id},
@@ -4104,14 +4103,10 @@ class LotIdentifiersTests(EngineTestBase):
 
 
 class CounterpartyRolesTests(EngineTestBase):
-    """Контрагент — одна сущность с ролями (поставщик/заказчик), а не два справочника:
-    у поставки он поставщик, у передачи заказчик, направление читается из вида;
-    пикеры фильтруют по роли (волна 13, Ф2f+; одна колонка — волна 19, Ф14)."""
-
-    def test_supplier_role_default(self):
-        # унаследованный `self.supplier` (без явных ролей) — поставщик по умолчанию
-        self.assertTrue(self.supplier.is_supplier)
-        self.assertFalse(self.supplier.is_customer)
+    """Контрагент — одна сущность, а не два справочника: у поставки он поставщик, у
+    передачи заказчик, направление читается из ВИДА документа (волна 13, Ф2f+; одна
+    колонка — волна 19, Ф14). Ролей-флагов у справочника нет (волна 20, Ф3) —
+    сторона выводится из фактов, см. `CounterpartySidesTests`."""
 
     def test_receipt_form_emits_contractor(self):
         r = models.Receipt.objects.create(
@@ -4123,7 +4118,7 @@ class CounterpartyRolesTests(EngineTestBase):
 
     def test_create_transfer_with_customer(self):
         cust = models.Counterparty.objects.create(
-            description='Заказчик', is_supplier=False, is_customer=True)
+            description='Заказчик')
         t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=cust)
         self.assertEqual(t.contractor_id, cust.id)
         cp = engine.transfer_form(t)
@@ -4135,7 +4130,7 @@ class CounterpartyRolesTests(EngineTestBase):
         self.assertIsNone(t.contractor_id)
         self.assertEqual(engine.transfer_form(t)['contractor_name'], '')
         cust = models.Counterparty.objects.create(
-            description='Поздний', is_supplier=False, is_customer=True)
+            description='Поздний')
         engine.update_transfer(t, contractor=cust)               # проставить позже
         t.refresh_from_db()
         self.assertEqual(t.contractor_id, cust.id)
@@ -4146,32 +4141,30 @@ class CounterpartyRolesTests(EngineTestBase):
     def test_update_transfer_sentinel_keeps_contractor(self):
         """Часовой `_UNSET`: правка номера/даты не сбрасывает получателя."""
         cust = models.Counterparty.objects.create(
-            description='Стойкий', is_supplier=False, is_customer=True)
+            description='Стойкий')
         t = engine.create_transfer(self.prj, self.user, 'Н-3', contractor=cust)
         engine.update_transfer(t, number='Н-3-ред')              # contractor не передан
         t.refresh_from_db()
         self.assertEqual(t.contractor_id, cust.id)
         self.assertEqual(t.number, 'Н-3-ред')
 
-    def test_counterparties_endpoint_role_filter(self):
-        models.Counterparty.objects.create(
-            description='ТолькоЗаказчик', is_supplier=False, is_customer=True)
+    def test_counterparties_endpoint_hides_nobody(self):
+        """Ф3: список — ВЕСЬ справочник, фильтра по роли больше нет.
+
+        Прежний `?role=` прятал запись, у которой «роль не та», и с места ошибки это
+        не читалось. Параметр остался разве что в старых закладках — он обязан быть
+        безвредным."""
+        models.Counterparty.objects.create(description='Ничей')
         c = Client()
         c.force_login(self.user)
-        # ?role=supplier — унаследованный поставщик, без заказчика
-        sup_names = {r['description'] for r in c.get('/api/counterparties/?role=supplier').json()}
-        self.assertIn('Поставщик', sup_names)
-        self.assertNotIn('ТолькоЗаказчик', sup_names)
-        # ?role=customer — только заказчик
-        cust_names = {r['description'] for r in c.get('/api/counterparties/?role=customer').json()}
-        self.assertIn('ТолькоЗаказчик', cust_names)
-        self.assertNotIn('Поставщик', cust_names)
-        # быстрое создание с ролью
-        created = c.post('/api/counterparties/',
-                         {'description': 'Новый', 'role': 'customer'},
-                         content_type='application/json').json()
-        self.assertTrue(created['is_customer'])
-        self.assertFalse(created['is_supplier'])
+        rows = c.get('/api/counterparties/').json()
+        names = {r['description'] for r in rows}
+        self.assertIn('Поставщик', names)
+        self.assertIn('Ничей', names)                       # без фактов — но в списке
+        self.assertNotIn('is_supplier', rows[0])            # флагов в проекции нет
+        stale = {r['description'] for r in
+                 c.get('/api/counterparties/?role=supplier').json()}
+        self.assertEqual(stale, names)                      # забытый параметр не сужает
 
 
 class CounterpartyFormTests(EngineTestBase):
@@ -4251,7 +4244,7 @@ class CounterpartyFormTests(EngineTestBase):
         self.assertEqual(supply['open_purchases'], 0)     # строка закрыта целиком
 
     def test_shipment_integral_from_locked_transfers(self):
-        cust = engine.create_counterparty(description='Заказчик', role='customer')
+        cust = engine.create_counterparty(description='Заказчик')
         device = self.make_item('DEV', manufactured=True)
         r, lot = self._receipt(5, 200)
         lot.item = device
@@ -4271,7 +4264,7 @@ class CounterpartyFormTests(EngineTestBase):
 
     def test_both_sides_live_together(self):
         """Одно юрлицо в двух ролях — панелей две сразу (роли не исключают друг друга)."""
-        both = engine.create_counterparty(description='И то, и то', role='both')
+        both = engine.create_counterparty(description='И то, и то')
         self._receipt(4, 25, contractor=both)
         _r, lot = self._receipt(4, 25)
         t = engine.create_transfer(self.prj, self.user, 'Н-2', contractor=both)
@@ -4288,7 +4281,7 @@ class CounterpartyFormTests(EngineTestBase):
         p = self.make_purchase(code='ЗАКАЗ-1')
         engine.add_purchase_line(p, self.comp, D(7))
         self._receipt(7, 11)
-        cust = engine.create_counterparty(description='Заказчик-2', role='customer')
+        cust = engine.create_counterparty(description='Заказчик-2')
         _r, lot = self._receipt(2, 5)
         t = engine.create_transfer(self.prj, self.user, 'Н-3', contractor=cust)
         engine.add_transfer_line(t, lot, D(2))
@@ -4306,26 +4299,10 @@ class CounterpartyFormTests(EngineTestBase):
         self.assertEqual(row['qty'], D(2))                 # магнитуда знаковой строки
         self.assertEqual(row['total'], D(2) * D(5))
 
-    def test_role_is_one_value_over_two_flags(self):
-        self.assertEqual(engine.counterparty_role(self.supplier), 'supplier')
-        engine.update_counterparty(self.supplier, role='both')
-        self.supplier.refresh_from_db()
-        self.assertTrue(self.supplier.is_supplier and self.supplier.is_customer)
-        self.assertEqual(engine.counterparty_role(self.supplier), 'both')
-        engine.update_counterparty(self.supplier, role='customer')
-        self.supplier.refresh_from_db()
-        self.assertFalse(self.supplier.is_supplier)
-        naked = models.Counterparty.objects.create(
-            description='Без роли', is_supplier=False, is_customer=False)
-        self.assertEqual(engine.counterparty_role(naked), '')   # легальная пустота
-        with self.assertRaises(ValidationError):
-            engine.update_counterparty(self.supplier, role='bogus')
-
     def test_birth_without_code_gets_fallback(self):
         """Ф12e: рождение по клику — код фолбэком, титул формы не пустует."""
         c = engine.create_counterparty()
         self.assertEqual(c.code, f'Контрагент {c.pk}')
-        self.assertTrue(c.is_supplier)                      # роль по умолчанию
         named = engine.create_counterparty(code='КОМПЭЛ', description='ООО Компэл')
         self.assertEqual(named.code, 'КОМПЭЛ')
         with self.assertRaises(ValidationError):
@@ -4367,6 +4344,51 @@ class CounterpartyFormTests(EngineTestBase):
         proc.refresh_from_db()
         self.assertIsNone(proc.contractor_id)
 
+    def test_sides_by_facts_replace_role_flags(self):
+        """Ф3: сторона контрагента — ФАКТ документооборота, а не флаг справочника.
+
+        `counterparty_sides` — ось СПИСКА (глиф `fold-*` и порядок в пикере), и она
+        обязана давать ровно то же, что интегралы формы: «есть сторона» = «интеграл
+        не `None`». Любой из трёх закупочных документов зажигает закупочную сторону —
+        в том числе план и заказ, по которым ещё ничего не приехало.
+        """
+        def sides(cp):
+            row = engine.counterparty_sides(
+                models.Counterparty.objects.filter(pk=cp.pk)).get()
+            return row.has_supply, row.has_shipment
+
+        naked = engine.create_counterparty(description='Ничей')
+        self.assertEqual(sides(naked), (False, False))      # пустой — законное состояние
+
+        planned = engine.create_counterparty(description='Только план')
+        proc = engine.create_procurement(self.user)
+        engine.update_procurement(proc, contractor=planned)
+        self.assertEqual(sides(planned), (True, False))     # заказа ещё нет — сторона есть
+
+        ordered = engine.create_counterparty(description='Только заказ')
+        self.make_purchase(contractor=ordered)
+        self.assertEqual(sides(ordered), (True, False))
+
+        self.assertEqual(sides(self.supplier), (False, False))
+        self._receipt(3, 7)                                 # привёз — стал закупочной
+        self.assertEqual(sides(self.supplier), (True, False))
+
+        cust = engine.create_counterparty(description='Заказчик')
+        _r, lot = self._receipt(2, 5)
+        t = engine.create_transfer(self.prj, self.user, 'Н-с', contractor=cust)
+        engine.add_transfer_line(t, lot, D(1))
+        self.assertEqual(sides(cust), (False, True))        # черновик — тоже факт стороны
+
+        both = engine.create_counterparty(description='И то, и то')
+        self._receipt(1, 1, contractor=both)
+        t2 = engine.create_transfer(self.prj, self.user, 'Н-с2', contractor=both)
+        engine.add_transfer_line(t2, lot, D(1))
+        self.assertEqual(sides(both), (True, True))
+        # Ось списка и витрина формы — одна правда.
+        form = engine.counterparty_form(both)
+        self.assertEqual((form['supply'] is not None, form['shipment'] is not None),
+                         sides(both))
+
 
 @override_settings(MEDIA_ROOT=_TEST_MEDIA)
 class CounterpartyDeleteSweepsFilesTests(EngineTestBase):
@@ -4400,31 +4422,34 @@ class CounterpartyHttpTests(TestCase):
         self.assertEqual(born.status_code, 201)
         cid = born.json()['id']
         self.assertEqual(born.json()['code'], f'Контрагент {cid}')
+        # Ф3: рождённый по клику пуст с обеих сторон — ни панелей, ни табов контура.
+        # Это ожидаемая картина, а не дыра: контрагента заводят под первый заказ.
+        self.assertEqual(born.json()['has_supply'], False)
+        self.assertEqual(born.json()['has_shipment'], False)
         form = self.client.get(f'/api/counterparties/{cid}/').json()
-        self.assertEqual(form['role'], 'supplier')
+        self.assertNotIn('role', form)
         self.assertIsNone(form['supply'])
+        self.assertIsNone(form['shipment'])
         self.assertEqual(form['transfers'], [])
 
     def test_quick_create_uses_typed_name_as_code(self):
         """«Завести "X"» из пикера: напечатанное имя — это и ярлык (`code`) тоже."""
         created = self.client.post('/api/counterparties/',
-                                   {'description': 'Амети́ст', 'role': 'customer'},
+                                   {'description': 'Амети́ст'},
                                    content_type='application/json').json()
         self.assertEqual(created['code'], 'Амети́ст')
-        self.assertTrue(created['is_customer'])
 
-    def test_patch_dna_and_role(self):
+    def test_patch_dna(self):
+        """ДНК контрагента — ровно три поля (Ф3: роль снесена, сторона выводится)."""
         cid = self.client.post('/api/counterparties/', {},
                                content_type='application/json').json()['id']
         form = self.client.patch(
             f'/api/counterparties/{cid}/',
-            {'code': 'КОМПЭЛ', 'description': 'ООО Компэл', 'inn': '7712345678',
-             'role': 'both'},
+            {'code': 'КОМПЭЛ', 'description': 'ООО Компэл', 'inn': '7712345678'},
             content_type='application/json').json()
         self.assertEqual(form['code'], 'КОМПЭЛ')
         self.assertEqual(form['description'], 'ООО Компэл')
         self.assertEqual(form['inn'], '7712345678')
-        self.assertEqual(form['role'], 'both')
 
     def test_patch_duplicate_code_is_friendly_400(self):
         self.client.post('/api/counterparties/', {'code': 'ЗАНЯТО', 'description': 'Раз'},

@@ -374,8 +374,8 @@ export default function App() {
               id: i.id, code: i.code, name: i.description, category: i.category?.description,
               glyph: <SyncGlyph synced={i.synced} /> }))} />}
 
-        {/* Волна 20: глиф строки = РОЛЬ контрагента (своей оси фиксации у справочника
-            нет) — семейство `fold-*`, см. `RoleGlyph`. */}
+        {/* Волна 20: глиф строки = СТОРОНА контрагента по фактам документооборота
+            (своей оси фиксации у справочника нет) — семейство `fold-*`, см. `SideGlyph`. */}
         {mode === 'counterparties' &&
           <ModeList heading="Контрагенты" newLabel="＋ Новый контрагент"
             onNew={() => born('counterparties', 'counterparty', reloadCounterparties,
@@ -384,7 +384,7 @@ export default function App() {
             onSelect={id => setSel({ kind: 'counterparty', id })}
             rows={[...counterparties].map(cp => ({
               id: cp.id, code: cp.code || cp.description, name: cp.description,
-              glyph: <RoleGlyph supplier={cp.is_supplier} customer={cp.is_customer} />,
+              glyph: <SideGlyph supply={cp.has_supply} shipment={cp.has_shipment} />,
             }))} />}
 
         {mode === 'orders' &&
@@ -498,18 +498,22 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },
 ]
 
-// Глиф строки контрагента: ось РОЛИ (единственная его ось — замка у справочника нет).
-// Семейство `fold-*` (решение Ивана 2026-07-30): одна форма с направлением внутри —
-// `fold-down` (к нам едет), `fold-up` (от нас уходит), `fold` (в обе стороны). Роль
-// читается СРАВНЕНИЕМ строк списка, а не припоминанием иконки, и глифы не занимают
-// формы, уже говорящие о другом (`inbox`/`export` — виды ордера, `arrow-swap` —
-// требование). Роль не задана — тот же `fold` нейтральным: направления нет вовсе.
-function RoleGlyph({ supplier, customer }: { supplier: boolean; customer: boolean }) {
-  const [icon, tone, title] = supplier && customer
-    ? ['fold', 'sg-ok', 'поставщик и заказчик']
-    : supplier ? ['fold-down', 'sg-ok', 'поставщик — привозит нам']
-    : customer ? ['fold-up', 'sg-ok', 'заказчик — ему передаём']
-    : ['fold', 'sg-none', 'роль не задана — в пикерах не появится']
+// Глиф строки контрагента: ось СТОРОНЫ (единственная его ось — замка у справочника
+// нет). Семейство `fold-*` (решение Ивана 2026-07-30): одна форма с направлением
+// внутри — `fold-down` (к нам едет), `fold-up` (от нас уходит), `fold` (в обе
+// стороны). Направление читается СРАВНЕНИЕМ строк списка, а не припоминанием иконки,
+// и глифы не занимают формы, уже говорящие о другом (`inbox`/`export` — виды ордера,
+// `arrow-swap` — требование).
+//
+// Ф3: сторона — ФАКТ (движок считает по документам), а не заявленная роль. Пустой
+// контрагент — нейтральный `fold`: он заведён, но с ним ещё ничего не было, и это
+// нормальная строка справочника, а не ошибка заполнения.
+function SideGlyph({ supply, shipment }: { supply: boolean; shipment: boolean }) {
+  const [icon, tone, title] = supply && shipment
+    ? ['fold', 'sg-ok', 'и привозит нам, и принимает от нас']
+    : supply ? ['fold-down', 'sg-ok', 'привозит нам — закупки, заказы, поставки']
+    : shipment ? ['fold-up', 'sg-ok', 'ему передаём — накладные']
+    : ['fold', 'sg-none', 'документов с ним ещё не было']
   return <span className={`ci sg ci-${icon} ${tone}`} title={title} />
 }
 

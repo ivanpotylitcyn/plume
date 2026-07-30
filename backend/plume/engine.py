@@ -105,7 +105,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Exists, OuterRef, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -3394,40 +3394,40 @@ def autopeg_procurement(procurement, user):
 # --------------------------------------------------------------------------- #
 #  Волна 20 — контрагент: справочник + витрина двух сторон документооборота
 # --------------------------------------------------------------------------- #
-# `Counterparty` — единая внешняя сторона в двух ролях (`is_supplier` / `is_customer`),
-# и витрина устроена по этой же оси: **две стороны**, а не одна лента. Закупочная
-# сторона (мы платим, к нам едет) — закупки → заказы → поставки; передачная (мы
-# отдаём) — передачи заказчику. Роли не взаимоисключающие: одно юрлицо законно бывает
-# и поставщиком, и заказчиком, и тогда сторон две сразу.
+# `Counterparty` — единая внешняя сторона документооборота, и витрина устроена по её
+# оси: **две стороны**, а не одна лента. Закупочная сторона (мы платим, к нам едет) —
+# закупки → заказы → поставки; передачная (мы отдаём) — передачи заказчику. Стороны не
+# взаимоисключающие: одно юрлицо законно и привозит нам, и принимает от нас.
 #
 # Каждая сторона отдаётся как **интеграл или `None`** (решение Ивана 2026-07-30):
 # «ноль движений — стороны нет». Тот же приём, что `project_health` (внутренний склад
-# → `None`, глиф нейтрален): пустоту решает ДВИЖОК, вью только не рисует панель. Роль
-# в решении не участвует — свежезаведённый поставщик без единого документа честно
-# показывает пустую форму, а не панель нулей.
-COUNTERPARTY_ROLE_FLAGS = {
-    'supplier': (True, False),
-    'customer': (False, True),
-    'both': (True, True),
-}
+# → `None`, глиф нейтрален): пустоту решает ДВИЖОК, вью только не рисует панель.
+#
+# **Ролей-флагов не существует** (снесены 2026-07-30, Ф3): сторона — не свойство
+# справочника, а факт документооборота. Два bool были декларацией о намерениях,
+# которую человек поддерживал руками, тогда как правда всегда лежала в документах;
+# хуже того, пикер по ним ФИЛЬТРОВАЛ и прятал нужную запись. Свежезаведённый
+# контрагент честно показывает пустую форму (ни панелей, ни табов контура) — он
+# заводится ровно тогда, когда ему собираются оформить заказ, и пустым не живёт.
 
 
-def counterparty_role(counterparty):
-    """Пара флагов-ролей как ОДНО значение формы: supplier | customer | both | ''.
+def counterparty_sides(queryset):
+    """Аннотировать контрагентов их сторонами ПО ФАКТАМ: `has_supply` / `has_shipment`.
 
-    В модели роли — два независимых bool (так их читают пикеры: приход → поставщики,
-    передача → заказчики). Человеку же на форме нужна одна ручка, а не две галочки:
-    осмысленных состояний три, и они складываются в обычный дропдаун (§13, тот же
-    приём, что `Item.category`). Пустая строка — легальное «ни одной роли» у старых
-    записей: поле честно пустует, вместо того чтобы врать «поставщик».
+    Заменила пару флагов-ролей: «поставщик» = у него что-то покупали (закупка-план,
+    заказ или поставка), «заказчик» = ему что-то передавали. Один запрос на весь
+    список (`Exists`, не счёт), потому что это ось СПИСКА режима — глиф строки
+    (`fold-*`) и порядок в пикере («свои» для этого вида ордера — наверх).
     """
-    if counterparty.is_supplier and counterparty.is_customer:
-        return 'both'
-    if counterparty.is_supplier:
-        return 'supplier'
-    if counterparty.is_customer:
-        return 'customer'
-    return ''
+    receipts = models.StockDocument.objects.filter(
+        contractor=OuterRef('pk'), kind=models.StockDocument.Kind.RECEIPT)
+    transfers = models.StockDocument.objects.filter(
+        contractor=OuterRef('pk'), kind=models.StockDocument.Kind.TRANSFER)
+    return queryset.annotate(
+        has_supply=(Exists(models.Procurement.objects.filter(contractor=OuterRef('pk')))
+                    | Exists(models.Purchase.objects.filter(contractor=OuterRef('pk')))
+                    | Exists(receipts)),
+        has_shipment=Exists(transfers))
 
 
 def _qty_by_uom(pairs):
@@ -3591,10 +3591,9 @@ def counterparty_form(counterparty):
     return {
         'id': counterparty.id, 'code': counterparty.code,
         'description': counterparty.description, 'inn': counterparty.inn,
-        'is_supplier': counterparty.is_supplier,
-        'is_customer': counterparty.is_customer,
-        'role': counterparty_role(counterparty),
-        # Стороны: интеграл или `None` («движений нет» решает движок, не вью).
+        # Стороны: интеграл или `None` («движений нет» решает движок, не вью). Отдельных
+        # `has_*` здесь нет намеренно — «сторона есть» это и есть «интеграл не `None`»,
+        # и два источника одной правды в одной проекции разошлись бы (Ф3).
         'supply': _counterparty_supply(counterparty),
         'shipment': _counterparty_shipment(counterparty),
         'procurements': _cp_procurement_rows(counterparty),
@@ -3604,33 +3603,34 @@ def counterparty_form(counterparty):
     }
 
 
-def create_counterparty(code=None, description='', inn='', role=None):
+def create_counterparty(code=None, description='', inn=''):
     """Завести контрагента. Пустой код — фолбэком «Контрагент 12» (Ф12e).
 
     Волна 19 (Ф10) оставила `code` контрагента без авто-фолбэка: заводили его только
     из пикера, где человек вводил имя. Волна 20 дала сущности форму, а форма рождается
     по клику (Ф12e) — титулу нужен код, и правило снова одно на всех.
+
+    Роли при рождении больше нет (Ф3): контрагента заводят из пикера конкретного
+    документа, и «кто он» этот документ и скажет — первым же фактом.
     """
     code = (code or '').strip() or None
     require_unique_code(models.Counterparty, code)
-    flags = COUNTERPARTY_ROLE_FLAGS.get(role or 'supplier', (True, False))
-    fields = dict(description=(description or '').strip(),
-                  inn=(inn or '').strip(),
-                  is_supplier=flags[0], is_customer=flags[1])
+    fields = dict(description=(description or '').strip(), inn=(inn or '').strip())
     if code:
         return models.Counterparty.objects.create(code=code, **fields)
     return create_with_fallback_code(models.Counterparty, 'Контрагент', **fields)
 
 
-def update_counterparty(counterparty, code=_UNSET, description=None, inn=None,
-                        role=None):
+def update_counterparty(counterparty, code=_UNSET, description=None, inn=None):
     """Правка ДНК контрагента под интерфейсным замком формы (волна 20).
+
+    ДНК теперь ровно три поля — код, описание, ИНН (роль снесена, Ф3): всё остальное,
+    что справочник «знает» о контрагенте, он знает из документов и правке не подлежит.
 
     `code` — часовой `_UNSET` (не прислали → не трогаем; пустой → NULL, как у
     документов: колонка nullable, и очистка кода не должна ловить IntegrityError).
     `description`/`inn` пустыми быть вправе (Ф12e: рождённое по клику незаполнено, и
-    запрет очистки означал бы «заполнить можно, передумать нельзя»). `role` меняет
-    пару флагов целиком — состояний три, и они не складываются по одному.
+    запрет очистки означал бы «заполнить можно, передумать нельзя»).
     """
     if code is not _UNSET:
         require_unique_code(models.Counterparty, code, counterparty.pk)
@@ -3639,11 +3639,6 @@ def update_counterparty(counterparty, code=_UNSET, description=None, inn=None,
         counterparty.description = description.strip()
     if inn is not None:
         counterparty.inn = inn.strip()
-    if role is not None:
-        if role not in COUNTERPARTY_ROLE_FLAGS:
-            raise ValidationError('Неизвестная роль контрагента.')
-        counterparty.is_supplier, counterparty.is_customer = \
-            COUNTERPARTY_ROLE_FLAGS[role]
     counterparty.save()
     return counterparty
 

@@ -687,17 +687,25 @@ def kitting_unlock(request, pk):
 #  Приход / УПД (волна 3 — записываемое ядро) + справочник поставщиков
 # --------------------------------------------------------------------------- #
 def _counterparty_row(c):
+    """Строка справочника: ДНК + СТОРОНЫ ПО ФАКТАМ (Ф3, вместо снесённых ролей-флагов).
+
+    `has_supply`/`has_shipment` приходят аннотацией `engine.counterparty_sides`; у
+    только что рождённого контрагента (ответ POST — не из аннотированной выборки)
+    фактов нет по определению, поэтому фолбэк `False` честен.
+    """
     return {'id': c.id, 'code': c.code, 'description': c.description, 'inn': c.inn,
-            'is_supplier': c.is_supplier, 'is_customer': c.is_customer}
+            'has_supply': getattr(c, 'has_supply', False),
+            'has_shipment': getattr(c, 'has_shipment', False)}
 
 
 @api_view(['GET', 'POST'])
 def counterparties(request):
-    """Контрагенты (список режима и пикеров) с фильтром по роли + рождение.
+    """Контрагенты (список режима и пикеров) + рождение.
 
-    GET `?role=supplier|customer` сужает список под пикер (приход → поставщики,
-    передача → заказчики); без `role` — все. POST создаёт с ролью по контексту
-    (`role`), по умолчанию поставщик (историческая роль сущности).
+    GET отдаёт **весь** справочник со сторонами-фактами. Фильтра `?role=` больше нет
+    (Ф3): пикер, сужавший список по флагу, прятал нужную запись, а причина («роль не
+    та») с места ошибки не читалась. Теперь список один, а «свои» для этого вида
+    ордера вью поднимает наверх сортировкой по `has_supply`/`has_shipment`.
 
     Волна 20 — два входа рождения в одной вьюхе:
     — «＋ Новый контрагент» режима шлёт **пустое тело** (Ф12e) → всё фолбэком, включая
@@ -713,25 +721,19 @@ def counterparties(request):
         try:
             c = engine.create_counterparty(
                 code=(d.get('code') or '').strip() or description,
-                description=description, inn=(d.get('inn') or '').strip(),
-                role=d.get('role'))
+                description=description, inn=(d.get('inn') or '').strip())
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(_counterparty_row(c), status=http.HTTP_201_CREATED)
-    qs = models.Counterparty.objects.all()
-    role = request.GET.get('role')
-    if role == 'supplier':
-        qs = qs.filter(is_supplier=True)
-    elif role == 'customer':
-        qs = qs.filter(is_customer=True)
+    qs = engine.counterparty_sides(models.Counterparty.objects.all())
     return Response([_counterparty_row(c) for c in qs])
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def counterparty_detail(request, pk):
     """Форма контрагента (волна 20): ДНК + два интеграла сторон + четыре списка.
-    PATCH — правка кода/описания/ИНН/роли под интерфейсным замком. DELETE — удаление
-    (friendly-guard движка; поставки/передачи/заказы держат наглухо)."""
+    PATCH — правка кода/описания/ИНН под интерфейсным замком (роли снесены, Ф3).
+    DELETE — удаление (friendly-guard движка; поставки/передачи/заказы держат наглухо)."""
     c = get_object_or_404(models.Counterparty, pk=pk)
     if request.method == 'DELETE':
         return _friendly_delete(engine.delete_counterparty, c)
@@ -741,8 +743,7 @@ def counterparty_detail(request, pk):
             engine.update_counterparty(
                 c, code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
-                inn=d['inn'] if 'inn' in d else None,
-                role=d.get('role'))
+                inn=d['inn'] if 'inn' in d else None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.counterparty_form(c))

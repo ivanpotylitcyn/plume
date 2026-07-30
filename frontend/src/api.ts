@@ -163,16 +163,17 @@ export interface KittingForm extends Authored {
   rows: KittingFormRow[]; born_lots: BornLot[]
 }
 
-// ── Контрагенты (волна 13, Ф2f+ — единая сущность с ролями) ──
+// ── Контрагенты (волна 13, Ф2f+ — единая сущность документооборота) ──
+// `has_*` — СТОРОНЫ ПО ФАКТАМ (волна 20, Ф3, вместо снесённых ролей-флагов): что-то у
+// него покупали / что-то ему передавали. Считает движок, вью только читает: глиф
+// строки справочника и порядок в пикере («свои» для этого вида ордера — наверх).
 export interface CounterpartyRow {
   id: number; code: string | null; description: string; inn: string
-  is_supplier: boolean; is_customer: boolean
+  has_supply: boolean; has_shipment: boolean
 }
 
 // ── Форма контрагента (волна 20 — режим «Контрагенты») ──
-// Роль — одно значение поверх пары флагов модели; '' — легальное «ни одной» у старых
-// записей. Обе стороны документооборота: `null` = «движений нет» (решает движок).
-export type CounterpartyRole = 'supplier' | 'customer' | 'both'
+// Обе стороны документооборота: `null` = «движений нет» (решает движок).
 export interface UomQty { uom: string; qty: number }
 // `draft_*` — сколько документов стороны ещё черновики: они считаются документами,
 // но в материальный итог не входят (замок гейтит склад, Ф15).
@@ -203,7 +204,6 @@ export interface CpTransferRow {
 }
 export interface CounterpartyForm {
   id: number; code: string | null; description: string; inn: string
-  is_supplier: boolean; is_customer: boolean; role: CounterpartyRole | ''
   supply: CounterpartySupply | null
   shipment: CounterpartyShipment | null
   procurements: CpProcurementRow[]; purchases: CpPurchaseRow[]
@@ -657,14 +657,14 @@ export const api = {
   unlockKitting: (id: number) => send<KittingForm>('POST', `/api/kittings/${id}/unlock/`),
   deleteKitting: (id: number) => send<void>('DELETE', `/api/kittings/${id}/`),
 
-  counterparties: (role?: 'supplier' | 'customer') =>
-    get<CounterpartyRow[]>(`/api/counterparties/${role ? `?role=${role}` : ''}`),
-  createCounterparty: (b: { description: string; code?: string; inn?: string; role?: 'supplier' | 'customer' }) =>
+  // Ф3: список ВЕСЬ, без сужения по роли — прятать записи справочника нельзя.
+  counterparties: () => get<CounterpartyRow[]>('/api/counterparties/'),
+  createCounterparty: (b: { description: string; code?: string; inn?: string }) =>
     send<CounterpartyRow>('POST', '/api/counterparties/', b),
   // Волна 20 — режим «Контрагенты»: форма стороны документооборота.
   counterparty: (id: number) => get<CounterpartyForm>(`/api/counterparties/${id}/`),
   updateCounterparty: (id: number, b: Partial<{
-    code: string | null; description: string; inn: string; role: CounterpartyRole
+    code: string | null; description: string; inn: string
   }>) => send<CounterpartyForm>('PATCH', `/api/counterparties/${id}/`, b),
   deleteCounterparty: (id: number) => send<void>('DELETE', `/api/counterparties/${id}/`),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),

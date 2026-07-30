@@ -33,7 +33,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
   // Ф17: контрагент заказа («у кого купили») — своё поле, обязательное к фиксации.
   const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
-  const reloadSuppliers = () => api.counterparties('supplier').then(setSuppliers)
+  const reloadSuppliers = () => api.counterparties().then(setSuppliers)
   const { unlocked, toggle } = useFormLock(purchaseId, isNew)
 
   useEffect(() => {
@@ -41,7 +41,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
     api.purchase(purchaseId).then(setC).catch(e => setErr(String(e)))
   }, [purchaseId])
   useEffect(() => { api.procurements().then(setProcs) }, [])
-  useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
+  useEffect(() => { reloadSuppliers() }, [])
   const att = useAttachments('purchase', purchaseId)   // владелец заведён Ф12b (§13.8)
 
   const run = (p: Promise<PurchaseForm>) => {
@@ -209,11 +209,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                 Обязательно к ФИКСАЦИИ (движок откажет внятно), не к рождению. */}
             <Field label="Контрагент" locked={locked}
               view={c.contractor_id ? <>{c.contractor_name}{mismatch}</> : ''}>
-              <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+              <CounterpartyPicker counterparties={suppliers} side="supply"
+                value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"
                 onPick={id => run(api.updatePurchase(c.id, { contractor_id: id }))}
                 onClear={() => run(api.updatePurchase(c.id, { contractor_id: null }))}
-                onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
+                onCreate={name => api.createCounterparty({ description: name })
                   .then(cp => { reloadSuppliers()
                     run(api.updatePurchase(c.id, { contractor_id: cp.id })) })} />
               {mismatch}

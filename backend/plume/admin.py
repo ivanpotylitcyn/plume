@@ -176,8 +176,9 @@ class ProjectAdmin(admin.ModelAdmin):
 
 @admin.register(models.Counterparty)
 class CounterpartyAdmin(admin.ModelAdmin):
-    list_display = ('code', 'description', 'inn', 'is_supplier', 'is_customer')
-    list_filter = ('is_supplier', 'is_customer')
+    # Ролей-флагов нет (Ф3): сторона контрагента — факт документооборота, а не
+    # колонка справочника; фильтровать по ней в админке нечего.
+    list_display = ('code', 'description', 'inn')
     search_fields = ('code', 'description', 'inn')
 
 

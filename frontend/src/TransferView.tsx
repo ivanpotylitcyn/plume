@@ -27,7 +27,7 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
 }) {
   const [lots, setLots] = useState<AvailableLot[]>([])
   const [customers, setCustomers] = useState<CounterpartyRow[]>([])
-  useEffect(() => { api.counterparties('customer').then(setCustomers) }, [])
+  useEffect(() => { api.counterparties().then(setCustomers) }, [])
 
   const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     transferId, api.transfer, {
@@ -96,12 +96,13 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
           // его место сразу за Проектом, до номера накладной (§13.4a).
           anchors={
             <Field label="Заказчик" locked={locked} view={c.contractor_name}>
-              <CounterpartyPicker counterparties={customers} value={c.contractor_id ?? ''}
+              <CounterpartyPicker counterparties={customers} side="shipment"
+                value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"
                 onPick={id => run(api.updateTransfer(c.id, { contractor_id: id }))}
                 onClear={() => run(api.updateTransfer(c.id, { contractor_id: null }))}
-                onCreate={name => api.createCounterparty({ description: name, role: 'customer' })
-                  .then(cp => { api.counterparties('customer').then(setCustomers)
+                onCreate={name => api.createCounterparty({ description: name })
+                  .then(cp => { api.counterparties().then(setCustomers)
                     run(api.updateTransfer(c.id, { contractor_id: cp.id })) })} />
             </Field>} />}
       tabs={tabs}

@@ -36,10 +36,9 @@ class Command(BaseCommand):
         user = self._superuser()
         main, sold, white, grey = self._infrastructure()
         supplier = models.Counterparty.objects.create(
-            code='ПОСТ', description='ООО «Поставщик»', inn='7700000000', is_supplier=True)
+            code='ПОСТ', description='ООО «Поставщик»', inn='7700000000')
         models.Counterparty.objects.create(
-            code='ЗАКАЗ', description='АО «Заказчик»', inn='7811111111',
-            is_supplier=False, is_customer=True)
+            code='ЗАКАЗ', description='АО «Заказчик»', inn='7811111111')
 
         # --- категории: 5 канонических из библиотеки + демо-классы под демо-BOM --- #
         # 5 библиотечных всплывают через ensure_category (канон description); демо-классы

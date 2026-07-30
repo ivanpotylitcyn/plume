@@ -39,8 +39,9 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
   const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
   const { unlocked, toggle } = useFormLock(procurementId, isNew)
 
-  // Контрагенты-поставщики (Ф4, Р3): закупка = поток общения с поставщиком.
-  useEffect(() => { api.counterparties('supplier').then(setSuppliers) }, [])
+  // Контрагенты (Ф4): закупка = поток общения с поставщиком. Список ВЕСЬ (Ф3) —
+  // пикер поднимает наверх тех, у кого уже покупали, но никого не прячет.
+  useEffect(() => { api.counterparties().then(setSuppliers) }, [])
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
   const peg = usePegging(procurementId, rev)                 // табы «Привязка» и «Заказы»
   const need = useScopeDeficit(procurementId, rev)           // таб «К закупке» (Ф13)
@@ -185,12 +186,13 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
             источником поставщика для «Заказ → УПД» он больше не является — заказ несёт
             своего, унаследованного отсюда копией при нарезке. */}
         <Field label="Контрагент" locked={locked} view={c.contractor_name}>
-          <CounterpartyPicker counterparties={suppliers} value={c.contractor_id ?? ''}
+          <CounterpartyPicker counterparties={suppliers} side="supply"
+            value={c.contractor_id ?? ''}
             disabled={busy} placeholder="— не указан —"
             onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
             onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))}
-            onCreate={name => api.createCounterparty({ description: name, role: 'supplier' })
-              .then(cp => { api.counterparties('supplier').then(setSuppliers)
+            onCreate={name => api.createCounterparty({ description: name })
+              .then(cp => { api.counterparties().then(setSuppliers)
                 run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
         </Field>
         <TextField label="Дата" type="date" value={c.date ?? ''} locked={locked}
