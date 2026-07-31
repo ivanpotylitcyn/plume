@@ -377,6 +377,61 @@ class KittingFormTests(EngineTestBase):
             project=self.prj, target_item=self.device, user=self.user,
             qty=D(qty), locked=False)
 
+    def test_target_pick_on_click_born_draft_sets_one_sample(self):
+        """Клик-проход Ивана, 500 на выборе НАШЕГО изделия: комплектация рождается по
+        клику без кол-ва (Ф12e), и проекция падала на `bl.qty * None`. У покупного
+        состава нет — цикл не заходил, и баг выглядел вывернутым наизнанку («покупное
+        выбирается, своё роняет»). Выбор цели теперь проставляет 1 образец, как
+        рождение сразу с целью."""
+        k = engine.create_kitting(self.prj, self.user)     # ни цели, ни кол-ва
+        self.assertIsNone(k.qty)
+        self.assertEqual(engine.kitting_form(k)['rows'], [])   # без цели — пусто
+        engine.update_kitting(k, target_item=self.device)
+        k.refresh_from_db()
+        self.assertEqual(k.qty, D(1))
+        rows = {r['component_code']: r for r in engine.kitting_form(k)['rows']}
+        self.assertEqual(rows['RES']['need'], D(2))        # 2×1
+        engine.update_kitting(k, qty=D(3))                 # своё кол-во не перетёрто
+        self.assertEqual(engine.kitting_form(k)['rows'][0]['need'], D(3))
+
+    def test_kitting_target_must_be_native(self):
+        """«Комплектуем только своё» (решение Ивана 2026-07-31): покупное изделие в цель
+        не пускаем ни на одном пути — ни при рождении, ни при правке."""
+        with self.assertRaises(ValidationError):
+            engine.create_kitting(self.prj, self.user, target_item=self.res)
+        k = engine.create_kitting(self.prj, self.user)
+        with self.assertRaises(ValidationError):
+            engine.update_kitting(k, target_item=self.res)
+        k.refresh_from_db()
+        self.assertIsNone(k.target_item)
+        engine.update_kitting(k, target_item=self.device)      # наше — проходит
+        k.refresh_from_db()
+        self.assertEqual(k.target_item, self.device)
+
+    def test_purchased_target_blocked_at_lock_even_past_the_engine(self):
+        """Второй слой правила. CHECK его выразить не может (смотрит в чужую таблицу,
+        а MySQL в CHECK подзапросы запрещает), поэтому страхует `clean()`: путь мимо
+        движка (прямой ORM, админка) упирается в отказ на фиксации."""
+        k = models.Kitting.objects.create(project=self.prj, target_item=self.res,
+                                          user=self.user, qty=D(1), locked=False)
+        self.receipt_lot(self.res, self.prj, 5)
+        lot = models.Lot.objects.filter(item=self.res).first()
+        engine.add_kitting_line(k, self.res, lot, D(1))
+        with self.assertRaises(ValidationError):
+            engine.lock_kitting(k)
+        k.refresh_from_db()
+        self.assertFalse(k.locked)
+
+    def test_form_survives_target_without_qty(self):
+        """Страховка того же места: пустое кол-во у цели с составом — не 500, а «надо 0»
+        без призраков. Проекция обязана пережить любой неполный черновик, каким бы
+        путём он ни возник (админка, прямой ORM)."""
+        k = models.Kitting.objects.create(project=self.prj, target_item=self.device,
+                                          user=self.user, qty=None, locked=False)
+        rows = engine.kitting_form(k)['rows']
+        self.assertEqual(rows[0]['need'], D(0))
+        self.assertIsNone(rows[0]['ghost'])
+
     def test_ghost_rows_before_piercing(self):
         # склад пуст → обе призрачные строки красные (▲ to_order)
         k = self.make_kitting(qty=2)
@@ -387,6 +442,9 @@ class KittingFormTests(EngineTestBase):
         self.assertEqual(rows['CASE']['pierced'], D(0))
         self.assertEqual(rows['CASE']['ghost']['status'], 'to_order')
         self.assertEqual(c['worst_status'], 'to_order')
+        # Оси компонента — под глиф строки (§7a), как в заказе и закупке-плане.
+        self.assertEqual(rows['CASE']['component_native'], False)
+        self.assertIn('component_locked', rows['CASE'])
 
     def test_ghost_available_when_stock_exists(self):
         # есть лот корпуса → призрачная строка зелёная + лот-кандидат
@@ -1327,12 +1385,28 @@ class HeaderEditTests(EngineTestBase):
         t.refresh_from_db()
         self.assertEqual(t.number, 'Н-99')
         self.assertEqual(str(t.date), '2026-06-15')
-        with self.assertRaises(ValidationError):
-            engine.update_transfer(t, number='   ')          # пустой номер
         engine.add_transfer_line(t, lot, D(1))
         engine.lock_transfer(t)
         with self.assertRaises(ValidationError):
             engine.update_transfer(t, number='Н-100')        # под замком нельзя
+
+    def test_draft_header_clears_but_lock_still_demands_it(self):
+        """Аудит-1 Б2б-4: «заполнить можно, передумать нельзя» — не наш принцип.
+        Номер и дата обязательны к ФИКСАЦИИ (`REQUIRED_HEADER_BY_KIND`), а не к
+        черновику: ошибся документом — стирай и заводи заново."""
+        lot = self.receipt_lot(self.make_item('DEV2', manufactured=True), self.prj, 5)
+        t = engine.create_transfer(self.prj, self.user, 'Н-1')
+        engine.update_transfer(t, number='   ', date='')
+        t.refresh_from_db()
+        self.assertEqual(t.number, '')
+        self.assertIsNone(t.date)
+        engine.add_transfer_line(t, lot, D(1))
+        with self.assertRaises(ValidationError):
+            engine.lock_transfer(t)                          # неполную шапку не выпустим
+        engine.update_transfer(t, number='Н-2', date='2026-06-15')
+        engine.lock_transfer(t)
+        t.refresh_from_db()
+        self.assertTrue(t.locked)
 
     def test_receipt_header_locked(self):
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
@@ -5959,6 +6033,19 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         panel = engine.project_closure(self.prj)
         self.assertEqual(panel['closing_drafts'], [])
         self.assertTrue(panel['can_close'])
+
+    def test_closure_blocker_names_both_halves_of_work(self):
+        """Аудит-1 Б2б-5: черновик разобрал часть остатка — панель обязана назвать и
+        вторую половину. Одинокое «зафиксируйте черновики» читается как «больше делать
+        нечего», хотя неразобранное никуда не делось."""
+        a = self.receipt_lot(self.item, self.prj, 10)
+        self.receipt_lot(self.make_item('R300'), self.prj, 4)
+        engine.writeoff_lot(self.prj, a, D(10), self.user)
+        panel = engine.project_closure(self.prj)
+        self.assertEqual(panel['residual_in_drafts'], D(10))
+        self.assertEqual(panel['residual_unsorted'], D(4))
+        self.assertIn('10', panel['blocker'])
+        self.assertIn('4', panel['blocker'])
 
     def test_item_screen_keeps_draft_lot_but_marks_it(self):
         """Таб «Склад» изделия показывает партии НЕЗАВИСИМО от движений — так виден

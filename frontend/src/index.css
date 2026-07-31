@@ -538,10 +538,10 @@ tr.row.s-to_order { border-left-color: var(--st-order); }
 tr.row.s-on_order { border-left-color: var(--st-wip); }
 tr.row.s-available { border-left-color: var(--st-ok); }
 
-/* девайс-заголовок прибора */
-.device { margin: 14px 0 4px; display: flex; align-items: baseline; gap: 8px; }
-.device .name { font-weight: 500; color: var(--fg-bright); }
-.device .triple { color: var(--fg-dim); font-size: 12px; }
+/* `.device` (заголовок прибора: flex + `.name` + `.triple`) снят 2026-07-31 вместе с
+   `.kit-comp-h` — это был тот же самый блочный заголовок, и умер он раньше, ещё когда
+   «Приборы» проекта уехали на `.prow`. Живёт только `prow--device`, класс из другой
+   семьи. */
 
 /* Синхронная сетка секций «Приборы» и «Потребность»: строка прибора и строки его
    состава делят один шаблон колонок → «потребность»↔«Надо», прогресс↔«Разбор»,
@@ -700,16 +700,13 @@ a.link:hover { text-decoration: underline; }
   background: color-mix(in srgb, var(--btn) 88%, var(--fg-bright));
   border-color: color-mix(in srgb, var(--btn) 88%, var(--fg-bright)); }
 
+/* Плашка «рождён лот-прибор» — итог фиксации над таблицей строк. */
 .born { color: var(--fg-dim); margin: 6px 0 4px; font-size: 12px; }
 .born .seg { color: var(--st-ok); margin-left: 8px; }
-.kit-comp { margin: 14px 0 4px; }
-.kit-comp-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
-.kit-comp-h .name { font-weight: 500; color: var(--fg-bright); }
-/* Описание рядом с кодом компонента — контекст, а не идентичность: приглушено по той же
-   оси, что ячейки таблиц (§7a). Правило структурное (описание всегда идёт за ссылкой) —
-   класса не заводим: тело комплектации ждёт своей волны и уедет на `table.grid`. */
-.kit-comp-h .name a + span { color: var(--fg-dim); font-weight: 400; }
-.kit-comp-h .triple { color: var(--fg-dim); font-size: 12px; }
+/* `.kit-comp` / `.kit-comp-h` (собственная вёрстка тела комплектации) сняты 2026-07-31:
+   тело уехало на `table.grid`, как и обещал комментарий, стоявший здесь. Ни одного
+   класса взамен не заведено — компонент стал обычной строкой таблицы, пробитые партии
+   и призрак — ступенью `.c-key.ind`. Роли на всё это уже были. */
 
 /* призрачная строка */
 tr.row.ghost td { color: var(--fg-dim); }

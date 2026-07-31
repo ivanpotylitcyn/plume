@@ -152,6 +152,7 @@ export interface Ghost {
 }
 export interface KittingFormRow {
   component_id: number; component_code: string; component_description: string; uom: string
+  component_native: boolean; component_synced: boolean; component_locked: boolean
   need: number; pierced: number; remaining: number
   real_lines: RealLine[]; ghost: Ghost | null
 }

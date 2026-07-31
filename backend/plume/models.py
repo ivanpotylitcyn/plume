@@ -88,6 +88,13 @@ class DocumentKind(models.TextChoices):
 # а инвариант БД.
 CONTRACTOR_KINDS = (DocumentKind.RECEIPT, DocumentKind.TRANSFER)
 
+# «Комплектуем только своё» (решение Ивана 2026-07-31, клик-проход комплектации):
+# целью комплектации может быть лишь НАШЕ изделие (`Item.native`) — покупное мы не
+# собираем, у него и состава нет. Текст один на все слои (движок гейтит дружелюбно,
+# `StockDocument.clean` страхует), поэтому живёт константой, а не тремя копиями.
+KITTING_TARGET_NATIVE = ('Комплектуем только свои изделия — целью может быть '
+                         'производимое изделие, не покупное.')
+
 
 # Волна 19, Ф1c: строковый `DocStatus {draft,posted}` снят — ось стала `bool locked`
 # на всех пяти сущностях (Item / StockDocument / Procurement / Purchase / Project).
@@ -251,7 +258,15 @@ class StockDocument(models.Model):
     def clean(self):
         """Условная валидация шапки по виду (Ф2d): восстанавливает per-kind
         обязательность `date`/`number`, ослабленную подъёмом полей в родителя (Ф2c).
-        Ошибки — по полям (дружелюбны и в админ-форме, и через `e.messages` в API)."""
+        Ошибки — по полям (дружелюбны и в админ-форме, и через `e.messages` в API).
+
+        Здесь же второй слой правила «комплектуем только своё» (решение Ивана
+        2026-07-31). Обычно второй слой — CHECK в БД, но это правило смотрит в ЧУЖУЮ
+        таблицу (`Item.native`), а MySQL в CHECK подзапросы запрещает. Поэтому
+        страховкой служит `clean()`: его зовёт и админ-форма, и фиксация
+        (`_require_header`) — то есть путь мимо движка (прямой ORM, админка) правило
+        всё равно проходит, пусть и позже, чем дружелюбный гейт `_set_target_item`.
+        """
         super().clean()
         required = self.REQUIRED_HEADER_BY_KIND.get(self.KIND or self.kind, ())
         errors = {}
@@ -259,6 +274,9 @@ class StockDocument(models.Model):
             errors['date'] = 'Дата обязательна для этого вида ордера.'
         if 'number' in required and not (self.number or '').strip():
             errors['number'] = 'Номер обязателен для этого вида ордера.'
+        if ((self.KIND or self.kind) == DocumentKind.KITTING
+                and self.target_item_id and not self.target_item.native):
+            errors['target_item'] = KITTING_TARGET_NATIVE
         if errors:
             raise ValidationError(errors)
 

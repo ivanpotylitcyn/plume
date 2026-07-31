@@ -122,6 +122,12 @@ from . import models
 ZERO = Decimal('0')
 
 
+def _num(value):
+    """Кол-во в текст сообщения: без хвостовых нулей и без экспоненты («10», «2.5»).
+    `normalize()` даёт `1E+1` на круглых числах — формат `f` возвращает его обратно."""
+    return f'{Decimal(value).normalize():f}'
+
+
 # --------------------------------------------------------------------------- #
 #  Категории изделий (волна 15) — канон внешней библиотеки компонентов
 # --------------------------------------------------------------------------- #
@@ -999,6 +1005,14 @@ def available_lots(item, project, location=None):
     return result
 
 
+def _require_native_target(item):
+    """«Комплектуем только своё» (решение Ивана 2026-07-31): целью комплектации может
+    быть лишь наше изделие. Дружелюбный гейт входного слоя; страховка — в
+    `StockDocument.clean` (CHECK на чужую таблицу MySQL не умеет, см. модель)."""
+    if item is not None and not item.native:
+        raise ValidationError(models.KITTING_TARGET_NATIVE)
+
+
 def create_kitting(project, user, target_item=None, qty=None, date=None):
     """Создать комплектацию — рождение переехало из вьюхи в движок (Ф12e).
 
@@ -1006,6 +1020,7 @@ def create_kitting(project, user, target_item=None, qty=None, date=None):
     `doc_locked_kitting_has_target`), потому что до выбора прибора форма всё равно
     пуста — BOM разузловать не от чего. Номера у комплектации нет
     (`REQUIRED_HEADER_BY_KIND[KITTING] = ()`), но `code` она получает общий."""
+    _require_native_target(target_item)
     return _born_order(models.Kitting, project, user, date=date,
                        target_item=target_item, qty=qty)
 
@@ -1025,9 +1040,15 @@ def kitting_form(kitting):
     rows = []
     statuses = []
     is_wip = not kitting.locked
+    # `qty` черновика может быть пустым (Ф12e: рождение по клику не спрашивает ничего),
+    # а состав у цели уже есть — проекция обязана это пережить. Раньше здесь падало
+    # `Decimal * None` → 500 ровно на выборе НАШЕГО изделия (у покупного состава нет,
+    # цикл не заходил, и баг выглядел вывернутым наизнанку). Пустое кол-во = «потребность
+    # ещё не задана» → надо 0, призраков нет; выбор цели её тут же и проставляет
+    # (`_set_target_item`), так что состояние мимолётное.
     for bl in (target.bom_lines.select_related('component') if target else ()):
         component = bl.component
-        need = bl.qty * kitting.qty
+        need = bl.qty * (kitting.qty or ZERO)
         real_lines = []
         pierced = ZERO
         # компонент строки выводится из lot.item (StockLine его не хранит);
@@ -1054,6 +1075,10 @@ def kitting_form(kitting):
         rows.append({
             'component_id': component.id, 'component_code': component.code,
             'component_description': component.description, 'uom': component.uom,
+            # Оси компонента — под глиф строки (§7a), как в заказе и закупке-плане:
+            # форма = изделие/компонент, цвет = покрытие строки складом проекта.
+            'component_native': component.native, 'component_synced': component.synced,
+            'component_locked': component.locked,
             'need': need, 'pierced': pierced, 'remaining': remaining,
             'real_lines': real_lines, 'ghost': ghost,
         })
@@ -2242,6 +2267,13 @@ def project_closure(project):
         else:
             anomaly_count += 1
     drafts = _closing_drafts(project)
+    # Аудит-1, Б2б-5: при смеси показываем ОБЕ половины работы. Черновики разобрали
+    # часть остатка, но `live` до фиксации не гаснет — «зафиксируйте черновики» в
+    # одиночку врало бы, что дальше делать нечего. Разбор считаем от магнитуды
+    # расхода черновиков (`_closing_drafts.qty`), нижний зажим — от возможной
+    # пере-разборки (два черновика на один лот).
+    in_drafts = sum((row['qty'] for row in drafts), ZERO)
+    unsorted = max(positive - in_drafts, ZERO)
     is_external = project.kind == models.Project.Kind.EXTERNAL
     is_closed = project.locked
     can_close = is_external and not is_closed and not residuals
@@ -2249,6 +2281,9 @@ def project_closure(project):
         blocker = 'Внутренний склад постоянный — не закрывается.'
     elif is_closed:
         blocker = ''
+    elif residuals and drafts and unsorted:
+        blocker = (f'В черновиках {_num(in_drafts)}, не разобрано {_num(unsorted)} — '
+                   'зафиксируйте черновики и сведите остаток в 0.')
     elif residuals and drafts:
         blocker = 'Закрывающие документы ещё черновики — зафиксируйте их.'
     elif residuals:
@@ -2261,6 +2296,7 @@ def project_closure(project):
         'locked': project.locked, 'closed': project.closed,
         'is_external': is_external,
         'residuals': residuals, 'residual_positive': positive,
+        'residual_in_drafts': in_drafts, 'residual_unsorted': unsorted,
         'anomaly_count': anomaly_count, 'closing_drafts': drafts,
         'can_close': can_close, 'blocker': blocker,
     }
@@ -2401,20 +2437,13 @@ def _apply(instance, updates):
     return instance
 
 
-# `_require_number`/`_require_date` — фаст-фейл входного слоя правки (дружелюбно
-# отклоняют попытку обнулить непустое поле в PATCH). Авторитетная per-kind политика
-# обязательности живёт на модели (`StockDocument.REQUIRED_HEADER_BY_KIND`/`clean`,
-# волна 13, Ф2d) и повторно гейтится на фиксации (`_require_header`).
-def _require_number(number):
-    if number is not None and not str(number).strip():
-        raise ValidationError('Номер не может быть пустым.')
-
-
-def _require_date(date):
-    if date is not None and not str(date).strip():
-        raise ValidationError('Дата не может быть пустой.')
-
-
+# Номер и дата шапки очищаются в черновике свободно (аудит-1, Б2б-4). Прежние
+# `_require_number`/`_require_date` отклоняли пустую строку в PATCH — «заполнить можно,
+# передумать нельзя», что расходилось с Ф12e: черновик имеет право быть неполным.
+# Авторитетная per-kind политика обязательности живёт на модели
+# (`StockDocument.REQUIRED_HEADER_BY_KIND`/`clean`, волна 13, Ф2d) и гейтится на
+# ФИКСАЦИИ (`_require_header`) — там ошибиться документом уже поздно, а в черновике
+# «стереть чужой номер» — обычный ход.
 _UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
 
 
@@ -2547,6 +2576,7 @@ def _set_target_item(kitting, item):
         return
     if item is None:
         raise ValidationError('Целевое изделие комплектации обязательно.')
+    _require_native_target(item)
     if item.pk == kitting.target_item_id:
         return
     if kitting.lines.exists() or kitting.lots.exists():
@@ -2554,7 +2584,15 @@ def _set_target_item(kitting, item):
             'Целевое изделие определяет состав — сначала удалите строки пайки '
             'и рождённый прибор.')
     kitting.target_item = item
-    kitting.save(update_fields=['target_item'])
+    fields = ['target_item']
+    # Цель появилась → появилась и потребность: без кол-ва образцов состав считать не
+    # из чего. Ставим 1, ровно как рождение СРАЗУ с целью (`kittings` POST:
+    # `qty=… or (1 if target else None)`) — там это правило уже жило, а путь «родил по
+    # клику, цель выбрал в форме» его не проходил и оставлял `qty` пустым.
+    if kitting.qty is None:
+        kitting.qty = Decimal('1')
+        fields.append('qty')
+    kitting.save(update_fields=fields)
 
 
 def update_document(doc, number=None, date=None, code=_UNSET, description=None,
@@ -2572,10 +2610,12 @@ def update_document(doc, number=None, date=None, code=_UNSET, description=None,
     `None` → снять. Применим только к своим видам (`CONTRACTOR_KINDS`) — то же, что
     стережёт CHECK `doc_contractor_only_own_kinds`, но дружелюбной ошибкой вместо
     `IntegrityError`.
+
+    `number`/`date` — не переданы (`None`) → не трогаем; пустая строка → **очистка**
+    (`''` / `NULL`): в черновике можно передумать, обязательность стережёт фиксация
+    (аудит-1, Б2б-4). Дата идёт мимо `_apply` — там `None` занят под «не передано».
     """
     _require_unlocked(doc)
-    _require_number(number)
-    _require_date(date)
     _set_author(doc, user)
     _set_project(doc, project)
     _set_code(doc, code)
@@ -2585,8 +2625,11 @@ def update_document(doc, number=None, date=None, code=_UNSET, description=None,
                 'Контрагент есть только у поставки (поставщик) и передачи (заказчик).')
         doc.contractor = contractor
         doc.save(update_fields=['contractor'])
+    if date is not None:
+        doc.date = date or None         # '' → NULL (как у заказа, `update_purchase`)
+        doc.save(update_fields=['date'])
     return _apply(doc, {
-        'number': number and number.strip(), 'date': date,
+        'number': None if number is None else str(number).strip(),
         'reason': None if reason is None else reason.strip(),
         'description': None if description is None else description.strip(),
     })

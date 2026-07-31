@@ -9,12 +9,14 @@
 // второй фронт внутри Ф12c мы не стали.
 import { useEffect, useState } from 'react'
 import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
-import { AnchorSelect, OrderFields, useOrderForm } from './FormHeader'
+import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
-import { TextField } from './FormField'
+import { Field, TextField } from './FormField'
+import { CommitInput } from './CommitInput'
+import { ItemPicker } from './Picker'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { Glyph, Segment, count, num } from './status'
+import { Glyph, ItemGlyph, Segment, count, num, statusTone } from './status'
 
 export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
   { kittingId: number; isNew: boolean; openItem: (id: number) => void
@@ -49,12 +51,26 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
             ))}
           </div>
         )}
-        {c.rows.length === 0 && <div className="tab-empty">
-          У целевого изделия нет состава — пробивать нечего.</div>}
-        {c.rows.map(row => (
-          <Component key={row.component_id} row={row} form={c} wip={!locked} busy={busy}
-            openItem={openItem} run={run} />
-        ))}
+        {c.rows.length === 0
+          ? <div className="tab-empty">У целевого изделия нет состава — пробивать нечего.</div>
+          : <table className="grid">
+              <thead>
+                <tr>
+                  <th className="gl" /><th className="c-key">Компонент</th>
+                  <th className="c-desc">Описание</th>
+                  <th className="num">Надо</th><th className="uom">Ед.</th>
+                  <th className="num">Пробито</th>
+                  <th className="num">Остаток</th>
+                  {!locked && <th className="act" />}
+                </tr>
+              </thead>
+              <tbody>
+                {c.rows.map(row => (
+                  <Component key={row.component_id} row={row} form={c} wip={!locked}
+                    busy={busy} openItem={openItem} run={run} />
+                ))}
+              </tbody>
+            </table>}
       </> },
     { key: 'files', label: 'Файлы', icon: 'files',
       content: <AttachmentList att={att} locked={locked} /> },
@@ -87,15 +103,28 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
               сильнее любого класса и выбивал поле из общей сетки шапки). */}
           {/* Под замком поле = САМА ССЫЛКА на прибор-цель (§8: кликабельно то, что
               названо) — как якори «Проект» здесь же, «Заказ» поставки и «Закупка»
-              заказа. Последний якорь формы, который ею не был. */}
-          <AnchorSelect label="Изделие" id={c.target_id} currentLabel={c.target_code}
-            options={items.map(i => ({ id: i.id, label: i.code }))}
-            locked={locked} busy={busy}
+              заказа. Последний якорь формы, который ею не был.
+              Выбор — общий `ItemPicker` (type-ahead), а не дропдаун: справочник
+              изделий — тысячи строк, и «пролистай до своего» здесь не работает нигде
+              больше в продукте. Кандидаты — только НАШИ изделия: «комплектуем своё» —
+              не подсказка вью, а ПРАВИЛО (решение Ивана 2026-07-31), и держат его
+              движок (`_require_native_target`) с моделью (`clean`). Фильтр здесь —
+              лишь его знак: показывать то, что всё равно будет отвергнуто, незачем.
+              Старую цель вне фильтра не подстраховываем — таких данных больше нет
+              (миграция `0019` их вычистила), а мёртвая ветка врала бы о правиле. */}
+          <Field label="Изделие" locked={locked}
             view={c.target_id
               ? <a className="link" onClick={() => openItem(c.target_id!)}>{c.target_code}</a>
-              : ''}
-            onChange={id => run(api.updateKitting(c.id, { target_id: id }))} />
-          <TextField label="Образцов" value={String(c.qty)} locked={locked} busy={busy}
+              : ''}>
+            <ItemPicker items={items.filter(i => i.native)} value={c.target_id ?? ''}
+              disabled={busy} placeholder="— не выбрано —"
+              notFound="ничего не найдено — комплектуем только свои изделия."
+              onPick={id => run(api.updateKitting(c.id, { target_id: id }))} />
+          </Field>
+          {/* Пустое кол-во показываем пустым полем, а не строкой «null»: у черновика,
+              рождённого по клику, его ещё нет (Ф12e). Выбор цели проставляет 1. */}
+          <TextField label="Образцов" value={c.qty == null ? '' : String(c.qty)}
+            locked={locked} busy={busy}
             onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
             validate={v => Number(v) > 0} />
         </OrderFields>}
@@ -104,6 +133,12 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
   )
 }
 
+// Компонент состава = одна строка таблицы (как строка заказа в закупочном контуре):
+// глиф + код + описание + три числа. Пробитые партии и призрак — строки СТУПЕНЬЮ
+// ниже (`.c-key.ind`), тем же приёмом, что дерево пеггинга. До этого каждый
+// компонент был отдельным блоком `.kit-comp` со своей таблицей: колонки не
+// выстраивались между компонентами, описания разливались на три строки, а «надо ·
+// пробито · остаток» шло свободным текстом справа — то, что Иван назвал мусором.
 function Component({ row, form, wip, busy, openItem, run }: {
   row: KittingFormRow; form: KittingForm; wip: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<KittingForm>) => void
@@ -111,43 +146,50 @@ function Component({ row, form, wip, busy, openItem, run }: {
   const g = row.ghost
   const status = g ? g.status : 'available'
   return (
-    <div className="kit-comp">
-      <div className="kit-comp-h">
-        <Glyph status={status} />
-        <span className="name">
-          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a>
-          {' '}<span>{row.component_description}</span>
-        </span>
-        <span className="triple">надо {num(row.need)} {row.uom} · пробито {num(row.pierced)}
-          {row.remaining > 0 && <> · остаток <span className="g-to_order">{num(row.remaining)}</span></>}
-        </span>
-      </div>
-
-      <table className="grid">
-        <tbody>
-          {row.real_lines.map(ln => (
-            <tr key={ln.id} className="row s-available">
-              {/* Ведущая ячейка = идентичность лота, поэтому `.code`: цвет ячейки идёт
-                  по оси «идентичность / контекст» (§7a), а не инлайном. */}
-              <td className="code"><span className="glyph g-available">✓</span> {ln.lot_label}</td>
-              <td className="num">
-                <QtyInput value={ln.qty} disabled={!wip || busy}
-                  onCommit={q => run(api.updateLine(ln.id, q))} /> {row.uom}
-              </td>
-              <td>{ln.date ?? ''}</td>
-              <td className="act">
-                {wip && <button className="fh-ctl icon fh-del" title="Убрать пробитую строку"
-                  disabled={busy} onClick={() => run(api.deleteLine(ln.id))}>
-                  <span className="ci ci-trash" /></button>}
-              </td>
-            </tr>
-          ))}
-          {wip && g && (
-            <GhostRow row={row} ghost={g} form={form} busy={busy} run={run} />
-          )}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <tr className={`row s-${status}`}>
+        {/* Глиф строки (§7a), как в заказе: ФОРМА = изделие/компонент (оси компонента),
+            ЦВЕТ = покрытие строки складом проекта. Одна строка — один глиф. */}
+        <td className="gl"><ItemGlyph native={row.component_native}
+          synced={row.component_synced} locked={row.component_locked}
+          tone={statusTone(status)} /></td>
+        <td className="c-key">
+          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a></td>
+        <td className="c-desc">
+          <span className="cell-ellip" title={row.component_description}>
+            {row.component_description}</span></td>
+        <td className="num">{num(row.need)}</td>
+        <td className="uom">{row.uom}</td>
+        <td className="num">{num(row.pierced)}</td>
+        <td className="num">{num(row.remaining)}</td>
+        {wip && <td className="act" />}
+      </tr>
+      {/* Пробитая партия: чем именно закрыт компонент. Кол-во стоит в колонке
+          «Пробито» — строка пайки в неё и складывается. */}
+      {row.real_lines.map(ln => (
+        <tr key={ln.id} className="row s-available">
+          <td className="gl" />
+          <td className="c-key ind">{ln.lot_label}</td>
+          <td className="c-desc">{ln.date ?? ''}</td>
+          <td className="num" />
+          <td className="uom">{row.uom}</td>
+          <td className="num">
+            {wip
+              ? <CommitInput value={String(ln.qty)} disabled={busy}
+                  onCommit={v => run(api.updateLine(ln.id, Number(v)))}
+                  validate={v => Number(v) > 0} />
+              : num(ln.qty)}
+          </td>
+          <td className="num" />
+          {wip && <td className="act">
+            <button className="fh-ctl icon fh-del" title="Убрать пробитую строку"
+              disabled={busy} onClick={() => run(api.deleteLine(ln.id))}>
+              <span className="ci ci-trash" /></button>
+          </td>}
+        </tr>
+      ))}
+      {wip && g && <GhostRow row={row} ghost={g} form={form} busy={busy} run={run} />}
+    </>
   )
 }
 
@@ -173,11 +215,14 @@ function GhostRow({ row, ghost, form, busy, run }: {
     run(api.pierce(form.id, { component_id: row.component_id, lot_id: lotId, qty: n }))
   }
 
+  const empty = lots.length === 0
   return (
     <tr className={`row ghost s-${ghost.status}`}>
-      <td>
-        <Glyph status={ghost.status} />{' '}
-        {lots.length === 0
+      <td className="gl"><Glyph status={ghost.status} /></td>
+      {/* Пикер занимает колонки идентичности и описания — канон призрачной строки
+          (`.c-key colSpan={2}`, тот же в девяти формах). */}
+      <td className="c-key ind" colSpan={2}>
+        {empty
           ? <>
               нет своих лотов —{' '}
               <Segment status="on_order" value={ghost.on_order} />
@@ -188,31 +233,19 @@ function GhostRow({ row, ghost, form, busy, run }: {
                 label: `#${l.lot_id} · остаток ${num(l.live_qty)}`
                   + (l.lot_name ? ` · ${l.lot_name}` : '') }))} />}
       </td>
+      <td className="num" />
+      <td className="uom">{empty ? '' : row.uom}</td>
       <td className="num">
-        {lots.length > 0 &&
+        {!empty &&
           <input className="qty-in" value={qty} disabled={busy}
             onChange={e => setQty(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') pierce() }} />} {row.uom}
+            onKeyDown={e => { if (e.key === 'Enter') pierce() }} />}
       </td>
-      {/* Ячейка накрывает колонки «дата» и «команды» — кнопка садится под колонкой
-          команд реальных строк, поэтому это `.act`, а не инлайновая выключка. */}
-      <td className="act" colSpan={2}>
-        {lots.length > 0 &&
+      <td className="num" />
+      <td className="act">
+        {!empty &&
           <button className="btn sm" disabled={busy} onClick={pierce}>спаять</button>}
       </td>
     </tr>
-  )
-}
-
-// Автосейв количества: коммит по blur / Enter (без кнопки «сохранить»).
-function QtyInput({ value, onCommit, disabled }:
-  { value: number; onCommit: (q: number) => void; disabled?: boolean }) {
-  const [v, setV] = useState(String(value))
-  useEffect(() => { setV(String(value)) }, [value])
-  const commit = () => { const n = Number(v); if (n > 0 && n !== value) onCommit(n) }
-  return (
-    <input className="qty-in" value={v} disabled={disabled}
-      onChange={e => setV(e.target.value)} onBlur={commit}
-      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
   )
 }

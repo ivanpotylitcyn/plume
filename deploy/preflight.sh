@@ -20,7 +20,7 @@
 #   4. Миграции: план         — что именно выполнится на проде (глазами)
 #   5. Django check --deploy  — прод-настройки без DEBUG
 #   6. Тесты бэкенда          — вся сюита
-#   7. Фронт                  — tsc + build + oxlint
+#   7. Фронт                  — tsc + build + oxlint (ноль предупреждений, блокирует)
 set -e
 
 QUICK=0
@@ -171,11 +171,14 @@ else
         bad "сборка фронта упала:"
         tail -15 /tmp/plume-build.log | sed 's/^/       /'
     fi
+    # Аудит-1, В-2: линт БЛОКИРУЕТ. Шум `react(only-export-components)` выключен в
+    # `.oxlintrc.json`, `npm run lint` идёт с `--deny-warnings` — предупреждений больше
+    # не бывает «фоновых», каждое означает живую находку.
     if (cd "$REPO_DIR/frontend" && npm run lint >/tmp/plume-lint.log 2>&1); then
         ok "oxlint чистый"
     else
-        warn "oxlint ругается (не блокирует):"
-        tail -8 /tmp/plume-lint.log | sed 's/^/       /'
+        bad "oxlint ругается:"
+        tail -12 /tmp/plume-lint.log | sed 's/^/       /'
     fi
 fi
 
