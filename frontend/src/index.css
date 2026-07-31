@@ -173,6 +173,12 @@ body { overflow: hidden; }
 .ci-file-zip::before        { content: '\eaef'; }
 .ci-add::before             { content: '\ea60'; }  /* «Завести "X"» из пикера (Ф12e) */
 .ci-check::before           { content: '\eab2'; }  /* отметка в мультивыборе (Ф13) */
+/* волна 22 — табы формы синхронизации (коды сверены с codicon.ttf фонттулзом) */
+.ci-diff::before            { content: '\eae1'; }  /* таб «Изменения» (old → new) */
+.ci-pass::before            { content: '\eba4'; }  /* таб «Повторы» (совпало с библиотекой) */
+.ci-question::before        { content: '\eb32'; }  /* таб «Сироты» (нет в библиотеке) */
+.ci-symbol-class::before    { content: '\eb5b'; }  /* таб «Категории» (классы компонентов) */
+.ci-file-text::before       { content: '\ec5e'; }  /* строка таба «Файлы»: загруженный CSV */
 
 /* ---- каркас (строки состояния больше нет — §11) ---- */
 .app { display: grid; grid-template-columns: 48px 240px 1fr; height: 100vh; }
@@ -390,11 +396,9 @@ body { overflow: hidden; }
 .props dd .scope-links { margin-left: 10px; }
 .props dd a.scope-chip { white-space: nowrap; }
 
-/* legacy-заголовок (постепенно вытесняется .form-head) */
-/* Остался у одного экрана — «Синхронизация с библиотекой» (§13.10, кастомный мастер).
-   Вложенные `.pn`/`.lit` сняты в Б2а аудита-1: разметки под них не осталось. */
-h1.title { font-size: 16px; font-weight: 500; margin: 0 0 2px; color: var(--fg-bright); }
-.subtitle { color: var(--fg-dim); margin-bottom: 16px; font-size: 12px; }
+/* `h1.title`/`.subtitle` — legacy-заголовок последнего кастомного экрана — сняты
+   2026-07-31 вместе с ним: «Синхронизация с библиотекой» переехала на `FormShell`,
+   и разметки под них в продукте не осталось (§13.10 выполнен). */
 .section-h { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--fg-dim); margin: 20px 0 6px; border-bottom: 1px solid var(--border);
   padding-bottom: 4px; font-weight: 500; }
@@ -664,13 +668,23 @@ a.link:hover { text-decoration: underline; }
   color: var(--fg-dim); font-size: 12px; }
 
 /* ---- экран «Синхронизация с библиотекой» ----
-   Единственный экран без сущности (§13.10): мастер сверки CSV, а не форма объекта.
-   Его вёрстка жила 15 инлайн-стилями; Б2а (2026-07-30) свела их в этот блок — решение
-   «легализовать как исключение или переодеть в FormShell» осталось открытым (Б2б-3),
-   но до него экран должен подчиняться тем же ролям, что все остальные. */
-.lib-diff { max-width: 920px; }                       /* таблица диффа — колонка чтения */
+   Б2б-3 аудита-1 ЗАКРЫТ 2026-07-31: экран переодет в `FormShell` (канон §13), своей
+   вёрстки у него больше нет — остались три роли, которых у форм-сущностей не бывает.
+   Кастомным скелетом он был последним (§13.10). */
 .lib-diff :is(th, td).pick { width: 24px; text-align: center; }
 .lib-diff b:not([class]) { color: var(--fg); }        /* новое значение — полным цветом */
+/* Инструкция ВМЕСТО полей шапки: у мастера степеней свободы нет, менять нечего — есть
+   что запустить, и запуск живёт в командах справа. Тянется на обе колонки `.props`,
+   потому что это не пара «подпись — значение». Ширина — колонка чтения (та же роль,
+   что была у `.lib-diff { max-width }`: длинная строка текста нечитаема). */
+.props .fs-note { grid-column: 1 / -1; max-width: 640px; color: var(--fg-dim);
+  font-size: 12px; }
+.props .fs-note p { margin: 0 0 6px; }
+.props .fs-note p:last-child { margin-bottom: 0; }
+/* Итог применения — панель-дополнение стека (§13.1, слот `extra`): не поле шапки и не
+   список. Зелёный глиф несёт «получилось», числа идут обычным цветом строки. */
+.fs-applied { margin-top: 12px; display: flex; align-items: center; gap: 8px;
+  font-size: 12px; }
 .btn { background: var(--bg-side); color: var(--fg); border: 1px solid var(--border-strong);
   padding: 4px 12px; border-radius: 3px; cursor: pointer; font-family: var(--font-base);
   font-size: 12px; }

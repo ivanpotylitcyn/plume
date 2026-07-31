@@ -34,6 +34,8 @@ urlpatterns = [
     path('projects/<int:pk>/unlock/', views.project_unlock, name='project-unlock'),
     path('available-lots/', views.available_lots, name='available-lots'),
     path('categories/', views.categories, name='categories'),
+    # правка описания класса из таба «Категории» формы синхронизации (волна 22)
+    path('categories/<int:pk>/', views.category, name='category'),
     path('items/', views.items, name='items'),
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),

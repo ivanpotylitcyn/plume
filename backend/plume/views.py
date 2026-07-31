@@ -394,8 +394,29 @@ def _item_row(i):
 
 @api_view(['GET'])
 def categories(request):
-    """Справочник категорий — пикер класса изделия в форме «＋ Новое»/правке."""
+    """Справочник категорий — пикер класса изделия в форме «＋ Новое»/правке и таб
+    «Категории» экрана синхронизации (волна 22)."""
     return Response([_category_row(c) for c in models.Category.objects.all()])
+
+
+@api_view(['PATCH'])
+def category(request, pk):
+    """Правка описания категории (волна 22) — из таба «Категории» экрана
+    синхронизации, а не только из админки.
+
+    Правится РОВНО описание. `code` — ключ синхронизации (стем имени CSV-файла
+    библиотеки), сменить его значит развязать класс с библиотекой, поэтому в API его
+    нет вовсе (тот же приём, что с `username` в форме аккаунта: признак, задаваемый
+    вне формы, полем не рисуем)."""
+    cat = get_object_or_404(models.Category, pk=pk)
+    if 'description' in request.data:
+        value = (request.data['description'] or '').strip()
+        limit = models.Category._meta.get_field('description').max_length
+        if len(value) > limit:
+            return _bad(f'Описание длиннее {limit} символов.')
+        cat.description = value
+        cat.save(update_fields=['description'])
+    return Response(_category_row(cat))
 
 
 @api_view(['GET', 'POST'])
@@ -2046,11 +2067,17 @@ def _library_files(request):
 
 @api_view(['POST'])
 def library_diff(request):
-    """Загрузить CSV библиотеки → диф против справочника (без записи). Форма грузит
-    таблицы, сервер декодит CP1251/парсит и возвращает строки со статусом
-    (новый/изменился/пропал→сирота|удалить/совпадает) для показа с чекбоксами."""
+    """Загрузить CSV библиотеки → диф против справочника. Форма грузит таблицы,
+    сервер декодит CP1251/парсит и возвращает строки со статусом
+    (новый/изменился/пропал→сирота|совпадает) для показа с чекбоксами.
+
+    Волна 22: единственная запись сверки — недостающие КАТЕГОРИИ загруженных классов
+    (`ensure_library_categories`); изделия по-прежнему не трогаются до «Применить».
+    Так таб «Категории» формы синхронизации получает полный справочник классов сразу
+    после загрузки, а не после применения дифа."""
     try:
         parsed = engine.parse_library(_library_files(request))
+        engine.ensure_library_categories(parsed['categories'])
         rows = engine.library_diff(parsed)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)

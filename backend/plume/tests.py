@@ -5727,6 +5727,52 @@ class LibrarySyncHttpTests(TestCase):
         self.assertTrue(models.Item.objects.filter(code='CAP-1').exists())
         self.assertFalse(models.Item.objects.filter(code='CAP-OLD').exists())
 
+    def test_diff_creates_missing_categories(self):
+        """Волна 22: сверка заводит недостающие КЛАССЫ (изделия не трогает) — иначе
+        таб «Категории» формы синхронизации нечего было бы показывать до применения."""
+        self.assertFalse(models.Category.objects.filter(code='inductors').exists())
+        up = self._upload('inductors.csv', [('L-4R7', 'Дроссель 4.7 мкГн', '')])
+        r = self.c.post('/api/library/diff/', {'files': up})
+        self.assertEqual(r.status_code, 200)
+        cat = models.Category.objects.get(code='inductors')
+        # Класса нет в `LIBRARY_CATEGORIES` — всплывает с сырым описанием, юзер правит.
+        self.assertEqual(cat.description, 'inductors')
+        # Изделия при этом НЕ заведены: диф остаётся дифом.
+        self.assertFalse(models.Item.objects.filter(code='L-4R7').exists())
+
+    def test_diff_keeps_edited_category_description(self):
+        """Повторная сверка не затирает описание, которое человек уже правил."""
+        cat = engine.ensure_category('inductors')
+        cat.description = 'Индуктивности'
+        cat.save(update_fields=['description'])
+        up = self._upload('inductors.csv', [('L-4R7', 'Дроссель', '')])
+        self.c.post('/api/library/diff/', {'files': up})
+        cat.refresh_from_db()
+        self.assertEqual(cat.description, 'Индуктивности')
+
+    def test_patch_category_description(self):
+        """Волна 22: описание класса правится из продукта (таб «Категории»), а не
+        только из админки. `code` — ключ синка и в теле не принимается."""
+        cat = engine.ensure_category('capacitors')
+        r = self.c.patch(f'/api/categories/{cat.id}/',
+                         data=json.dumps({'description': '  Конденсаторы SMD  ',
+                                          'code': 'hacked'}),
+                         content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['description'], 'Конденсаторы SMD')
+        cat.refresh_from_db()
+        self.assertEqual(cat.description, 'Конденсаторы SMD')
+        self.assertEqual(cat.code, 'capacitors')
+
+    def test_patch_category_description_too_long(self):
+        cat = engine.ensure_category('capacitors')
+        r = self.c.patch(f'/api/categories/{cat.id}/',
+                         data=json.dumps({'description': 'я' * 129}),
+                         content_type='application/json')
+        self.assertEqual(r.status_code, 400)
+        cat.refresh_from_db()
+        self.assertEqual(cat.description, 'Конденсаторы')
+
     def test_recalc_cost_endpoint(self):
         cat = _cat()
         leaf = models.Item.objects.create(code='L', description='L', category=cat,

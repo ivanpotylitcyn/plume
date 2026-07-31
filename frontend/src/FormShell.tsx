@@ -8,7 +8,7 @@
 //   │ дополнения (панели)  │  ← `extra`: интеграл проекта/контрагента (§13.1)
 //   └──────────────────────┘
 //        мета (по центру)     ← только то, чего в полях нет
-//   [⊞ Таб] [🗎 Таб]           ← табы, рисуем всегда (даже один)
+//   [⊞ Таб] [🗎 Таб]           ← табы, рисуем всегда (даже один; пустой набор = панели нет)
 //   ┌──────────────────────┐
 //   │ список активного табa│  ← панель СПИСОК
 //   └──────────────────────┘
@@ -94,19 +94,24 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
       {/* Мета — оглавление табов, поэтому прижата к ним, а не к шапке (см. шапку файла). */}
       {meta && <div className="fs-meta">{meta}</div>}
 
-      {/* Табы и тело — одна карточка: полоса табов вверху панели (§13.7). */}
-      <div className="panel fs-body">
-        <div className="fs-tabs">
-          {tabs.map((t, i) => (
-            <button key={t.key} className={'fh-ctl fs-tab' + (t === active ? ' on' : '')}
-              onClick={() => setTab(i)}>
-              <span className={'ci ci-' + t.icon} />
-              <span className="lbl">{t.label}</span>
-            </button>
-          ))}
-        </div>
-        <div className="fs-list">{active?.content}</div>
-      </div>
+      {/* Табы и тело — одна карточка: полоса табов вверху панели (§13.7). Пустой набор
+          табов = панели НЕТ вовсе (волна 22): «рисуем всегда, даже один» относится к
+          форме, у которой список есть, а форма синхронизации до загрузки файлов не
+          показывает ничего — сверять нечего. Пустая полоса с пустым телом была бы
+          обещанием содержимого, которого нет. */}
+      {tabs.length > 0 &&
+        <div className="panel fs-body">
+          <div className="fs-tabs">
+            {tabs.map((t, i) => (
+              <button key={t.key} className={'fh-ctl fs-tab' + (t === active ? ' on' : '')}
+                onClick={() => setTab(i)}>
+                <span className={'ci ci-' + t.icon} />
+                <span className="lbl">{t.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="fs-list">{active?.content}</div>
+        </div>}
     </div>
   )
 }

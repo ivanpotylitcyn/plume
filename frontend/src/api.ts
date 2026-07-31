@@ -638,6 +638,10 @@ export const api = {
   projects: () => get<ProjectRow[]>('/api/projects/'),
   items: () => get<ItemRow[]>('/api/items/'),
   categories: () => get<Category[]>('/api/categories/'),
+  // Описание класса правится из таба «Категории» формы синхронизации (волна 22).
+  // `code` — ключ синка (стем имени CSV), в теле его нет намеренно.
+  updateCategory: (id: number, description: string) =>
+    send<Category>('PATCH', `/api/categories/${id}/`, { description }),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
   updateProject: (id: number, b: Partial<{ code: string; description: string; budget: number | null; started: string | null }>) =>
     send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),
