@@ -386,7 +386,7 @@ erDiagram
     string filename "оригинальное имя для скачивания = идентичность вложения"
     string description "опц. описание (Ф12a: label→description, пара filename+description)"
     int size "байт"
-    string content_type "application/pdf | image/jpeg | image/png"
+    string content_type "MIME как прислал браузер (PDF/картинка — inline, прочее — скачиванием)"
     datetime uploaded_at
     int user_id FK "кто загрузил"
     int item_id FK "владелец: datasheet изделия (nullable)"
@@ -765,7 +765,8 @@ erDiagram
   `Counterparty` — «карточка предприятия») — один файл = одна строка `Attachment`,
   владелец 1:N. Сам файл лежит на диске (`FileField` → `MEDIA_ROOT`), **не BLOB в
   БД** (иначе раздувание дампов и упор в `max_allowed_packet` на shared-MySQL); в
-  таблице — путь, имя, размер, `content_type` (PDF / JPEG / PNG), автор загрузки
+  таблице — путь, имя, размер, `content_type` (MIME как прислал браузер; PDF и
+  картинки открываются inline, прочее — скачиванием), автор загрузки
   (`user`) и дата. Связь с владельцем — **двухпутный exclusive arc**: `item`
   (datasheet изделия) ИЛИ `document → StockDocument` (скан любого ордера). Семь
   документных FK схлопнуты в один ещё в волне 13 (Ф2b: id ордеров едины) —

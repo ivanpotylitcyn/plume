@@ -3115,6 +3115,34 @@ class AttachmentTests(EngineTestBase):
                 self.assertFalse(models.Attachment.objects.filter(pk=att.id).exists())
                 self.assertFalse(os.path.exists(path))
 
+    def test_office_mime_fits(self):
+        """Грабля прода: MIME от Office длиннее прежних 64 символов (xlsx = 65,
+        docx = 71, pptx = 73) — вложение отвергалось не по сути, а по длине
+        служебной строки. Метаданные больше не решают, приняли файл или нет."""
+        office = {
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        }
+        for ext, ctype in office.items():
+            with self.subTest(ext):
+                self.assertGreater(len(ctype), 64)         # ради этого тест и живёт
+                att = engine.add_attachment(
+                    'receipt', self.receipt,
+                    self._file(f'КП от 30.07.2026.{ext}', b'PK\x03\x04', ctype), self.user)
+                self.assertEqual(att.content_type, ctype)
+                self.assertEqual(att.filename, f'КП от 30.07.2026.{ext}')
+
+    def test_absurd_metadata_trimmed_not_rejected(self):
+        """Имя и MIME приходят от браузера: сверхдлинные подрезаются под поле,
+        загрузку не роняют."""
+        att = engine.add_attachment(
+            'receipt', self.receipt,
+            self._file('и' * 400 + '.pdf', b'%PDF-1.4', 'application/' + 'x' * 400),
+            self.user)
+        self.assertEqual(len(att.filename), 255)
+        self.assertEqual(len(att.content_type), 255)
+
     def test_oversize_rejected(self):
         big = SimpleUploadedFile('big.bin', b'x' * 10, content_type='application/octet-stream')
         with override_settings(MAX_ATTACHMENT_SIZE=5):

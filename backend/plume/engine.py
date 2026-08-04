@@ -4641,11 +4641,21 @@ def attachments_for(owner_type, owner_id):
     return [attachment_row(a) for a in qs]
 
 
+def _fit(value, field_name):
+    """Подрезать служебную строку вложения под длину её поля (лимит берём у модели)."""
+    limit = models.Attachment._meta.get_field(field_name).max_length
+    return (value or '')[:limit]
+
+
 def add_attachment(owner_type, owner, upload, user, description=''):
     """Прикрепить файл к владельцу: файл на диск, метаданные из upload (не с клиента).
 
     filename/size/content_type заполняет сервер из загруженного файла. Владелец
     ровно один (exclusive arc item↔document) — поле задаётся по owner_type. Синхронно.
+
+    Служебные строки (имя, MIME) приходят от браузера и подрезаются по длине поля:
+    метаданные описывают файл, а не решают, приняли его или нет — длинный MIME не
+    повод отказать в загрузке (грабля xlsx, 65 символов против прежних 64).
     """
     if owner_type not in ATTACHMENT_OWNER_MODELS:
         raise ValidationError(f'Неизвестный тип владельца вложения: {owner_type}.')
@@ -4655,8 +4665,9 @@ def add_attachment(owner_type, owner, upload, user, description=''):
     if upload.size and upload.size > limit:
         raise ValidationError(f'Файл больше лимита ({limit // (1024 * 1024)} МБ).')
     att = models.Attachment(
-        file=upload, filename=upload.name or '', size=upload.size or 0,
-        content_type=getattr(upload, 'content_type', '') or '',
+        file=upload,
+        filename=_fit(upload.name, 'filename'), size=upload.size or 0,
+        content_type=_fit(getattr(upload, 'content_type', ''), 'content_type'),
         description=(description or '').strip(), user=user,
         **{_attachment_owner_field(owner_type): owner})
     att.full_clean(exclude=['file'])   # exclusive-arc + длины полей (file уже валиден)
