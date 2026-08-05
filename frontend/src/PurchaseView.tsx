@@ -16,9 +16,17 @@ import { AnchorSelect, OrderFields, useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph, count, num,
-  statusTone } from './status'
+import { CounterpartyRef, MismatchGlyph, StatusGlyph, count, num } from './status'
+import { ColumnFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
+
+// Фильтр остатка: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
+// духу, что у фильтров «Потребности»: первый вариант нейтральный, дальше — состояния
+// строки на языке заказа.
+type RestFilter = 'any' | 'open' | 'closed'
+const REST_OPTS: [string, string][] = [
+  ['any', 'все'], ['open', 'ждём'], ['closed', 'закрыто'],
+]
 
 export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, openProject,
   openProcurement, openCounterparty, onChanged, onDeleted }: {
@@ -33,6 +41,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
+  const [rest, setRest] = useState<RestFilter>('any')        // фильтр колонки «Остаток»
   // Ф17: контрагент заказа («у кого купили») — своё поле, обязательное к фиксации.
   const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
   const reloadSuppliers = () => api.counterparties().then(setSuppliers)
@@ -101,6 +110,9 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       .finally(() => setBusy(false))
   }
 
+  const shown = c.rows.filter(ln => rest === 'any'
+    || (rest === 'open' ? ln.remaining > 0 : ln.remaining <= 0))
+
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <>
@@ -109,19 +121,25 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             <tr>
               <th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
-              <th className="num">Заказано</th><th className="uom">Ед.</th>
+              <th className="num">Заказано</th>
               <th className="num">Поступило</th>
-              <th className="num">Остаток</th>
-              {/* Ф6: обратная связь потока «Заказ → УПД» — чем строка закрыта.
-                  У зафиксированного заказа она занимает слот команд строки. */}
-              <th className="c-fit">Поставки</th>
+              {/* Фильтр — тот же приём, что в «Потребности» проекта: раскрыватель сразу
+                  за подписью, внутри её ячейки. Главный вопрос к заказу — «что ещё не
+                  приехало», поэтому фильтр висит именно на остатке. */}
+              <th className="num">Остаток
+                <ColumnFilter opts={REST_OPTS} value={rest}
+                  onPick={v => setRest(v as RestFilter)} /></th>
+              {/* Колонка «Поставки» снята 2026-08-05 (решение Ивана: «забудем о них,
+                  пока не заболит»). Чем строка закрыта — видно в табе «Поставки»
+                  и в самой накладной; в строке это распирало таблицу ссылками. */}
+              <th className="uom">Ед.</th>
               {editable && <th className="act" />}
             </tr>
           </thead>
           <tbody>
-            {c.rows.map(ln => (
+            {shown.map(ln => (
               <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
-                openItem={openItem} openReceipt={openReceipt} run={run} />
+                openItem={openItem} run={run} />
             ))}
             {editable && <GhostRow purchaseId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
@@ -232,17 +250,23 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
 }
 
 // Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
-function LineRow({ ln, editable, busy, openItem, openReceipt, run }: {
+function LineRow({ ln, editable, busy, openItem, run }: {
   ln: PurchaseFormLine; editable: boolean; busy: boolean
-  openItem: (id: number) => void; openReceipt: (id: number) => void
+  openItem: (id: number) => void
   run: (p: Promise<PurchaseForm>) => void
 }) {
   return (
-    <tr className={`row s-${ln.status}`}>
-      {/* Глиф строки (§7a): форма = изделие/компонент, ЦВЕТ = закрытость строки
-          (▲ ждём → ● частично → ✓ получено). Одна строка — один глиф. */}
-      <td className="gl"><ItemGlyph native={ln.item_native} synced={ln.item_synced}
-        locked={ln.item_locked} tone={statusTone(ln.status)} /></td>
+    <tr className="row">
+      {/* Глиф строки (2026-08-05) отвязан от природы изделия и говорит про ЗАКАЗ:
+          ждём поставку (остаток есть) — оранжевый циферблат, закрыта (остаток 0) —
+          зелёная галка. В форме заказа «покупное или наше» не вопрос, а «приехало ли» —
+          главный. */}
+      <td className="gl">
+        {ln.remaining > 0
+          ? <span className="ci sg ci-clockface sg-wip"
+              title={`ждём ${num(ln.remaining)} ${ln.uom}`} />
+          : <span className="ci sg ci-check sg-ok" title="строка закрыта поставками" />}
+      </td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
       <td className="c-desc">
@@ -254,21 +278,9 @@ function LineRow({ ln, editable, busy, openItem, openReceipt, run }: {
               validate={v => Number(v) > 0} />
           : num(ln.qty)}
       </td>
-      <td className="uom">{ln.uom}</td>
       <td className="num">{num(ln.received)}</td>
       <td className="num">{num(ln.remaining)}</td>
-      {/* Типовой случай — одна накладная, поэтому список плоский, без аккордеона.
-          Частичная поставка подписана количеством: «ПОСТ-17 (15)». */}
-      <td className="c-fit">
-        {ln.receipts.map((r, i) => (
-          <span key={r.receipt_id}>
-            {i > 0 && ', '}
-            <a className="link" title={`${r.date} · поступило ${num(r.qty)} ${ln.uom}`}
-              onClick={() => openReceipt(r.receipt_id)}>{r.number || `Поставка #${r.receipt_id}`}</a>
-            {r.qty !== ln.qty && ` (${num(r.qty)})`}
-          </span>
-        ))}
-      </td>
+      <td className="uom">{ln.uom}</td>
       {editable && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку заказа"
           disabled={busy} onClick={() => run(api.deletePurchaseLine(ln.id))}>

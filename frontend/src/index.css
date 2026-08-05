@@ -118,6 +118,7 @@ body { overflow: hidden; }
 .ci-unlock::before       { content: '\eb74'; }  /* контрол шапки: расфиксировать */
 .ci-file::before         { content: '\ea7b'; }  /* контрол шапки: скачать xlsx */
 .ci-warning::before      { content: '\ea6c'; }  /* Ф17: расхождение контрагентов (не гейт) */
+.ci-clockface::before    { content: '\ec75'; }  /* строка заказа: ждём поставку */
 .ci-arrow-swap::before   { content: '\ebcb'; }
 .ci-table::before        { content: '\ebb7'; }
 .ci-search::before       { content: '\ea6d'; }
@@ -370,9 +371,6 @@ body { overflow: hidden; }
   grid-auto-rows: minmax(var(--row-h), auto); align-items: center;
   gap: var(--row-gap) 14px; flex: 1; min-width: 0; }
 .props dt { color: var(--fg-dim); text-align: right; }   /* метки по правому краю — к инпутам */
-/* Хинт производного поля («из заказов»): почему оно не правится ни при каком замке.
-   Приглушён сильнее самой метки и мельче — это пояснение о поле, а не его имя. */
-.props dt .fd-hint { display: block; font-size: 11px; opacity: .65; }
 .props dd { margin: 0; color: var(--fg); min-width: 0; }
 /* Шрифт шапки — ТОЛЬКО Inter (решение Ивана 2026-07-29, отменяет «mono у кодов и дат»
    того же дня): моноширинный вперемешку с литературным внутри одной панели сбивает —
@@ -584,6 +582,15 @@ tr.row { border-left: 2px solid transparent; }
   border-left: 2px solid transparent; padding: 3px 10px 3px 8px; }
 .pgrid--acts .prow {
   grid-template-columns: 208px minmax(140px, 1fr) repeat(5, 74px) 55px 44px; }
+/* «Привязка» закупки живёт на той же сетке строк (2026-08-05), но со своим числовым
+   хвостом: `Баланс · Разложено · Остаток` + единица. Треки те же 74/55px, поэтому два
+   аккордеона продукта читаются как один приём. Колонка кода шире: в ней код ЗАКАЗА
+   («Нева-1/03»), а не артикул. */
+.pgrid--alloc .prow {
+  grid-template-columns: 228px minmax(140px, 1fr) repeat(3, 74px) 55px; }
+/* Ведущая ячейка строки-заказа: spacer вместо раскрывателя — коды заказов встают в
+   одну вертикаль под кодом изделия, как листья под узлом в дереве «Приборов». */
+.pgrid--alloc .alloc-sub { padding-left: 18px; }
 .prow .pnum { text-align: right; font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; }
 /* Глиф члена стоит ПОСЛЕ числа и отбит от него: вплотную они читались как одна
@@ -613,11 +620,19 @@ tr.row { border-left: 2px solid transparent; }
 /* Фильтр колонки (2026-08-05) — раскрыватель СРАЗУ за подписью, внутри её ячейки:
    фильтр относится к своей колонке и живёт в ней, отдельной панели над таблицей нет.
    Выбранное значение горит акцентом — спрятанные строки не должны выглядеть пропажей
-   данных. Подложка ловит клик мимо меню (у пикеров ту же роль играет blur поля). */
-.prow--head .col-filter { margin-left: 3px; }
-.prow--head .col-filter .chev { color: var(--fg-dim); }
-.prow--head .col-filter .chev:hover { color: var(--fg-bright); }
-.prow--head .col-filter .chev.on { color: var(--accent); }
+   данных. Подложка ловит клик мимо меню (у пикеров ту же роль играет blur поля).
+   Правила НЕ привязаны к `.prow`: тот же фильтр стоит в заголовках `table.grid`
+   («Остаток» заказа), и там кнопка иначе досталась бы браузерному дефолту — рамка,
+   фон и перенос на вторую строку (поймано 2026-08-05). */
+.col-filter { margin-left: 3px; white-space: nowrap; }
+/* Заголовок С ФИЛЬТРОМ не переносится: «Остаток ›» — одна лексема, а auto-layout
+   таблицы охотно рвёт её по пробелу перед раскрывателем. Правило по роли (`:has`), а
+   не утилита-класс на каждый такой `th`. */
+table.grid th:has(.col-filter) { white-space: nowrap; }
+.col-filter .chev { background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 12px; line-height: 1; color: var(--fg-dim); }
+.col-filter .chev:hover { color: var(--fg-bright); }
+.col-filter .chev.on { color: var(--accent); }
 .col-filter-veil { position: fixed; inset: 0; z-index: 15; }   /* ниже меню (20) */
 /* Меню фильтра — тот же слой, что у пикеров, но узкое: в нём три-четыре слова, а
    `min-width: 320px` пикера рассчитан на «код + описание» в строке. */

@@ -109,13 +109,13 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
         </table>
         {c.lines.length === 0 && !editable && <div className="tab-empty">Закупка пуста.</div>}
       </> },
-    { key: 'need', label: 'К закупке', icon: 'table',
+    { key: 'need', label: 'К закупке', icon: 'law',
       content: <ScopeDeficitRows st={need} openItem={openItem}
         editable={editable} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
           { item_id: itemId, qty }))} /> },
     { key: 'pegging', label: 'Привязка', icon: 'flag',
-      content: <AllocationRows st={alloc} procurementId={c.id}
-        openPurchase={openPurchase} /> },
+      content: <AllocationRows st={alloc} procurementId={c.id} openItem={openItem}
+        openProject={openProject} openPurchase={openPurchase} /> },
     { key: 'fan', label: 'Заказы', icon: 'package',
       content: <PurchaseFan st={alloc} openPurchase={openPurchase} /> },
     { key: 'files', label: 'Файлы', icon: 'files',
@@ -165,12 +165,17 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
             заказа и поставки занимает `project`.
             2026-08-05: охват стал ПРОИЗВОДНЫМ — это проекты заказов закупки, галочек
             больше нет (два источника правды на одно отношение молча расходились).
-            Поэтому поле всегда в режиме просмотра, даже под карандашом, а хинт у метки
-            объясняет, почему его не правят: иначе оно читается как сломанное. */}
-        <Field label="Проекты" wide locked hint="из заказов"
-          view={c.projects.length ? scopeLinks
-            : <span className="hint" title={'охват задаётся заказами: заведите заказ '
-                + 'и укажите в нём эту закупку'}>—</span>} />
+            Поэтому поле всегда в режиме просмотра, даже под карандашом. Пояснение
+            «(из заказов)» появляется ТОЛЬКО в правке — там оно и нужно: рядом все поля
+            стали контролами, и без него это читалось бы как сломанное. В просмотре
+            пояснять нечего, и лишняя подпись под меткой только шумит. */}
+        <Field label="Проекты" wide locked
+          view={<>
+            {c.projects.length ? scopeLinks
+              : <span className="hint" title={'охват задаётся заказами: заведите заказ '
+                  + 'и укажите в нём эту закупку'}>—</span>}
+            {!locked && <span className="hint"> (из заказов)</span>}
+          </>} />
         {/* Контрагент закупки — НАМЕРЕНИЕ плана («у кого собираемся купить»). Ф17:
             источником поставщика для «Заказ → УПД» он больше не является — заказ несёт
             своего, унаследованного отсюда копией при нарезке. */}

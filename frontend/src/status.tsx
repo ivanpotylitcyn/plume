@@ -216,3 +216,31 @@ export function CounterpartyRef({ code, name, onOpen }: {
     ? <a className="link" title={name} onClick={onOpen}>{body}</a>
     : <span title={name}>{body}</span>
 }
+
+// ─── Баланс потребности — ОДИН на весь продукт (2026-08-05) ───
+// Показывается в двух местах и обязан читаться одинаково: свод «Потребность» проекта
+// (общая оценка) и ячейка «Привязки» закупки (конкретное решение по заказу).
+//
+// Невязка со знаком: `−4` не хватает четырёх, `+4` запас, `0` сошлось впритык. Глиф
+// один (warning), различает ТОН: красный / оранжевый / зелёный (§7a — форма ⟂ цвет).
+// Ноль здесь НЕ гасим, в отличие от членов баланса: это не «ничего нет», а
+// содержательное состояние «сошлось, запаса нет».
+export function Balance({ value, status, title }: {
+  value: number; status: Status; title: string
+}) {
+  return (
+    <span className="pnum" title={title}>
+      {value > 0 ? `+${num(value)}` : num(value)}
+      <span className={`ci sg ci-warning sg-${statusTone(status)}`} />
+    </span>
+  )
+}
+
+// Расшифровка баланса под курсором: из чего он собрался. Четыре слагаемых неочевидны —
+// особенно впаянное, которого на складе уже нет (решение Ивана: подпись должна не
+// подписывать, а объяснять).
+export function balanceTitle(code: string, need: number, kitted: number,
+                             inStock: number, onOrder: number): string {
+  return `${code} · надо ${num(need)}, скомплектовано ${num(kitted)}, `
+    + `склад ${num(inStock)}, в заказах ${num(onOrder)}`
+}

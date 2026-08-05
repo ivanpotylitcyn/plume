@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
-import { Chevron, StatusGlyph, num } from './status'
+import { Balance, Chevron, StatusGlyph, balanceTitle, num } from './status'
 
 // Состояние привязки: загрузка по id, обновление на `rev` (мутации формы плана) и
 // обёртка мутации. Живёт у формы — оба таба смотрят в одни данные.
@@ -39,8 +39,20 @@ export function useAllocation(procurementId: number, rev: number) {
 export type AllocationState = ReturnType<typeof useAllocation>
 
 // Таб «Привязка»: строки плана с раскрытием по заказам закупки.
-export function AllocationRows({ st, procurementId, openPurchase }: {
-  st: AllocationState; procurementId: number; openPurchase: (id: number) => void
+//
+// Вёрстка — ТА ЖЕ сетка строк, что у «Приборов» проекта (`.prow`, правка Ивана
+// 2026-08-05): раскрыватель·глиф·код единым блоком слева, числа справа с глифом за
+// числом, единица последней колонкой. Таблица `.grid` здесь давала другую геометрию, и
+// два аккордеона одного продукта выглядели чужими друг другу.
+//
+// Колонки числовой части — `Баланс · Разложено · Остаток`, и каждая осмысленна ровно на
+// своём уровне: у строки плана заполнены две правые (сколько разложено и сколько ещё
+// нет), у строки заказа — две левые (баланс его проекта и поле ввода). «В плане» снята:
+// она выводится из пары «Разложено + Остаток» и занимала место, которое нужнее балансу.
+export function AllocationRows({ st, procurementId, openItem, openProject, openPurchase }: {
+  st: AllocationState; procurementId: number
+  openItem: (id: number) => void; openProject: (id: number) => void
+  openPurchase: (id: number) => void
 }) {
   const { p, err, busy, run } = st
   if (!p) return <div className="tab-empty">Загрузка…</div>
@@ -49,26 +61,23 @@ export function AllocationRows({ st, procurementId, openPurchase }: {
   return (
     <>
       {err && <div className="anomaly">{err}</div>}
-      <table className="grid">
-        <thead>
-          <tr>
-            <th className="gl" /><th className="c-key">Изделие</th>
-            <th className="c-desc">Описание</th>
-            <th className="uom">Ед.</th>
-            <th className="num">В плане</th>
-            <th className="num">Разложено</th>
-            <th className="num">Остаток</th>
-            <th className="num">Баланс</th>
-            <th className="act" />
-          </tr>
-        </thead>
-        <tbody>
-          {p.rows.map(r => (
-            <LineRow key={r.line_id} r={r} busy={busy} procurementId={procurementId}
-              run={run} openPurchase={openPurchase} />
-          ))}
-        </tbody>
-      </table>
+      <div className="pgrid pgrid--alloc">
+        <div className="prow prow--head">
+          <span className="tree-cell">Код</span>
+          <span>Описание</span>
+          <span className="pnum" title="баланс проекта заказа по этому изделию">
+            Баланс</span>
+          <span className="pnum" title="разложено по заказам закупки">Разложено</span>
+          <span className="pnum" title="остаток строки плана: сколько ещё не разложено">
+            Остаток</span>
+          <span className="puom" title="единица измерения строки">Ед.</span>
+        </div>
+        {p.rows.map(r => (
+          <LineRow key={r.line_id} r={r} busy={busy} procurementId={procurementId}
+            run={run} openItem={openItem} openProject={openProject}
+            openPurchase={openPurchase} />
+        ))}
+      </div>
     </>
   )
 }
@@ -115,83 +124,80 @@ export function PurchaseFan({ st, openPurchase }: {
 // перепег — красный warning; между — оранжевый warning. Колонка «Баланс» у строки
 // плана пустая ПРИНЦИПИАЛЬНО: сложить балансы разных проектов нельзя — профицит одного
 // не гасит нужду другого. Баланс проявляется только в раскрытых строках заказов.
-function LineRow({ r, busy, procurementId, run, openPurchase }: {
+function LineRow({ r, busy, procurementId, run, openItem, openProject, openPurchase }: {
   r: AllocationRow; busy: boolean; procurementId: number
-  run: (p: Promise<Allocation>) => void; openPurchase: (id: number) => void
+  run: (p: Promise<Allocation>) => void
+  openItem: (id: number) => void; openProject: (id: number) => void
+  openPurchase: (id: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const done = r.status === 'available'
   const tone = r.status === 'available' ? 'ok' : r.status === 'on_order' ? 'wip' : 'order'
   return (
     <>
-      <tr className="row">
-        <td className="gl">
+      <div className="prow prow--device">
+        <span className="tree-cell">
+          <button className="chev" title={open ? 'свернуть' : 'раскладка по заказам'}
+            onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           <span className={`ci sg ci-${done ? 'check' : 'warning'} sg-${tone}`}
             title={done ? 'разложена полностью'
               : r.allocated === 0 ? 'ещё не разложена'
               : r.remaining < 0 ? 'разложено больше, чем в плане'
               : 'разложена частично'} />
-        </td>
-        <td className="c-key">
-          {/* Раскрыватель — первый символ строки (§7a), как в «Приборах» проекта. */}
-          <button className="fh-ctl icon" title="Раскладка по заказам закупки"
-            onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
-          <span className="code">{r.item_code}</span></td>
-        <td className="c-desc">
-          <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
-        <td className="uom">{r.uom}</td>
-        <td className="num">{num(r.qty)}</td>
-        <td className="num">{num(r.allocated)}</td>
+          {/* Код — ссылка в форму изделия и в ОДНУ строку с многоточием, как везде
+              (правило строк §7a): длинный код иначе разрывал строку на две. */}
+          <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a>
+        </span>
+        <span className="name">{r.item_description}</span>
+        <span className="pnum" />
+        <span className="pnum">{num(r.allocated)}</span>
         {/* Перепег (остаток ушёл в минус) — «нужна работа», знак выбирает тема. */}
-        <td className="num">
-          <span className={r.remaining < 0 ? 'g-to_order' : undefined}>{num(r.remaining)}</span>
-        </td>
-        <td className="num" />
-        <td className="act" />
-      </tr>
+        <span className="pnum">
+          <span className={r.remaining < 0 ? 'g-to_order' : undefined}>
+            {num(r.remaining)}</span>
+        </span>
+        <span className="puom">{r.uom}</span>
+      </div>
       {open && (r.orders.length === 0
-        ? <tr className="row ghost"><td className="gl" />
-            <td colSpan={8}><span>
-              Под этой закупкой нет заказов — заведите заказ и укажите в нём эту закупку.
-            </span></td></tr>
+        ? <div className="prow prow--comp prow--empty">
+            <span>Под этой закупкой нет заказов — заведите заказ и укажите
+              в нём эту закупку.</span>
+          </div>
         : r.orders.map(c => (
             <OrderCell key={c.purchase_id} c={c} itemId={r.item_id} busy={busy}
-              procurementId={procurementId} run={run} openPurchase={openPurchase} />
+              procurementId={procurementId} run={run} openProject={openProject}
+              openPurchase={openPurchase} />
           )))}
     </>
   )
 }
 
-// Ячейка раскладки: заказ (глиф замка + кликабельный код + проект), баланс проекта и
-// поле количества. Поле — присвоение: что вписал, то и стоит в строке заказа; `0`
-// снимает строку. Зафиксированный заказ остаётся видимым («сюда уже заказано» — нужный
-// контекст), но правится только в своей форме.
-function OrderCell({ c, itemId, busy, procurementId, run, openPurchase }: {
+// Ячейка раскладки: заказ (глиф замка + кликабельный код + проект), баланс его проекта
+// и поле количества — оно стоит в колонке «Разложено», потому что это она и есть, только
+// в разрезе одного заказа. Ввод — присвоение: что вписал, то и стоит в строке заказа;
+// `0` снимает строку. Зафиксированный заказ остаётся видимым («сюда уже заказано» —
+// нужный контекст), но правится только в своей форме.
+function OrderCell({ c, itemId, busy, procurementId, run, openProject, openPurchase }: {
   c: AllocationCell; itemId: number; busy: boolean; procurementId: number
-  run: (p: Promise<Allocation>) => void; openPurchase: (id: number) => void
+  run: (p: Promise<Allocation>) => void
+  openProject: (id: number) => void; openPurchase: (id: number) => void
 }) {
-  const tone = c.balance_status === 'to_order' ? 'order'
-    : c.balance_status === 'on_order' ? 'wip' : 'ok'
   return (
-    <tr className="row ghost">
-      <td className="gl"><StatusGlyph locked={c.locked} /></td>
-      <td className="c-key ind">
+    <div className="prow prow--comp">
+      <span className="tree-cell alloc-sub">
+        <span className="tree-lead" />
+        <StatusGlyph locked={c.locked} />
         <a className="link" onClick={() => openPurchase(c.purchase_id)}>
-          {c.purchase_code}</a></td>
-      <td className="c-desc">
-        <span className="code">{c.project_code}</span>{' '}
-        <span className="cell-ellip" title={c.project_name}>{c.project_name}</span></td>
-      <td className="uom" />
-      <td className="num" />
-      <td className="num" />
-      <td className="num" />
-      <td className="num" title={`${c.project_code} · надо ${num(c.need)}, `
-        + `скомплектовано ${num(c.kitted)}, склад ${num(c.in_stock)}, `
-        + `в заказах ${num(c.on_order)}`}>
-        <span className={`ci sg ci-warning sg-${tone}`} />
-        {c.balance > 0 ? `+${num(c.balance)}` : num(c.balance)}
-      </td>
-      <td className="act">
+          {c.purchase_code}</a>
+      </span>
+      {/* Проект — КОДОМ и ссылкой в его форму: код первичен, описание живёт в title
+          (то же правило, что у контрагента). */}
+      <span className="name">
+        <a className="link" title={c.project_name}
+          onClick={() => openProject(c.project_id)}>{c.project_code}</a></span>
+      <Balance value={c.balance} status={c.balance_status}
+        title={balanceTitle(c.project_code, c.need, c.kitted, c.in_stock, c.on_order)} />
+      <span className="pnum">
         {c.locked
           ? <span className="sub" title="заказ зафиксирован — расфиксируйте в его форме">
               {num(c.qty)}</span>
@@ -199,7 +205,9 @@ function OrderCell({ c, itemId, busy, procurementId, run, openPurchase }: {
               onCommit={v => run(api.allocate(procurementId,
                 { purchase_id: c.purchase_id, item_id: itemId, qty: Number(v || 0) }))}
               validate={v => v === '' || Number(v) >= 0} />}
-      </td>
-    </tr>
+      </span>
+      <span className="pnum" />
+      <span className="puom" />
+    </div>
   )
 }

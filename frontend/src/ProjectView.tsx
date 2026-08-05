@@ -6,18 +6,19 @@
 // 2026-07-26: «это обычные проекты, унифицируем») — у них просто нет приборов и
 // потребности, поэтому набор табов сужается, как у покупного изделия нет «Состава».
 // Фиксация проекта (бывш. «Закрыть проект») — обычная команда шапки (§5).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
   type ResidualLot, type Status } from './api'
-import { Chevron, LotGlyph, count, money, num, ItemGlyph } from './status'
+import { Balance, Chevron, LotGlyph, balanceTitle, count, money, num,
+  ItemGlyph } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { AnchoredMenu } from './AnchoredMenu'
+import { ColumnFilter } from './ColumnFilter'
 import { ItemPicker } from './Picker'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 
@@ -359,37 +360,6 @@ function needPass(c: DeficitComponent, f: NeedFilters) {
         : f.balance === 'even' ? c.balance === 0 : c.balance > 0))
 }
 
-// Раскрыватель фильтра в заголовке: неактивный приглушён заодно с самим заголовком,
-// выбранный горит акцентом — иначе спрятанные строки выглядят пропажей данных.
-function ColumnFilter({ opts, value, onPick }: {
-  opts: [string, string][]; value: string; onPick: (v: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const anchor = useRef<HTMLSpanElement>(null)
-  const on = value !== 'any'
-  const label = opts.find(([v]) => v === value)?.[1] ?? ''
-  return (
-    <span className="col-filter" ref={anchor}>
-      <button className={'chev' + (on ? ' on' : '')}
-        title={on ? `фильтр: ${label}` : 'фильтр по колонке'}
-        onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
-      {open && <>
-        {/* Подложка на всё окно: клик мимо меню закрывает его, как у пикеров. */}
-        <div className="col-filter-veil" onClick={() => setOpen(false)} />
-        <AnchoredMenu anchor={anchor} className="typeahead-menu col-filter-menu">
-          {opts.map(([v, text]) => (
-            <div key={v} className={'typeahead-item' + (v === value ? ' active' : '')}
-              onClick={() => { onPick(v); setOpen(false) }}>
-              <span className={'ci' + (v === value ? ' ci-check' : '')} />
-              <span>{text}</span>
-            </div>
-          ))}
-        </AnchoredMenu>
-      </>}
-    </span>
-  )
-}
-
 // `filters` — только у свода «Потребность»: в аккордеоне прибора фильтровать нечего
 // (там состав одного изделия, и дыры в дереве читались бы как ошибка состава).
 function CompHead({ f, tree }: { f?: FilterBar; tree?: boolean }) {
@@ -431,22 +401,6 @@ function Member({ glyph, tone, value, title }: {
   return (
     <span className="pnum" title={title}>
       {num(value)}<span className={`ci sg ci-${glyph} sg-${value ? tone : 'none'}`} />
-    </span>
-  )
-}
-
-// Баланс — невязка со знаком: `−4` не хватает четырёх, `+4` запас, `0` сошлось впритык.
-// Глиф один (warning), различает ТОН: красный / оранжевый / зелёный (§7a — форма ⟂ цвет).
-// Ноль здесь НЕ гасим (в отличие от членов): это не «ничего нет», а содержательное
-// состояние «сошлось, запаса нет» — ровно то, ради чего колонка и заведена.
-function Balance({ value, status, title }: {
-  value: number; status: Status; title: string
-}) {
-  const tone = status === 'to_order' ? 'order' : status === 'on_order' ? 'wip' : 'ok'
-  return (
-    <span className="pnum" title={title}>
-      {value > 0 ? `+${num(value)}` : num(value)}
-      <span className={`ci sg ci-warning sg-${tone}`} />
     </span>
   )
 }
@@ -534,15 +488,6 @@ function DeviceTree({ tree, openItem }: {
   return <>{visible.map(({ n, i, hasChildren, isExp }) =>
     <TreeRow key={i} n={n} hasChildren={hasChildren} expanded={isExp}
       onToggle={() => toggle(i)} openItem={openItem} />)}</>
-}
-
-// Расшифровка баланса под курсором: из чего он собрался. Четыре слагаемых неочевидны —
-// особенно впаянное, которого на складе уже нет (решение Ивана 2026-08-05: подпись
-// должна не подписывать, а объяснять).
-function balanceTitle(code: string, need: number, kitted: number,
-                      inStock: number, onOrder: number) {
-  return `${code} · надо ${num(need)}, скомплектовано ${num(kitted)}, `
-    + `склад ${num(inStock)}, в заказах ${num(onOrder)}`
 }
 
 // Числовой хвост строки-листа: четыре члена + баланс. Один и тот же в дереве прибора и
