@@ -166,6 +166,17 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
           onCommit={v => run(api.updateCounterparty(c.id, { inn: v }))} />
       </>}
       extra={<>
+        {/* Мягкое напоминание (2026-08-05): с этой правки контрагент показывается во
+            всех документах КОДОМ — он первичная идентичность. Код nullable, старые
+            записи живут без него и в шапках выглядят длинным именем из ЕГРЮЛ. Не гейт
+            (фиксации у справочника нет, ломать нечего) — просто просьба в его же
+            карточке, там, где код и заводят. */}
+        {!c.code &&
+          <StatPanel caption="Идентичность" icon="key">
+            <StatWarn title="код показывается во всех документах вместо длинного названия">
+              ▲ код не задан — заполните поле «Код»
+            </StatWarn>
+          </StatPanel>}
         {supply && <StatPanel caption="Поставки" icon="inbox">
           <StatGroup>
             <Stat label="закупок (план)" value={num(supply.procurements)} />

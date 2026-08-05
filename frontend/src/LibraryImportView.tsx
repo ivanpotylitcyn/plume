@@ -38,36 +38,36 @@ import { count } from './status'
 // зелёный = создать/пометить, оранжевый = обновить, красный = удалить; у неактивных
 // (повторы, сироты) полосы нет — действия к ним не прилагается.
 const ST: Record<LibraryStatus, {
-  tab: string; icon: string; cls: string; col: string; empty: string
+  tab: string; icon: string; col: string; empty: string
   actionable: boolean; word: [string, string, string]
 }> = {
   new: {
-    tab: 'Новые', icon: 'add', cls: 's-available', col: 'Что заведём',
+    tab: 'Новые', icon: 'add', col: 'Что заведём',
     empty: 'Новых изделий в загруженной библиотеке нет.', actionable: true,
     word: ['новое', 'новых', 'новых'],
   },
   changed: {
-    tab: 'Изменения', icon: 'diff', cls: 's-on_order', col: 'Что изменится',
+    tab: 'Изменения', icon: 'diff', col: 'Что изменится',
     empty: 'Изменившихся изделий нет — описания совпадают с библиотекой.',
     actionable: true, word: ['изменение', 'изменения', 'изменений'],
   },
   mark: {
-    tab: 'Пометки', icon: 'check', cls: 's-available', col: 'Почему',
+    tab: 'Пометки', icon: 'check', col: 'Почему',
     empty: 'Непомеченных совпадений нет — всё библиотечное уже помечено.',
     actionable: true, word: ['пометка', 'пометки', 'пометок'],
   },
   gone: {
-    tab: 'Пропавшие', icon: 'trash', cls: 's-to_order', col: 'Что удалим',
+    tab: 'Пропавшие', icon: 'trash', col: 'Что удалим',
     empty: 'Из загруженных классов ничего не пропало.', actionable: true,
     word: ['пропавшее', 'пропавших', 'пропавших'],
   },
   same: {
-    tab: 'Повторы', icon: 'pass', cls: '', col: 'В справочнике',
+    tab: 'Повторы', icon: 'pass', col: 'В справочнике',
     empty: 'Совпадений нет.', actionable: false,
     word: ['повтор', 'повтора', 'повторов'],
   },
   orphan: {
-    tab: 'Сироты', icon: 'question', cls: '', col: 'В справочнике',
+    tab: 'Сироты', icon: 'question', col: 'В справочнике',
     empty: 'Сирот нет — всё используемое есть в библиотеке.', actionable: false,
     word: ['сирота', 'сироты', 'сирот'],
   },
@@ -267,7 +267,7 @@ function DiffTable({ status, rows, confirmed, busy, onToggle, onBulk, openItem }
           <th className="c-desc">{m.col}</th>
         </tr></thead>
         <tbody>{rows.map(r => (
-          <tr key={r.code} className={'row ' + m.cls}>
+          <tr key={r.code} className="row">
             {m.actionable &&
               <td className="pick">
                 <input type="checkbox" checked={confirmed.has(r.code)} disabled={busy}

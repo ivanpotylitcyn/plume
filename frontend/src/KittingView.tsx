@@ -167,7 +167,7 @@ function Component({ row, form, wip, busy, openItem, run }: {
       {/* Пробитая партия: чем именно закрыт компонент. Кол-во стоит в колонке
           «Пробито» — строка пайки в неё и складывается. */}
       {row.real_lines.map(ln => (
-        <tr key={ln.id} className="row s-available">
+        <tr key={ln.id} className="row">
           <td className="gl" />
           <td className="c-key ind">{ln.lot_label}</td>
           <td className="c-desc">{ln.date ?? ''}</td>

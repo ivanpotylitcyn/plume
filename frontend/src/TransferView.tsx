@@ -15,14 +15,16 @@ import { FormShell, type FormTab } from './FormShell'
 import { Dropdown } from './Dropdown'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { LotGlyph, count, num, sumByUom } from './status'
+import { CounterpartyRef, LotGlyph, count, num, sumByUom } from './status'
 import { CounterpartyPicker } from './Picker'
 
-export function TransferView({ transferId, isNew, openItem, openProject, onChanged, onDeleted }: {
+export function TransferView({ transferId, isNew, openItem, openProject,
+  openCounterparty, onChanged, onDeleted }: {
   transferId: number
   isNew: boolean
   openItem: (id: number) => void
   openProject: (id: number) => void
+  openCounterparty: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
 }) {
@@ -96,7 +98,9 @@ export function TransferView({ transferId, isNew, openItem, openProject, onChang
           // Ф17: «Заказчик» — это `contractor`, то есть ЯКОРЬ, а не атрибут вида:
           // его место сразу за Проектом, до номера накладной (§13.4a).
           anchors={
-            <Field label="Заказчик" locked={locked} view={c.contractor_name}>
+            <Field label="Заказчик" locked={locked}
+              view={<CounterpartyRef code={c.contractor_code} name={c.contractor_name}
+                onOpen={() => openCounterparty(c.contractor_id!)} />}>
               <CounterpartyPicker counterparties={customers} side="shipment"
                 value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"

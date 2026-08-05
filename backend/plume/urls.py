@@ -24,7 +24,6 @@ urlpatterns = [
     path('project-demands/<int:pk>/', views.project_demand_detail, name='project-demand'),
     path('projects/<int:pk>/budget/', views.project_budget, name='project-budget'),
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
-    path('projects/<int:pk>/add-to-purchase/', views.project_add_to_purchase, name='project-add-to-purchase'),
     path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),
     # закрытие проекта (волна 6): панель сведения остатков + мосты + мягкий замок
     path('projects/<int:pk>/closure/', views.project_closure, name='project-closure'),
@@ -127,11 +126,11 @@ urlpatterns = [
     path('procurements/<int:pk>/unlock/', views.procurement_unlock, name='procurement-unlock'),
     path('procurements/<int:pk>/xlsx/', views.procurement_xlsx, name='procurement-xlsx'),
     path('procurement-lines/<int:pk>/', views.procurement_line_detail, name='procurement-line'),
-    # pegging (волна 8): нарезка плана на проектные заказы
-    path('procurements/<int:pk>/pegging/', views.procurement_pegging, name='procurement-pegging'),
-    path('procurements/<int:pk>/peg/', views.procurement_peg, name='procurement-peg'),
-    path('procurements/<int:pk>/unpeg/', views.procurement_unpeg, name='procurement-unpeg'),
-    path('procurements/<int:pk>/autopeg/', views.procurement_autopeg, name='procurement-autopeg'),
+    # привязка (волна 8): раскладка плана по заказам закупки
+    path('procurements/<int:pk>/allocation/', views.procurement_allocation,
+         name='procurement-allocation'),
+    path('procurements/<int:pk>/allocate/', views.procurement_allocate,
+         name='procurement-allocate'),
     # вложения (волна 11): PDF/сканы к документам и изделиям. download/detail (int)
     # идут раньше owner-маршрута (str) — коллизии нет, но порядок нагляднее.
     path('attachments/<int:pk>/download/', views.attachment_download, name='attachment-download'),

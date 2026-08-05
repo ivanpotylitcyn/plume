@@ -1106,25 +1106,6 @@ def project_purchases(request, pk):
     return Response(rows)
 
 
-@api_view(['POST'])
-def project_add_to_purchase(request, pk):
-    """Мост «дефицит → заказ»: положить позицию в draft-заказ проекта.
-
-    Возвращает id заказа (UI ведёт в форму). Оживляет ▲-член «заказано» дефицита.
-    """
-    project = get_object_or_404(models.Project, pk=pk)
-    d = request.data
-    try:
-        item = models.Item.objects.get(pk=d['item_id'])
-        p = engine.add_to_project_purchase(project, item, _dec(d.get('qty')),
-                                        _actor(request))
-    except (KeyError, models.Item.DoesNotExist) as e:
-        return _bad(f'Нужны item_id, qty ({e}).')
-    except ValidationError as e:
-        return _bad(e.messages[0] if e.messages else e)
-    return Response({'purchase_id': p.id}, status=http.HTTP_201_CREATED)
-
-
 # --------------------------------------------------------------------------- #
 #  Передача / Transfer (волна 5 — записываемое ядро): отгрузка заказчику
 # --------------------------------------------------------------------------- #
@@ -1814,8 +1795,8 @@ def procurements(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def procurement_detail(request, pk):
-    """Форма закупки-плана: охват проектов + строки (item, qty) + итог.
-    PATCH — правка шапки (дата / код / описание / контрагент / охват `project_ids`).
+    """Форма закупки-плана: охват (вычисляемый) + строки (item, qty) + итог.
+    PATCH — правка шапки (дата / код / описание / контрагент).
     DELETE — удаление закупки (WAVE14 Ф2) под замком; friendly-guard (заказы/отправка)."""
     p = get_object_or_404(models.Procurement, pk=pk)
     if request.method == 'DELETE':
@@ -1829,14 +1810,6 @@ def procurement_detail(request, pk):
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
                 contractor=_resolve_contractor(d))
-            # Охват (Ф13) — M2M, отдельным входом движка. Пустой список = снять охват
-            # («пусто = пусто»), поэтому смотрим на наличие ключа, а не на истинность.
-            if 'project_ids' in d:
-                ids = d['project_ids'] or []
-                projects = list(models.Project.objects.filter(pk__in=ids))
-                if len(projects) != len(set(ids)):
-                    return _bad('Проект охвата не найден.')
-                engine.set_procurement_scope(p, projects)
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
         except User.DoesNotExist:
@@ -1943,68 +1916,33 @@ def procurement_xlsx(request, pk):
 
 
 # --------------------------------------------------------------------------- #
-#  Pegging (волна 8): нарезка плана-`Procurement` на проектные заказы-`Purchase`
+#  Привязка (волна 8, переделана 2026-08-05): раскладка плана по ЗАКАЗАМ закупки
 # --------------------------------------------------------------------------- #
 @api_view(['GET'])
-def procurement_pegging(request, pk):
-    """Проекция pegging плана: распределение строк по проектам + веер заказов."""
+def procurement_allocation(request, pk):
+    """Проекция «Привязка»: строка плана × заказы закупки + веер заказов."""
     p = get_object_or_404(models.Procurement, pk=pk)
-    return Response(engine.procurement_pegging(p))
+    return Response(engine.procurement_allocation(p))
 
 
 @api_view(['POST'])
-def procurement_peg(request, pk):
-    """Пегнуть кол-во строки плана на проект (строка проектного заказа под этим планом).
+def procurement_allocate(request, pk):
+    """Положить в ячейку раскладки ровно `qty` (`0` — снять строку заказа).
 
-    `purchase_id` (Р2): число — пегаем в **этот** заказ; строка `'new'` — в новый заказ
-    проекта; ключа нет — фолбэк «найти-или-создать черновик».
+    Присвоение, а не добавление: поле в строке показывает состояние строки заказа, и
+    ввод его задаёт. Ячейка адресуется парой `purchase_id` + `item_id`.
     """
     p = get_object_or_404(models.Procurement, pk=pk)
     d = request.data
     try:
         item = models.Item.objects.get(pk=d['item_id'])
-        project = models.Project.objects.get(pk=d['project_id'])
-        target, fresh = None, False
-        pid = d.get('purchase_id')
-        if pid == 'new':
-            fresh = True
-        elif pid:
-            target = models.Purchase.objects.get(pk=pid)
-        engine.peg_procurement_line(p, item, project, _dec(d.get('qty')),
-                                    _actor(request), purchase=target, new_purchase=fresh)
-    except (KeyError, models.Item.DoesNotExist, models.Project.DoesNotExist,
-            models.Purchase.DoesNotExist) as e:
-        return _bad(f'Нужны item_id, project_id, qty ({e}).')
+        purchase = models.Purchase.objects.get(pk=d['purchase_id'])
+        engine.set_allocation(p, purchase, item, _dec(d.get('qty')))
+    except (KeyError, models.Item.DoesNotExist, models.Purchase.DoesNotExist) as e:
+        return _bad(f'Нужны purchase_id, item_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_pegging(p))
-
-
-@api_view(['POST'])
-def procurement_unpeg(request, pk):
-    """Снять пег (item, project) под этим планом — удалить строку проектного заказа."""
-    p = get_object_or_404(models.Procurement, pk=pk)
-    d = request.data
-    try:
-        item = models.Item.objects.get(pk=d['item_id'])
-        project = models.Project.objects.get(pk=d['project_id'])
-        engine.unpeg_procurement_line(p, item, project)
-    except (KeyError, models.Item.DoesNotExist, models.Project.DoesNotExist) as e:
-        return _bad(f'Нужны item_id, project_id ({e}).')
-    except ValidationError as e:
-        return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_pegging(p))
-
-
-@api_view(['POST'])
-def procurement_autopeg(request, pk):
-    """Разрезать план по проектам в один клик (топ-ап до наводки свода)."""
-    p = get_object_or_404(models.Procurement, pk=pk)
-    try:
-        engine.autopeg_procurement(p, _actor(request))
-    except ValidationError as e:
-        return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_pegging(p))
+    return Response(engine.procurement_allocation(p))
 
 
 # --------------------------------------------------------------------------- #

@@ -6,24 +6,25 @@
 // 2026-07-26: «это обычные проекты, унифицируем») — у них просто нет приборов и
 // потребности, поэтому набор табов сужается, как у покупного изделия нет «Состава».
 // Фиксация проекта (бывш. «Закрыть проект») — обычная команда шапки (§5).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitComponent, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
-  type ResidualLot } from './api'
-import { Chevron, LayerSeg, LotGlyph, count, money, num, ItemGlyph } from './status'
+  type ResidualLot, type Status } from './api'
+import { Chevron, LotGlyph, count, money, num, ItemGlyph } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { AnchoredMenu } from './AnchoredMenu'
 import { ItemPicker } from './Picker'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 
-export function ProjectView({ projectId, items, isNew, openItem, openPurchase, openOrder,
+export function ProjectView({ projectId, items, isNew, openItem, openOrder,
   onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean
-    openItem: (id: number) => void; openPurchase: (id: number) => void
+    openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // Ф15: черновики закрытия кликабельны
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
@@ -32,6 +33,9 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)      // бюджет пересчитывается при правке потребности
+  // Фильтры свода «Потребность» — состояние вью, на сервер не ходят: строки уже все
+  // здесь, а вопрос («что не заказано?») меняется чаще, чем данные.
+  const [filters, setFilters] = useState<NeedFilters>(NO_FILTERS)
   const { unlocked, toggle } = useFormLock(projectId, isNew)   // §5: существующее — в просмотре
   const att = useAttachments('project', projectId)   // владелец заведён Ф12b (§13.8)
 
@@ -80,15 +84,6 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
       .finally(() => setBusy(false))
   }
 
-  // Мост «дефицит → заказ»: положить ▲-позицию в расфиксированный заказ проекта и открыть его.
-  const order = (itemId: number, qty: number) => {
-    setBusy(true)
-    api.addToPurchase(projectId, { item_id: itemId, qty })
-      .then(r => openPurchase(r.purchase_id))
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-
   if (err && !data) return <div className="empty">Ошибка: {err}</div>
   if (!data) return <div className="empty">Загрузка…</div>
 
@@ -98,6 +93,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
   const locked = closed || !unlocked
   // Внешний проект (НИР/контракт) делает приборы; внутренние склады — только хранят.
   const external = phead ? phead.kind === 'external' : true
+  const shown = data.components.filter(c => needPass(c, filters))
   const residuals = closure?.residuals ?? []
   const drafts = closure?.closing_drafts ?? []   // Ф15: закрывающие документы-черновики
 
@@ -108,8 +104,8 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
         {data.demands.length === 0
           ? <div className="tab-empty">
               {locked ? 'Приборов нет.' : 'Пока ничего — добавьте прибор ниже.'}</div>
-          : <div className="pgrid">
-              <CompHead />
+          : <div className="pgrid pgrid--acts">
+              <CompHead tree />
               {data.demands.map(d => <DeviceRow key={d.demand_id} d={d}
                 editable={!locked}
                 busy={busy} openItem={openItem} run={run} />)}
@@ -122,9 +118,14 @@ export function ProjectView({ projectId, items, isNew, openItem, openPurchase, o
       content: data.components.length === 0
         ? <div className="tab-empty">Нет компонентов — задайте приборы и их составы.</div>
         : <div className="pgrid">
-            <CompHead />
-            {data.components.map(c => <CompRow key={c.component_id} ln={c}
-              busy={busy} openItem={openItem} order={order} />)}
+            <CompHead f={{ ...filters,
+              set: (k, v) => setFilters(f => ({ ...f, [k]: v })) }} />
+            {shown.length === 0
+              ? <div className="prow prow--comp prow--empty">
+                  <span>Ни одна строка не подходит под фильтры колонок.</span>
+                </div>
+              : shown.map(c => <CompRow key={c.component_id} ln={c}
+                  openItem={openItem} />)}
           </div> },
   )
   tabs.push(
@@ -231,7 +232,7 @@ function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
 }) {
   const positive = r.live_qty > 0
   return (
-    <tr className={'row' + (r.anomaly ? ' s-to_order' : '')}>
+    <tr className="row">
       <td className="gl"><LotGlyph origin={r.origin} liveQty={r.live_qty} /></td>
       <td className="c-key"><span className="code">{r.lot_label}</span></td>
       <td className="c-fit">
@@ -301,18 +302,152 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
 }
 
 // Шапка колонок (общая для «Приборов» в раскрытии и «Потребности»). Совпадает по
-// сетке со строкой прибора: код↔Компонент, потребность↔Надо, прогресс↔Разбор.
-function CompHead() {
+// сетке со строкой прибора: код↔Компонент, потребность↔Потребность.
+//
+// Пять чисел вместо трёх сегментов разбора (2026-08-05). Разбор клампован потребностью,
+// поэтому перебор в нём невидим: заказали 10 при нужде 6 — сегмент всё равно 6. Здесь
+// все члены сырые, а «Баланс» — их невязка со знаком: минус не хватает, плюс запас.
+// Порядок колонок = убывающая готовность (впаяно → лежит → едет → нет), то есть прежняя
+// ось ✓●▲, разложенная на четыре члена.
+//
+// «Ед.» стоит ПЕРЕД числами: единица квалифицирует всю строку — все пять чисел в ней
+// одной размерности, — а не примыкает к одному числу (отступление от §7a, решение
+// Ивана 2026-08-05; раскатка на остальные таблицы отложена в бэклог).
+// Заголовки сокращены до 4–6 знаков (2026-08-05): полное «Скомплектовано» распирало
+// колонку под слово, которое ни одно число не заполняет. Полная версия — под курсором.
+// ─── Фильтры колонок свода «Потребность» (2026-08-05) ───
+//
+// Свод — это весь закупочный состав проекта, сотни строк; вопросы к нему всегда узкие:
+// «что не заказано», «что уже лежит», «где перебор». Поэтому фильтр живёт в ЗАГОЛОВКЕ
+// колонки — там же, где число, к которому он относится, — и не заводит отдельной
+// панели над таблицей. Знак — тот же раскрыватель, что везде в продукте.
+//
+// Словарь значений: у членов «есть/пусто» (наличие), у баланса — три его состояния,
+// названные тем же языком, каким мы говорим о них в подсказках и журнале: не хватает /
+// впритык / запас.
+type MemberFilter = 'any' | 'zero' | 'some'
+type BalanceFilter = 'any' | 'short' | 'even' | 'surplus'
+
+const MEMBER_OPTS: [string, string][] = [
+  ['any', 'все'], ['some', 'есть'], ['zero', 'пусто'],
+]
+const BALANCE_OPTS: [string, string][] = [
+  ['any', 'все'], ['short', 'не хватает'], ['even', 'впритык'], ['surplus', 'запас'],
+]
+
+export interface NeedFilters {
+  kitted: MemberFilter; in_stock: MemberFilter; on_order: MemberFilter
+  balance: BalanceFilter
+}
+const NO_FILTERS: NeedFilters = {
+  kitted: 'any', in_stock: 'any', on_order: 'any', balance: 'any',
+}
+interface FilterBar extends NeedFilters {
+  set: (key: keyof NeedFilters, value: string) => void
+}
+
+function memberPass(v: number, f: MemberFilter) {
+  return f === 'any' || (f === 'zero' ? v === 0 : v !== 0)
+}
+
+function needPass(c: DeficitComponent, f: NeedFilters) {
+  return memberPass(c.kitted, f.kitted)
+    && memberPass(c.in_stock, f.in_stock)
+    && memberPass(c.on_order, f.on_order)
+    && (f.balance === 'any'
+      || (f.balance === 'short' ? c.balance < 0
+        : f.balance === 'even' ? c.balance === 0 : c.balance > 0))
+}
+
+// Раскрыватель фильтра в заголовке: неактивный приглушён заодно с самим заголовком,
+// выбранный горит акцентом — иначе спрятанные строки выглядят пропажей данных.
+function ColumnFilter({ opts, value, onPick }: {
+  opts: [string, string][]; value: string; onPick: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLSpanElement>(null)
+  const on = value !== 'any'
+  const label = opts.find(([v]) => v === value)?.[1] ?? ''
   return (
-    <div className="prow prow--head">
-      <span className="tree-cell">Компонент</span>
-      <span>Назв.</span>
-      <span className="pnum">Надо</span>
-      <span className="puom">Ед.</span>
-      <span>Разбор</span>
-      <span className="pnum">Склад</span>
-      <span />
+    <span className="col-filter" ref={anchor}>
+      <button className={'chev' + (on ? ' on' : '')}
+        title={on ? `фильтр: ${label}` : 'фильтр по колонке'}
+        onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
+      {open && <>
+        {/* Подложка на всё окно: клик мимо меню закрывает его, как у пикеров. */}
+        <div className="col-filter-veil" onClick={() => setOpen(false)} />
+        <AnchoredMenu anchor={anchor} className="typeahead-menu col-filter-menu">
+          {opts.map(([v, text]) => (
+            <div key={v} className={'typeahead-item' + (v === value ? ' active' : '')}
+              onClick={() => { onPick(v); setOpen(false) }}>
+              <span className={'ci' + (v === value ? ' ci-check' : '')} />
+              <span>{text}</span>
+            </div>
+          ))}
+        </AnchoredMenu>
+      </>}
+    </span>
+  )
+}
+
+// `filters` — только у свода «Потребность»: в аккордеоне прибора фильтровать нечего
+// (там состав одного изделия, и дыры в дереве читались бы как ошибка состава).
+function CompHead({ f, tree }: { f?: FilterBar; tree?: boolean }) {
+  return (
+    <div className={'prow prow--head' + (tree ? ' head--tree' : '')}>
+      <span className="tree-cell">Код</span>
+      <span>Описание</span>
+      <span className="pnum" title="потребность: разузлование BOM на все приборы проекта">
+        Потр.</span>
+      <span className="pnum" title="скомплектовано: впаяно в изделия проекта">
+        Компл.{f && <ColumnFilter opts={MEMBER_OPTS} value={f.kitted}
+          onPick={v => f.set('kitted', v)} />}</span>
+      <span className="pnum" title="на складе: остаток лотов проекта">
+        Склад{f && <ColumnFilter opts={MEMBER_OPTS} value={f.in_stock}
+          onPick={v => f.set('in_stock', v)} />}</span>
+      <span className="pnum" title="в заказе: ещё не приехало по зафиксированным заказам">
+        Заказ{f && <ColumnFilter opts={MEMBER_OPTS} value={f.on_order}
+          onPick={v => f.set('on_order', v)} />}</span>
+      <span className="pnum" title="баланс: (компл. + склад + заказ) − потребность">
+        Баланс{f && <ColumnFilter opts={BALANCE_OPTS} value={f.balance}
+          onPick={v => f.set('balance', v)} />}</span>
+      <span className="puom" title="единица измерения строки">Ед.</span>
+      {tree && <span />}
     </div>
+  )
+}
+
+// Число члена баланса с глифом ПОСЛЕ него (правка Ивана 2026-08-05). Глиф впереди
+// плясал по горизонтали: числа разной ширины при выключке вправо сдвигали его на
+// каждой строке, и колонка глифов шла зигзагом. За числом он встаёт на правую кромку —
+// вертикальный строй ровный, а числа по-прежнему выключены вправо.
+//
+// Форма глифа — вид члена (что это), цвет — его роль в покрытии: впаяно и склад
+// зелёные (нужда закрыта), заказ оранжевый (закрыта обещанием). НОЛЬ гасим до
+// нейтрального: глиф светит, когда за ним что-то есть, иначе колонка нулей шумит.
+function Member({ glyph, tone, value, title }: {
+  glyph: string; tone: string; value: number; title: string
+}) {
+  return (
+    <span className="pnum" title={title}>
+      {num(value)}<span className={`ci sg ci-${glyph} sg-${value ? tone : 'none'}`} />
+    </span>
+  )
+}
+
+// Баланс — невязка со знаком: `−4` не хватает четырёх, `+4` запас, `0` сошлось впритык.
+// Глиф один (warning), различает ТОН: красный / оранжевый / зелёный (§7a — форма ⟂ цвет).
+// Ноль здесь НЕ гасим (в отличие от членов): это не «ничего нет», а содержательное
+// состояние «сошлось, запаса нет» — ровно то, ради чего колонка и заведена.
+function Balance({ value, status, title }: {
+  value: number; status: Status; title: string
+}) {
+  const tone = status === 'to_order' ? 'order' : status === 'on_order' ? 'wip' : 'ok'
+  return (
+    <span className="pnum" title={title}>
+      {value > 0 ? `+${num(value)}` : num(value)}
+      <span className={`ci sg ci-warning sg-${tone}`} />
+    </span>
   )
 }
 
@@ -327,7 +462,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
   const dev = d.device
   return (
     <>
-      <div className={`prow prow--device s-${d.status}`}>
+      <div className="prow prow--device">
         <span className="tree-cell">
           <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
@@ -342,13 +477,19 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
                 validate={v => Number(v) > 0} />
             : num(d.qty)}
         </span>
+        {/* Прибор живёт в тех же колонках, что и его состав: собрано ↔ «Скомплектовано»,
+            в работе ↔ «В заказе» (черновые акты — тот же смысл «запущено, ждём»), не
+            начато ↔ «Баланс» со знаком минус. «На складе» у прибора пусто намеренно:
+            собранный прибор лежит теми же лотами, что породила комплектация, и показать
+            его здесь значило бы посчитать дважды. */}
+        <Member glyph="notebook" tone="ok" value={dev.done}
+          title="собрано — зафиксированные акты комплектации" />
+        <span className="pnum sub">—</span>
+        <Member glyph="package" tone="wip" value={dev.wip}
+          title="в работе — черновые акты комплектации" />
+        <Balance value={-dev.not_started} status={dev.not_started > 0 ? 'to_order' : 'on_order'}
+          title="сколько приборов ещё не начато" />
         <span className="puom">шт</span>
-        <span title="сделано / делается / осталось сделать">
-          <LayerSeg status="available" value={dev.done} />
-          <LayerSeg status="on_order" value={dev.wip} />
-          <LayerSeg status="to_order" value={dev.not_started} />
-        </span>
-        <span />
         <span className="act">
           {editable &&
             <button className="fh-ctl icon fh-del" title="Убрать прибор из потребности"
@@ -395,9 +536,40 @@ function DeviceTree({ tree, openItem }: {
       onToggle={() => toggle(i)} openItem={openItem} />)}</>
 }
 
-// Строка дерева. Отступ = глубина; статус-полоса слева (у узла — worst-of поддерева).
-// Узел-подсборка: кликабельный шеврон (свернуть/раскрыть), купить нельзя — «＋ в заказ»
-// живёт в своде «Потребность». Лист: разбор ✓/●/▲ + склад (read-only).
+// Расшифровка баланса под курсором: из чего он собрался. Четыре слагаемых неочевидны —
+// особенно впаянное, которого на складе уже нет (решение Ивана 2026-08-05: подпись
+// должна не подписывать, а объяснять).
+function balanceTitle(code: string, need: number, kitted: number,
+                      inStock: number, onOrder: number) {
+  return `${code} · надо ${num(need)}, скомплектовано ${num(kitted)}, `
+    + `склад ${num(inStock)}, в заказах ${num(onOrder)}`
+}
+
+// Числовой хвост строки-листа: четыре члена + баланс. Один и тот же в дереве прибора и
+// в сводной «Потребности» — колонки обязаны совпадать, поэтому и разметка одна.
+function BalanceCells({ code, need, kitted, inStock, onOrder, balance, status, anomaly }: {
+  code: string; need: number; kitted: number; inStock: number; onOrder: number
+  balance: number; status: Status; anomaly?: boolean
+}) {
+  return (
+    <>
+      <Member glyph="notebook" tone="ok" value={kitted}
+        title="впаяно в изделия проекта (зафиксированные комплектации)" />
+      <span className="pnum" title="остаток лотов проекта на складах">
+        {num(inStock)}
+        {anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
+        <span className={`ci sg ci-layers sg-${inStock ? 'ok' : 'none'}`} />
+      </span>
+      <Member glyph="package" tone="wip" value={onOrder}
+        title="ещё не приехало по зафиксированным заказам проекта" />
+      <Balance value={balance} status={status}
+        title={balanceTitle(code, need, kitted, inStock, onOrder)} />
+    </>
+  )
+}
+
+// Строка дерева. Отступ = глубина. Узел-подсборка: кликабельный шеврон, чисел покрытия
+// нет (купить нельзя — деньги и заказ живут на листьях). Лист: баланс, read-only.
 function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   n: DeficitTreeNode; hasChildren: boolean; expanded: boolean
   onToggle: () => void; openItem: (id: number) => void
@@ -407,7 +579,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   // классом такое не выразить — правил под каждый уровень не заводим.
   const indent = (n.depth + 1) * 18
   return (
-    <div className={`prow prow--comp s-${n.status}`}>
+    <div className="prow prow--comp">
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}
@@ -418,55 +590,38 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
       </span>
       <span className="name">{n.component_description}</span>
       <span className="pnum">{num(n.need)}</span>
+      {n.is_leaf
+        ? <BalanceCells code={n.component_code} need={n.need} kitted={n.kitted ?? 0}
+            inStock={n.in_stock ?? 0} onOrder={n.on_order ?? 0} balance={n.balance ?? 0}
+            status={n.status ?? 'available'} anomaly={n.anomaly} />
+        : <>
+            <span className="lbl">подсборка</span>
+            <span /><span /><span />
+          </>}
       <span className="puom">{n.uom}</span>
-      {n.is_leaf ? <>
-        <span>
-          <LayerSeg status="available" value={n.have ?? 0} />
-          <LayerSeg status="on_order" value={n.on_order ?? 0} />
-          <LayerSeg status="to_order" value={n.to_order ?? 0} />
-        </span>
-        <span className="pnum">
-          {num(n.available_raw ?? 0)}
-          {n.anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
-        </span>
-      </> : <>
-        <span className="lbl">подсборка</span>
-        <span />
-      </>}
       <span className="act" />
     </div>
   )
 }
 
-// Строка компонента: разбор ✓/●/▲ + «＋ в заказ». Общая для аккордеона и сводной.
-function CompRow({ ln, busy, openItem, order }: {
-  ln: DeficitComponent; busy: boolean; openItem: (id: number) => void
-  order: (itemId: number, qty: number) => void
+// Строка компонента в сводной «Потребности»: те же пять чисел, read-only. Кнопки
+// «＋ в заказ» здесь больше нет (2026-08-05) — набивка заказов живёт в «Привязке»
+// закупки, где рядом стоит остаток плана; вкладки проекта кнопками не засоряем.
+function CompRow({ ln, openItem }: {
+  ln: DeficitComponent; openItem: (id: number) => void
 }) {
   return (
-    <div className={`prow prow--comp s-${ln.status}`}>
+    <div className="prow prow--comp">
       <span className="tree-cell">
         <ItemGlyph native={ln.component_native} synced={ln.component_synced} locked={ln.component_locked} />
         <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_code}</a>
       </span>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)}</span>
+      <BalanceCells code={ln.component_code} need={ln.need} kitted={ln.kitted}
+        inStock={ln.in_stock} onOrder={ln.on_order} balance={ln.balance}
+        status={ln.status} anomaly={ln.anomaly} />
       <span className="puom">{ln.uom}</span>
-      <span>
-        <LayerSeg status="available" value={ln.have} />
-        <LayerSeg status="on_order" value={ln.on_order} />
-        <LayerSeg status="to_order" value={ln.to_order} />
-      </span>
-      <span className="pnum">
-        {num(ln.available_raw)}
-        {ln.anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
-      </span>
-      <span className="act">
-        {ln.to_order > 0 &&
-          <button className="btn sm" disabled={busy}
-            title={`положить ${num(ln.to_order)} ${ln.uom} в расфиксированный заказ проекта`}
-            onClick={() => order(ln.component_id, ln.to_order)}>＋ в заказ</button>}
-      </span>
     </div>
   )
 }

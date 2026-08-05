@@ -197,3 +197,22 @@ export function count(n: number, one: string, few: string, many: string): string
     : many
   return `${n} ${word}`
 }
+
+// Контрагент в форме и в списке — ЕДИНЫЙ вид (2026-08-05). Показываем `code`
+// («КОМПЭЛ»), не описание из ЕГРЮЛ: код — первичная идентичность, он короче и
+// узнаваемее, а полное имя всегда под курсором. Клик ведёт в карточку контрагента.
+//
+// Код у контрагента nullable (авто-фолбэка нет), поэтому пустой код — не ошибка, а
+// повод мягко попросить: показываем описание и приглушённую пометку «код не задан»
+// (тот же приём, что у номеров документов в карточке контрагента).
+export function CounterpartyRef({ code, name, onOpen }: {
+  code: string; name: string; onOpen?: () => void
+}) {
+  if (!name) return null
+  const body = code
+    ? <span className="code">{code}</span>
+    : <>{name}<span className="hint"> код не задан</span></>
+  return onOpen
+    ? <a className="link" title={name} onClick={onOpen}>{body}</a>
+    : <span title={name}>{body}</span>
+}

@@ -14,22 +14,23 @@
 // `OrderFields` тут по-прежнему неприменим — у закупки проектов много, а не один.
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
-  type CounterpartyRow, type ProjectRow } from './api'
+  type CounterpartyRow } from './api'
 import { CommitInput } from './CommitInput'
 import { AuthorField, useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { Field, TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { PeggingRows, PurchaseFan, usePegging } from './PeggingPanel'
+import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
 import { ScopeDeficitRows, useScopeDeficit } from './ScopeDeficitPanel'
-import { CounterpartyPicker, ItemPicker, ProjectScopePicker } from './Picker'
-import { ItemGlyph, count, num, sumByUom } from './status'
+import { CounterpartyPicker, ItemPicker } from './Picker'
+import { CounterpartyRef, ItemGlyph, count, num, sumByUom } from './status'
 
-export function ProcurementView({ procurementId, items, projects, isNew, openItem,
-  openProject, openPurchase, onChanged, onDeleted }: {
-  procurementId: number; items: ItemRow[]; projects: ProjectRow[]; isNew: boolean
+export function ProcurementView({ procurementId, items, isNew, openItem,
+  openProject, openPurchase, openCounterparty, onChanged, onDeleted }: {
+  procurementId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openProject: (id: number) => void
-  openPurchase: (id: number) => void; onChanged: () => void
+  openPurchase: (id: number) => void; openCounterparty: (id: number) => void
+  onChanged: () => void
   onDeleted?: () => void
 }) {
   const [c, setC] = useState<ProcurementForm | null>(null)
@@ -43,7 +44,7 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
   // пикер поднимает наверх тех, у кого уже покупали, но никого не прячет.
   useEffect(() => { api.counterparties().then(setSuppliers) }, [])
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
-  const peg = usePegging(procurementId, rev)                 // табы «Привязка» и «Заказы»
+  const alloc = useAllocation(procurementId, rev)            // табы «Привязка» и «Заказы»
   const need = useScopeDeficit(procurementId, rev)           // таб «К закупке» (Ф13)
 
   useEffect(() => {
@@ -76,19 +77,8 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
   const fixed = !editable                  // зафиксирована — read-only
   const locked = !editable || !unlocked
 
-  // Охват (Ф13): кандидаты — только активные внешние проекты (внутренние склады не
-  // потребители, закрытый проект не закупают — движок откажет). Отмеченное шлём целым
-  // списком: M2M правится заменой набора, а не дельтой.
-  const scopeIds = c.projects.map(pr => pr.id)
-  const scopeCandidates = projects.filter(
-    pr => pr.kind === 'external' && (!pr.locked || scopeIds.includes(pr.id)))
-  const toggleScope = (id: number) => run(api.updateProcurement(c.id, {
-    project_ids: scopeIds.includes(id) ? scopeIds.filter(x => x !== id) : [...scopeIds, id],
-  }))
-
-  // Коды охвата — ссылки на проекты; в правке стоят рядом с пикером, в просмотре
-  // остаются одни (§5). Разделитель — ЗАПЯТАЯ вне ссылки (правка Ивана 2026-07-29):
-  // так видно, что перечислено несколько проектов, а не один длинный код.
+  // Коды охвата — ссылки на проекты. Разделитель — ЗАПЯТАЯ вне ссылки (правка Ивана
+  // 2026-07-29): так видно, что перечислено несколько проектов, а не один длинный код.
   const scopeLinks = c.projects.map((pr, i) => (
     <span key={pr.id}>
       {i > 0 && ', '}
@@ -124,9 +114,10 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
         editable={editable} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
           { item_id: itemId, qty }))} /> },
     { key: 'pegging', label: 'Привязка', icon: 'flag',
-      content: <PeggingRows st={peg} procurementId={c.id} /> },
+      content: <AllocationRows st={alloc} procurementId={c.id}
+        openPurchase={openPurchase} /> },
     { key: 'fan', label: 'Заказы', icon: 'package',
-      content: <PurchaseFan st={peg} openPurchase={openPurchase} /> },
+      content: <PurchaseFan st={alloc} openPurchase={openPurchase} /> },
     { key: 'files', label: 'Файлы', icon: 'files',
       content: <AttachmentList att={att} locked={locked} /> },
   ]
@@ -139,7 +130,7 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
         {count(c.lines.length, 'позиция', 'позиции', 'позиций')}
         {sumByUom(c.lines).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
         {' · '}{count(c.projects.length, 'проект', 'проекта', 'проектов')} в охвате
-        {' · '}{count(peg.p?.fan.length ?? 0, 'заказ', 'заказа', 'заказов')}
+        {' · '}{count(alloc.p?.fan.length ?? 0, 'заказ', 'заказа', 'заказов')}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
       </>}
       unlocked={unlocked} onToggleLock={toggle}
@@ -158,9 +149,9 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
             title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }
         : undefined}
       actions={[
-        ...(editable ? [{ onClick: peg.autopeg, label: 'Разрезать', icon: 'ci-git-branch',
-          title: 'Разложить каждую строку плана по нуждающимся проектам охвата',
-          disabled: peg.busy }] : []),
+        /* «Разрезать по проектам» (autopeg) снята 2026-08-05 вместе с автосозданием
+           заказов: раскладка — дело рук и глаз, а кнопка «нажал и жди чуда» здесь
+           слишком ответственная. Понадобится — вернём осознанно. */
         { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
           title: 'Загрузить файл (КП, счёт) — появится в табе «Файлы»', disabled: att.busy },
       ]}
@@ -172,20 +163,20 @@ export function ProcurementView({ procurementId, items, projects, isNew, openIte
         {/* Порядок — канон §13.4a (Ф17): идентичность → якори (охват, контрагент) →
             внешние атрибуты → автор. Верхний якорь закупки — ОХВАТ: место, которое у
             заказа и поставки занимает `project`.
-            Охват (Ф13): отмеченные проекты — ссылки рядом с пикером; в просмотре
-            остаются одни ссылки, поле ввода исчезает вместе с остальными (§5). */}
-        <Field label="Проекты" wide locked={locked}
-          view={c.projects.length ? scopeLinks : ''}>
-          <ProjectScopePicker projects={scopeCandidates} selected={scopeIds}
-            disabled={busy} onToggle={toggleScope} />
-          {/* Отступ — только в ПРАВКЕ, где ссылки стоят рядом с пикером. В просмотре
-              пикера нет, и тот же отступ выбивал значение из общей левой кромки. */}
-          <span className="scope-links">{scopeLinks}</span>
-        </Field>
+            2026-08-05: охват стал ПРОИЗВОДНЫМ — это проекты заказов закупки, галочек
+            больше нет (два источника правды на одно отношение молча расходились).
+            Поэтому поле всегда в режиме просмотра, даже под карандашом, а хинт у метки
+            объясняет, почему его не правят: иначе оно читается как сломанное. */}
+        <Field label="Проекты" wide locked hint="из заказов"
+          view={c.projects.length ? scopeLinks
+            : <span className="hint" title={'охват задаётся заказами: заведите заказ '
+                + 'и укажите в нём эту закупку'}>—</span>} />
         {/* Контрагент закупки — НАМЕРЕНИЕ плана («у кого собираемся купить»). Ф17:
             источником поставщика для «Заказ → УПД» он больше не является — заказ несёт
             своего, унаследованного отсюда копией при нарезке. */}
-        <Field label="Контрагент" locked={locked} view={c.contractor_name}>
+        <Field label="Контрагент" locked={locked}
+          view={<CounterpartyRef code={c.contractor_code} name={c.contractor_name}
+            onOpen={() => openCounterparty(c.contractor_id!)} />}>
           <CounterpartyPicker counterparties={suppliers} side="supply"
             value={c.contractor_id ?? ''}
             disabled={busy} placeholder="— не указан —"

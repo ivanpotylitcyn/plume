@@ -6,7 +6,8 @@ import { useEffect, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
-import { num, money, count, sumByUom, LotGlyph, MismatchGlyph } from './status'
+import { num, money, count, sumByUom, CounterpartyRef, LotGlyph,
+  MismatchGlyph } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -14,10 +15,10 @@ import { Field } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
-  onChanged, onDeleted }: {
+  openCounterparty, onChanged, onDeleted }: {
   receiptId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openPurchase: (id: number) => void
-  openProject: (id: number) => void
+  openProject: (id: number) => void; openCounterparty: (id: number) => void
   onChanged: () => void; onDeleted: () => void
 }) {
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
@@ -126,7 +127,10 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
                 в продукте нет (заведётся режимом «Контрагенты», волна 20).
                 Ф17: глиф расхождения — «кто привёз» ≠ «у кого купили». */}
             <Field label="Поставщик" locked={locked}
-              view={c.contractor_id ? <>{c.contractor_name}{mismatch}</> : ''}>
+              view={c.contractor_id
+                ? <><CounterpartyRef code={c.contractor_code} name={c.contractor_name}
+                    onOpen={() => openCounterparty(c.contractor_id!)} />{mismatch}</>
+                : ''}>
               <CounterpartyPicker counterparties={suppliers} side="supply"
                 value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"

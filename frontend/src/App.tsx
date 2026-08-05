@@ -461,7 +461,6 @@ export default function App() {
           <ProjectView key={sel.id} projectId={sel.id} items={items}
             isNew={isFresh('project', sel.id)}
             openItem={openItem}
-            openPurchase={id => { reloadPurchases(); openPurchase(id) }}
             openOrder={openOrder}
             onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }}
             onDeleted={() => { reloadProjects(); setSel(null) }} />}
@@ -477,6 +476,7 @@ export default function App() {
           return <OrderForm kind={o.kind} id={o.id} items={items}
             isNew={isFresh(o.kind, o.id)}
             openItem={openItem} openPurchase={openPurchase} openProject={openProject}
+            openCounterparty={openCounterparty}
             onChanged={() => reloadOrderKind(o.kind)}
             onDeleted={() => { reloadOrderKind(o.kind); setSel(null) }} />
         })()}
@@ -484,12 +484,14 @@ export default function App() {
           <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
             isNew={isFresh('purchase', sel.id)}
             openReceipt={openReceipt} openProject={openProject}
+            openCounterparty={openCounterparty}
             openProcurement={id => { reloadProcurements(); openProcurement(id) }}
             onChanged={reloadPurchases}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'procurement' &&
-          <ProcurementView procurementId={sel.id} items={items} projects={projects}
+          <ProcurementView procurementId={sel.id} items={items}
             openItem={openItem} openProject={openProject}
+            openCounterparty={openCounterparty}
             isNew={isFresh('procurement', sel.id)}
             openPurchase={id => { reloadPurchases(); openPurchase(id) }}
             onChanged={reloadProcurements}

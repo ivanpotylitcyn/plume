@@ -27,6 +27,11 @@ export interface FieldProps {
   locked: boolean           // замок формы закрыт → показываем текст
   view?: ReactNode          // значение в просмотре; пустое → прочерк
   wide?: boolean            // длинная ступень ширины (§13.3)
+  // Хинт у метки — для ПРОИЗВОДНЫХ полей (2026-08-05, первое такое — «Проекты»
+  // закупки: охват вычисляется из её заказов). Такое поле не редактируется никогда,
+  // не «под замком», и без пояснения при снятом карандаше читается как сломанное:
+  // рядом все поля стали контролами, а это осталось текстом. Хинт отвечает «почему».
+  hint?: string
 }
 
 // Пустое значение — прочерк, а не пустая строка: пустое место в шапке читается как
@@ -35,11 +40,11 @@ function dash(view: ReactNode): ReactNode {
   return view === null || view === undefined || view === '' ? '—' : view
 }
 
-export function Field({ label, locked, view, wide, children }:
+export function Field({ label, locked, view, wide, hint, children }:
   FieldProps & { children?: ReactNode }) {
   return (
     <>
-      <dt>{label}</dt>
+      <dt>{label}{hint && <span className="fd-hint">{hint}</span>}</dt>
       <dd className={wide ? 'wide' : undefined}>{locked ? dash(view) : children}</dd>
     </>
   )

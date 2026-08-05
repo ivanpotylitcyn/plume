@@ -16,15 +16,17 @@ import { AnchorSelect, OrderFields, useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { ItemGlyph, MismatchGlyph, StatusGlyph, count, num, statusTone } from './status'
+import { CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph, count, num,
+  statusTone } from './status'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 
 export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, openProject,
-  openProcurement, onChanged, onDeleted }: {
+  openProcurement, openCounterparty, onChanged, onDeleted }: {
   purchaseId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openReceipt: (id: number) => void
   openProject: (id: number) => void
   openProcurement: (id: number) => void   // якорь «Закупка» кликабелен под замком (§8)
+  openCounterparty: (id: number) => void
   onChanged: () => void; onDeleted?: () => void
 }) {
   const [c, setC] = useState<PurchaseForm | null>(null)
@@ -149,7 +151,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                       {r.code || `Поставка #${r.id}`}</a></td>
                   <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
                   <td className="c-fit">{r.date}</td>
-                  <td className="c-desc">{r.contractor_name}</td>
+                  <td className="c-desc">
+                    <CounterpartyRef code={r.contractor_code} name={r.contractor_name} /></td>
                   <td className="num">{r.lines}</td>
                 </tr>
               ))}
@@ -208,7 +211,10 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             {/* Ф17: «у кого купили» — своё поле заказа, а не чтение сквозь план.
                 Обязательно к ФИКСАЦИИ (движок откажет внятно), не к рождению. */}
             <Field label="Контрагент" locked={locked}
-              view={c.contractor_id ? <>{c.contractor_name}{mismatch}</> : ''}>
+              view={c.contractor_id
+                ? <><CounterpartyRef code={c.contractor_code} name={c.contractor_name}
+                    onOpen={() => openCounterparty(c.contractor_id!)} />{mismatch}</>
+                : ''}>
               <CounterpartyPicker counterparties={suppliers} side="supply"
                 value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"

@@ -40,8 +40,11 @@ export interface ItemRow {
 export interface DeficitTreeNode {
   component_id: number; component_code: string; component_description: string; uom: string
   component_native: boolean; component_synced: boolean; component_locked: boolean
-  need: number; depth: number; is_leaf: boolean; status: Status
-  have?: number; on_order?: number; to_order?: number; available_raw?: number; anomaly?: boolean
+  need: number; depth: number; is_leaf: boolean
+  // Баланс несёт только ЛИСТ: узел-подсборка — структурная строка (`is_leaf: false`),
+  // у неё нет ни чисел покрытия, ни статуса.
+  kitted?: number; in_stock?: number; on_order?: number; balance?: number
+  status?: Status; anomaly?: boolean
 }
 export interface DeficitDemand {
   demand_id: number; target_id: number; target_code: string; target_description: string
@@ -50,11 +53,14 @@ export interface DeficitDemand {
   status: Status; badge: Status; tree: DeficitTreeNode[]
 }
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
+// Четыре сырых члена + невязка: `(kitted + in_stock + on_order) − need = balance`.
+// `status` — тон БАЛАНСА (минус красный / ноль оранжевый / плюс зелёный), `supply` —
+// ось снабжения для цвета прибора и проекта. Два разных вопроса, два поля.
 export interface DeficitComponent {
   component_id: number; component_code: string; component_description: string; uom: string
   component_native: boolean; component_synced: boolean; component_locked: boolean
-  need: number; have: number; on_order: number; to_order: number
-  status: Status; available_raw: number; anomaly: boolean
+  need: number; kitted: number; in_stock: number; on_order: number; balance: number
+  status: Status; supply: Status; anomaly: boolean
 }
 export interface Deficit {
   project_id: number; project_code: string; project_name: string
@@ -220,7 +226,8 @@ export interface CounterpartyForm {
 
 // ── Приход / УПД (волна 3 — записываемое ядро) ──
 export interface ReceiptRow {
-  id: number; code: string | null; number: string; date: string; contractor_name: string
+  id: number; code: string | null; number: string; date: string
+  contractor_code: string; contractor_name: string
   project_code: string; locked: boolean; lines: number
 }
 export interface ReceiptLot {
@@ -231,7 +238,7 @@ export interface ReceiptLot {
 export interface ReceiptForm extends Authored {
   id: number; number: string; date: string
   code: string | null; description: string
-  contractor_id: number | null; contractor_name: string
+  contractor_id: number | null; contractor_code: string; contractor_name: string
   contractor_mismatch: boolean   // Ф17: «кто привёз» ≠ «у кого купили» (флаг от движка)
   project_id: number; project_code: string; project_name: string
   purchase_id: number | null
@@ -256,13 +263,13 @@ export interface LineReceiptRow {
 }
 export interface PurchaseReceiptRow {
   id: number; code: string | null; number: string; date: string
-  locked: boolean; contractor_name: string; lines: number
+  locked: boolean; contractor_code: string; contractor_name: string; lines: number
 }
 export interface PurchaseForm extends Authored {
   id: number; locked: boolean; project_id: number; project_code: string
   // Ф17: закупка-план опциональна; контрагент — своё поле заказа («у кого купили»).
   project_name: string; procurement_id: number | null
-  contractor_id: number | null; contractor_name: string
+  contractor_id: number | null; contractor_code: string; contractor_name: string
   contractor_mismatch: boolean   // расхождение с контрагентом закупки — знак, не гейт
   code: string | null; description: string; date: string | null
   editable: boolean; worst_status: Status
@@ -292,7 +299,7 @@ export interface TransferFormLine {
 export interface TransferForm extends Authored {
   id: number; number: string; date: string
   code: string | null; description: string
-  contractor_id: number | null; contractor_name: string
+  contractor_id: number | null; contractor_code: string; contractor_name: string
   project_id: number; project_code: string; project_name: string; locked: boolean
   total_qty: number; lines: TransferFormLine[]
 }
@@ -453,38 +460,35 @@ export interface ProcurementScopeProject {
 export interface ProcurementForm extends Authored {
   id: number; locked: boolean; date: string | null
   code: string | null; description: string; editable: boolean
-  contractor_id: number | null; contractor_name: string
+  contractor_id: number | null; contractor_code: string; contractor_name: string
   projects: ProcurementScopeProject[]        // охват (Ф13): под какие проекты закупка
   total_qty: number; lines: ProcurementFormLine[]
 }
 
-// ── Pegging (волна 8): нарезка плана на проектные заказы ──
-// Применение изделия в проекте (обратное разузлование, Ф5): «зачем оно тут».
-export interface PeggingUsage {
-  target_item_id: number; target_code: string; target_description: string
-  per_unit: number; demand_qty: number; total: number
-}
-// Заказ проекта под этим планом — куда пегать (Р2: их может быть несколько).
-export interface PeggingPurchase {
-  id: number; code: string; locked: boolean; lines: number
-}
-export interface PeggingProject {
+// ── Привязка (волна 8, переделана 2026-08-05): раскладка плана по ЗАКАЗАМ ──
+// Ячейка матрицы: строка плана × заказ закупки. `qty` — сколько этого Item в этом
+// заказе (правится прямо здесь); `balance` — баланс ПРОЕКТА заказа по этому Item, то
+// же число, что в «Потребности» проекта: считает только зафиксированное, поэтому
+// черновая раскладка его не двигает.
+export interface AllocationCell {
+  purchase_id: number; purchase_code: string; locked: boolean
   project_id: number; project_code: string; project_name: string
-  suggest: number; pegged: number
-  usage: PeggingUsage[]; purchases: PeggingPurchase[]
+  qty: number
+  need: number; kitted: number; in_stock: number; on_order: number
+  balance: number; balance_status: Status
 }
-export interface PeggingRow {
+export interface AllocationRow {
   line_id: number; item_id: number; item_code: string; item_description: string
-  uom: string; qty: number; pegged: number; remaining: number; status: Status
-  by_project: PeggingProject[]
+  uom: string; qty: number; allocated: number; remaining: number; status: Status
+  orders: AllocationCell[]
 }
-export interface PeggingFanRow {
-  purchase_id: number; locked: boolean; project_id: number
+export interface AllocationFanRow {
+  purchase_id: number; purchase_code: string; locked: boolean; project_id: number
   project_code: string; project_name: string; lines: number; total: number
 }
-export interface Pegging {
-  id: number; locked: boolean; editable: boolean
-  rows: PeggingRow[]; fan: PeggingFanRow[]
+export interface Allocation {
+  id: number; locked: boolean
+  rows: AllocationRow[]; fan: AllocationFanRow[]
 }
 
 // ── Вложения (волна 11): PDF/сканы к документам и изделиям ──
@@ -748,8 +752,6 @@ export const api = {
   receiptFromPurchase: (id: number) =>
     send<ReceiptForm>('POST', `/api/purchases/${id}/receipt/`),
   projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
-  addToPurchase: (id: number, b: { item_id: number; qty: number }) =>
-    send<{ purchase_id: number }>('POST', `/api/projects/${id}/add-to-purchase/`, b),
 
   transfers: () => get<TransferRow[]>('/api/transfers/'),
   transfer: (id: number) => get<TransferForm>(`/api/transfers/${id}/`),
@@ -860,14 +862,11 @@ export const api = {
   lockProcurement: (id: number) => send<ProcurementForm>('POST', `/api/procurements/${id}/lock/`),
   unlockProcurement: (id: number) => send<ProcurementForm>('POST', `/api/procurements/${id}/unlock/`),
   xlsxUrl: (id: number) => `/api/procurements/${id}/xlsx/`,
-  // pegging (волна 8)
-  pegging: (id: number) => get<Pegging>(`/api/procurements/${id}/pegging/`),
+  // привязка (волна 8): матрица «строка плана × заказы»
+  allocation: (id: number) => get<Allocation>(`/api/procurements/${id}/allocation/`),
   // `purchase_id`: число — в этот заказ, 'new' — в новый, нет ключа — фолбэк (Р2)
-  peg: (id: number, b: { item_id: number; project_id: number; qty: number; purchase_id?: number | 'new' }) =>
-    send<Pegging>('POST', `/api/procurements/${id}/peg/`, b),
-  unpeg: (id: number, b: { item_id: number; project_id: number }) =>
-    send<Pegging>('POST', `/api/procurements/${id}/unpeg/`, b),
-  autopeg: (id: number) => send<Pegging>('POST', `/api/procurements/${id}/autopeg/`),
+  allocate: (id: number, b: { purchase_id: number; item_id: number; qty: number }) =>
+    send<Allocation>('POST', `/api/procurements/${id}/allocate/`, b),
 
   // ── Вложения (волна 11) ──
   attachments: (ownerType: string, ownerId: number) =>

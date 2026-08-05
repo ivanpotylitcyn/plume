@@ -14,7 +14,7 @@ import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { useTypeahead } from './core/useTypeahead'
 import { AnchoredMenu } from './AnchoredMenu'
-import type { ItemRow, CounterpartyRow, ProjectPurchaseRow, ProjectRow } from './api'
+import type { ItemRow, CounterpartyRow, ProjectPurchaseRow } from './api'
 import { ItemGlyph, StatusGlyph } from './status'
 
 export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, renderRow,
@@ -187,32 +187,6 @@ export function CounterpartyPicker({ counterparties, side, value, onPick, disabl
     </>} />
 }
 
-// ── Пикер охвата закупки (волна 19, Ф13): множественный выбор проектов ──
-// Ориентир — выбор папки в мессенджере: список с галочками, Enter/клик переключает и
-// список НЕ закрывается. Форма растёт ровно на одно поле: отмеченное свёрнуто в поле
-// («ДОП ДЗЗ, ЛК-1 +2»), полный состав виден в меню и в табе «К закупке».
-export function ProjectScopePicker({ projects, selected, onToggle, disabled }: {
-  projects: ProjectRow[]
-  selected: number[]
-  onToggle: (id: number) => void
-  disabled?: boolean
-}) {
-  const chosen = new Set(selected)
-  const names = projects.filter(p => chosen.has(p.id)).map(p => p.code)
-  // Сводка: два кода целиком, остальные счётчиком — иначе поле уезжает по ширине.
-  const summary = names.length === 0 ? ''
-    : names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2}` : '')
-  return <Picker options={projects} value={''} onPick={onToggle} keyOf={p => p.id}
-    multi summary={summary}
-    textOf={p => p.code} searchOf={p => `${p.code} ${p.description}`}
-    disabled={disabled} placeholder="— не выбраны —"
-    notFound="ничего не найдено — проект должен быть в справочнике."
-    renderRow={p => <>
-      <span className={'ci' + (chosen.has(p.id) ? ' ci-check' : '')} />
-      <span className="code">{p.code}</span>
-      <span className="dim">{p.description}</span>
-    </>} />
-}
 
 // ── Пикер заказа (УПД → какой заказ закрывает) ──
 // Тип узкий (`ProjectPurchaseRow`): у заказа-кандидата берём только идентичность,

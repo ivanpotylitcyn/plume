@@ -192,7 +192,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             <th className="uom">Ед.</th></tr></thead>
           <tbody>{d.movements.map((m, i) => (
             <tr key={`${m.kind}-${m.document_id}-${m.lot_id}-${i}`}
-              className={'row ' + (m.qty < 0 ? 's-to_order' : 's-available')}>
+              className="row">
               <td className="gl"><StatusGlyph locked={m.locked} /></td>
               <td className="c-key"><a className="link" onClick={() => openOrder(m.kind as OrderKind, m.document_id)}>
                 {m.code || m.number || `${ORDER_LABEL[m.kind as OrderKind]} #${m.document_id}`}</a></td>

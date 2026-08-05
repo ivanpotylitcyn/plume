@@ -200,6 +200,47 @@ class CoverageTests(EngineTestBase):
         self.assertEqual(engine._best_of(['to_order', 'on_order']), 'on_order')
 
 
+class BalanceTests(EngineTestBase):
+    """Баланс потребности (2026-08-05): четыре сырых члена, дефицит — невязка."""
+
+    def test_four_members_sum_to_balance(self):
+        b = engine._balance(need=D(10), kitted=D(2), in_stock=D(3), on_order=D(1))
+        self.assertEqual(b['balance'], D(-4))
+        self.assertEqual(b['status'], 'to_order')      # красный: не хватает
+
+    def test_surplus_shows_as_plus(self):
+        """То, ради чего затевалось: перебор виден знаком, а не прячется за клампом."""
+        b = engine._balance(need=D(6), kitted=D(0), in_stock=D(0), on_order=D(10))
+        self.assertEqual(b['balance'], D(4))
+        self.assertEqual(b['status'], 'available')     # зелёный: запас 4
+
+    def test_exact_zero_is_orange(self):
+        b = engine._balance(need=D(6), kitted=D(6), in_stock=D(0), on_order=D(0))
+        self.assertEqual(b['balance'], D(0))
+        self.assertEqual(b['status'], 'on_order')      # оранжевый: сошлось впритык
+
+    def test_kitted_counts_as_covered(self):
+        """Впаянное закрывает потребность: со склада ушло, но в изделии стоит."""
+        b = engine._balance(need=D(6), kitted=D(6), in_stock=D(0), on_order=D(0))
+        self.assertEqual(b['balance'], D(0))
+        self.assertEqual(b['kitted'], D(6))
+
+    def test_supply_status_separates_from_balance_tone(self):
+        """Ноль-баланс оранжевый в колонке, но здоровым зелёный в оси снабжения."""
+        zero = engine._balance(need=D(6), kitted=D(6), in_stock=D(0), on_order=D(0))
+        self.assertEqual(zero['status'], 'on_order')
+        self.assertEqual(engine._supply_status(zero), 'available')
+        waiting = engine._balance(need=D(6), kitted=D(0), in_stock=D(0), on_order=D(6))
+        self.assertEqual(engine._supply_status(waiting), 'on_order')   # часть ещё едет
+        short = engine._balance(need=D(6), kitted=D(0), in_stock=D(0), on_order=D(0))
+        self.assertEqual(engine._supply_status(short), 'to_order')
+
+    def test_negative_stock_drags_balance_down(self):
+        """Недостача не клампится — она и должна утаскивать баланс в минус."""
+        b = engine._balance(need=D(10), kitted=D(0), in_stock=D(-5), on_order=D(0))
+        self.assertEqual(b['balance'], D(-15))
+
+
 class OnOrderTests(EngineTestBase):
     def test_purchased_open_order_minus_received(self):
         item = self.make_item('SCR', kind='material')
@@ -247,15 +288,57 @@ class DeficitTests(EngineTestBase):
 
         d = engine.project_deficit(self.prj)
         dm = d['demands'][0]
-        self.assertEqual(dm['status'], 'to_order')   # worst-of (SCR ▲)
+        self.assertEqual(dm['status'], 'to_order')   # worst-of (SCR не хватает)
         # аккордеон-дерево: CASE/SCR — прямые покупные листья прибора (depth 0)
         lines = {ln['component_code']: ln for ln in dm['tree']}
+        self.assertEqual(lines['CASE']['in_stock'], D(12))   # сырой остаток, не клампованный
+        self.assertEqual(lines['CASE']['balance'], D(2))     # нужно 10, лежит 12 → запас 2
         self.assertEqual(lines['CASE']['status'], 'available')
-        self.assertEqual(lines['CASE']['have'], D(10))
         self.assertTrue(lines['CASE']['is_leaf'])
         self.assertEqual(lines['SCR']['need'], D(40))
         self.assertEqual(lines['SCR']['on_order'], D(25))
-        self.assertEqual(lines['SCR']['to_order'], D(15))
+        self.assertEqual(lines['SCR']['balance'], D(-15))
+        self.assertEqual(lines['SCR']['status'], 'to_order')
+
+    def test_surplus_order_reaches_the_view(self):
+        """Заказали больше нужды: свод отдаёт сырые числа, перебор виден плюсом."""
+        device = self.make_item('DEV', manufactured=True, kind='device')
+        screw = self.make_item('SCR', kind='material')
+        models.BomLine.objects.create(parent=device, component=screw, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(6))
+        purchase = models.Purchase.objects.create(
+            project=self.prj, user=self.user, contractor=self.supplier, locked=True)
+        models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=D(10))
+
+        d = engine.project_deficit(self.prj)
+        row = {c['component_code']: c for c in d['components']}['SCR']
+        self.assertEqual(row['need'], D(6))
+        self.assertEqual(row['on_order'], D(10))         # сырое: столько заказано
+        self.assertEqual(row['in_stock'], D(0))
+        self.assertEqual(row['kitted'], D(0))
+        self.assertEqual(row['balance'], D(4))           # запас 4 виден знаком
+        self.assertEqual(row['status'], 'available')
+        # то же число и в дереве-аккордеоне (лист несёт баланс)
+        leaf = d['demands'][0]['tree'][0]
+        self.assertEqual(leaf['balance'], D(4))
+
+    def test_kitted_closes_need_without_stock(self):
+        """Собрали приборы: компонент ушёл со склада, но потребность им закрыта."""
+        device = self.make_item('DEV', manufactured=True, kind='device')
+        screw = self.make_item('SCR', kind='material')
+        models.BomLine.objects.create(parent=device, component=screw, qty=D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(6))
+        lot = self.receipt_lot(screw, self.prj, 6)        # купили 6
+        kit = engine.create_kitting(self.prj, self.user, target_item=device, qty=D(6))
+        engine.add_kitting_line(kit, screw, lot, D(6))   # впаяли все 6
+        engine.lock_kitting(kit)
+
+        row = {c['component_code']: c
+               for c in engine.project_deficit(self.prj)['components']}['SCR']
+        self.assertEqual(row['kitted'], D(6))            # стоит в изделии
+        self.assertEqual(row['in_stock'], D(0))          # на складе не осталось
+        self.assertEqual(row['balance'], D(0))           # и это НЕ дефицит
+        self.assertEqual(row['status'], 'on_order')      # оранжевый: сошлось впритык
 
 
 class PurchaseCoverageTests(EngineTestBase):
@@ -803,15 +886,6 @@ class PurchaseFormTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.set_receipt_purchase(r, p)           # заказ чужого проекта
 
-    def test_deficit_bridge_creates_and_increments_line(self):
-        item = self.make_item('SCR', kind='material')
-        p1 = engine.add_to_project_purchase(self.prj, item, D(15), self.user)
-        self.assertEqual(p1.lines.get(item=item).qty, D(15))
-        # повтор той же позиции — инкремент в том же черновике
-        p2 = engine.add_to_project_purchase(self.prj, item, D(10), self.user)
-        self.assertEqual(p1.id, p2.id)
-        self.assertEqual(p2.lines.get(item=item).qty, D(25))
-
 
 class ReceiptFromPurchaseTests(EngineTestBase):
     """Волна 19, Ф6: поток «Заказ → УПД» — накладная преднабивается остатком заказа."""
@@ -951,14 +1025,19 @@ class PurchaseContractorTests(EngineTestBase):
         self.assertEqual(r.contractor_id, self.supplier.id)   # из ЗАКАЗА, не сквозь план
         self.assertEqual(r.lots.get(item=self.item).qty, D(7))
 
-    def test_peg_copies_plan_contractor_then_fields_live_apart(self):
-        """Наследование — копией при рождении: дальше поля независимы."""
+    def test_plan_and_order_contractors_live_apart(self):
+        """Контрагенты плана и заказа независимы: одна закупка законно идёт к разным.
+
+        Наследование «копией при рождении» отсюда ушло вместе с автосозданием заказов
+        (2026-08-05): движок заказы больше не рождает, их заводят руками и контрагента
+        ставят там же. Независимость полей — то, ради чего копия и делалась, — осталась.
+        """
         plan = engine.create_procurement(self.user)
-        engine.set_procurement_scope(plan, [self.prj])
         engine.add_procurement_line(plan, self.item, D(10))
         engine.update_procurement(plan, contractor=self.supplier)
-        engine.peg_procurement_line(plan, self.item, self.prj, D(10), self.user)
-        pu = plan.purchases.get()
+        pu = engine.create_purchase(self.prj, self.user)
+        engine.update_purchase(pu, procurement=plan, contractor=self.supplier)
+        engine.set_allocation(plan, pu, self.item, D(10))
         self.assertEqual(pu.contractor_id, self.supplier.id)
         # правка заказа план не трогает…
         engine.update_purchase(pu, contractor=self.other_cp)
@@ -1882,8 +1961,8 @@ class ItemXlsxHttpTests(TestCase):
         self.assertIn(quote(f'изделие-{self.item.id}.xlsx'), cd)
 
 
-class PeggingTests(EngineTestBase):
-    """Волна 8: нарезка плана (Procurement) на проектные заказы (Purchase)."""
+class AllocationTests(EngineTestBase):
+    """Привязка (волна 8, переделана 2026-08-05): раскладка плана по ЗАКАЗАМ закупки."""
 
     def setUp(self):
         super().setUp()
@@ -1895,158 +1974,125 @@ class PeggingTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         models.ProjectDemand.objects.create(project=self.prj2, target_item=dev, qty=D(5))
         self.plan = engine.create_procurement(self.user, description='свод')   # need 40 + 20
-        # Ф13: наводка живёт по охвату — без него плану нечего раскладывать
-        engine.set_procurement_scope(self.plan, [self.prj, self.prj2])
-        # Ф17: намерение плана — «у кого собираемся купить»; рождённые пеггингом заказы
-        # наследуют его копией, иначе их нечем зафиксировать.
         engine.update_procurement(self.plan, contractor=self.supplier)
         engine.add_procurement_line(self.plan, self.scr, D(60))
+        # Заказы заводятся РУКАМИ и привязываются к закупке — движок их не рождает.
+        self.ord1 = self._order(self.prj)
+        self.ord2 = self._order(self.prj2)
 
-    def test_peg_creates_project_purchase_under_plan(self):
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
-        pu = self.plan.purchases.get(project=self.prj)
-        self.assertEqual(pu.procurement_id, self.plan.id)   # заказ висит на плане
-        self.assertEqual(pu.contractor_id, self.supplier.id)   # Ф17: контрагент копией
-        self.assertFalse(pu.locked)
-        self.assertEqual(pu.lines.get(item=self.scr).qty, D(40))
-        # повторный пег — инкремент в тот же заказ
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
-        self.assertEqual(self.plan.purchases.count(), 1)
-        self.assertEqual(pu.lines.get(item=self.scr).qty, D(50))
+    def _order(self, project):
+        """Заказ под проект, привязанный к закупке — как это делает человек руками."""
+        pu = engine.create_purchase(project, self.user)
+        engine.update_purchase(pu, procurement=self.plan, contractor=self.supplier)
+        return pu
 
-    def test_autopeg_distributes_and_idempotent(self):
-        engine.autopeg_procurement(self.plan, self.user)
-        p1 = self.plan.purchases.get(project=self.prj)
-        p2 = self.plan.purchases.get(project=self.prj2)
-        self.assertEqual(p1.lines.get(item=self.scr).qty, D(40))     # по наводке свода
-        self.assertEqual(p2.lines.get(item=self.scr).qty, D(20))
-        row = engine.procurement_pegging(self.plan)['rows'][0]
-        self.assertEqual(row['pegged'], D(60))
-        self.assertEqual(row['remaining'], D(0))
-        self.assertEqual(row['status'], 'available')
-        # идемпотентность — повтор ничего не добавляет
-        engine.autopeg_procurement(self.plan, self.user)
-        self.assertEqual(p1.lines.get(item=self.scr).qty, D(40))
-        self.assertEqual(self.plan.purchases.count(), 2)
+    def test_scope_is_derived_from_orders(self):
+        """Охват больше не хранится: это проекты заказов закупки."""
+        self.assertEqual([p.code for p in engine.procurement_scope(self.plan)],
+                         ['P1', 'P2'])
+        empty = engine.create_procurement(self.user)
+        self.assertEqual(list(engine.procurement_scope(empty)), [])   # нет заказов = пусто
 
-    def test_peg_guards(self):
+    def test_set_allocation_assigns_not_adds(self):
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        self.assertEqual(self.ord1.lines.get(item=self.scr).qty, D(40))
+        # повтор — присвоение, а не инкремент (в этом вся разница с прежним пегом)
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(25))
+        self.assertEqual(self.ord1.lines.get(item=self.scr).qty, D(25))
+
+    def test_zero_removes_the_line(self):
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(0))
+        self.assertFalse(self.ord1.lines.filter(item=self.scr).exists())
+        # и появляется снова, если вписать число
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(7))
+        self.assertEqual(self.ord1.lines.get(item=self.scr).qty, D(7))
+
+    def test_allocation_guards(self):
         with self.assertRaises(ValidationError):            # item не в плане
-            engine.peg_procurement_line(self.plan, self.make_item('OTH'),
-                                        self.prj, D(1), self.user)
-        with self.assertRaises(ValidationError):            # неположительное кол-во
-            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(0), self.user)
-        white = models.Project.objects.create(code='WHITE', description='Свой склад',
-            kind=models.Project.Kind.INTERNAL_STOCK)
-        with self.assertRaises(ValidationError):            # не внешний проект
-            engine.peg_procurement_line(self.plan, self.scr, white, D(1), self.user)
-        closed = models.Project.objects.create(code='CL', description='Закрыт',
-            kind=models.Project.Kind.EXTERNAL, locked=True)
-        with self.assertRaises(ValidationError):            # не активный проект
-            engine.peg_procurement_line(self.plan, self.scr, closed, D(1), self.user)
+            engine.set_allocation(self.plan, self.ord1, self.make_item('OTH'), D(1))
+        with self.assertRaises(ValidationError):            # отрицательное количество
+            engine.set_allocation(self.plan, self.ord1, self.scr, D(-1))
+        alien = engine.create_procurement(self.user)
+        engine.add_procurement_line(alien, self.scr, D(5))
+        with self.assertRaises(ValidationError):            # заказ под другой закупкой
+            engine.set_allocation(alien, self.ord1, self.scr, D(1))
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(10))
+        engine.lock_purchase(self.ord1)
+        with self.assertRaises(ValidationError):            # зафиксированный заказ
+            engine.set_allocation(self.plan, self.ord1, self.scr, D(1))
 
-    def test_unpeg_removes_and_blocks_sent(self):
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
-        engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
-        pu = self.plan.purchases.get(project=self.prj)
-        self.assertFalse(pu.lines.exists())                 # пег снят
-        # пег в отправленном заказе — снять нельзя, пока не снят send
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(40), self.user)
-        engine.lock_purchase(pu)
-        with self.assertRaises(ValidationError):
-            engine.unpeg_procurement_line(self.plan, self.scr, self.prj)
+    def test_matrix_row_has_a_cell_per_order(self):
+        """Матрица прямоугольная: строка плана × все заказы закупки, пустое — тоже факт."""
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        row = engine.procurement_allocation(self.plan)['rows'][0]
+        cells = {c['purchase_id']: c for c in row['orders']}
+        self.assertEqual(set(cells), {self.ord1.id, self.ord2.id})
+        self.assertEqual(cells[self.ord1.id]['qty'], D(40))
+        self.assertEqual(cells[self.ord2.id]['qty'], D(0))     # заказ есть, ячейка пуста
+        self.assertEqual(cells[self.ord1.id]['project_code'], 'P1')
+        self.assertEqual(row['allocated'], D(40))
+        self.assertEqual(row['remaining'], D(20))
+
+    def test_row_status_by_allocation(self):
+        row = lambda: engine.procurement_allocation(self.plan)['rows'][0]
+        self.assertEqual(row()['status'], 'to_order')          # не тронута — красный
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        self.assertEqual(row()['status'], 'on_order')          # тронута, не подбита
+        engine.set_allocation(self.plan, self.ord2, self.scr, D(20))
+        self.assertEqual(row()['status'], 'available')         # разложена в ноль
+        engine.set_allocation(self.plan, self.ord2, self.scr, D(30))
+        self.assertEqual(row()['remaining'], D(-10))           # перепег законен
+        self.assertEqual(row()['status'], 'to_order')          # но красный: не сходится
+
+    def test_cell_carries_project_balance_untouched_by_drafts(self):
+        """Баланс в ячейке — тот же, что в «Потребности»: черновая раскладка его не двигает."""
+        cells = lambda: {c['purchase_id']: c
+                         for c in engine.procurement_allocation(self.plan)['rows'][0]['orders']}
+        self.assertEqual(cells()[self.ord1.id]['need'], D(40))
+        self.assertEqual(cells()[self.ord1.id]['balance'], D(-40))
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        self.assertEqual(cells()[self.ord1.id]['balance'], D(-40))   # черновик не считается
+        engine.lock_purchase(self.ord1)
+        self.assertEqual(cells()[self.ord1.id]['balance'], D(0))     # фиксация — момент истины
+        self.assertEqual(cells()[self.ord1.id]['balance_status'], 'on_order')
+
+    def test_two_orders_of_one_project_share_the_balance(self):
+        """Баланс — свойство ПРОЕКТА: у двух его заказов число одинаково (принято 08-05)."""
+        extra = self._order(self.prj)
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(30))
+        engine.set_allocation(self.plan, extra, self.scr, D(10))
+        cells = {c['purchase_id']: c
+                 for c in engine.procurement_allocation(self.plan)['rows'][0]['orders']}
+        self.assertEqual(cells[self.ord1.id]['balance'], cells[extra.id]['balance'])
+        engine.lock_purchase(self.ord1)
+        cells = {c['purchase_id']: c
+                 for c in engine.procurement_allocation(self.plan)['rows'][0]['orders']}
+        self.assertEqual(cells[extra.id]['balance'], D(-10))   # сходится само
+
+    def test_locked_order_stays_visible_in_the_matrix(self):
+        """Зафиксированный заказ из привязки НЕ исчезает: «сюда уже заказано» — контекст."""
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        engine.lock_purchase(self.ord1)
+        cells = {c['purchase_id']: c
+                 for c in engine.procurement_allocation(self.plan)['rows'][0]['orders']}
+        self.assertTrue(cells[self.ord1.id]['locked'])
+        self.assertEqual(cells[self.ord1.id]['qty'], D(40))
+
+    def test_fan_lists_orders_of_the_plan(self):
+        engine.set_allocation(self.plan, self.ord1, self.scr, D(40))
+        fan = {f['purchase_id']: f for f in engine.procurement_allocation(self.plan)['fan']}
+        self.assertEqual(fan[self.ord1.id]['lines'], 1)
+        self.assertEqual(fan[self.ord1.id]['total'], D(40))
+        self.assertEqual(fan[self.ord2.id]['lines'], 0)
 
     def test_plan_list_shows_every_procurement(self):
-        """Ф17: список закупок = ВСЕ закупки — прятать больше нечего.
-
-        Раньше одиночный заказ рождал закупку-пустышку, и список отсекал её эвристикой
-        «есть заказы, но нет строк». `procurement` стал nullable — пустышки не рождаются,
-        эвристика умерла вместе с ними.
-        """
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
+        """Ф17: список закупок = ВСЕ закупки — прятать больше нечего."""
         engine.create_purchase(self.prj, self.user)         # заказ без плана
         c = Client()
         c.force_login(self.user)
         ids = {row['id'] for row in c.get('/api/procurements/').json()}
         self.assertEqual(ids, {self.plan.id})               # заказ пустышки не создал
-
-    # --- Ф13: охват задаёт область расчёта --------------------------------- #
-
-    def test_scope_narrows_suggestion_to_its_projects(self):
-        # до Ф13 в аккордеон ЛЮБОГО плана лезли проекты всей организации
-        engine.set_procurement_scope(self.plan, [self.prj])
-        row = engine.procurement_pegging(self.plan)['rows'][0]
-        self.assertEqual([bp['project_code'] for bp in row['by_project']], ['P1'])
-
-    def test_empty_scope_gives_no_suggestion_and_autopeg_does_nothing(self):
-        engine.set_procurement_scope(self.plan, [])
-        row = engine.procurement_pegging(self.plan)['rows'][0]
-        self.assertEqual(row['by_project'], [])             # пусто = пусто
-        engine.autopeg_procurement(self.plan, self.user)
-        self.assertEqual(self.plan.purchases.count(), 0)    # раскладывать нечего
-
-    def test_project_outside_scope_still_shows_what_is_pegged(self):
-        # охват правит НАВОДКУ, а не факт: разложенное вручную видно всегда, иначе
-        # сужение охвата прятало бы существующие обязательства
-        engine.peg_procurement_line(self.plan, self.scr, self.prj2, D(7), self.user)
-        engine.set_procurement_scope(self.plan, [self.prj])
-        by = {bp['project_code']: bp for bp in
-              engine.procurement_pegging(self.plan)['rows'][0]['by_project']}
-        self.assertEqual(by['P2']['pegged'], D(7))
-        self.assertEqual(by['P2']['suggest'], D(0))         # но наводки по нему нет
-
-    def test_scope_refuses_internal_and_locked_plan(self):
-        white = models.Project.objects.create(code='WHITE', description='Свой склад',
-            kind=models.Project.Kind.INTERNAL_STOCK)
-        with self.assertRaises(ValidationError):
-            engine.set_procurement_scope(self.plan, [white])
-        engine.lock_procurement(self.plan)
-        with self.assertRaises(ValidationError):            # область расчёта под замком
-            engine.set_procurement_scope(self.plan, [self.prj])
-
-    # --- Ф5: пеггинг в явный заказ (Р2) ------------------------------------ #
-
-    def test_peg_into_explicit_purchase(self):
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
-        first = self.plan.purchases.get(project=self.prj)
-        # «＋ новый заказ»: второе обязательство под тем же проектом
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(5), self.user,
-                                    new_purchase=True)
-        self.assertEqual(self.plan.purchases.filter(project=self.prj).count(), 2)
-        second = self.plan.purchases.filter(project=self.prj).exclude(pk=first.pk).get()
-        self.assertEqual(second.lines.get(item=self.scr).qty, D(5))
-        # явный выбор кладёт именно туда, куда указано (фолбэк взял бы последний черновик)
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(3), self.user,
-                                    purchase=first)
-        self.assertEqual(first.lines.get(item=self.scr).qty, D(13))
-        self.assertEqual(second.lines.get(item=self.scr).qty, D(5))
-
-    def test_peg_into_wrong_or_locked_purchase_refused(self):
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
-        mine = self.plan.purchases.get(project=self.prj)
-        engine.peg_procurement_line(self.plan, self.scr, self.prj2, D(10), self.user)
-        other_project = self.plan.purchases.get(project=self.prj2)
-        with self.assertRaises(ValidationError):            # заказ другого проекта
-            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(1), self.user,
-                                        purchase=other_project)
-        alien = engine.create_procurement(self.user)
-        engine.add_procurement_line(alien, self.scr, D(5))
-        engine.peg_procurement_line(alien, self.scr, self.prj, D(5), self.user)
-        with self.assertRaises(ValidationError):            # заказ под другим планом
-            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(1), self.user,
-                                        purchase=alien.purchases.get())
-        engine.lock_purchase(mine)
-        with self.assertRaises(ValidationError):            # зафиксированный заказ
-            engine.peg_procurement_line(self.plan, self.scr, self.prj, D(1), self.user,
-                                        purchase=mine)
-
-    def test_purchase_fan_per_project_in_projection(self):
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(10), self.user)
-        engine.peg_procurement_line(self.plan, self.scr, self.prj, D(5), self.user,
-                                    new_purchase=True)
-        by = {bp['project_code']: bp for bp in
-              engine.procurement_pegging(self.plan)['rows'][0]['by_project']}
-        self.assertEqual(len(by['P1']['purchases']), 2)     # есть из чего выбрать
-        self.assertEqual(by['P2']['purchases'], [])         # под P2 заказов ещё нет
 
 
 class ItemUsageTests(EngineTestBase):
@@ -2191,16 +2237,20 @@ class ProcurementHttpTests(TestCase):
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
 
     def test_scope_deficit_and_bridge(self):
-        # Ф13: витрина живёт ВНУТРИ закупки и считает по её охвату
+        # Витрина живёт ВНУТРИ закупки и считает по её охвату, а охват — проекты её
+        # заказов (2026-08-05): пока заказов нет, закупка честно слепа.
         pid = self.c.post('/api/procurements/', {'description': 'весна'},
             content_type='application/json').json()['id']
         blind = self.c.get(f'/api/procurements/{pid}/deficit/')
         self.assertEqual(blind.status_code, 200)
         self.assertEqual(blind.json()['rows'], [])            # пусто = пусто
-        scope = self.c.patch(f'/api/procurements/{pid}/',
-            {'project_ids': [self.prj.id]}, content_type='application/json')
+        oid = self.c.post('/api/purchases/', {'project_id': self.prj.id},
+            content_type='application/json').json()['id']
+        scope = self.c.patch(f'/api/purchases/{oid}/', {'procurement_id': pid},
+            content_type='application/json')
         self.assertEqual(scope.status_code, 200)
-        self.assertEqual([p['code'] for p in scope.json()['projects']], ['P1'])
+        form = self.c.get(f'/api/procurements/{pid}/').json()
+        self.assertEqual([p['code'] for p in form['projects']], ['P1'])
         svod = self.c.get(f'/api/procurements/{pid}/deficit/')
         rows = {r['item_code']: r for r in svod.json()['rows']}
         self.assertEqual(float(rows['SCR']['to_order']), 40.0)
@@ -2213,14 +2263,23 @@ class ProcurementHttpTests(TestCase):
         again = self.c.get(f'/api/procurements/{pid}/deficit/').json()
         self.assertEqual(float(again['rows'][0]['planned']), 40.0)
 
-    def test_scope_refuses_internal_project(self):
+    def test_internal_project_never_reaches_the_scope_deficit(self):
+        """Внутренний склад — источник покрытия, а не потребитель.
+
+        Гейта на охвате больше нет (охват вычисляемый, запрещать нечему): отсев живёт в
+        самой арифметике свода, куда бы заказ ни был привязан.
+        """
         white = models.Project.objects.create(code='WHITE', description='Свой склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         pid = self.c.post('/api/procurements/', {}, content_type='application/json').json()['id']
-        bad = self.c.patch(f'/api/procurements/{pid}/', {'project_ids': [white.id]},
+        oid = self.c.post('/api/purchases/', {'project_id': white.id},
+            content_type='application/json').json()['id']
+        self.c.patch(f'/api/purchases/{oid}/', {'procurement_id': pid},
             content_type='application/json')
-        self.assertEqual(bad.status_code, 400)
-        self.assertIn('не закупаются', bad.json()['detail'])
+        form = self.c.get(f'/api/procurements/{pid}/').json()
+        self.assertEqual([p['code'] for p in form['projects']], ['WHITE'])  # заказ есть
+        svod = self.c.get(f'/api/procurements/{pid}/deficit/')
+        self.assertEqual(svod.json()['rows'], [])            # но в расчёт не идёт
 
     def test_procurement_crud_lock_and_xlsx(self):
         r = self.c.post('/api/procurements/', {'description': 'весна'},
@@ -2274,8 +2333,8 @@ class ProcurementHttpTests(TestCase):
         self.assertNotIn('order', cd3)
 
 
-class PeggingHttpTests(TestCase):
-    """Волна 8: HTTP-путь pegging — проекция, peg/unpeg/autopeg, гварды."""
+class AllocationHttpTests(TestCase):
+    """HTTP-путь «Привязки» (2026-08-05): проекция-матрица, присвоение в ячейку, гварды."""
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
@@ -2283,6 +2342,7 @@ class PeggingHttpTests(TestCase):
             kind=models.Project.Kind.EXTERNAL)
         self.prj2 = models.Project.objects.create(code='P2', description='Проект 2',
             kind=models.Project.Kind.EXTERNAL)
+        self.sup = models.Counterparty.objects.create(code='КЭ', description='Поставщик')
         self.scr = models.Item.objects.create(code='SCR', description='Винт',
             category=_cat())
         dev = models.Item.objects.create(code='DEV', description='Прибор',
@@ -2295,63 +2355,66 @@ class PeggingHttpTests(TestCase):
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
         self.pid = self.c.post('/api/procurements/', {'description': 'свод'},
             content_type='application/json').json()['id']
-        self.c.patch(f'/api/procurements/{self.pid}/',
-            {'project_ids': [self.prj.id, self.prj2.id]},
-            content_type='application/json')
         self.c.post(f'/api/procurements/{self.pid}/lines/',
             {'item_id': self.scr.id, 'qty': 60}, content_type='application/json')
+        self.ord1 = self._order(self.prj)
+        self.ord2 = self._order(self.prj2)
 
-    def test_pegging_projection_and_autopeg(self):
-        peg = self.c.get(f'/api/procurements/{self.pid}/pegging/')
-        self.assertEqual(peg.status_code, 200)
-        row = peg.json()['rows'][0]
+    def _order(self, project):
+        oid = self.c.post('/api/purchases/', {'project_id': project.id},
+            content_type='application/json').json()['id']
+        self.c.patch(f'/api/purchases/{oid}/',
+            {'procurement_id': self.pid, 'contractor_id': self.sup.id},
+            content_type='application/json')
+        return oid
+
+    def test_matrix_projection(self):
+        r = self.c.get(f'/api/procurements/{self.pid}/allocation/')
+        self.assertEqual(r.status_code, 200)
+        row = r.json()['rows'][0]
         self.assertEqual(row['item_code'], 'SCR')
-        self.assertEqual(float(row['pegged']), 0.0)
-        self.assertEqual(len(row['by_project']), 2)             # наводка по двум проектам
-        auto = self.c.post(f'/api/procurements/{self.pid}/autopeg/')
-        self.assertEqual(auto.status_code, 200)
-        body = auto.json()
-        self.assertEqual(len(body['fan']), 2)                  # веер из двух заказов
-        self.assertEqual(float(body['rows'][0]['pegged']), 60.0)
-        self.assertEqual(body['rows'][0]['status'], 'available')
+        self.assertEqual(float(row['allocated']), 0.0)
+        cells = {c['purchase_id']: c for c in row['orders']}
+        self.assertEqual(set(cells), {self.ord1, self.ord2})     # ячейка на каждый заказ
+        self.assertEqual(float(cells[self.ord1]['balance']), -40.0)
+        self.assertEqual(len(r.json()['fan']), 2)
 
-    def test_manual_peg_unpeg_and_guard(self):
-        peg = self.c.post(f'/api/procurements/{self.pid}/peg/',
-            {'item_id': self.scr.id, 'project_id': self.prj.id, 'qty': 25},
+    def test_allocate_assigns_and_clears(self):
+        r = self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': self.ord1, 'item_id': self.scr.id, 'qty': 40},
             content_type='application/json')
-        self.assertEqual(peg.status_code, 200)
-        self.assertEqual(float(peg.json()['rows'][0]['pegged']), 25.0)
-        # item не в плане → 400
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(float(r.json()['rows'][0]['allocated']), 40.0)
+        # присвоение, не добавление
+        r = self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': self.ord1, 'item_id': self.scr.id, 'qty': 15},
+            content_type='application/json')
+        self.assertEqual(float(r.json()['rows'][0]['allocated']), 15.0)
+        # ноль снимает строку
+        r = self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': self.ord1, 'item_id': self.scr.id, 'qty': 0},
+            content_type='application/json')
+        self.assertEqual(float(r.json()['rows'][0]['allocated']), 0.0)
+        self.assertEqual(r.json()['rows'][0]['status'], 'to_order')
+
+    def test_allocate_guards(self):
         x = models.Item.objects.create(code='X', description='X', category=_cat())
-        bad = self.c.post(f'/api/procurements/{self.pid}/peg/',
-            {'item_id': x.id, 'project_id': self.prj.id, 'qty': 1},
+        bad = self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': self.ord1, 'item_id': x.id, 'qty': 1},
             content_type='application/json')
-        self.assertEqual(bad.status_code, 400)
-        # unpeg → 0
-        un = self.c.post(f'/api/procurements/{self.pid}/unpeg/',
-            {'item_id': self.scr.id, 'project_id': self.prj.id},
+        self.assertEqual(bad.status_code, 400)                   # item не в плане
+        gone = self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': 999999, 'item_id': self.scr.id, 'qty': 1},
             content_type='application/json')
-        self.assertEqual(un.status_code, 200)
-        self.assertEqual(float(un.json()['rows'][0]['pegged']), 0.0)
-
-    def test_peg_chooses_purchase_explicitly(self):
-        # Р2: под проектом заказов может быть несколько — выбор едет в теле запроса
-        body = {'item_id': self.scr.id, 'project_id': self.prj.id, 'qty': 10}
-        self.c.post(f'/api/procurements/{self.pid}/peg/', body,
-                    content_type='application/json')
-        fresh = self.c.post(f'/api/procurements/{self.pid}/peg/',
-            {**body, 'qty': 5, 'purchase_id': 'new'}, content_type='application/json')
-        self.assertEqual(fresh.status_code, 200)
-        by = {b['project_code']: b for b in fresh.json()['rows'][0]['by_project']}
-        self.assertEqual(len(by['P1']['purchases']), 2)
-        target = by['P1']['purchases'][0]['id']
-        into = self.c.post(f'/api/procurements/{self.pid}/peg/',
-            {**body, 'qty': 1, 'purchase_id': target}, content_type='application/json')
-        self.assertEqual(into.status_code, 200)
-        self.assertEqual(float(into.json()['rows'][0]['pegged']), 16.0)
-        alien = self.c.post(f'/api/procurements/{self.pid}/peg/',
-            {**body, 'qty': 1, 'purchase_id': 999999}, content_type='application/json')
-        self.assertEqual(alien.status_code, 400)
+        self.assertEqual(gone.status_code, 400)                  # заказа нет
+        self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': self.ord1, 'item_id': self.scr.id, 'qty': 40},
+            content_type='application/json')
+        self.c.post(f'/api/purchases/{self.ord1}/lock/')
+        locked = self.c.post(f'/api/procurements/{self.pid}/allocate/',
+            {'purchase_id': self.ord1, 'item_id': self.scr.id, 'qty': 5},
+            content_type='application/json')
+        self.assertEqual(locked.status_code, 400)                # заказ зафиксирован
 
 
 class ReferenceCreateTests(EngineTestBase):
@@ -2971,16 +3034,20 @@ class MultiLevelDemandTests(EngineTestBase):
         self.assertEqual(rows['A']['need'], D(5))
         self.assertEqual(rows['B']['need'], D(6))
 
-    def test_tree_intermediate_status_is_worst_of_subtree(self):
-        # Ф5b: цвет узла-подсборки в дереве = worst-of поддерева (где под ним «горит»).
+    def test_tree_leaves_carry_balance_node_is_structural(self):
+        # Листья дерева несут баланс; узел-подсборка — структурная строка без чисел
+        # покрытия и БЕЗ статуса (полосы сняты 2026-08-05, смотреть его было некому).
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
-        self.receipt_lot(a, self.prj, 100)   # лист A покрыт, лист B — нет
+        self.receipt_lot(a, self.prj, 100)   # лист A покрыт с запасом, лист B — нет
         tree = {(n['component_code'], n['depth']): n
                 for n in engine.project_deficit(self.prj)['demands'][0]['tree']}
-        self.assertEqual(tree[('A', 1)]['status'], 'available')   # ✓ покрыт
-        self.assertEqual(tree[('B', 1)]['status'], 'to_order')    # ▲ надо купить
-        self.assertEqual(tree[('SUB', 0)]['status'], 'to_order')  # узел = worst-of (B горит)
+        self.assertEqual(tree[('A', 1)]['balance'], D(96))        # +96 запас (в узле нужно 4)
+        self.assertEqual(tree[('A', 1)]['status'], 'available')
+        self.assertEqual(tree[('B', 1)]['balance'], D(-6))        # −6 не хватает
+        self.assertEqual(tree[('B', 1)]['status'], 'to_order')
+        self.assertNotIn('status', tree[('SUB', 0)])
+        self.assertFalse(tree[('SUB', 0)]['is_leaf'])
 
     def test_produced_without_bom_is_incomplete_zero(self):
         # производимый узел без состава оценить нечем: 0 в план, помечен неполнотой,
@@ -2995,16 +3062,16 @@ class MultiLevelDemandTests(EngineTestBase):
         self.assertEqual(engine.project_budget(self.prj)['plan'], D(0))
         self.assertEqual(engine.project_deficit(self.prj)['components'], [])
 
-    def test_leaf_coverage_nets_stock_and_order(self):
-        # нетинг — на листе (через _coverage), не на подсборке. Купили часть листа A.
+    def test_leaf_balance_nets_stock_and_order(self):
+        # нетинг — на листе (через `_balance`), не на подсборке. Купили часть листа A.
         dev, sub, a, b = self._tree()
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         self.receipt_lot(a, self.prj, 20)                # A: склад 20 из нужных 50
         comps = {c['component_code']: c
                  for c in engine.project_deficit(self.prj)['components']}
         self.assertEqual(comps['A']['need'], D(50))
-        self.assertEqual(comps['A']['have'], D(20))
-        self.assertEqual(comps['A']['to_order'], D(30))
+        self.assertEqual(comps['A']['in_stock'], D(20))
+        self.assertEqual(comps['A']['balance'], D(-30))
         # план оценивает только докупаемое (30×100) + весь B (60×10) = 3600
         self.assertEqual(engine.project_budget(self.prj)['plan'], D(3600))
 
@@ -6030,10 +6097,13 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.item, D(10))
         row = engine.project_deficit(self.prj)['components'][0]
-        self.assertEqual(row['status'], 'to_order')          # черновик не покрывает
+        self.assertEqual(row['in_stock'], D(0))              # черновик не на складе
+        self.assertEqual(row['balance'], D(-10))             # и потребность не покрывает
         engine.lock_receipt(r)
         row = engine.project_deficit(self.prj)['components'][0]
-        self.assertEqual(row['status'], 'available')         # сверен → покрыл
+        self.assertEqual(row['in_stock'], D(10))
+        self.assertEqual(row['balance'], D(0))               # сверен → покрыл ровно
+        self.assertEqual(row['supply'], 'available')         # снабжение здорово
 
     def test_draft_receipt_does_not_spend_budget(self):
         """Деньги — единственное чтение мимо движений, поэтому гейт продублирован в
