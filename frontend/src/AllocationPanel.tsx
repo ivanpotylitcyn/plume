@@ -45,12 +45,20 @@ export type AllocationState = ReturnType<typeof useAllocation>
 // числом, единица последней колонкой. Таблица `.grid` здесь давала другую геометрию, и
 // два аккордеона одного продукта выглядели чужими друг другу.
 //
-// Колонки числовой части — `Баланс · Разложено · Остаток`, и каждая осмысленна ровно на
-// своём уровне: у строки плана заполнены две правые (сколько разложено и сколько ещё
-// нет), у строки заказа — две левые (баланс его проекта и поле ввода). «В плане» снята:
-// она выводится из пары «Разложено + Остаток» и занимала место, которое нужнее балансу.
-export function AllocationRows({ st, procurementId, openItem, openProject, openPurchase }: {
+// Колонки числовой части — `Баланс · Кол-во · Остаток`, и «Кол-во» честно означает одно
+// и то же на обоих уровнях: сколько этого изделия В ЭТОМ документе. У строки плана это
+// количество в закупке, у строки заказа — количество в заказе, и оба — поля ввода
+// (правка Ивана 2026-08-06). «Разложено» снято: оно выводится из пары «Кол-во − Остаток»,
+// а колонка ушла под то число, которое здесь и правят.
+//
+// Так «Привязка» стала самодостаточной: план набивается и раскладывается на одном
+// экране, без прыжков в таб «Строки» за каждой правкой количества.
+export function AllocationRows({ st, procurementId, editable, onQty,
+  openItem, openProject, openPurchase }: {
   st: AllocationState; procurementId: number
+  editable: boolean                            // закупка расфиксирована — план правится
+  onQty: (lineId: number, qty: number) => void // правка строки ПЛАНА (мимо st: ответ
+                                               // сервера — форма закупки, не привязка)
   openItem: (id: number) => void; openProject: (id: number) => void
   openPurchase: (id: number) => void
 }) {
@@ -67,13 +75,17 @@ export function AllocationRows({ st, procurementId, openItem, openProject, openP
           <span>Описание</span>
           <span className="pnum" title="баланс проекта заказа по этому изделию">
             Баланс</span>
-          <span className="pnum" title="разложено по заказам закупки">Разложено</span>
+          {/* Одна подпись на два уровня — количество в ТОМ документе, чья это строка. */}
+          <span className="pnum"
+            title="у строки плана — кол-во в закупке, у заказа — кол-во в заказе">
+            Кол-во</span>
           <span className="pnum" title="остаток строки плана: сколько ещё не разложено">
             Остаток</span>
           <span className="puom" title="единица измерения строки">Ед.</span>
         </div>
         {p.rows.map(r => (
           <LineRow key={r.line_id} r={r} busy={busy} procurementId={procurementId}
+            editable={editable} onQty={onQty}
             run={run} openItem={openItem} openProject={openProject}
             openPurchase={openPurchase} />
         ))}
@@ -124,8 +136,10 @@ export function PurchaseFan({ st, openPurchase }: {
 // перепег — красный warning; между — оранжевый warning. Колонка «Баланс» у строки
 // плана пустая ПРИНЦИПИАЛЬНО: сложить балансы разных проектов нельзя — профицит одного
 // не гасит нужду другого. Баланс проявляется только в раскрытых строках заказов.
-function LineRow({ r, busy, procurementId, run, openItem, openProject, openPurchase }: {
+function LineRow({ r, busy, procurementId, editable, onQty, run,
+  openItem, openProject, openPurchase }: {
   r: AllocationRow; busy: boolean; procurementId: number
+  editable: boolean; onQty: (lineId: number, qty: number) => void
   run: (p: Promise<Allocation>) => void
   openItem: (id: number) => void; openProject: (id: number) => void
   openPurchase: (id: number) => void
@@ -150,7 +164,16 @@ function LineRow({ r, busy, procurementId, run, openItem, openProject, openPurch
         </span>
         <span className="name">{r.item_description}</span>
         <span className="pnum" />
-        <span className="pnum">{num(r.allocated)}</span>
+        {/* Кол-во в ПЛАНЕ — то же поле, что в табе «Строки», и тот же гейт: под замком
+            закупки план read-only. Ответ приходит формой закупки, поэтому правку ведёт
+            вьюха-хозяйка (`onQty`), а привязка освежается следом, по `rev`. */}
+        <span className="pnum">
+          {editable
+            ? <CommitInput value={String(r.qty)} disabled={busy}
+                onCommit={v => onQty(r.line_id, Number(v))}
+                validate={v => Number(v) > 0} />
+            : num(r.qty)}
+        </span>
         {/* Перепег (остаток ушёл в минус) — «нужна работа», знак выбирает тема. */}
         <span className="pnum">
           <span className={r.remaining < 0 ? 'g-to_order' : undefined}>

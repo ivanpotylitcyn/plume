@@ -1628,6 +1628,131 @@ class ProcurementFormTests(EngineTestBase):
         self.assertFalse(c['locked'])
         self.assertEqual(c['description'], 'весна')
 
+    def test_estimate_sums_lines_and_names_gaps(self):
+        """«Оценка» шапки: Σ(кол-во × оценка изделия) + коды позиций без оценки.
+
+        Позиция без `estimated_cost` в сумму не идёт и НЕ считается нулём молча — её код
+        уезжает в `unestimated`, чтобы форма показала «оценка неполна» (2026-08-06).
+        Заказ считает ту же величину по своим строкам.
+        """
+        priced = self.make_item('A')
+        priced.estimated_cost = D('12.50')
+        priced.save(update_fields=['estimated_cost'])
+        blank = self.make_item('B')                    # без оценки — пробел
+
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, priced, D(10))
+        engine.add_procurement_line(p, blank, D(5))
+        c = engine.procurement_form(p)
+        self.assertEqual(c['estimate'], D('125.00'))
+        self.assertEqual(c['unestimated'], ['B'])
+
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, priced, D(4))
+        self.assertEqual(engine.purchase_form(pu)['estimate'], D('50.00'))
+        self.assertEqual(engine.purchase_form(pu)['unestimated'], [])
+
+    def test_intent_money_demand_and_overpay(self):
+        """Панель бюджета намерения (2026-08-07): потребность / сумма / разница.
+
+        Потребность берёт количество НЕ из строки, а из нужды проекта (BOM ×
+        `ProjectDemand`, разузлование до листьев); строка задаёт только номенклатуру.
+        Цена у обоих чисел одна — `estimated_cost`, поэтому переплата = сумма − нужда.
+        """
+        screw = self.make_item('SCR')
+        screw.estimated_cost = D(10)
+        screw.save(update_fields=['estimated_cost'])
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(4))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(3))
+
+        pu = self.make_purchase()                      # нужно 12 шт (3×4) = 120 ₽
+        engine.add_purchase_line(pu, screw, D(20))     # заказали 20 шт = 200 ₽
+        c = engine.purchase_form(pu)
+        self.assertEqual(c['demand'], D(120))
+        self.assertEqual(c['estimate'], D(200))
+        self.assertEqual(c['overpay'], D(80))          # + переплата
+
+    def test_intent_money_overpay_negative_is_undersupply(self):
+        """Заказали меньше нужды — разница уходит в минус («Недозаказ» в панели)."""
+        screw = self.make_item('SCR')
+        screw.estimated_cost = D(10)
+        screw.save(update_fields=['estimated_cost'])
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(4))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(3))
+
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, screw, D(5))      # 50 ₽ против нужды 120 ₽
+        self.assertEqual(engine.purchase_form(pu)['overpay'], D(-70))
+
+    def test_intent_money_unestimated_drops_from_both_sums(self):
+        """Позиция без оценки выпадает из ОБЕИХ сумм разом — знак разницы не врёт."""
+        blank = self.make_item('B')                    # без `estimated_cost`
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=blank, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, blank, D(50))
+        c = engine.purchase_form(pu)
+        self.assertEqual((c['demand'], c['estimate'], c['overpay']), (D(0), D(0), D(0)))
+        self.assertEqual(c['unestimated'], ['B'])
+
+    def test_intent_money_ignores_items_outside_bom(self):
+        """Строка, которой в составе проекта нет: нужда 0 → вся сумма в переплату."""
+        stray = self.make_item('X')
+        stray.estimated_cost = D(7)
+        stray.save(update_fields=['estimated_cost'])
+
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, stray, D(3))
+        c = engine.purchase_form(pu)
+        self.assertEqual(c['demand'], D(0))
+        self.assertEqual(c['overpay'], D(21))
+
+    def test_intent_money_of_procurement_counts_scope(self):
+        """У закупки знаменатель — ОХВАТ (проекты её заказов), сумма по проектам.
+
+        Пока заказов нет, охват пуст: спросить «сколько надо» не у кого, потребность 0 и
+        весь план читается переплатой. Появился заказ — появилась и нужда его проекта.
+        """
+        screw = self.make_item('SCR')
+        screw.estimated_cost = D(10)
+        screw.save(update_fields=['estimated_cost'])
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(3))
+
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, screw, D(30))
+        c = engine.procurement_form(p)
+        self.assertEqual(c['demand'], D(0))            # охват пуст — сравнивать не с чем
+        self.assertEqual(c['overpay'], D(300))
+
+        pu = self.make_purchase()                      # заказ проекта под этот план
+        engine.update_purchase(pu, procurement=p)
+        c = engine.procurement_form(p)
+        self.assertEqual(c['demand'], D(60))           # 3×2 шт × 10 ₽
+        self.assertEqual(c['overpay'], D(240))
+
+    def test_intent_money_of_procurement_skips_closed_project(self):
+        """Отсев охвата — общий с витриной «К закупке»: закрытый проект не закупают."""
+        screw = self.make_item('SCR')
+        screw.estimated_cost = D(10)
+        screw.save(update_fields=['estimated_cost'])
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(3))
+
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, screw, D(30))
+        pu = self.make_purchase()
+        engine.update_purchase(pu, procurement=p)
+        self.prj.locked = True
+        self.prj.save(update_fields=['locked'])
+        self.assertEqual(engine.procurement_form(p)['demand'], D(0))
+
     def test_add_line_rejects_duplicate_and_nonpositive(self):
         p = engine.create_procurement(self.user)
         item = self.make_item('A')

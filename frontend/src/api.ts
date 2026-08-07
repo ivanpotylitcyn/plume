@@ -274,6 +274,10 @@ export interface PurchaseForm extends Authored {
   code: string | null; description: string; date: string | null
   editable: boolean; worst_status: Status
   total_ordered: number; total_received: number
+  // Панель бюджета (2026-08-07): потребность проекта в деньгах / сумма документа /
+  // их разница со знаком (+ переплата, − недозаказ) + коды позиций без оценки
+  // (обе суммы по ним неполны — вью показывает счётчик).
+  demand: number; estimate: number; overpay: number; unestimated: string[]
   rows: PurchaseFormLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
@@ -462,7 +466,11 @@ export interface ProcurementForm extends Authored {
   code: string | null; description: string; editable: boolean
   contractor_id: number | null; contractor_code: string; contractor_name: string
   projects: ProcurementScopeProject[]        // охват (Ф13): под какие проекты закупка
-  total_qty: number; lines: ProcurementFormLine[]
+  total_qty: number
+  // Панель бюджета — см. `PurchaseForm`. Нужда считается по ОХВАТУ: пустой охват
+  // (заказов ещё нет) → потребность 0, вся сумма плана читается переплатой.
+  demand: number; estimate: number; overpay: number; unestimated: string[]
+  lines: ProcurementFormLine[]
 }
 
 // ── Привязка (волна 8, переделана 2026-08-05): раскладка плана по ЗАКАЗАМ ──

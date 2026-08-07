@@ -25,6 +25,8 @@
 - `purchase_form(purchase)` — шапка + строки (заказано/поступило/остаток) + приходы;
   `create_purchase`, `add/update/remove_purchase_line`, `send/unsend/cancel/restore_purchase`.
 - `set_receipt_purchase(receipt, purchase)` — связь `Receipt↔Purchase` (гашение заказа).
+- `lines_estimate(lines)` — прогноз денег документа-намерения: `Σ(qty×estimated_cost)`
+  + коды позиций без оценки. Общий для заказа и закупки-плана (поле «Оценка» в шапке).
 
 Волна 5 (записываемая передача / Transfer — отгрузка заказчику):
 - `transfer_form(transfer)` — шапка накладной + строки-лоты (отдаём партию заказчику,
@@ -71,6 +73,11 @@
   где есть, оценка где нет» через `estimated_cost`) + компас `budget − план` +
   позиции без оценки; **себестоимость** (Σ снимков лотов-приборов верхних целей,
   заём по реальной цене) + **экономия** = себестоимость − потрачено. Чистая витрина.
+- `intent_money(lines, need)` (2026-08-07) — те же деньги, но у документа-намерения:
+  **потребность** (нужда проекта × цена — сколько надо по-настоящему), **сумма
+  документа** (`lines_estimate`) и **переплата** = их разница со знаком. Знаменатель
+  даёт `demand_map(projects)` (нужда по листьям через набор проектов): у заказа это его
+  проект, у закупки — её охват (`counts_in_scope`, тот же набор, что у свода).
 
 Волна 13 Ф2e (мультисклад + перемещение):
 - Остаток по паре `(лот, локация)`: `lot_live_qty(lot, location)` / `item_available(…,
@@ -1547,6 +1554,78 @@ def _contractor_mismatch(own_contractor_id, parent):
     return bool(own_contractor_id and parent_id and own_contractor_id != parent_id)
 
 
+def lines_estimate(lines):
+    """Оценка документа-намерения: `Σ(qty × item.estimated_cost)` + позиции без оценки.
+
+    Прямое перемножение по строкам, без разузлования: строка закупки/заказа — это то,
+    что покупают КАК ЕСТЬ, и цена берётся с самого изделия (у производимого там лежит
+    роллап его состава — тоже валидная оценка покупки узла на стороне).
+
+    Считаем по тем, у кого оценка есть, а коды остальных возвращаем списком: молча
+    сложить их как 0 значило бы выдать неполную сумму за полную. Тот же приём, что у
+    `_project_estimate` (`unestimated`) — вью показывает счётчик, а коды кладёт в title.
+
+    Это НЕ деньги документа: факт живёт в поставке (`Lot.unit_cost`). Здесь — прогноз,
+    «во сколько это обойдётся», и цена может ещё десять раз поменяться.
+    """
+    estimate = ZERO
+    unestimated = []
+    for line in lines:
+        if line.item.estimated_cost is None:
+            unestimated.append(line.item.code)
+            continue
+        estimate += line.qty * line.item.estimated_cost
+    return estimate, unestimated
+
+
+def demand_map(projects):
+    """`{item_id: нужда по листьям}` через набор проектов — знаменатель денег намерения.
+
+    Та же нужда, что в «Потребности» и в своде «К закупке» (`project_leaf_demand`,
+    разузлование насквозь), только сложенная по Item и **без покрытия**: панель бюджета
+    отвечает «сколько деталей нужно по-настоящему», а не «сколько осталось докупить».
+    Между проектами не перенеттим — как и `scope_deficit`.
+    """
+    total = {}
+    for project in projects:
+        leaves, _incomplete = project_leaf_demand(project)
+        for leaf, qty in leaves.items():
+            total[leaf.id] = total.get(leaf.id, ZERO) + qty
+    return total
+
+
+def intent_money(lines, need_by_item):
+    """Три числа денег документа-намерения (2026-08-07): нужда / сумма строк / разница.
+
+    - `demand` — **потребность**: `Σ` по строкам `нужда_проекта(item) × estimated_cost`.
+      Сколько денег на эти позиции нужно по-настоящему, без запаса. Количество берётся
+      НЕ из строки, а из потребности проекта — строка задаёт только номенклатуру.
+    - `estimate` — сумма самого документа (`lines_estimate`, «во сколько обойдётся»).
+    - `overpay` — их разница со знаком: `+` переплата (взяли с запасом), `−` недозаказ
+      (взяли меньше нужды). Знак считает движок, подпись и цвет выбирает вью
+      ([[engine-view-seam]]).
+
+    Цена у обоих чисел одна — `estimated_cost` изделия (в строках заказа/закупки цены
+    нет вовсе, факт рождается только в поставке). Поэтому позиция без оценки выпадает
+    из **обеих** сумм разом и знак разницы не врёт; её код — в `unestimated`.
+
+    Числа — витрина, а не снимок: замок морозит строки, но не цену и не BOM, поэтому у
+    зафиксированного документа они законно едут вслед за справочником.
+
+    Потребность проекта не поделена между его заказами: два заказа на один Item покажут
+    каждый полную нужду. Число отвечает «сколько из ЭТОГО документа оправдано нуждой», и
+    по проекту не складывается.
+    """
+    estimate, unestimated = lines_estimate(lines)
+    demand = ZERO
+    for line in lines:
+        if line.item.estimated_cost is None:
+            continue                      # уже учтён в `unestimated` — молчим в обеих суммах
+        demand += need_by_item.get(line.item_id, ZERO) * line.item.estimated_cost
+    return {'demand': demand, 'estimate': estimate, 'overpay': estimate - demand,
+            'unestimated': unestimated}
+
+
 def purchase_form(purchase):
     """Проекция формы заказа: шапка + строки (заказано/поступило/остаток) + приходы.
 
@@ -1560,11 +1639,12 @@ def purchase_form(purchase):
     """
     editable = not purchase.locked
     closure = _purchase_closure(purchase)
+    lines = list(purchase.lines.select_related('item').order_by('id'))
     rows = []
     statuses = []
     total_ordered = ZERO
     total_received = ZERO
-    for line in purchase.lines.select_related('item').order_by('id'):
+    for line in lines:
         closed_by = closure.get(line.item_id, [])
         received = sum((r['qty'] for r in closed_by), ZERO)
         remaining = max(ZERO, line.qty - received)
@@ -1597,6 +1677,10 @@ def purchase_form(purchase):
          'lines': r.lots.count()}
         for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
+    # Деньги намерения (2026-08-07): потребность / заказ / переплата. Знаменатель —
+    # нужда СВОЕГО проекта: он у заказа один и назван явно, отсева тут нет (замок или
+    # вид проекта потребность не отменяют — заказ уже заведён именно под него).
+    money = intent_money(lines, demand_map([purchase.project]))
     return {
         'id': purchase.id, **_author(purchase), 'locked': purchase.locked,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
@@ -1613,6 +1697,7 @@ def purchase_form(purchase):
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'worst_status': _worst_of(statuses),      # worst-of закрытости строк
         'total_ordered': total_ordered, 'total_received': total_received,
+        **money,          # demand / estimate / overpay / unestimated — панель бюджета
         'rows': rows, 'receipts': receipts,
     }
 
@@ -2802,6 +2887,16 @@ def update_kitting(kitting, qty=None, date=None, code=_UNSET, description=None,
 # --------------------------------------------------------------------------- #
 #  Волна 7 — планирование закупок: командный свод + записываемый Procurement
 # --------------------------------------------------------------------------- #
+def counts_in_scope(project):
+    """Проект участвует в арифметике охвата: **активный внешний**.
+
+    Внутренние склады — источник покрытия, а не потребитель; закрытый проект не
+    закупают. Правило одно на весь охват (свод «К закупке» и деньги закупки считают
+    один и тот же набор — иначе панель и витрина разошлись бы молча).
+    """
+    return project.kind == models.Project.Kind.EXTERNAL and not project.locked
+
+
 def scope_deficit(projects):
     """Дефицит по **охвату**: суммарная нужда по оси Item через заданный набор проектов.
 
@@ -2820,12 +2915,13 @@ def scope_deficit(projects):
 
     Считаем только по **активным внешним** проектам охвата: внутренние склады —
     источник покрытия, а не потребитель, а закрытый проект не закупают (пегать на него
-    движок и так отказывается — наводка на непегаемое была бы враньём). Отсев здесь, а
-    не у вызывающих: это инвариант самой арифметики.
+    движок и так отказывается — наводка на непегаемое была бы враньём). Отсев — общий
+    предикат `counts_in_scope`: это инвариант самой арифметики охвата, и деньги закупки
+    считают по тому же набору.
     """
     acc = {}  # item_id → агрегат по Item через проекты
     for project in projects:
-        if project.kind != models.Project.Kind.EXTERNAL or project.locked:
+        if not counts_in_scope(project):
             continue
         # потребность проекта по покупным листьям (разузлование насквозь)
         need_by_item, _incomplete = project_leaf_demand(project)
@@ -2906,9 +3002,10 @@ def procurement_form(procurement):
     `status` зеркалит заказ: строки правятся только пока не зафиксировано. Чистая проекция.
     """
     editable = not procurement.locked
+    lines = list(procurement.lines.select_related('item').order_by('id'))
     rows = []
     total_qty = ZERO
-    for line in procurement.lines.select_related('item').order_by('id'):
+    for line in lines:
         total_qty += line.qty
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
@@ -2916,6 +3013,12 @@ def procurement_form(procurement):
             'item_native': line.item.native, 'item_synced': line.item.synced,
             'item_locked': line.item.locked,   # глиф строки по режиму (Ф3a)
         })
+    scope = list(procurement_scope(procurement))
+    # Деньги намерения (2026-08-07): потребность / закупка / переплата. Знаменатель —
+    # нужда ОХВАТА (у закупки своего проекта нет), по тому же набору, что свод «К
+    # закупке». Охват пуст (заказов ещё нет) → нужда 0, и вся сумма плана читается
+    # переплатой: спросить «сколько надо» закупке пока не у кого, и она это показывает.
+    money = intent_money(lines, demand_map(p for p in scope if counts_in_scope(p)))
     return {
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
         'code': procurement.code, 'description': procurement.description,
@@ -2924,9 +3027,11 @@ def procurement_form(procurement):
         # Охват — область расчёта витрины «К закупке». Вычисляемый (проекты заказов),
         # правке не подлежит: поле шапки показывает его ссылками и только.
         'projects': [{'id': p.id, 'code': p.code, 'description': p.description}
-                     for p in procurement_scope(procurement)],
+                     for p in scope],
         'editable': editable,                       # строки правятся только пока не зафиксировано
-        'total_qty': total_qty, 'lines': rows,
+        'total_qty': total_qty,
+        **money,          # demand / estimate / overpay / unestimated — панель бюджета
+        'lines': rows,
     }
 
 

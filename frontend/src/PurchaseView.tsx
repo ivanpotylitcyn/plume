@@ -13,6 +13,7 @@ import { api, type CounterpartyRow, type ItemRow, type ProcurementRow, type Purc
   type PurchaseFormLine, type Status } from './api'
 import { CommitInput } from './CommitInput'
 import { AnchorSelect, OrderFields, useFormLock } from './FormHeader'
+import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
@@ -244,6 +245,10 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               {mismatch}
             </Field>
           </>} />}
+      // Деньги заказа — панелью над метой (2026-08-07), как бюджет у проекта. Поле
+      // «Оценка» отсюда снято: это ровно стат «Заказ», и держать его дважды незачем.
+      extra={<IntentBudget demand={c.demand} total={c.estimate} totalLabel="Заказ"
+        overpay={c.overpay} unestimated={c.unestimated} />}
       tabs={tabs}
     />
   )
@@ -317,8 +322,13 @@ function GhostRow({ purchaseId, items, busy, run }: {
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
+      {/* «Поступило» и «Остаток» у ненабитой строки пусты — считать ещё нечего. Ячейки
+          обязаны БЫТЬ и стоять на своих местах: лишний безымянный `<td>` здесь заводил
+          таблице девятый столбец против восьми в шапке, и весь правый блок колонок
+          отлипал от края панели на его ширину (правка Ивана 2026-08-06). */}
+      <td className="num" /><td className="num" />
       {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
-      <td className="uom" /><td /><td /><td />
+      <td className="uom" />
       <td className="act">
         <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>

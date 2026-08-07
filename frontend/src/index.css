@@ -706,6 +706,7 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
   font-size: 15px; font-weight: 500; color: var(--fg-bright); }
 .stat-val.dim { color: var(--fg-dim); font-weight: 400; }
 .stat-val.t-ok { color: var(--st-ok); }
+.stat-val.t-wip { color: var(--st-wip); }
 .stat-val.t-bad { color: var(--st-order); }
 .stat-warn { flex-basis: 100%; color: var(--st-order); font-size: 12px; }
 

@@ -31,9 +31,11 @@ export function StatGroup({ aside, children }: { aside?: boolean; children: Reac
 }
 
 // Один стат: подпись сверху, значение крупным моно (числа сканируют, а не читают).
-// `tone` — знак от смысла, который посчитал движок ([[engine-view-seam]]).
+// `tone` — знак от смысла, который посчитал движок ([[engine-view-seam]]). Тона — тот же
+// словарь статусов, что у глифов (§0.4): `ok` зелёный, `wip` оранжевый (2026-08-07:
+// переплата — «взяли с запасом», это ожидание, а не дефицит), `bad` красный.
 export function Stat({ label, value, tone, dim, title }: {
-  label: string; value: string; tone?: 'ok' | 'bad'; dim?: boolean; title?: string
+  label: string; value: string; tone?: 'ok' | 'wip' | 'bad'; dim?: boolean; title?: string
 }) {
   return (
     <div className="stat" title={title}>

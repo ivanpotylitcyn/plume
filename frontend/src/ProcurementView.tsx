@@ -4,8 +4,9 @@
 // Кнопка выгрузки xlsx-бланка поставщику (имя файла = код закупки). Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 //
-// Волна 19 (Ф12c): форма по канону §13 — табы Строки · К закупке · Привязка · Заказы ·
-// Файлы. Панель pegging разобрана на табы (§13.7), её команда «Разрезать по проектам»
+// Волна 19 (Ф12c): форма по канону §13 — табы Привязка · Строки · К закупке · Заказы ·
+// Файлы (порядок правлен 2026-08-06: «Привязка» стала главным экраном закупки и уехала
+// вперёд). Панель pegging разобрана на табы (§13.7), её команда «Разрезать по проектам»
 // уехала в колонку команд шапки.
 //
 // Ф13: у закупки появился ОХВАТ — набор проектов, под которые она ведётся (поле
@@ -17,6 +18,7 @@ import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
   type CounterpartyRow } from './api'
 import { CommitInput } from './CommitInput'
 import { AuthorField, useFormLock } from './FormHeader'
+import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
 import { Field, TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
@@ -87,7 +89,14 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
     </span>
   ))
 
+  // Порядок табов (правка Ивана 2026-08-06): ПРИВЯЗКА первой. Она стала главным экраном
+  // закупки — там и план правится, и раскладка по заказам видна разом; «Строки» остались
+  // плоским списком того же плана, а «К закупке» — наводкой, к которой идут реже.
   const tabs: FormTab[] = [
+    { key: 'pegging', label: 'Привязка', icon: 'flag',
+      content: <AllocationRows st={alloc} procurementId={c.id} editable={editable}
+        openItem={openItem} openProject={openProject} openPurchase={openPurchase}
+        onQty={(lineId, qty) => run(api.updateProcurementLine(lineId, qty))} /> },
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <>
         <table className="grid">
@@ -113,9 +122,6 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
       content: <ScopeDeficitRows st={need} openItem={openItem}
         editable={editable} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
           { item_id: itemId, qty }))} /> },
-    { key: 'pegging', label: 'Привязка', icon: 'flag',
-      content: <AllocationRows st={alloc} procurementId={c.id} openItem={openItem}
-        openProject={openProject} openPurchase={openPurchase} /> },
     { key: 'fan', label: 'Заказы', icon: 'package',
       content: <PurchaseFan st={alloc} openPurchase={openPurchase} /> },
     { key: 'files', label: 'Файлы', icon: 'files',
@@ -196,6 +202,11 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
         <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}
           onChange={id => run(api.updateProcurement(c.id, { user_id: id }))} />
       </>}
+      // Деньги закупки — панелью над метой (2026-08-07), одна на обе формы контура.
+      // Поле «Оценка» отсюда снято: это ровно стат «Закупка». Потребность считается по
+      // ОХВАТУ — пока заказов нет, спросить не у кого, и весь план читается переплатой.
+      extra={<IntentBudget demand={c.demand} total={c.estimate} totalLabel="Закупка"
+        overpay={c.overpay} unestimated={c.unestimated} />}
       tabs={tabs}
     />
   )
