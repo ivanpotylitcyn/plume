@@ -441,8 +441,10 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
         <span className="pnum sub">—</span>
         <Member glyph="package" tone="wip" value={dev.wip}
           title="в работе — черновые акты комплектации" />
-        <Balance value={-dev.not_started} status={dev.not_started > 0 ? 'to_order' : 'on_order'}
-          title="сколько приборов ещё не начато" />
+        <span className="pnum">
+          <Balance value={-dev.not_started} status={dev.not_started > 0 ? 'to_order' : 'on_order'}
+            title="сколько приборов ещё не начато" />
+        </span>
         <span className="puom">шт</span>
         <span className="act">
           {editable &&
@@ -507,8 +509,10 @@ function BalanceCells({ code, need, kitted, inStock, onOrder, balance, status, a
       </span>
       <Member glyph="package" tone="wip" value={onOrder}
         title="ещё не приехало по зафиксированным заказам проекта" />
-      <Balance value={balance} status={status}
-        title={balanceTitle(code, need, kitted, inStock, onOrder)} />
+      <span className="pnum">
+        <Balance value={balance} status={status}
+          title={balanceTitle(code, need, kitted, inStock, onOrder)} />
+      </span>
     </>
   )
 }

@@ -78,6 +78,12 @@
   документа** (`lines_estimate`) и **переплата** = их разница со знаком. Знаменатель
   даёт `demand_map(projects)` (нужда по листьям через набор проектов): у заказа это его
   проект, у закупки — её охват (`counts_in_scope`, тот же набор, что у свода).
+- `line_cost(item, qty)` + `mark_costs(rows)` (2026-08-07) — деньги ОТДЕЛЬНОЙ строки в
+  «Строках» заказа и «Привязке» закупки: стоимость (без оценки — `None`, не ноль) и
+  `cost_status` = `overpaid` (взято сверх порога `overpay_threshold` = полторы нормы,
+  округлённые вверх до круглого: 5/10/50/100) > `costly` (верхняя четверть набора по
+  стоимости). Ранжирование — внутри одного списка; порог едет в строку (`overpay_at`),
+  чтобы вью объясняла цвет числом, а не словами.
 
 Волна 13 Ф2e (мультисклад + перемещение):
 - Остаток по паре `(лот, локация)`: `lot_live_qty(lot, location)` / `item_available(…,
@@ -110,7 +116,7 @@ import csv
 import io
 import os
 from datetime import date as dt_date, datetime, timedelta, timezone as dt_timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 from django.conf import settings
@@ -1626,6 +1632,87 @@ def intent_money(lines, need_by_item):
             'unestimated': unestimated}
 
 
+# Строка взята с перебором больше чем в ПОЛТОРА раза от нужды — красный член. Порог
+# задан в деньгах («переплата больше половины потребности»), но цена в неравенстве
+# сокращается: `(qty − need)·цена > ½·need·цена` ⇔ `qty > 1.5·need`. Поэтому правило
+# работает и там, где `estimated_cost` нет вовсе (красить, впрочем, будет нечего).
+OVERPAY_LIMIT = Decimal('1.5')
+# Шкала округления порога (2026-08-07): до 5 → до 10 → до 50 → до 100, ступень выбирается
+# по величине самого порога. Округляем ПОРОГ, а не потребность: иначе «нужно 13, беру
+# круглые 20» ловилось красным (порог 19.5), хотя это ровно то решение, к которому
+# приходят руками — некратные числа не заказывают.
+ROUND_STEPS = ((Decimal(50), Decimal(5)), (Decimal(100), Decimal(10)),
+               (Decimal(500), Decimal(50)))
+ROUND_STEP_MAX = Decimal(100)
+# Доля строк, помеченных «дорогая»: верхняя четверть по стоимости, округление ВВЕРХ
+# (в списке из двух строк дорогая — одна; решение Ивана 2026-08-07).
+COSTLY_SHARE = 4
+
+
+def line_cost(item, qty):
+    """Стоимость строки: `qty × estimated_cost`. Без оценки — `None`, а не ноль.
+
+    Тот же приём, что у `lines_estimate`/`intent_money`: неизвестную цену нельзя
+    показывать нулём — вью рисует прочерк, и строка не участвует в ранжировании.
+    """
+    return None if item.estimated_cost is None else qty * item.estimated_cost
+
+
+def overpay_threshold(need):
+    """Сколько можно взять при нужде `need`, чтобы это ещё не считалось перебором:
+    **полторы нормы, округлённые вверх до круглого числа**.
+
+    Одна фраза — и её видно в подсказке строки («без перебора можно до 20»). Понятность
+    правила тут важнее точности (решение Ивана 2026-08-07): закупщик держит его в голове
+    и заранее знает, загорится строка или нет.
+
+    Округление вверх убирает жёсткость на малых количествах, где процент режет по живому:
+    нужно 13 → полторы нормы 19.5 → **20**, то есть ровно то круглое число, которым и
+    закупают. На больших партиях ступень грубее (5 → 10 → 50 → 100), и процент снова
+    берёт своё: 100 → 150, 333 → 500.
+
+    `need = 0` даёт порог 0: позиции нет в составе проекта, любое количество — перебор.
+    """
+    raw = need * OVERPAY_LIMIT
+    step = next((s for limit, s in ROUND_STEPS if raw < limit), ROUND_STEP_MAX)
+    return (raw / step).to_integral_value(rounding=ROUND_CEILING) * step
+
+
+def is_overpaid(qty, need):
+    """Строка взята сверх порога (красный). Пустая ячейка (`qty = 0`) не горит."""
+    return qty > overpay_threshold(need) and qty > ZERO
+
+
+def mark_costs(rows):
+    """Проставить `cost_status` строкам: `overpaid` (красный) > `costly` (оранжевый).
+
+    Смысл считает движок, знак выбирает вью ([[engine-view-seam]]): здесь — «эта строка
+    дорогая» и «эта взята с перебором», а не «оранжевая»/«красная».
+
+    «Дорогая» — верхняя четверть НАБОРА (ранжирование внутри одного списка, поэтому
+    считается тут, а не построчно): в разных документах дорого разное. Строки без цены и
+    нулевые в ранжировании не участвуют — «самый дорогой ноль» не бывает.
+
+    Красное сильнее оранжевого (worst-of, как везде в продукте): перебор — повод
+    вмешаться, дороговизна — повод посмотреть.
+
+    Ждёт в строках `cost` (может быть `None`), `qty` и `need`; правит их на месте.
+    """
+    ranked = sorted((r for r in rows if r['cost'] is not None and r['cost'] > ZERO),
+                    key=lambda r: r['cost'], reverse=True)
+    costly = -(-len(ranked) // COSTLY_SHARE)          # ceil: 4→1, 6→2, 10→3
+    for i, row in enumerate(ranked):
+        row['cost_status'] = 'costly' if i < costly else None
+    for row in rows:
+        row.setdefault('cost_status', None)
+        # Порог едет в строку: им вью объясняет цвет («без перебора можно до 20»).
+        # Правило, которое видно, закупщик держит в голове — а держа, не спорит с ним.
+        row['overpay_at'] = overpay_threshold(row['need'])
+        if row['cost'] is not None and row['qty'] > row['overpay_at'] and row['qty'] > ZERO:
+            row['cost_status'] = 'overpaid'
+    return rows
+
+
 def purchase_form(purchase):
     """Проекция формы заказа: шапка + строки (заказано/поступило/остаток) + приходы.
 
@@ -1636,10 +1723,19 @@ def purchase_form(purchase):
 
     Ф6: строка несёт ещё и **чем** она закрыта (`receipts`) — обратная связь потока
     «Заказ → УПД». Список приходов заказа целиком остаётся отдельным табом.
+
+    2026-08-07: строка несёт **баланс проекта** по своему изделию (`_balance`, четвёрка
+    слагаемых + невязка) — третий экран, показывающий одно и то же число: в проекте для
+    общей оценки, в «Привязке» для раскладки, здесь для решения «сколько заказывать».
+    Две закрытости не путать: `status` — приехало ли по ЭТОЙ строке, `balance_status` —
+    как дела у проекта с этим изделием вообще.
     """
     editable = not purchase.locked
     closure = _purchase_closure(purchase)
     lines = list(purchase.lines.select_related('item').order_by('id'))
+    # Нужда своего проекта — знаменатель и панели бюджета, и цвета строк (одно
+    # разузлование на форму).
+    need_by_item = demand_map([purchase.project])
     rows = []
     statuses = []
     total_ordered = ZERO
@@ -1657,6 +1753,12 @@ def purchase_form(purchase):
         else:
             st = 'to_order'       # ▲ ждём поставки
         statuses.append(st)
+        # Баланс считаем ЗДЕСЬ, а не в вью: три обращения к складу на строку — та же
+        # цена, что платит ячейка «Привязки», и та же арифметика (`_balance`).
+        bal = _balance(need_by_item.get(line.item_id, ZERO),
+                       item_kitted(line.item, purchase.project),
+                       item_available(line.item, purchase.project),
+                       item_on_order(line.item, purchase.project))
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom,
@@ -1666,8 +1768,19 @@ def purchase_form(purchase):
             'item_locked': line.item.locked,
             'qty': line.qty, 'received': received, 'remaining': remaining,
             'status': st,
+            # Баланс проекта по этому изделию (2026-08-07) — то же число и та же
+            # четвёрка слагаемых, что в «Потребности» проекта и в ячейке «Привязки»:
+            # заказ без него не отвечает на вопрос «а сколько вообще надо». Считает
+            # только зафиксированное, поэтому свой же черновик его не двигает — гаснет
+            # на фиксации заказа, в осмысленный момент.
+            **{k: v for k, v in bal.items() if k != 'status'},
+            'balance_status': bal['status'],
+            # Деньги строки (2026-08-07): сколько она стоит и оправдана ли нуждой.
+            # `need` приезжает выше вместе с балансом — он и есть его первый член.
+            'cost': line_cost(line.item, line.qty),
             'receipts': closed_by,     # Ф6: какими накладными строка закрыта
         })
+    mark_costs(rows)                   # `cost_status`: overpaid (красный) > costly (оранж.)
     receipts = [
         # Ф6: `code` — первичная идентичность накладной (у рождённой из заказа
         # `number` пуст до заполнения по бумаге, и ссылка на него рисовала пустоту).
@@ -1680,7 +1793,7 @@ def purchase_form(purchase):
     # Деньги намерения (2026-08-07): потребность / заказ / переплата. Знаменатель —
     # нужда СВОЕГО проекта: он у заказа один и назван явно, отсева тут нет (замок или
     # вид проекта потребность не отменяют — заказ уже заведён именно под него).
-    money = intent_money(lines, demand_map([purchase.project]))
+    money = intent_money(lines, need_by_item)
     return {
         'id': purchase.id, **_author(purchase), 'locked': purchase.locked,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
@@ -3437,6 +3550,11 @@ def procurement_allocation(procurement):
     только зафиксированное, поэтому черновая раскладка его НЕ двигает и он не гаснет,
     пока набиваешь. Гаснет на фиксации заказа — в осмысленный момент. Два экрана
     показывают одно число: в проекте для общей оценки, здесь для конкретного решения.
+
+    `cost` (2026-08-07) есть на ОБОИХ уровнях — `qty × estimated_cost` того документа,
+    чья это строка (у плана — в закупке, у ячейки — в заказе; та же двухуровневость, что
+    у «Кол-ва»). Знаменатель для цвета у каждого уровня свой и честный: строка плана
+    меряется нуждой ОХВАТА, ячейка — нуждой своего проекта.
     """
     allocations = _plan_allocations(procurement)
     orders = list(procurement.purchases.select_related('project')
@@ -3447,6 +3565,19 @@ def procurement_allocation(procurement):
         if pu.project_id not in demand_by_project:
             leaves, _incomplete = project_leaf_demand(pu.project)
             demand_by_project[pu.project_id] = {leaf.id: qty for leaf, qty in leaves.items()}
+
+    # Нужда ОХВАТА для строк плана: у строки плана своего проекта нет, и её деньги
+    # меряются тем же знаменателем, что панель бюджета закупки (отсев `counts_in_scope`,
+    # иначе панель и таб разошлись бы). Складываем уже посчитанные разузлования — второй
+    # раз по BOM не ходим.
+    scope_need = {}
+    counted = set()
+    for pu in orders:
+        if pu.project_id in counted or not counts_in_scope(pu.project):
+            continue
+        counted.add(pu.project_id)
+        for item_id, need in demand_by_project[pu.project_id].items():
+            scope_need[item_id] = scope_need.get(item_id, ZERO) + need
 
     rows = []
     for line in procurement.lines.select_related('item').order_by('id'):
@@ -3469,6 +3600,14 @@ def procurement_allocation(procurement):
                 'need': bal['need'], 'kitted': bal['kitted'], 'in_stock': bal['in_stock'],
                 'on_order': bal['on_order'], 'balance': bal['balance'],
                 'balance_status': bal['status'],
+                # Деньги ячейки (2026-08-07): её стоимость и перебор относительно нужды
+                # ЭТОГО проекта. Оранжевого «дорогая» тут нет — верхнюю четверть ищем
+                # среди строк плана, где строки сопоставимы (решение Ивана).
+                'cost': line_cost(line.item, qty),
+                'overpay_at': overpay_threshold(bal['need']),
+                'cost_status': ('overpaid'
+                                if line.item.estimated_cost is not None
+                                and is_overpaid(qty, bal['need']) else None),
             })
         rows.append({
             'line_id': line.id, 'item_id': line.item_id,
@@ -3476,8 +3615,12 @@ def procurement_allocation(procurement):
             'uom': line.item.uom, 'qty': line.qty,
             'allocated': allocated, 'remaining': line.qty - allocated,
             'status': _allocation_status(line.qty, allocated),
+            # Деньги строки плана: знаменатель — нужда ОХВАТА (см. `scope_need` выше).
+            'cost': line_cost(line.item, line.qty),
+            'need': scope_need.get(line.item_id, ZERO),
             'orders': cells,
         })
+    mark_costs(rows)                   # `cost_status` строк плана: overpaid > costly
     fan = []
     for pu in orders:
         fan.append({

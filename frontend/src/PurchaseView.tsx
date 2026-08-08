@@ -17,7 +17,8 @@ import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { CounterpartyRef, MismatchGlyph, StatusGlyph, count, num } from './status'
+import { Balance, Cost, CounterpartyRef, MismatchGlyph, StatusGlyph, balanceTitle,
+  count, num } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 
@@ -122,6 +123,10 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             <tr>
               <th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
+              {/* Баланс проекта по изделию — ПЕРВЫМ числом, как в «Привязке» закупки
+                  (Баланс · Кол-во · …): сперва «сколько надо вообще», потом «сколько
+                  беру здесь». Два экрана одного контура читаются одинаково. */}
+              <th className="num" title="баланс проекта по этому изделию">Баланс</th>
               <th className="num">Заказано</th>
               <th className="num">Поступило</th>
               {/* Фильтр — тот же приём, что в «Потребности» проекта: раскрыватель сразу
@@ -134,6 +139,9 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                   пока не заболит»). Чем строка закрыта — видно в табе «Поставки»
                   и в самой накладной; в строке это распирало таблицу ссылками. */}
               <th className="uom">Ед.</th>
+              {/* Деньги — за границей единицы измерения: «Ед.» квалифицирует количества
+                  слева от себя, а стоимость другой размерности и к ней не относится. */}
+              <th className="num c-money">Стоимость</th>
               {editable && <th className="act" />}
             </tr>
           </thead>
@@ -277,6 +285,10 @@ function LineRow({ ln, editable, busy, openItem, run }: {
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
+        <Balance value={ln.balance} status={ln.balance_status}
+          title={balanceTitle(ln.item_code, ln.need, ln.kitted, ln.in_stock, ln.on_order)} />
+      </td>
+      <td className="num">
         {editable
           ? <CommitInput value={String(ln.qty)} disabled={busy}
               onCommit={v => run(api.updatePurchaseLine(ln.id, Number(v)))}
@@ -286,6 +298,8 @@ function LineRow({ ln, editable, busy, openItem, run }: {
       <td className="num">{num(ln.received)}</td>
       <td className="num">{num(ln.remaining)}</td>
       <td className="uom">{ln.uom}</td>
+      <td className="num c-money"><Cost cost={ln.cost} status={ln.cost_status}
+        overpayAt={ln.overpay_at} uom={ln.uom} /></td>
       {editable && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку заказа"
           disabled={busy} onClick={() => run(api.deletePurchaseLine(ln.id))}>
@@ -317,6 +331,7 @@ function GhostRow({ purchaseId, items, busy, run }: {
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
           placeholder="＋ изделие…" onEnter={add} />
       </td>
+      <td className="num" />
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}
@@ -329,6 +344,7 @@ function GhostRow({ purchaseId, items, busy, run }: {
       <td className="num" /><td className="num" />
       {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
       <td className="uom" />
+      <td className="num c-money" />
       <td className="act">
         <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
           onClick={add}>добавить</button>

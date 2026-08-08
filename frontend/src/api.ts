@@ -4,6 +4,11 @@ import type { OrderKind } from './orders'
 
 export type Status = 'available' | 'on_order' | 'to_order'
 
+// Цвет-смысл денег строки (2026-08-07): `overpaid` — взято больше чем в полтора раза от
+// нужды (красный), `costly` — верхняя четверть набора по стоимости (оранжевый), `null` —
+// ничего примечательного. Считает движок, знак выбирает вью ([[engine-view-seam]]).
+export type CostStatus = 'overpaid' | 'costly' | null
+
 // Замок изделия (волна 17; строка → bool в волне 19, Ф1c): `locked` = форма
 // read-only (свойства+BOM), мутации гейтятся бэком. Ось общая для ВСЕХ сущностей —
 // изделия, ордеров, закупки, заказа, проекта: одно поле, один глагол, один глиф.
@@ -256,6 +261,16 @@ export interface PurchaseFormLine {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
   item_native: boolean; item_synced: boolean; item_locked: boolean
   qty: number; received: number; remaining: number; status: Status
+  // Баланс проекта по этому изделию (2026-08-07) — то же число, что в «Потребности»
+  // проекта и в ячейке «Привязки». `status` выше — про ЭТУ строку (приехало ли),
+  // `balance_status` — про дела проекта с этим изделием вообще.
+  need: number; kitted: number; in_stock: number; on_order: number
+  balance: number; balance_status: Status
+  // Деньги строки (2026-08-07): стоимость (null = у изделия нет оценки, рисуем прочерк),
+  // нужда проекта по этому изделию и готовый цвет-смысл от движка.
+  // `overpay_at` — порог красного (полторы нормы, округлённые вверх до круглого):
+  // им подсказка называет цифру, до которой брать было не перебором.
+  cost: number | null; overpay_at: number; cost_status: CostStatus
   receipts: LineReceiptRow[]   // Ф6: чем строка закрыта (обычно одна накладная)
 }
 export interface LineReceiptRow {
@@ -484,10 +499,14 @@ export interface AllocationCell {
   qty: number
   need: number; kitted: number; in_stock: number; on_order: number
   balance: number; balance_status: Status
+  // Стоимость ячейки = кол-во в ЭТОМ заказе × цена. `costly` тут не бывает: верхнюю
+  // четверть движок ищет среди строк плана, где строки сопоставимы.
+  cost: number | null; overpay_at: number; cost_status: CostStatus
 }
 export interface AllocationRow {
   line_id: number; item_id: number; item_code: string; item_description: string
   uom: string; qty: number; allocated: number; remaining: number; status: Status
+  cost: number | null; need: number; overpay_at: number; cost_status: CostStatus  // нужда — по ОХВАТУ
   orders: AllocationCell[]
 }
 export interface AllocationFanRow {

@@ -1753,6 +1753,132 @@ class ProcurementFormTests(EngineTestBase):
         self.prj.save(update_fields=['locked'])
         self.assertEqual(engine.procurement_form(p)['demand'], D(0))
 
+    def test_line_cost_and_costly_quartile(self):
+        """Стоимость строки + оранжевая верхняя четверть набора (2026-08-07).
+
+        Ранжирование — внутри одного списка (в разных документах дорого разное), доля
+        `ceil(N/4)`: из четырёх строк дорогая одна. Позиция без оценки в ранжировании не
+        участвует и стоимости не имеет (`None`, а не ноль).
+        """
+        pu = self.make_purchase()
+        dev = self.make_item('DEV', manufactured=True)
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        for code, price, qty in [('A', D(100), D(10)),    # 1000 — самая дорогая
+                                 ('B', D(10), D(10)),     # 100
+                                 ('C', D(1), D(10)),      # 10
+                                 ('D', None, D(10))]:     # без оценки — стоимости нет
+            item = self.make_item(code)
+            if price is not None:
+                item.estimated_cost = price
+                item.save(update_fields=['estimated_cost'])
+            # нужда с запасом (100 шт против 10 в заказе) — красный «перебор» не мешает
+            models.BomLine.objects.create(parent=dev, component=item, qty=D(100))
+            engine.add_purchase_line(pu, item, qty)
+
+        rows = {r['item_code']: r for r in engine.purchase_form(pu)['rows']}
+        self.assertEqual(rows['A']['cost'], D(1000))
+        self.assertIsNone(rows['D']['cost'])
+        # ранжируются трое оценённых → ceil(3/4) = 1 дорогая
+        self.assertEqual(rows['A']['cost_status'], 'costly')
+        self.assertIsNone(rows['B']['cost_status'])
+        self.assertIsNone(rows['C']['cost_status'])
+        self.assertIsNone(rows['D']['cost_status'])
+
+    def test_overpaid_beats_costly_and_needs_half_over(self):
+        """Красный «перебор» сильнее оранжевого и загорается строго за 1.5× нужды."""
+        priced = []
+        for code in ('A', 'B'):
+            item = self.make_item(code)
+            item.estimated_cost = D(10)
+            item.save(update_fields=['estimated_cost'])
+            priced.append(item)
+        dev = self.make_item('DEV', manufactured=True)
+        for item in priced:
+            models.BomLine.objects.create(parent=dev, component=item, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+
+        pu = self.make_purchase()                      # нужда каждой позиции = 10 шт
+        engine.add_purchase_line(pu, priced[0], D(16))  # 1.6× — перебор, и она же дороже
+        engine.add_purchase_line(pu, priced[1], D(15))  # ровно 1.5× — ещё не перебор
+        rows = {r['item_code']: r for r in engine.purchase_form(pu)['rows']}
+        self.assertEqual(rows['A']['cost_status'], 'overpaid')   # красный, не 'costly'
+        self.assertIsNone(rows['B']['cost_status'])
+
+    def test_purchase_line_carries_project_balance(self):
+        """Строка заказа несёт баланс проекта по своему изделию (2026-08-07).
+
+        То же число и та же четвёрка слагаемых, что в «Потребности» проекта и в ячейке
+        «Привязки». Свой черновик баланс не двигает (считается только зафиксированное) —
+        значит он не гаснет, пока набиваешь заказ.
+        """
+        screw = self.make_item('SCR')
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+        self.receipt_lot(screw, self.prj, 4)           # на складе 4 при нужде 10
+
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, screw, D(6))
+        row = engine.purchase_form(pu)['rows'][0]
+        self.assertEqual((row['need'], row['in_stock']), (D(10), D(4)))
+        self.assertEqual(row['balance'], D(-6))        # черновик своего заказа не считается
+        self.assertEqual(row['balance_status'], 'to_order')
+
+        engine.lock_purchase(pu)                       # зафиксировали — заказ вошёл в баланс
+        row = engine.purchase_form(pu)['rows'][0]
+        self.assertEqual((row['on_order'], row['balance']), (D(6), D(0)))
+        self.assertEqual(row['balance_status'], 'on_order')   # сошлось впритык
+
+    def test_overpay_threshold_rounds_up_to_round_numbers(self):
+        """Порог = полторы нормы, округлённые ВВЕРХ до круглого (правка Ивана 2026-08-07).
+
+        Округляем порог, а не потребность: иначе «нужно 13, беру круглые 20» ловилось
+        красным (19.5), хотя некратные числа никто не заказывает. Шкала ступеней —
+        5 → 10 → 50 → 100 по величине самого порога.
+        """
+        cases = {1: 5, 3: 5, 7: 15, 13: 20, 40: 60, 100: 150, 333: 500, 0: 0}
+        for need, threshold in cases.items():
+            self.assertEqual(engine.overpay_threshold(D(need)), D(threshold), need)
+        # ...и сам гейт: ровно порог — ещё не перебор, шаг за него — уже да.
+        self.assertFalse(engine.is_overpaid(D(20), D(13)))
+        self.assertTrue(engine.is_overpaid(D(21), D(13)))
+
+    def test_overpaid_when_item_not_needed_at_all(self):
+        """Нужды нет вовсе (позиции нет в BOM) — тоже перебор (решение Ивана)."""
+        stray = self.make_item('X')
+        stray.estimated_cost = D(7)
+        stray.save(update_fields=['estimated_cost'])
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, stray, D(3))
+        self.assertEqual(engine.purchase_form(pu)['rows'][0]['cost_status'], 'overpaid')
+
+    def test_allocation_costs_on_both_levels(self):
+        """«Привязка»: стоимость у строки плана и у ячейки заказа, каждая по своему кол-ву.
+
+        Оранжевого у ячеек не бывает — верхнюю четверть ищем среди строк плана. Красный
+        работает на обоих уровнях: у строки плана знаменатель — нужда охвата, у ячейки —
+        нужда её проекта.
+        """
+        screw = self.make_item('SCR')
+        screw.estimated_cost = D(10)
+        screw.save(update_fields=['estimated_cost'])
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=screw, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+
+        p = engine.create_procurement(self.user)
+        engine.add_procurement_line(p, screw, D(20))   # нужда охвата 10 шт → 2× = перебор
+        pu = self.make_purchase()
+        engine.update_purchase(pu, procurement=p)
+        engine.set_allocation(p, pu, screw, D(12))     # в заказ 12 при нужде 10 — не перебор
+
+        row = engine.procurement_allocation(p)['rows'][0]
+        self.assertEqual(row['cost'], D(200))
+        self.assertEqual(row['cost_status'], 'overpaid')
+        cell = row['orders'][0]
+        self.assertEqual(cell['cost'], D(120))
+        self.assertIsNone(cell['cost_status'])
+
     def test_add_line_rejects_duplicate_and_nonpositive(self):
         p = engine.create_procurement(self.user)
         item = self.make_item('A')

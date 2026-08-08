@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
-import { Balance, Chevron, StatusGlyph, balanceTitle, num } from './status'
+import { Balance, Chevron, Cost, StatusGlyph, balanceTitle, num } from './status'
 
 // Состояние привязки: загрузка по id, обновление на `rev` (мутации формы плана) и
 // обёртка мутации. Живёт у формы — оба таба смотрят в одни данные.
@@ -82,6 +82,10 @@ export function AllocationRows({ st, procurementId, editable, onQty,
           <span className="pnum" title="остаток строки плана: сколько ещё не разложено">
             Остаток</span>
           <span className="puom" title="единица измерения строки">Ед.</span>
+          {/* Деньги — за границей единицы: она квалифицирует количества слева, а
+              стоимость другой размерности. Одна подпись на два уровня, как «Кол-во». */}
+          <span className="pnum" title="стоимость строки: кол-во × оценка изделия">
+            Стоимость</span>
         </div>
         {p.rows.map(r => (
           <LineRow key={r.line_id} r={r} busy={busy} procurementId={procurementId}
@@ -180,6 +184,8 @@ function LineRow({ r, busy, procurementId, editable, onQty, run,
             {num(r.remaining)}</span>
         </span>
         <span className="puom">{r.uom}</span>
+        <span className="pnum"><Cost cost={r.cost} status={r.cost_status}
+          overpayAt={r.overpay_at} uom={r.uom} /></span>
       </div>
       {open && (r.orders.length === 0
         ? <div className="prow prow--comp prow--empty">
@@ -218,8 +224,10 @@ function OrderCell({ c, itemId, busy, procurementId, run, openProject, openPurch
       <span className="name">
         <a className="link" title={c.project_name}
           onClick={() => openProject(c.project_id)}>{c.project_code}</a></span>
-      <Balance value={c.balance} status={c.balance_status}
-        title={balanceTitle(c.project_code, c.need, c.kitted, c.in_stock, c.on_order)} />
+      <span className="pnum">
+        <Balance value={c.balance} status={c.balance_status}
+          title={balanceTitle(c.project_code, c.need, c.kitted, c.in_stock, c.on_order)} />
+      </span>
       <span className="pnum">
         {c.locked
           ? <span className="sub" title="заказ зафиксирован — расфиксируйте в его форме">
@@ -231,6 +239,7 @@ function OrderCell({ c, itemId, busy, procurementId, run, openProject, openPurch
       </span>
       <span className="pnum" />
       <span className="puom" />
+      <span className="pnum"><Cost cost={c.cost} status={c.cost_status} overpayAt={c.overpay_at} /></span>
     </div>
   )
 }
