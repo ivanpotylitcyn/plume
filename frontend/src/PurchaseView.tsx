@@ -17,8 +17,8 @@ import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { Balance, Cost, CounterpartyRef, MismatchGlyph, StatusGlyph, balanceTitle,
-  count, num } from './status'
+import { Balance, Cost, CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
+  balanceTitle, count, num } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 
@@ -270,15 +270,13 @@ function LineRow({ ln, editable, busy, openItem, run }: {
 }) {
   return (
     <tr className="row">
-      {/* Глиф строки (2026-08-05) отвязан от природы изделия и говорит про ЗАКАЗ:
-          ждём поставку (остаток есть) — оранжевый циферблат, закрыта (остаток 0) —
-          зелёная галка. В форме заказа «покупное или наше» не вопрос, а «приехало ли» —
-          главный. */}
+      {/* Глиф строки — ИЗДЕЛИЕ, как в списке «Компоненты» и в форме закупки (правка
+          Ивана 2026-08-08, разворот решения 2026-08-05). Циферблат «ждём поставку» снят:
+          приехало ли — и так видно колонками «Поступило»/«Остаток» с фильтром на них,
+          а вот статус компонента (библиотечный / ручной / наш под замком) в строке
+          заказа больше взять негде. */}
       <td className="gl">
-        {ln.remaining > 0
-          ? <span className="ci sg ci-clockface sg-wip"
-              title={`ждём ${num(ln.remaining)} ${ln.uom}`} />
-          : <span className="ci sg ci-check sg-ok" title="строка закрыта поставками" />}
+        <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} />
       </td>
       <td className="c-key">
         <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>

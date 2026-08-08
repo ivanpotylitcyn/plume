@@ -21,6 +21,7 @@ import { LocationView } from './LocationView'
 import { CounterpartyView } from './CounterpartyView'
 import { AccountView } from './AccountView'
 import { applyTheme } from './core/theme'
+import { parsePath, pathOf, type Mode, type Sel } from './core/route'
 import { StatusGlyph, SyncGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 
@@ -38,33 +39,9 @@ import { AnchoredMenu } from './AnchoredMenu'
 // Замечено Иваном 2026-07-30, поправлено тем же днём: режим = ровно своя половина оси.
 // Волна 20: режим «Контрагенты» — внешняя сторона документооборота (поставщик/заказчик)
 // стала полноценной сущностью со своей формой, а не только записью в пикерах.
-type Mode = 'projects' | 'products' | 'items' | 'orders' | 'locations' | 'procurements'
-  | 'purchases' | 'counterparties'
-// Волна 19, Ф12e: тринадцати вариантов `new-*` больше нет. «＋ Новый» не открывает
-// форму создания (второй, параллельный скелет формы), а РОЖДАЕТ сущность и уводит в
-// её обычную каноничную форму — выбирать тут нечего.
-type Sel =
-  | { kind: 'project'; id: number }
-  | { kind: 'item'; id: number }
-  | { kind: 'library-sync' }
-  | { kind: 'kitting'; id: number }
-  | { kind: 'receipt'; id: number }
-  | { kind: 'purchase'; id: number }
-  | { kind: 'transfer'; id: number }
-  | { kind: 'writeoff'; id: number }
-  | { kind: 'requisition'; id: number }
-  | { kind: 'procurement'; id: number }
-  | { kind: 'inventory'; id: number }
-  | { kind: 'relocation'; id: number }
-  | { kind: 'location'; id: number }
-  | { kind: 'counterparty'; id: number }
-  // Волна 21: аккаунт — это `Sel` БЕЗ `Mode` (как `library-sync`), а не режим. `mode` и
-  // `sel` в этом компоненте независимы, поэтому сайдбар держит последний открытый
-  // список: аккаунт — «я сам», а не режим работы, и он не должен стоить человеку места
-  // в работе. Даром работают и `Alt+←`, и браузерный «Назад» — история пишет пару
-  // `{mode, sel}`.
-  | { kind: 'account' }
-  | null
+//
+// 2026-08-07: сами типы `Mode`/`Sel` уехали в `core/route` — вместе с адресом страницы,
+// который их теперь и кодирует. Здесь остаётся только работа с ними.
 
 // Виды ордера и их подписи живут рядом с типом (`./OrderForm`) — их читает и этот
 // список, и ленты, где вид приходит данными (движения изделия).
@@ -80,7 +57,12 @@ interface OrderEntry {
 export default function App() {
   // Аутентификация (волна 12): undefined = грузим me(); null = не залогинен → Login.
   const [user, setUser] = useState<User | null | undefined>(undefined)
-  const [mode, setMode] = useState<Mode>('projects')
+  // Стартовая форма — из АДРЕСА (2026-08-07): пришли по ссылке из чата — откроется она,
+  // а не дефолтный проект. Разбираем ОДИН раз, до первого рендера, поэтому автовыбор
+  // проекта ниже (он ставит `sel` только пустому) ссылку не перебивает. Неизвестный
+  // путь → дефолт: чужая ссылка с опечаткой не должна ронять приложение.
+  const [start] = useState(() => parsePath(window.location.pathname, 'projects'))
+  const [mode, setMode] = useState<Mode>(start?.mode ?? 'projects')
   const [projects, setProjects] = useState<ProjectRow[]>([])
   const [items, setItems] = useState<ItemRow[]>([])
   const [kittings, setKittings] = useState<KittingRow[]>([])
@@ -94,19 +76,18 @@ export default function App() {
   const [relocations, setRelocations] = useState<RelocationRow[]>([])
   const [locationRows, setLocationRows] = useState<LocationRow[]>([])
   const [counterparties, setCounterparties] = useState<CounterpartyRow[]>([])
-  const [sel, setSel] = useState<Sel>(null)
+  const [sel, setSel] = useState<Sel>(start?.sel ?? null)
   // §5 (Ф9): «только что создан» — единственный документ, что открывается в правке.
   // Помечается в onCreated-потоках, гаснет как только выбор ушёл с него (эффект ниже).
   const [justCreated, setJustCreated] = useState<{ kind: string; id: number } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
-  // История навигации («предыдущая форма»). Пишем сюда любую смену mode/sel
-  // единым эффектом (не трогая десятки call-sites); back() восстанавливает. Всё
-  // ведётся через window.history.back() → popstate, поэтому браузерный «Назад» и
-  // жест Cmd+[ тоже возвращают на предыдущую форму, а не уводят с сайта.
-  const [history, setHistory] = useState<{ mode: Mode; sel: Sel }[]>([])
+  // История навигации ведётся АДРЕСОМ (2026-08-07). Раньше рядом с браузерной жил свой
+  // стек состояний `{mode, sel}`, и он был вторым источником правды о том, где мы были;
+  // теперь форму восстанавливает сам путь, а стек снят. Побочно заработало браузерное
+  // «Вперёд» — раньше оно молчало, потому что откатывать было некуда.
   const prevRef = useRef<{ mode: Mode; sel: Sel } | null>(null)
-  const skipRef = useRef(false)   // не записывать эту смену (back / автовыбор)
+  const skipRef = useRef(false)   // сменили форму САМИ (popstate / автовыбор) — не пушить
 
   const reloadKittings = useCallback(() => api.kittings().then(setKittings), [])
   const reloadReceipts = useCallback(() => api.receipts().then(setReceipts), [])
@@ -161,48 +142,57 @@ export default function App() {
       reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories,
       reloadRelocations, reloadLocations, reloadCounterparties])
 
-  // Записать предыдущее состояние в историю при смене mode/sel + завести запись в
-  // браузерной истории (чтобы её «Назад» пришёл к нам через popstate).
+  // Смена формы → новый адрес. `pushState` кладёт запись в браузерную историю (её
+  // «Назад» придёт к нам через `popstate`), `replaceState` — когда форму выбрали НЕ
+  // руками: стартовый автовыбор проекта и откат по popstate адрес уточняют, но новым
+  // шагом истории не являются.
   useEffect(() => {
     const cur = { mode, sel }
-    if (skipRef.current) { skipRef.current = false; prevRef.current = cur; return }
+    const path = pathOf(cur)
     const prev = prevRef.current
-    if (prev && (prev.mode !== mode || prev.sel !== sel)) {
-      setHistory(h => [...h, prev])
-      window.history.pushState(null, '')
+    if (skipRef.current || !prev) {
+      skipRef.current = false
+      prevRef.current = cur
+      window.history.replaceState(null, '', path)
+      return
     }
+    if (prev.mode !== mode || prev.sel !== sel)
+      window.history.pushState(null, '', path)
     prevRef.current = cur
   }, [mode, sel])
 
-  const back = useCallback(() => {
-    setHistory(h => {
-      if (h.length === 0) return h
-      const last = h[h.length - 1]
-      skipRef.current = true
-      setMode(last.mode)
-      setSel(last.sel)
-      return h.slice(0, -1)
-    })
-  }, [])
-
-  // Браузерный «Назад» / Cmd+[ → popstate → откат на предыдущую форму.
+  // Браузерный «Назад»/«Вперёд» (и Cmd+[ / Cmd+]) → адрес уже сменился, применяем его.
+  // Форму восстанавливает путь, а не собственная память: одна дорога, нечему разойтись.
   useEffect(() => {
-    const onPop = () => back()
+    const onPop = () => {
+      const route = parsePath(window.location.pathname, mode)
+      if (!route) return
+      skipRef.current = true
+      setMode(route.mode)
+      setSel(route.sel)
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [back])
+  }, [mode])
 
-  // Клавиатурное сокращение: Alt+← (идёт через браузерную историю, синхронно).
+  // Alt+← СНЯТ (правка Ивана 2026-08-08). Alt+стрелка — системный жест выделения слова,
+  // и перехват отбрасывал человека назад прямо посреди набора текста. Своего сокращения
+  // «назад» у нас больше нет: браузерные «Назад»/«Вперёд» (и Cmd+[ / Cmd+]) работают
+  // сами — с адресом у каждой формы им и не нужен наш посредник.
+
+  // Адрес изделия называет ФОРМУ, но не режим: наше авторское живёт в «Изделиях»,
+  // покупное — в «Компонентах», и ось `native` видна только когда список доехал.
+  // Правим ровно один раз, на старте по ссылке; дальше режим принадлежит человеку.
+  const startItemFixed = useRef(false)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && e.key === 'ArrowLeft' && history.length > 0) {
-        e.preventDefault()
-        window.history.back()
-      }
+    if (startItemFixed.current || items.length === 0) return
+    startItemFixed.current = true
+    const s = start?.sel
+    if (s && s.kind === 'item' && items.find(i => i.id === s.id)?.native) {
+      skipRef.current = true
+      setMode('products')
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [history.length])
+  }, [items, start])
 
   // Палитра ⌘K (§8): глобальный поиск-переход.
   useEffect(() => {
