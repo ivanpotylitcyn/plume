@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ScopeDeficit, type ScopeDeficitRow } from './api'
 import { Chevron, Glyph, Segment, num } from './status'
+import { EntityLink } from './EntityLink'
 
 // Состояние витрины: перечитывается на `rev` (мутации формы — взяли позицию в план,
 // поменяли охват), как и пеггинг.
@@ -79,7 +80,7 @@ function Row({ r, openItem, editable, onTake }: {
       <tr className={`row s-${r.status}`}>
         <td className="gl"><Glyph status={r.status} /></td>
         <td className="c-key">
-          <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a></td>
+          <EntityLink kind="item" id={r.item_id} open={openItem}>{r.item_code}</EntityLink></td>
         <td className="c-desc">
           <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
         <td className="num">{num(r.need)}</td>

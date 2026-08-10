@@ -27,6 +27,7 @@ import { ScopeDeficitRows, useScopeDeficit } from './ScopeDeficitPanel'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { useCategoryFilter } from './ColumnFilter'
 import { CounterpartyRef, ItemGlyph, count, num, sumByUom } from './status'
+import { EntityLink } from './EntityLink'
 
 export function ProcurementView({ procurementId, items, isNew, openItem,
   openProject, openPurchase, openCounterparty, onChanged, onDeleted }: {
@@ -191,7 +192,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
             своего, унаследованного отсюда копией при нарезке. */}
         <Field label="Контрагент" locked={locked}
           view={<CounterpartyRef code={c.contractor_code} name={c.contractor_name}
-            onOpen={() => openCounterparty(c.contractor_id!)} />}>
+            id={c.contractor_id} open={openCounterparty} />}>
           <CounterpartyPicker counterparties={suppliers} side="supply"
             value={c.contractor_id ?? ''}
             disabled={busy} placeholder="— не указан —"
@@ -226,7 +227,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
       <td className="gl">
         <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} /></td>
       <td className="c-key">
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+        <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">

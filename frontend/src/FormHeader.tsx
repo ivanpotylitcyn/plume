@@ -6,6 +6,7 @@ import { api, type Authored, type UserRow, type ProjectRow } from './api'
 import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
 import { AnchoredMenu } from './AnchoredMenu'
+import { EntityLink } from './EntityLink'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Канон §5 (Ф9): всё существующее открывается В ПРОСМОТРЕ; исключение ровно одно —
@@ -167,7 +168,7 @@ export function ProjectField({ projectId, projectLabel, locked, busy, onChange, 
       options={projects.map(p => ({ id: p.id, label: p.code }))}
       locked={locked} busy={busy} onChange={onChange}
       view={projectId && onOpen
-        ? <a className="link" onClick={() => onOpen(projectId)}>{projectLabel}</a>
+        ? <EntityLink kind="project" id={projectId} open={onOpen}>{projectLabel}</EntityLink>
         : projectLabel} />
   )
 }

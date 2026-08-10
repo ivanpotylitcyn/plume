@@ -32,6 +32,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { useFormLock } from './FormHeader'
 import { CommitInput } from './CommitInput'
 import { count } from './status'
+import { EntityLink } from './EntityLink'
 
 // Один словарь статуса на всё: подпись таба, глиф, цвет полосы строки, заголовок
 // колонки-объяснения, текст пустого таба и склонение для меты. Цвета из канона:
@@ -276,7 +277,7 @@ function DiffTable({ status, rows, confirmed, busy, onToggle, onBulk, openItem }
             {/* Код изделия — идентичность (`.code`): у уже заведённого он ссылка
                 со своим цветом, у нового — просто код, и приглушать его нельзя. */}
             <td className="c-key">{r.item_id
-              ? <a className="link" onClick={() => openItem(r.item_id!)}>{r.code}</a>
+              ? <EntityLink kind="item" id={r.item_id} open={openItem}>{r.code}</EntityLink>
               : r.code}</td>
             <td className="c-desc"><RowDetail row={r} /></td>
           </tr>))}</tbody>

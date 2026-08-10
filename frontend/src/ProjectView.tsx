@@ -21,6 +21,7 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ColumnFilter } from './ColumnFilter'
 import { ItemPicker } from './Picker'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
+import { EntityLink } from './EntityLink'
 
 export function ProjectView({ projectId, items, isNew, openItem, openOrder,
   onChanged, onDeleted }:
@@ -140,9 +141,10 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder,
               Ждут фиксации:{' '}
               {drafts.map((d, i) => <span key={d.document_id}>
                 {i > 0 && ' · '}
-                <a className="link" onClick={() => openOrder(d.kind as OrderKind, d.document_id)}>
+                <EntityLink kind={d.kind as OrderKind} id={d.document_id}
+                  open={id => openOrder(d.kind as OrderKind, id)}>
                   {ORDER_LABEL[d.kind as OrderKind]} {d.code || d.number || `#${d.document_id}`}
-                </a>{` (${num(d.qty)})`}
+                </EntityLink>{` (${num(d.qty)})`}
               </span>)}
             </div>}
             <table className="grid">
@@ -237,7 +239,7 @@ function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
       <td className="gl"><LotGlyph origin={r.origin} liveQty={r.live_qty} /></td>
       <td className="c-key"><span className="code">{r.lot_label}</span></td>
       <td className="c-fit">
-        <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a></td>
+        <EntityLink kind="item" id={r.item_id} open={openItem}>{r.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
       <td className="num">
@@ -421,7 +423,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
           <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           <ItemGlyph native={d.target_native} synced={d.target_synced} locked={d.target_locked} />
-          <a className="link" onClick={() => openItem(d.target_id)}>{d.target_code}</a>
+          <EntityLink kind="item" id={d.target_id} open={openItem}>{d.target_code}</EntityLink>
         </span>
         <span className="name">{d.target_description}</span>
         <span className="pnum">
@@ -535,7 +537,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
               onClick={onToggle}><Chevron open={expanded} /></button>
           : <span className="tree-lead" />}
         <ItemGlyph native={n.component_native} synced={n.component_synced} locked={n.component_locked} />
-        <a className="link" onClick={() => openItem(n.component_id)}>{n.component_code}</a>
+        <EntityLink kind="item" id={n.component_id} open={openItem}>{n.component_code}</EntityLink>
       </span>
       <span className="name">{n.component_description}</span>
       <span className="pnum">{num(n.need)}</span>
@@ -563,7 +565,7 @@ function CompRow({ ln, openItem }: {
     <div className="prow prow--comp">
       <span className="tree-cell">
         <ItemGlyph native={ln.component_native} synced={ln.component_synced} locked={ln.component_locked} />
-        <a className="link" onClick={() => openItem(ln.component_id)}>{ln.component_code}</a>
+        <EntityLink kind="item" id={ln.component_id} open={openItem}>{ln.component_code}</EntityLink>
       </span>
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)}</span>

@@ -14,6 +14,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 import { useCategoryFilter } from './ColumnFilter'
+import { EntityLink } from './EntityLink'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
   openCounterparty, onChanged, onDeleted }: {
@@ -119,7 +120,8 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
                 нужна: кликабельно то, что названо). */}
             <Field label="Заказ" locked={locked}
               view={c.purchase_id
-                ? <a className="link" onClick={() => openPurchase(c.purchase_id!)}>{purchaseLabel}</a>
+                ? <EntityLink kind="purchase" id={c.purchase_id}
+                    open={openPurchase}>{purchaseLabel}</EntityLink>
                 : ''}>
               <PurchasePicker purchases={purchases} value={c.purchase_id ?? ''}
                 disabled={busy}
@@ -133,7 +135,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
             <Field label="Поставщик" locked={locked}
               view={c.contractor_id
                 ? <><CounterpartyRef code={c.contractor_code} name={c.contractor_name}
-                    onOpen={() => openCounterparty(c.contractor_id!)} />{mismatch}</>
+                    id={c.contractor_id} open={openCounterparty} />{mismatch}</>
                 : ''}>
               <CounterpartyPicker counterparties={suppliers} side="supply"
                 value={c.contractor_id ?? ''}
@@ -166,7 +168,7 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
           цвет — живость остатка, §7a), код и описание — РАЗНЫМИ колонками. */}
       <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
-        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
+        <EntityLink kind="item" id={lot.item_id} open={openItem}>{lot.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}

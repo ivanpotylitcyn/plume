@@ -17,6 +17,7 @@ import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CounterpartyRef, LotGlyph, count, num, sumByUom } from './status'
 import { CounterpartyPicker } from './Picker'
+import { EntityLink } from './EntityLink'
 
 export function TransferView({ transferId, isNew, openItem, openProject,
   openCounterparty, onChanged, onDeleted }: {
@@ -100,7 +101,7 @@ export function TransferView({ transferId, isNew, openItem, openProject,
           anchors={
             <Field label="Заказчик" locked={locked}
               view={<CounterpartyRef code={c.contractor_code} name={c.contractor_name}
-                onOpen={() => openCounterparty(c.contractor_id!)} />}>
+                id={c.contractor_id} open={openCounterparty} />}>
               <CounterpartyPicker counterparties={customers} side="shipment"
                 value={c.contractor_id ?? ''}
                 disabled={busy} placeholder="— не указан —"
@@ -126,7 +127,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
       <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
       <td className="c-key"><span className="code">{ln.lot_label}</span></td>
       <td className="c-fit">
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+        <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">

@@ -15,6 +15,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LotGlyph, count, num, sumByUom } from './status'
+import { EntityLink } from './EntityLink'
 
 export function RelocationView({ relocationId, isNew, openItem, openProject, onChanged, onDeleted }: {
   relocationId: number
@@ -108,7 +109,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
       <td className="gl"><LotGlyph origin={m.origin} liveQty={m.from_live_qty} /></td>
       <td className="c-key"><span className="code">{m.lot_label}</span></td>
       <td className="c-fit">
-        <a className="link" onClick={() => openItem(m.item_id)}>{m.item_code}</a></td>
+        <EntityLink kind="item" id={m.item_id} open={openItem}>{m.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={m.item_description}>{m.item_description}</span></td>
       <td className="num">

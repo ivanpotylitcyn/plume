@@ -18,6 +18,7 @@ import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { useCategoryFilter } from './ColumnFilter'
 import { Glyph, ItemGlyph, Segment, count, num, statusTone } from './status'
+import { EntityLink } from './EntityLink'
 
 export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
   { kittingId: number; isNew: boolean; openItem: (id: number) => void
@@ -118,7 +119,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
               (миграция `0019` их вычистила), а мёртвая ветка врала бы о правиле. */}
           <Field label="Изделие" locked={locked}
             view={c.target_id
-              ? <a className="link" onClick={() => openItem(c.target_id!)}>{c.target_code}</a>
+              ? <EntityLink kind="item" id={c.target_id} open={openItem}>{c.target_code}</EntityLink>
               : ''}>
             <ItemPicker items={items.filter(i => i.native)} value={c.target_id ?? ''}
               disabled={busy} placeholder="— не выбрано —"
@@ -158,7 +159,8 @@ function Component({ row, form, wip, busy, openItem, run }: {
           synced={row.component_synced} locked={row.component_locked}
           tone={statusTone(status)} /></td>
         <td className="c-key">
-          <a className="link" onClick={() => openItem(row.component_id)}>{row.component_code}</a></td>
+          <EntityLink kind="item" id={row.component_id} open={openItem}>
+            {row.component_code}</EntityLink></td>
         <td className="c-desc">
           <span className="cell-ellip" title={row.component_description}>
             {row.component_description}</span></td>

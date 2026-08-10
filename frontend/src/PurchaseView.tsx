@@ -21,6 +21,7 @@ import { Balance, Cost, CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
   balanceTitle, count, num } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
+import { EntityLink } from './EntityLink'
 
 // Фильтр остатка: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
 // духу, что у фильтров «Потребности»: первый вариант нейтральный, дальше — состояния
@@ -178,8 +179,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                   {/* Ссылка — по КОДУ: он есть всегда (фолбэк «Поставка 12»), а № поставки
                       у только что рождённой пуст, и ссылка на него была пустотой. */}
                   <td className="c-key">
-                    <a className="link" onClick={() => openReceipt(r.id)}>
-                      {r.code || `Поставка #${r.id}`}</a></td>
+                    <EntityLink kind="receipt" id={r.id} open={openReceipt}>
+                      {r.code || `Поставка #${r.id}`}</EntityLink></td>
                   <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
                   <td className="c-fit">{r.date}</td>
                   <td className="c-desc">
@@ -241,8 +242,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               options={procs.map(p => ({ id: p.id, label: p.code || `Закупка #${p.id}` }))}
               locked={locked} busy={busy} placeholder="— не выбрана —"
               view={c.procurement_id
-                ? <a className="link"
-                    onClick={() => openProcurement(c.procurement_id!)}>{procurementLabel}</a>
+                ? <EntityLink kind="procurement" id={c.procurement_id}
+                    open={openProcurement}>{procurementLabel}</EntityLink>
                 : ''}
               onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))}
               onClear={() => run(api.updatePurchase(c.id, { procurement_id: null }))} />
@@ -251,7 +252,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             <Field label="Контрагент" locked={locked}
               view={c.contractor_id
                 ? <><CounterpartyRef code={c.contractor_code} name={c.contractor_name}
-                    onOpen={() => openCounterparty(c.contractor_id!)} />{mismatch}</>
+                    id={c.contractor_id} open={openCounterparty} />{mismatch}</>
                 : ''}>
               <CounterpartyPicker counterparties={suppliers} side="supply"
                 value={c.contractor_id ?? ''}
@@ -290,7 +291,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
         <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} />
       </td>
       <td className="c-key">
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+        <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">

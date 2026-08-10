@@ -17,6 +17,7 @@ import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
 import { useCategoryFilter } from './ColumnFilter'
 import { Balance, Chevron, Cost, StatusGlyph, balanceTitle, num } from './status'
+import { EntityLink } from './EntityLink'
 
 // Состояние привязки: загрузка по id, обновление на `rev` (мутации формы плана) и
 // обёртка мутации. Живёт у формы — оба таба смотрят в одни данные.
@@ -129,8 +130,8 @@ export function PurchaseFan({ st, openPurchase }: {
           <tr key={f.purchase_id} className="row">
             <td className="gl"><StatusGlyph locked={f.locked} /></td>
             <td className="c-key">
-              <a className="link" onClick={() => openPurchase(f.purchase_id)}>
-                {f.purchase_code}</a></td>
+              <EntityLink kind="purchase" id={f.purchase_id} open={openPurchase}>
+                {f.purchase_code}</EntityLink></td>
             <td className="c-fit"><span className="code">{f.project_code}</span></td>
             <td className="c-desc">
               <span className="cell-ellip" title={f.project_name}>{f.project_name}</span></td>
@@ -172,7 +173,7 @@ function LineRow({ r, busy, procurementId, editable, onQty, run,
               : 'разложена частично'} />
           {/* Код — ссылка в форму изделия и в ОДНУ строку с многоточием, как везде
               (правило строк §7a): длинный код иначе разрывал строку на две. */}
-          <a className="link" onClick={() => openItem(r.item_id)}>{r.item_code}</a>
+          <EntityLink kind="item" id={r.item_id} open={openItem}>{r.item_code}</EntityLink>
         </span>
         <span className="name">{r.item_description}</span>
         <span className="pnum" />
@@ -224,14 +225,14 @@ function OrderCell({ c, itemId, busy, procurementId, run, openProject, openPurch
       <span className="tree-cell alloc-sub">
         <span className="tree-lead" />
         <StatusGlyph locked={c.locked} />
-        <a className="link" onClick={() => openPurchase(c.purchase_id)}>
-          {c.purchase_code}</a>
+        <EntityLink kind="purchase" id={c.purchase_id} open={openPurchase}>
+          {c.purchase_code}</EntityLink>
       </span>
       {/* Проект — КОДОМ и ссылкой в его форму: код первичен, описание живёт в title
           (то же правило, что у контрагента). */}
       <span className="name">
-        <a className="link" title={c.project_name}
-          onClick={() => openProject(c.project_id)}>{c.project_code}</a></span>
+        <EntityLink kind="project" id={c.project_id} open={openProject}
+          title={c.project_name}>{c.project_code}</EntityLink></span>
       <span className="pnum">
         <Balance value={c.balance} status={c.balance_status}
           title={balanceTitle(c.project_code, c.need, c.kitted, c.in_stock, c.on_order)} />

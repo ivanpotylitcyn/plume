@@ -15,6 +15,7 @@ import { CommitInput } from './CommitInput'
 import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
 import { useCategoryFilter } from './ColumnFilter'
+import { EntityLink } from './EntityLink'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
@@ -104,7 +105,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             <tr key={b.id} className="row">
               <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
               <td className="c-key">
-                <a className="link" onClick={() => openItem(b.component_id)}>{b.component_code}</a></td>
+                <EntityLink kind="item" id={b.component_id} open={openItem}>
+                  {b.component_code}</EntityLink></td>
               <td className="c-desc">
                 <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
               <td className="num">
@@ -142,7 +144,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
               <td className="gl"><ItemGlyph native={w.parent_native} synced={w.parent_synced}
                 locked={w.parent_locked} /></td>
               <td className="c-key">
-                <a className="link" onClick={() => openItem(w.parent_id)}>{w.parent_code}</a></td>
+                <EntityLink kind="item" id={w.parent_id} open={openItem}>
+                  {w.parent_code}</EntityLink></td>
               <td className="c-desc">
                 <span className="cell-ellip" title={w.parent_description}>{w.parent_description}</span></td>
               <td className="num">{num(w.qty)}</td>
@@ -202,8 +205,11 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             <tr key={`${m.kind}-${m.document_id}-${m.lot_id}-${i}`}
               className="row">
               <td className="gl"><StatusGlyph locked={m.locked} /></td>
-              <td className="c-key"><a className="link" onClick={() => openOrder(m.kind as OrderKind, m.document_id)}>
-                {m.code || m.number || `${ORDER_LABEL[m.kind as OrderKind]} #${m.document_id}`}</a></td>
+              <td className="c-key">
+                <EntityLink kind={m.kind as OrderKind} id={m.document_id}
+                  open={id => openOrder(m.kind as OrderKind, id)}>
+                  {m.code || m.number || `${ORDER_LABEL[m.kind as OrderKind]} #${m.document_id}`}
+                </EntityLink></td>
               <td>
                 {ORDER_LABEL[m.kind as OrderKind] ?? m.kind}
                 {m.event === 'born' && <span className="hint">партия рождена</span>}</td>

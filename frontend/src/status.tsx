@@ -1,5 +1,6 @@
 // Сквозной словарь статусов (единый везде): значок + цвет текста, не заливка.
 import type { CostStatus, Status } from './api'
+import { EntityLink } from './EntityLink'
 
 // Единый глиф оси фиксации (Ф1b, волна 19): строгая проекция `bool locked` на codicon
 // `lock` (зафиксировано) / `unlock` (расфиксировано). Никаких эмодзи и ✓/○ — только
@@ -227,15 +228,19 @@ export function count(n: number, one: string, few: string, many: string): string
 // Код у контрагента nullable (авто-фолбэка нет), поэтому пустой код — не ошибка, а
 // повод мягко попросить: показываем описание и приглушённую пометку «код не задан»
 // (тот же приём, что у номеров документов в карточке контрагента).
-export function CounterpartyRef({ code, name, onOpen }: {
-  code: string; name: string; onOpen?: () => void
+// 2026-08-10: ссылка стала настоящей (`EntityLink`), поэтому компонент принимает `id`
+// контрагента, а не готовый колбэк без аргумента: адрес формы собирается из вида и id.
+export function CounterpartyRef({ code, name, id, open }: {
+  code: string; name: string
+  id?: number | null                       // нет id — показываем текстом, ссылки нет
+  open?: (id: number) => void
 }) {
   if (!name) return null
   const body = code
     ? <span className="code">{code}</span>
     : <>{name}<span className="hint"> код не задан</span></>
-  return onOpen
-    ? <a className="link" title={name} onClick={onOpen}>{body}</a>
+  return id && open
+    ? <EntityLink kind="counterparty" id={id} open={open} title={name}>{body}</EntityLink>
     : <span title={name}>{body}</span>
 }
 

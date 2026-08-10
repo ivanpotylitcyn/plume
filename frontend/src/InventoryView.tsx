@@ -17,6 +17,7 @@ import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
+import { EntityLink } from './EntityLink'
 
 export function InventoryView({ inventoryId, items, isNew, openItem, openProject,
   onChanged, onDeleted }: {
@@ -111,7 +112,7 @@ function LotRow({ lot, locked, draft, busy, openItem, run }: {
       {/* Строка = партия, рождённая этим актом (origin = инвентаризация). */}
       <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
-        <a className="link" onClick={() => openItem(lot.item_id)}>{lot.item_code}</a></td>
+        <EntityLink kind="item" id={lot.item_id} open={openItem}>{lot.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
         {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}

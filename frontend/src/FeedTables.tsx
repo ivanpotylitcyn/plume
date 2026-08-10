@@ -12,6 +12,7 @@ import type { AccountDocumentRow, FeedProcurementRow, FeedPurchaseRow } from './
 import { num, StatusGlyph, statusTone } from './status'
 import { viewDate } from './FormField'
 import { ORDER_LABEL, type OrderKind } from './orders'
+import { EntityLink } from './EntityLink'
 
 // Лента закупок-планов. Глиф = фиксация плана (своей оси покрытия у него нет).
 export function ProcurementFeed({ rows, empty, open }: {
@@ -30,8 +31,8 @@ export function ProcurementFeed({ rows, empty, open }: {
         <tr key={p.id} className="row">
           <td className="gl"><StatusGlyph locked={p.locked} /></td>
           <td className="c-key">
-            <a className="link" onClick={() => open(p.id)}>
-              {p.code || `Закупка #${p.id}`}</a></td>
+            <EntityLink kind="procurement" id={p.id} open={open}>
+              {p.code || `Закупка #${p.id}`}</EntityLink></td>
           <td className="c-desc">
             <span className="cell-ellip" title={p.description}>{p.description}</span></td>
           <td className="c-fit">
@@ -64,8 +65,8 @@ export function PurchaseFeed({ rows, empty, open }: {
           <td className="gl">
             <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} /></td>
           <td className="c-key">
-            <a className="link" onClick={() => open(p.id)}>
-              {p.code || `Заказ #${p.id}`}</a></td>
+            <EntityLink kind="purchase" id={p.id} open={open}>
+              {p.code || `Заказ #${p.id}`}</EntityLink></td>
           <td className="c-desc">
             <span className="cell-ellip" title={p.description}>{p.description}</span></td>
           <td className="c-fit code">{p.project_code}</td>
@@ -99,8 +100,8 @@ export function DocumentFeed({ rows, empty, open }: {
           {/* Ссылка — по КОДУ (он есть всегда, фолбэк «Поставка 12»); номер у только что
               рождённого пуст, и ссылка на него была бы пустотой. */}
           <td className="c-key">
-            <a className="link" onClick={() => open(d.kind, d.id)}>
-              {d.code || `${ORDER_LABEL[d.kind]} #${d.id}`}</a></td>
+            <EntityLink kind={d.kind} id={d.id} open={id => open(d.kind, id)}>
+              {d.code || `${ORDER_LABEL[d.kind]} #${d.id}`}</EntityLink></td>
           <td className="c-fit">{ORDER_LABEL[d.kind]}</td>
           <td className="c-desc">
             <span className="cell-ellip" title={d.description}>{d.description}</span></td>

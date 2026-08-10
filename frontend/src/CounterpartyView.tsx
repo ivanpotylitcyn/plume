@@ -26,6 +26,7 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ProcurementFeed, PurchaseFeed } from './FeedTables'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import type { OrderKind } from './orders'
+import { EntityLink } from './EntityLink'
 
 // Итог в натуре — вектор по единицам, а не одно число: штуки с метрами не складываем
 // (§13.6). Пустой вектор — прочерк, как у пустого поля шапки.
@@ -229,7 +230,8 @@ function RecRow({ r, open }: { r: CpReceiptRow; open: (id: number) => void }) {
     <tr className="row">
       <td className="gl"><StatusGlyph locked={r.locked} /></td>
       <td className="c-key">
-        <a className="link" onClick={() => open(r.id)}>{r.code || `Поставка #${r.id}`}</a></td>
+        <EntityLink kind="receipt" id={r.id} open={open}>
+          {r.code || `Поставка #${r.id}`}</EntityLink></td>
       <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
       <td className="c-fit code">{r.project_code}</td>
       <td className="c-fit">
@@ -245,7 +247,8 @@ function TransRow({ t, open }: { t: CpTransferRow; open: (id: number) => void })
     <tr className="row">
       <td className="gl"><StatusGlyph locked={t.locked} /></td>
       <td className="c-key">
-        <a className="link" onClick={() => open(t.id)}>{t.code || `Передача #${t.id}`}</a></td>
+        <EntityLink kind="transfer" id={t.id} open={open}>
+          {t.code || `Передача #${t.id}`}</EntityLink></td>
       <td className="c-fit code">{t.number || <span className="hint">не задан</span>}</td>
       <td className="c-fit code">{t.project_code}</td>
       <td className="c-fit">

@@ -16,6 +16,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LotGlyph, count, num, sumByUom } from './status'
+import { EntityLink } from './EntityLink'
 
 export function RequisitionView({ requisitionId, isNew, openItem, openProject, onChanged, onDeleted }: {
   requisitionId: number
@@ -106,7 +107,7 @@ function LineRow({ ln, locked, busy, openItem, run }: {
       <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.source_live_qty} /></td>
       <td className="c-key"><span className="code">{ln.lot_label}</span></td>
       <td className="c-fit">
-        <a className="link" onClick={() => openItem(ln.item_id)}>{ln.item_code}</a></td>
+        <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="c-fit">{ln.source_project_code}</td>

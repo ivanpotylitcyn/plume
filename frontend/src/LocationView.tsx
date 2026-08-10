@@ -13,6 +13,7 @@ import { num, count, sumByUom, LotGlyph } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
+import { EntityLink } from './EntityLink'
 
 export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted }: {
   locationId: number
@@ -68,7 +69,8 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
                 <td className="gl"><LotGlyph origin={l.origin} liveQty={l.qty} /></td>
                 <td className="c-key"><span className="code">{l.lot_label}</span></td>
                 <td className="c-fit">
-                  <a className="link" onClick={() => openItem(l.item_id)}>{l.item_code}</a></td>
+                  <EntityLink kind="item" id={l.item_id} open={openItem}>
+                    {l.item_code}</EntityLink></td>
                 <td className="c-desc">
                   <span className="cell-ellip" title={l.item_description}>{l.item_description}</span></td>
                 <td className="c-fit code">{l.project_code}</td>
