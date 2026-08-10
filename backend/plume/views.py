@@ -152,6 +152,39 @@ def _safe_filename(code):
     return cleaned.strip('. ')
 
 
+_XLSX_TYPE = ('application/vnd.openxmlformats-officedocument'
+              '.spreadsheetml.sheet')
+
+
+def _xlsx_response(data, code, fallback):
+    """xlsx-байты → HTTP-ответ с именем «{мы} {код} от {дата скачивания}.xlsx».
+
+    Три части, каждая отвечает на свой вопрос получателя:
+
+    - **наш код** (`our_organization().code`, например «Мы») — от кого файл. Стоит
+      ПЕРВЫМ (правка Ивана 2026-08-10): у контрагента в папке лежат бумаги от десятка
+      организаций, и сортировка по имени собирает наши вместе. Мы не настроены или у
+      записи нет кода — часть просто не рисуется, как пустая строка шапки бланка;
+    - **код сущности** — про что файл («Нева-1»);
+    - **дата СКАЧИВАНИЯ** — когда это выгружено из Plume. Именно скачивания, а не
+      документа: запрос заводят в начале месяца, а правят весь месяц, и на руках у обеих
+      сторон оказывается стопка одноимённых файлов. Дата самого документа живёт внутри,
+      в шапке. Формат ISO — файлы одной сущности сортируются по имени хронологически.
+
+    Коды бывают кириллическими и с пробелами, поэтому заголовок собирает
+    `content_disposition_header` (RFC 6266: ASCII-фолбэк + `filename*=UTF-8''…`), а не
+    f-строка. Пустой `code` сущности (он nullable) → фолбэк по id.
+    """
+    us = engine.our_organization()
+    parts = [_safe_filename(us.code) if us else '',
+             _safe_filename(code) or fallback,
+             f'от {timezone.localdate().isoformat()}']
+    resp = HttpResponse(data, content_type=_XLSX_TYPE)
+    resp['Content-Disposition'] = content_disposition_header(
+        as_attachment=True, filename=' '.join(p for p in parts if p) + '.xlsx')
+    return resp
+
+
 def _delete_order(doc):
     """DELETE складского ордера с единым friendly-guard (В13 Ф1b): draft — свободно;
     posted — «сперва расфиксировать»; `PROTECT` бережёт потраченные лоты. 204 при
@@ -248,7 +281,7 @@ def account(request):
     адреса — нет и подмены чужого профиля.
 
     PATCH частичный, как везде: имя / фамилия / почта — ДНК Django (`update_user`),
-    тема — своя приставка (`set_theme`, единственный вход). Фиксации у пользователя
+    тема и телефон — своя приставка (`set_theme` / `set_phone`, единственные входы). Фиксации у пользователя
     нет (он не документ), поэтому и `lock`-маршрутов у аккаунта не бывает.
     """
     if request.method == 'PATCH':
@@ -261,6 +294,8 @@ def account(request):
                     email=d.get('email'))
             if 'theme' in d:
                 engine.set_theme(request.user, d['theme'])
+            if 'phone' in d:
+                engine.set_phone(request.user, d['phone'])
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.user_form(request.user))
@@ -567,22 +602,15 @@ def item_xlsx(request, pk):
     меню кнопки «Скачать». Неизвестное значение трактуем как «только состав» —
     выгрузка не то место, где ругаться на опечатку в query.
 
-    **Имя файла = `code` изделия** — то же правило, что у бланка закупки (2026-07-26):
-    ярлык сущности едет наружу вместе с файлом. Кириллица и пробелы в коде — обычное
-    дело, поэтому заголовок собираем `content_disposition_header` (RFC 6266), а не
-    f-строкой.
+    **Имя файла = `code` изделия + дата скачивания** — общее правило всех выгрузок
+    продукта (`_xlsx_response`): ярлык сущности едет наружу вместе с файлом, а дата
+    говорит, когда этот снимок сделан.
     """
     item = get_object_or_404(models.Item, pk=pk)
     scope = (engine.ITEM_XLSX_ALL if request.GET.get('scope') == engine.ITEM_XLSX_ALL
              else engine.ITEM_XLSX_BOM)
-    resp = HttpResponse(
-        engine.item_xlsx(item, scope),
-        content_type=('application/vnd.openxmlformats-officedocument'
-                      '.spreadsheetml.sheet'))
-    resp['Content-Disposition'] = content_disposition_header(
-        as_attachment=True,
-        filename=f'{_safe_filename(item.code) or f"изделие-{item.id}"}.xlsx')
-    return resp
+    return _xlsx_response(engine.item_xlsx(item, scope), item.code,
+                          f'изделие-{item.id}')
 
 
 @api_view(['POST'])
@@ -1903,21 +1931,25 @@ def procurement_unlock(request, pk):
 def procurement_xlsx(request, pk):
     """Выгрузка xlsx-бланка закупки-плана — файл поставщику (attachment).
 
-    **Имя файла = `code` закупки** (2026-07-26): человек скачивает «Нева ДЗЗ 1.xlsx»,
-    а не безликий `order-12.xlsx` — ярлык сущности едет наружу вместе с файлом.
-    Код бывает кириллическим и с пробелами, поэтому заголовок собираем
-    `content_disposition_header` (RFC 6266: ASCII-фолбэк + `filename*=UTF-8''…`),
-    а не f-строкой. Пустой `code` (он nullable) → фолбэк по id.
+    **Имя файла = `code` закупки + дата скачивания** (`_xlsx_response`): человек
+    скачивает «Нева-1 от 2026-08-10.xlsx», а не безликий `order-12.xlsx`.
     """
     p = get_object_or_404(models.Procurement, pk=pk)
-    data = engine.procurement_xlsx(p)
-    resp = HttpResponse(
-        data,
-        content_type=('application/vnd.openxmlformats-officedocument'
-                      '.spreadsheetml.sheet'))
-    resp['Content-Disposition'] = content_disposition_header(
-        as_attachment=True, filename=f'{_safe_filename(p.code) or f"закупка-{p.id}"}.xlsx')
-    return resp
+    return _xlsx_response(engine.procurement_xlsx(p), p.code, f'закупка-{p.id}')
+
+
+@api_view(['GET'])
+def purchase_xlsx(request, pk):
+    """Выгрузка xlsx-бланка ЗАКАЗА — тот же документ, что у закупки (2026-08-10).
+
+    Гейт — как у закупки: бланк отдаём только у ЗАФИКСИРОВАННОГО заказа (черновик ещё
+    не обязательство, наружу ему рано). Вью прячет кнопку, здесь — тот же отказ на
+    случай прямого запроса по адресу.
+    """
+    p = get_object_or_404(models.Purchase, pk=pk)
+    if not p.locked:
+        return _bad('Заказ не зафиксирован — бланк отдаём только по утверждённому.')
+    return _xlsx_response(engine.purchase_xlsx(p), p.code, f'заказ-{p.id}')
 
 
 # --------------------------------------------------------------------------- #

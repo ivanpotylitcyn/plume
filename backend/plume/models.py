@@ -1062,6 +1062,13 @@ class UserProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                                 related_name='profile', verbose_name='пользователь')
     theme = models.CharField('тема интерфейса', max_length=32, default=DEFAULT_THEME)
+    # Телефон (2026-08-10) — контакт автора в бланке, уходящем ПОСТАВЩИКУ: «кому
+    # звонить по этому запросу». В ДНК Django телефона нет, а кастомную модель
+    # пользователя вводить поздно — значит сюда же, в приставку, рядом с темой.
+    # Хранится РОВНО в том виде, в каком показывается («+7 985 963 42 31», решение
+    # Ивана 2026-08-10): второго представления у одного факта в продукте не заводим,
+    # нормализатор (`engine.normalize_phone`) работает один раз — на вводе.
+    phone = models.CharField('телефон', max_length=32, blank=True, default='')
 
     class Meta:
         verbose_name = 'профиль пользователя'

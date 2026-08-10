@@ -206,6 +206,13 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       </>}
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
+      /* Бланк наружу — как у закупки: только у ЗАФИКСИРОВАННОГО заказа (черновик ещё
+         не обязательство). Один и тот же документ у двух форм контура: шапка запроса
+         (поставщик · заказчик · дата · автор с контактами) + нумерованные позиции. */
+      download={fixed
+        ? { href: api.purchaseXlsxUrl(c.id),
+            title: 'Скачать xlsx-бланк для поставщика (имя файла = код заказа и дата)' }
+        : undefined}
       fixed={fixed}
       onFixate={() => run(api.lockPurchase(c.id))}
       fixateTitle="Зафиксировать заказ — строки станут read-only"

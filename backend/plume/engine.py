@@ -57,7 +57,7 @@
   / `send|unsend|cancel|restore_procurement` — записываемый план закупки под охват
   проектов (мягкий замок `locked`). Нарезка на `Purchase` — волна 8.
 - `add_to_procurement(...)` — мост «витрина → строки плана» (топ-ап до наводки);
-  `procurement_xlsx(...)` — xlsx-бланк поставщику.
+  `procurement_xlsx(...)` / `purchase_xlsx(...)` — xlsx-бланк поставщику (одна форма).
 
 Волна 8 (нарезка плана на проектные заказы; переделана 2026-08-05):
 - `procurement_allocation(proc)` — проекция «Привязка»: строка плана × ЗАКАЗЫ закупки
@@ -3320,9 +3320,17 @@ def our_organization():
     return models.Counterparty.objects.filter(pk=oid).first() if oid else None
 
 
-def _party_line(cp):
-    """Сторона одной строкой для бланка: наименование + ИНН, если он известен."""
-    return f'{cp.description} · ИНН {cp.inn}' if cp.inn else cp.description
+def _author_line(user):
+    """Автор запроса для бланка: имя · почта · телефон, через запятую.
+
+    Бланк уходит поставщику, и графа «Автор» отвечает на один вопрос — **кому отвечать
+    по этому файлу**. Одного имени для этого мало, поэтому рядом едут контакты (правка
+    Ивана 2026-08-10); незаполненные просто не рисуются, как и пустые строки шапки.
+    Телефон берём из приставки (`UserProfile.phone`) уже в готовом виде.
+    """
+    parts = [user.get_full_name() or user.get_username(), user.email,
+             profile_of(user).phone]
+    return ', '.join(p for p in parts if p)
 
 
 def _doc_date(value):
@@ -3376,6 +3384,27 @@ def _xlsx_sheet(ws, title, head, headers, rows, widths):
     return ws
 
 
+def _blank_head(contractor, date, user):
+    """Шапка бланка наружу — ОДНА на закупку и заказ (2026-08-10).
+
+    Порядок и подписи заданы Иваном по образцу реального файла: **Поставщик** (у кого
+    просим/покупаем) → **Заказчик** (мы, `our_organization`) → **Дата запроса** →
+    **Автор запроса** с контактами. Сторона идёт одним наименованием: ИНН из бланка
+    снят — реквизиты живут в договоре и в карточке предприятия, а в запросе цен они
+    только шумят.
+
+    Незаданные строки не рисуются вовсе (`_xlsx_sheet`): пустая графа во внешнем
+    документе читается как брак, а не как «значение не задано».
+    """
+    us = our_organization()
+    return [
+        ('Поставщик', contractor.description if contractor else ''),
+        ('Заказчик', us.description if us else ''),
+        ('Дата запроса', _doc_date(date)),
+        ('Автор запроса', _author_line(user)),
+    ]
+
+
 def procurement_xlsx(procurement):
     """Сгенерировать xlsx-бланк закупки-плана (bytes) — файл поставщику.
 
@@ -3384,12 +3413,11 @@ def procurement_xlsx(procurement):
     первое такое изменение: над таблицей появилась шапка запроса (кто просит, у кого,
     когда, кто автор), а у позиций — порядковый номер.
 
-    Шапка: **заказчик** — наша сторона (`our_organization`, обычный контрагент);
-    **контрагент** — `Procurement.contractor` (намерение плана: у кого собираемся
-    купить); **дата запроса** — `Procurement.date`; **автор** — `Procurement.user`.
-    Незаданные строки шапки **не рисуются вовсе**: пустая графа во внешнем документе
-    читается как брак, а не как «значение не задано» (внутри продукта правило обратное,
-    §13 — там прочерк честнее).
+    Шапка — общая с бланком заказа (`_blank_head`): поставщик (`Procurement.contractor`
+    — намерение плана, у кого собираемся купить) · заказчик (мы) · дата запроса · автор
+    с контактами. Незаданные строки **не рисуются вовсе**: пустая графа во внешнем
+    документе читается как брак, а не как «значение не задано» (внутри продукта правило
+    обратное, §13 — там прочерк честнее).
 
     **Порядок позиций = порядок на экране** (`order_by('id')`, тот же, что у
     `procurement_form`): нумерация в файле обязана совпадать с тем, что видит человек,
@@ -3400,21 +3428,41 @@ def procurement_xlsx(procurement):
     """
     from openpyxl import Workbook
 
-    us = our_organization()
     wb = Workbook()
     _xlsx_sheet(
         wb.active, 'Заказ',
-        head=[
-            ('Заказчик', _party_line(us) if us else ''),
-            ('Контрагент', _party_line(procurement.contractor)
-                           if procurement.contractor_id else ''),
-            ('Дата запроса', _doc_date(procurement.date)),
-            ('Автор', procurement.user.get_full_name() or procurement.user.get_username()),
-        ],
+        head=_blank_head(procurement.contractor if procurement.contractor_id else None,
+                         procurement.date, procurement.user),
         headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
         rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
               for line in procurement.lines.select_related('item').order_by('id')],
         widths=[5, 22, 48, 12, 8])       # «№» узкая; остальные — по содержимому
+    return _xlsx_bytes(wb)
+
+
+def purchase_xlsx(purchase):
+    """Сгенерировать xlsx-бланк ЗАКАЗА (bytes) — тот же файл, что у закупки-плана.
+
+    Решение Ивана 2026-08-10: закупка и заказ отдают наружу один и тот же документ —
+    шапка запроса + нумерованные позиции. Разница только в источнике строк: у закупки
+    это план (`ProcurementLine`), у заказа — обязательство перед конкретным поставщиком
+    (`PurchaseLine`). Подписи шапки и имя листа НЕ разводим по видам (решение того же
+    дня): получателю приходит бланк одной формы, чем бы он ни был у нас внутри.
+
+    Порядок позиций — `order_by('id')`, тот же, что в табе «Строки»: нумерация в файле
+    обязана совпадать с экраном, иначе «позиция 3» в переписке значит разное.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    _xlsx_sheet(
+        wb.active, 'Заказ',
+        head=_blank_head(purchase.contractor if purchase.contractor_id else None,
+                         purchase.date, purchase.user),
+        headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
+        rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
+              for line in purchase.lines.select_related('item').order_by('id')],
+        widths=[5, 22, 48, 12, 8])
     return _xlsx_bytes(wb)
 
 
@@ -4976,7 +5024,9 @@ def user_form(user):
         'last_name': user.last_name,
         'email': user.email,
         'full_name': user.get_full_name() or user.username,
+        # Приставка: тема и телефон (обе — свойства ЧЕЛОВЕКА, а не ДНК Django).
         'theme': profile_of(user).theme,
+        'phone': profile_of(user).phone,
         'procurements': _procurement_rows(user.procurements),
         'purchases': _purchase_rows(user.purchases),
         'documents': _document_rows(user.documents),
@@ -5016,6 +5066,48 @@ def set_theme(user, slug):
     profile = profile_of(user)
     profile.theme = slug
     profile.save(update_fields=['theme'])
+    return profile
+
+
+# Российский номер: 11 цифр с ведущей 7/8 либо 10 цифр без кода страны. Другого
+# формата продукт не принимает (решение Ивана 2026-08-10): телефон едет в бланк
+# ПОСТАВЩИКУ, и «ровный вид наружу» дороже, чем возможность записать что угодно.
+_PHONE_DIGITS = 10
+
+
+def normalize_phone(raw):
+    """Любой ввод → «+7 985 963 42 31» (или `''`, если стёрли).
+
+    Один вид у одного факта: то, что лежит в колонке, — ровно то, что человек видит в
+    форме и получатель видит в бланке. Поэтому нормализуем НА ВВОДЕ, а не на каждой
+    выдаче. Разделители, скобки, `8` вместо `+7`, пробелы вразнобой — всё это способы
+    записать один и тот же номер, и спорить с человеком о них незачем.
+
+    Не сводится к российскому номеру (иностранный, внутренний короткий, опечатка) —
+    отказ с человеческим текстом, как у почты: молча сохранить «как ввели» значит
+    пустить в документ наружу что угодно.
+    """
+    raw = (raw or '').strip()
+    if not raw:
+        return ''
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if len(digits) == 11 and digits[0] in '78':
+        digits = digits[1:]
+    if len(digits) != _PHONE_DIGITS:
+        raise ValidationError('Телефон задан неверно — нужен российский номер, '
+                              'например +7 985 963 42 31.')
+    return f'+7 {digits[:3]} {digits[3:6]} {digits[6:8]} {digits[8:]}'
+
+
+def set_phone(user, raw):
+    """Единственный вход к телефону — как `set_theme` к теме.
+
+    Телефон живёт в приставке (`UserProfile`), а не в ДНК Django, поэтому и правится
+    отдельно от `update_user`: разные таблицы — разные входы.
+    """
+    profile = profile_of(user)
+    profile.phone = normalize_phone(raw)
+    profile.save(update_fields=['phone'])
     return profile
 
 

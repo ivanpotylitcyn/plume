@@ -24,6 +24,12 @@ def D(x):
     return Decimal(str(x))
 
 
+def _today():
+    """Дата скачивания в имени файла (`… от 2026-08-10.xlsx`) — та же, что у вьюхи."""
+    from django.utils import timezone
+    return timezone.localdate().isoformat()
+
+
 def _cat(code='test', description='Тест'):
     """Категория-заглушка для тестов (волна 15: `Item.category` — обязательный FK).
     Класс изделия в движке логику не ветвит, поэтому одной общей категории хватает."""
@@ -885,6 +891,48 @@ class PurchaseFormTests(EngineTestBase):
             project=self.prj, user=self.user)
         with self.assertRaises(ValidationError):
             engine.set_receipt_purchase(r, p)           # заказ чужого проекта
+
+
+class PurchaseXlsxTests(EngineTestBase):
+    """Бланк ЗАКАЗА наружу (2026-08-10) — тот же документ, что у закупки-плана.
+
+    Решение Ивана: получателю приходит бланк одной формы, чем бы он ни был у нас внутри,
+    поэтому подписи шапки и имя листа по видам не разводим. Гейт — как у закупки: наружу
+    отдаём только утверждённое.
+    """
+
+    def _sheet(self, purchase):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+        wb = load_workbook(BytesIO(engine.purchase_xlsx(purchase)))
+        ws = wb.active
+        return ws.title, [[c.value for c in row] for row in ws.iter_rows()]
+
+    def test_blank_repeats_the_procurement_one(self):
+        us = models.Counterparty.objects.create(description='Наша сторона')
+        self.user.first_name, self.user.last_name = 'Иван', 'Потылицын'
+        self.user.email = 'i@example.com'
+        self.user.save()
+        engine.set_phone(self.user, '89859634231')
+        p = self.make_purchase(date='2026-08-10')
+        engine.add_purchase_line(p, self.make_item('R900'), D(12))
+        engine.add_purchase_line(p, self.make_item('R100'), D(5))
+        with self.settings(ORG_COUNTERPARTY_ID=us.id):
+            title, rows = self._sheet(p)
+        self.assertEqual(title, 'Заказ')
+        head = {r[1]: r[2] for r in rows if r[0] is None and r[1]}
+        self.assertEqual(head['Поставщик'], self.supplier.description)
+        self.assertEqual(head['Заказчик'], 'Наша сторона')
+        self.assertEqual(head['Дата запроса'], '10.08.2026')
+        self.assertEqual(head['Автор запроса'],
+                         'Иван Потылицын, i@example.com, +7 985 963 42 31')
+        # позиции — нумерованные и в порядке ЭКРАНА (таб «Строки», тот же `order_by('id')`)
+        table = rows.index(['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'])
+        self.assertEqual(rows[table + 1][:4], [1, 'R900', 'R900', 12])
+        self.assertEqual(rows[table + 2][:4], [2, 'R100', 'R100', 5])
+        screen = [ln['item_code'] for ln in engine.purchase_form(p)['rows']]
+        self.assertEqual([r[1] for r in rows[table + 1:]], screen)
 
 
 class ReceiptFromPurchaseTests(EngineTestBase):
@@ -2036,17 +2084,27 @@ class ProcurementFormTests(EngineTestBase):
                 if r[0] is None and r[1]}
 
     def test_xlsx_head_carries_both_parties_date_and_author(self):
-        """Ф4b: шапка запроса — заказчик (мы) · контрагент · дата · автор."""
+        """Шапка запроса — поставщик · заказчик (мы) · дата · автор с контактами.
+
+        2026-08-10: ИНН из бланка снят (реквизиты живут в договоре, в запросе цен они
+        шумят), у автора появились почта и телефон — графа отвечает на вопрос «кому
+        отвечать по этому файлу».
+        """
         us = models.Counterparty.objects.create(description='Наша сторона', inn='7700000000')
+        self.user.first_name, self.user.last_name = 'Иван', 'Потылицын'
+        self.user.email = 'i@example.com'
+        self.user.save()
+        engine.set_phone(self.user, '89859634231')
         p = engine.create_procurement(self.user, date='2026-07-30')
         engine.update_procurement(p, contractor=self.supplier)
         engine.add_procurement_line(p, self.make_item('R100'), D(1))
         with self.settings(ORG_COUNTERPARTY_ID=us.id):
             head = self._xlsx_head(p)
-            self.assertEqual(head['Заказчик'], 'Наша сторона · ИНН 7700000000')
-            self.assertEqual(head['Контрагент'], self.supplier.description)  # ИНН не задан
+            self.assertEqual(head['Поставщик'], self.supplier.description)
+            self.assertEqual(head['Заказчик'], 'Наша сторона')      # без ИНН
             self.assertEqual(head['Дата запроса'], '30.07.2026')
-            self.assertEqual(head['Автор'], self.user.get_username())
+            self.assertEqual(head['Автор запроса'],
+                             'Иван Потылицын, i@example.com, +7 985 963 42 31')
             # та же дата после перечитывания из БД (в памяти она держится строкой из
             # JSON — бланк обязан выдержать оба состояния, документ уходит наружу)
             p.refresh_from_db()
@@ -2076,9 +2134,9 @@ class ProcurementFormTests(EngineTestBase):
             head = self._xlsx_head(p)
             rows = self._xlsx_rows(p)
         self.assertNotIn('Заказчик', head)
-        self.assertNotIn('Контрагент', head)
+        self.assertNotIn('Поставщик', head)
         self.assertNotIn('Дата запроса', head)
-        self.assertIn('Автор', head)                      # автор есть всегда (NOT NULL)
+        self.assertIn('Автор запроса', head)              # автор есть всегда (NOT NULL)
         self.assertTrue(any(r[0] == '№' for r in rows))   # таблица позиций на месте
 
     def test_our_organization_ignores_id_of_deleted_counterparty(self):
@@ -2184,12 +2242,12 @@ class ItemXlsxHttpTests(TestCase):
         self.item = models.Item.objects.create(code='Нева БУ 1', description='Блок',
             category=_cat(), native=True)
 
-    def test_download_is_xlsx_attachment_named_by_code(self):
+    def test_download_is_xlsx_attachment_named_by_code_and_date(self):
         r = self.c.get(f'/api/items/{self.item.id}/xlsx/')
         self.assertEqual(r.status_code, 200)
         self.assertIn('spreadsheetml', r['Content-Type'])
         self.assertTrue(r['Content-Disposition'].startswith('attachment'))
-        self.assertIn(quote('Нева БУ 1.xlsx'), r['Content-Disposition'])
+        self.assertIn(quote(f'Нева БУ 1 от {_today()}.xlsx'), r['Content-Disposition'])
         self.assertEqual(r.content[:2], b'PK')            # zip-сигнатура xlsx
 
     def test_scope_query_picks_sheet_set_and_unknown_falls_back_to_bom(self):
@@ -2209,7 +2267,7 @@ class ItemXlsxHttpTests(TestCase):
         self.item.code = ''
         self.item.save(update_fields=['code'])
         cd = self.c.get(f'/api/items/{self.item.id}/xlsx/')['Content-Disposition']
-        self.assertIn(quote(f'изделие-{self.item.id}.xlsx'), cd)
+        self.assertIn(quote(f'изделие-{self.item.id} от {_today()}.xlsx'), cd)
 
 
 class AllocationTests(EngineTestBase):
@@ -2558,8 +2616,49 @@ class ProcurementHttpTests(TestCase):
         self.assertTrue(xlsx['Content-Disposition'].startswith('attachment'))
         self.assertTrue(xlsx.content[:2] == b'PK')      # zip-сигнатура xlsx
 
-    def test_xlsx_filename_is_procurement_code(self):
-        """Имя файла = `code` закупки (2026-07-26), с фолбэком по id у пустого кода.
+    def test_purchase_xlsx_is_gated_by_fixation_and_named_by_code_and_date(self):
+        """Бланк ЗАКАЗА (2026-08-10): только у зафиксированного, имя — как у закупки.
+
+        Гейт стоит и на бэкенде, не только в кнопке: у формы адрес есть, и прямой запрос
+        по нему обязан отвечать так же, как интерфейс.
+        """
+        cp = models.Counterparty.objects.create(description='АО «Поставщик»')
+        oid = self.c.post('/api/purchases/', {'project_id': self.prj.id},
+            content_type='application/json').json()['id']
+        self.c.patch(f'/api/purchases/{oid}/',
+            {'code': 'Нева-1', 'contractor_id': cp.id}, content_type='application/json')
+        self.c.post(f'/api/purchases/{oid}/lines/',
+            {'item_id': self.scr.id, 'qty': 10}, content_type='application/json')
+        draft = self.c.get(f'/api/purchases/{oid}/xlsx/')
+        self.assertEqual(draft.status_code, 400)
+        self.assertIn('не зафиксирован', draft.json()['detail'])
+        self.c.post(f'/api/purchases/{oid}/lock/')
+        r = self.c.get(f'/api/purchases/{oid}/xlsx/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('spreadsheetml', r['Content-Type'])
+        self.assertIn(quote(f'Нева-1 от {_today()}.xlsx'), r['Content-Disposition'])
+        self.assertEqual(r.content[:2], b'PK')            # zip-сигнатура xlsx
+
+    def test_xlsx_filename_starts_with_our_code_when_configured(self):
+        """Имя файла начинается с НАШЕГО кода (правка Ивана 2026-08-10): у контрагента
+        в папке бумаги от десятка организаций, и сортировка по имени собирает наши
+        вместе. Не настроены — часть не рисуется, остальное имя не меняется."""
+        r = self.c.post('/api/procurements/', {'code': 'Нева-1'},
+            content_type='application/json')
+        pid = r.json()['id']
+        us = models.Counterparty.objects.create(code='Мы', description='Наша сторона')
+        with self.settings(ORG_COUNTERPARTY_ID=us.id):
+            cd = self.c.get(f'/api/procurements/{pid}/xlsx/')['Content-Disposition']
+        self.assertIn(quote(f'Мы Нева-1 от {_today()}.xlsx'), cd)
+        # у записи «нас» кода может не быть — тогда файл зовётся как прежде
+        us.code = None
+        us.save(update_fields=['code'])
+        with self.settings(ORG_COUNTERPARTY_ID=us.id):
+            bare = self.c.get(f'/api/procurements/{pid}/xlsx/')['Content-Disposition']
+        self.assertIn(quote(f'Нева-1 от {_today()}.xlsx'), bare)
+
+    def test_xlsx_filename_is_procurement_code_and_download_date(self):
+        """Имя файла = `code` закупки + дата скачивания (2026-08-10), с фолбэком по id.
 
         Коды человек вводит кириллицей и с пробелами («Нева ДЗЗ 1») — заголовок обязан
         нести RFC 5987 (`filename*=utf-8''…`), иначе имя приедет мусором.
@@ -2569,18 +2668,19 @@ class ProcurementHttpTests(TestCase):
         pid = r.json()['id']
         cd = self.c.get(f'/api/procurements/{pid}/xlsx/')['Content-Disposition']
         self.assertIn("filename*=utf-8''", cd)
-        self.assertIn(quote('Нева ДЗЗ 1.xlsx'), cd)
+        # Дата — скачивания, а не документа: имя отвечает «когда выгружено из Plume».
+        self.assertIn(quote(f'Нева ДЗЗ 1 от {_today()}.xlsx'), cd)
         # Ф12e: рождённая без кода закупка получает фолбэк «Закупка 42» ещё в движке,
         # поэтому имя файла осмысленно уже здесь.
         r2 = self.c.post('/api/procurements/', {'description': 'без кода'},
             content_type='application/json')
         pid2 = r2.json()['id']
         cd2 = self.c.get(f'/api/procurements/{pid2}/xlsx/')['Content-Disposition']
-        self.assertIn(quote(f'Закупка {pid2}.xlsx'), cd2)
+        self.assertIn(quote(f'Закупка {pid2} от {_today()}.xlsx'), cd2)
         # Код можно очистить руками — тогда работает страховочный фолбэк по id.
         engine.update_procurement(models.Procurement.objects.get(pk=pid2), code='')
         cd3 = self.c.get(f'/api/procurements/{pid2}/xlsx/')['Content-Disposition']
-        self.assertIn(quote(f'закупка-{pid2}.xlsx'), cd3)
+        self.assertIn(quote(f'закупка-{pid2} от {_today()}.xlsx'), cd3)
         self.assertNotIn('order', cd3)
 
 
@@ -6558,6 +6658,39 @@ class AccountTests(TestCase):
         form = self.client.patch('/api/account/', {'email': ''},
                                  content_type='application/json').json()
         self.assertEqual(form['email'], '')
+
+    # ── телефон (2026-08-10): контакт автора в бланке наружу ──
+
+    def test_phone_is_normalized_to_one_shape(self):
+        """Любая запись номера → «+7 985 963 42 31». Один вид у одного факта: в колонке
+        лежит ровно то, что видит человек в форме и получатель в бланке."""
+        for raw in ('89859634231', '+7 (985) 963-42-31', '8 985 963 42 31',
+                    '9859634231', '+7985 9634231'):
+            form = self.client.patch('/api/account/', {'phone': raw},
+                                     content_type='application/json').json()
+            self.assertEqual(form['phone'], '+7 985 963 42 31', raw)
+        self.assertEqual(engine.profile_of(self.user).phone, '+7 985 963 42 31')
+
+    def test_phone_of_other_shape_is_friendly_400(self):
+        """Не российский номер — отказ с человеческим текстом (решение Ивана
+        2026-08-10): телефон едет в документ наружу, и «ровный вид» дороже свободы
+        записи. Отказ ничего не записывает."""
+        self.client.patch('/api/account/', {'phone': '89859634231'},
+                          content_type='application/json')
+        bad = self.client.patch('/api/account/', {'phone': '+44 20 7946 0958'},
+                                content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('Телефон', bad.json()['detail'])
+        self.assertEqual(engine.profile_of(self.user).phone, '+7 985 963 42 31')
+
+    def test_empty_phone_is_legal(self):
+        """Стереть телефон можно — «заполнить можно, передумать нельзя» продукт не
+        заводит нигде (то же правило, что у почты)."""
+        self.client.patch('/api/account/', {'phone': '89859634231'},
+                          content_type='application/json')
+        form = self.client.patch('/api/account/', {'phone': ''},
+                                 content_type='application/json').json()
+        self.assertEqual(form['phone'], '')
 
     # ── тема интерфейса ──
 

@@ -140,7 +140,8 @@ export function AccountView({ openProcurement, openPurchase, openOrder, onChange
         { onClick: onLogout, label: 'Выход', icon: 'ci-sign-out',
           title: 'Выйти из системы' },
       ]}
-      // Порядок §13.4a: литературное имя → внешний атрибут (почта) → настройка (тема).
+      // Порядок §13.4a: литературное имя → внешние атрибуты (почта, телефон) →
+      // настройка (тема).
       // `username` полем не рисуется — он титул (см. шапку файла).
       fields={<>
         <TextField label="Имя" value={a.first_name} locked={locked} busy={busy}
@@ -149,6 +150,12 @@ export function AccountView({ openProcurement, openPurchase, openOrder, onChange
           onCommit={v => run(api.updateAccount({ last_name: v }))} />
         <TextField label="Почта" value={a.email} locked={locked} busy={busy}
           onCommit={v => run(api.updateAccount({ email: v }))} />
+        {/* Телефон — контакт автора в бланке, уходящем поставщику. Вид приводит движок
+            («+7 985 963 42 31»), поэтому поле принимает любую запись номера и после
+            коммита показывает уже причёсанную; неверный номер вернётся ошибкой шапки,
+            как и неверная почта. Форматировать во вью нечего — вид приезжает готовым. */}
+        <TextField label="Телефон" value={a.phone} locked={locked} busy={busy}
+          onCommit={v => run(api.updateAccount({ phone: v }))} />
         {/* Тема — настройка ВЬЮ, но свойство ЧЕЛОВЕКА: движок хранит слаг, ярлыки
             приходят из реестра темы (`themes/registry.ts`), и о цветах форма не знает. */}
         <Field label="Тема интерфейса" locked={locked} view={THEME_LABEL[a.theme]}>

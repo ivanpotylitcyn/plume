@@ -557,7 +557,9 @@ export interface AccountDocumentRow {
 export interface AccountForm {
   username: string; first_name: string; last_name: string; email: string
   full_name: string
-  theme: ThemeSlug
+  // Приставка профиля: тема и телефон. Телефон приходит уже в готовом виде
+  // («+7 985 963 42 31») — нормализует его движок на записи, вью не форматирует.
+  theme: ThemeSlug; phone: string
   procurements: FeedProcurementRow[]; purchases: FeedPurchaseRow[]
   documents: AccountDocumentRow[]
 }
@@ -662,6 +664,7 @@ export const api = {
   account: () => get<AccountForm>('/api/account/'),
   updateAccount: (b: Partial<{
     first_name: string; last_name: string; email: string; theme: ThemeSlug
+    phone: string
   }>) => send<AccountForm>('PATCH', '/api/account/', b),
   changePassword: (b: { current: string; new: string; repeat: string }) =>
     send<void>('POST', '/api/account/password/', b),
@@ -897,6 +900,9 @@ export const api = {
   lockProcurement: (id: number) => send<ProcurementForm>('POST', `/api/procurements/${id}/lock/`),
   unlockProcurement: (id: number) => send<ProcurementForm>('POST', `/api/procurements/${id}/unlock/`),
   xlsxUrl: (id: number) => `/api/procurements/${id}/xlsx/`,
+  // Бланк ЗАКАЗА (2026-08-10) — тот же документ, что у закупки; имя файла и гейт
+  // «только у зафиксированного» держит бэкенд.
+  purchaseXlsxUrl: (id: number) => `/api/purchases/${id}/xlsx/`,
   // привязка (волна 8): матрица «строка плана × заказы»
   allocation: (id: number) => get<Allocation>(`/api/procurements/${id}/allocation/`),
   // `purchase_id`: число — в этот заказ, 'new' — в новый, нет ключа — фолбэк (Р2)
