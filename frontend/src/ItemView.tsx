@@ -14,6 +14,7 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CommitInput } from './CommitInput'
 import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
+import { useCategoryFilter } from './ColumnFilter'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
@@ -26,6 +27,9 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
   const [rollup, setRollup] = useState<RollupResult | null>(null)
   const { unlocked, toggle } = useFormLock(itemId, isNew)   // §5: существующее — в просмотре
   const att = useAttachments('item', itemId)   // загрузка — команда шапки (§13.8)
+  // Фильтр состава по категории компонента — общий движок (2026-08-10): «покажи только
+  // конденсаторы». Ключ сброса — изделие: у другого прибора состав свой.
+  const bomFilter = useCategoryFilter(d?.bom, b => b.component_category, itemId)
 
   useEffect(() => {
     setD(null); setErr(null); setRollup(null)
@@ -89,10 +93,14 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         {locked ? 'Состав пуст.' : 'Состав пуст — добавьте компонент ниже.'}</div>}
       {d.bom.length > 0 &&
         <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Компонент</th><th className="c-desc">Описание</th>
+          <thead><tr><th className="gl" />
+            {/* Фильтр — в ячейке подписи, как «Остаток» заказа и члены баланса
+                «Потребности»: он относится к колонке, а не к таблице целиком. */}
+            <th className="c-key">Компонент{bomFilter.head}</th>
+            <th className="c-desc">Описание</th>
             <th className="num">Кол-во</th><th className="uom">Ед.</th>
             {!locked && <th className="act" />}</tr></thead>
-          <tbody>{d.bom.map(b => (
+          <tbody>{bomFilter.shown.map(b => (
             <tr key={b.id} className="row">
               <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
               <td className="c-key">

@@ -25,6 +25,7 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
 import { ScopeDeficitRows, useScopeDeficit } from './ScopeDeficitPanel'
 import { CounterpartyPicker, ItemPicker } from './Picker'
+import { useCategoryFilter } from './ColumnFilter'
 import { CounterpartyRef, ItemGlyph, count, num, sumByUom } from './status'
 
 export function ProcurementView({ procurementId, items, isNew, openItem,
@@ -48,6 +49,9 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
   const alloc = useAllocation(procurementId, rev)            // табы «Привязка» и «Заказы»
   const need = useScopeDeficit(procurementId, rev)           // таб «К закупке» (Ф13)
+  // Фильтр плана по классу изделия — общий движок (2026-08-10). Тот же фильтр стоит в
+  // «Привязке»: это один и тот же план, показанный двумя способами.
+  const byCat = useCategoryFilter(c?.lines, ln => ln.item_category, procurementId)
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -102,14 +106,14 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               {editable && <th className="act" />}
             </tr>
           </thead>
           <tbody>
-            {c.lines.map(ln => (
+            {byCat.shown.map(ln => (
               <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
                 openItem={openItem} run={run} />
             ))}

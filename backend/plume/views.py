@@ -500,10 +500,15 @@ def _item_detail_payload(item):
          'component_code': bl.component.code,
          'component_description': bl.component.description,
          'component_uom': bl.component.uom,
+         # Категория компонента — под фильтр колонки «Компонент» (2026-08-10): состав
+         # прибора читают классами («покажи только конденсаторы»). Плоско кодом, как
+         # остальные `component_*` и как в проекциях документов (`engine.category_code`):
+         # строка BOM самодостаточна, джойн по справочнику на клиенте не нужен.
+         'component_category': engine.category_code(bl.component),
          'component_native': bl.component.native, 'component_synced': bl.component.synced,
          'component_locked': bl.component.locked,   # глиф строки по режиму (Ф3a)
          'qty': bl.qty}
-        for bl in item.bom_lines.select_related('component')
+        for bl in item.bom_lines.select_related('component', 'component__category')
     ]
     # Ф15: партия черновика в этом табе ОСТАЁТСЯ (видно входящий поток: «10 едет, 0
     # принято»), но живости у неё нет — вью обязано отличать её от израсходованной,

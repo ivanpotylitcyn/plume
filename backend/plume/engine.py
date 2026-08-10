@@ -669,6 +669,19 @@ def _best_of(statuses):
     return min(statuses, key=lambda s: _WORST_RANK[s])
 
 
+def category_code(item):
+    """Код категории изделия или `None` (Ф12e: у черновика её может не быть).
+
+    Один ответ на два вопроса: чем изделие числится в библиотеке (синк сверяет класс
+    по `code`, стему CSV-файла) и чем оно числится в строке документа — с 2026-08-10
+    класс едет в проекциях строк под фильтр колонки изделия. Кодом, а не объектом:
+    идентичность изделия в строке и так разложена плоскими полями (`*_code`,
+    `*_description`), класс встаёт рядом с ними. `None` вью показывает отдельным
+    вариантом «без категории».
+    """
+    return item.category.code if item.category_id else None
+
+
 # --------------------------------------------------------------------------- #
 #  Разузлование потребности до покупных листьев (Ф5, волна 16)
 # --------------------------------------------------------------------------- #
@@ -1143,7 +1156,8 @@ def kitting_form(kitting):
     # цикл не заходил, и баг выглядел вывернутым наизнанку). Пустое кол-во = «потребность
     # ещё не задана» → надо 0, призраков нет; выбор цели её тут же и проставляет
     # (`_set_target_item`), так что состояние мимолётное.
-    for bl in (target.bom_lines.select_related('component') if target else ()):
+    for bl in (target.bom_lines.select_related('component', 'component__category')
+               if target else ()):
         component = bl.component
         need = bl.qty * (kitting.qty or ZERO)
         real_lines = []
@@ -1172,6 +1186,7 @@ def kitting_form(kitting):
         rows.append({
             'component_id': component.id, 'component_code': component.code,
             'component_description': component.description, 'uom': component.uom,
+            'component_category': category_code(component),   # фильтр колонки
             # Оси компонента — под глиф строки (§7a), как в заказе и закупке-плане:
             # форма = изделие/компонент, цвет = покрытие строки складом проекта.
             'component_native': component.native, 'component_synced': component.synced,
@@ -1323,11 +1338,12 @@ def receipt_form(receipt):
     """
     lots = []
     total = ZERO
-    for lot in receipt.lots.select_related('item').order_by('id'):
+    for lot in receipt.lots.select_related('item', 'item__category').order_by('id'):
         total += lot.qty * lot.unit_cost
         lots.append({
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
+            'item_category': category_code(lot.item),   # фильтр колонки
             'qty': lot.qty, 'live_qty': lot_live_qty(lot),
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
@@ -1732,7 +1748,7 @@ def purchase_form(purchase):
     """
     editable = not purchase.locked
     closure = _purchase_closure(purchase)
-    lines = list(purchase.lines.select_related('item').order_by('id'))
+    lines = list(purchase.lines.select_related('item', 'item__category').order_by('id'))
     # Нужда своего проекта — знаменатель и панели бюджета, и цвета строк (одно
     # разузлование на форму).
     need_by_item = demand_map([purchase.project])
@@ -1762,6 +1778,7 @@ def purchase_form(purchase):
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom,
+            'item_category': category_code(line.item),   # фильтр колонки
             # Оси изделия — под глиф строки (§7a): форма = изделие/компонент,
             # цвет = закрытость строки. Так же устроена форма закупки-плана (Ф3a).
             'item_native': line.item.native, 'item_synced': line.item.synced,
@@ -3115,7 +3132,7 @@ def procurement_form(procurement):
     `status` зеркалит заказ: строки правятся только пока не зафиксировано. Чистая проекция.
     """
     editable = not procurement.locked
-    lines = list(procurement.lines.select_related('item').order_by('id'))
+    lines = list(procurement.lines.select_related('item', 'item__category').order_by('id'))
     rows = []
     total_qty = ZERO
     for line in lines:
@@ -3123,6 +3140,7 @@ def procurement_form(procurement):
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom, 'qty': line.qty,
+            'item_category': category_code(line.item),   # фильтр колонки
             'item_native': line.item.native, 'item_synced': line.item.synced,
             'item_locked': line.item.locked,   # глиф строки по режиму (Ф3a)
         })
@@ -3580,7 +3598,7 @@ def procurement_allocation(procurement):
             scope_need[item_id] = scope_need.get(item_id, ZERO) + need
 
     rows = []
-    for line in procurement.lines.select_related('item').order_by('id'):
+    for line in procurement.lines.select_related('item', 'item__category').order_by('id'):
         cells = []
         allocated = ZERO
         for pu in orders:
@@ -3612,6 +3630,7 @@ def procurement_allocation(procurement):
         rows.append({
             'line_id': line.id, 'item_id': line.item_id,
             'item_code': line.item.code, 'item_description': line.item.description,
+            'item_category': category_code(line.item),   # фильтр колонки
             'uom': line.item.uom, 'qty': line.qty,
             'allocated': allocated, 'remaining': line.qty - allocated,
             'status': _allocation_status(line.qty, allocated),
@@ -4378,11 +4397,6 @@ def parse_library(files):
 _DIFF_ORDER = {'new': 0, 'changed': 1, 'mark': 2, 'gone': 3, 'orphan': 4, 'same': 5}
 
 
-def _category_code(item):
-    """Код категории изделия или `None` (Ф12e: у черновика её может не быть)."""
-    return item.category.code if item.category_id else None
-
-
 def _library_changes(item, row):
     """Что изменилось у существующего изделия против библиотеки: сравниваем только
     синкаемые поля (`description`/`category`/`temperature`). Категорию — по `code`
@@ -4392,8 +4406,8 @@ def _library_changes(item, row):
         changes['description'] = {'old': item.description, 'new': row['description']}
     # Ф12e: у изделия-черновика категории может не быть — тогда это тоже
     # изменение («было пусто → станет `capacitors`»), а не падение.
-    if _category_code(item) != row['category']:
-        changes['category'] = {'old': _category_code(item), 'new': row['category']}
+    if category_code(item) != row['category']:
+        changes['category'] = {'old': category_code(item), 'new': row['category']}
     if item.temperature != row['temperature']:
         changes['temperature'] = {'old': item.temperature, 'new': row['temperature']}
     return changes
@@ -4409,7 +4423,7 @@ def _diff_row(status, row, item, changes=None):
     if item is not None:
         out['current'] = {'description': item.description,
                           'temperature': item.temperature,
-                          'category': _category_code(item),
+                          'category': category_code(item),
                           'native': item.native, 'synced': item.synced,
                           'locked': item.locked}
     if changes:
@@ -4462,7 +4476,7 @@ def library_diff(parsed):
     for key, item in existing.items():
         # Изделие без категории (Ф12e, черновик) не принадлежит ни одному
         # синкаемому классу — сиротой библиотеки объявлять его не за что.
-        if key in by_key or _category_code(item) not in categories:
+        if key in by_key or category_code(item) not in categories:
             continue
         result.append(_diff_row('orphan' if item_is_used(item) else 'gone', None, item))
     result.sort(key=lambda d: (_DIFF_ORDER[d['status']], d['code']))

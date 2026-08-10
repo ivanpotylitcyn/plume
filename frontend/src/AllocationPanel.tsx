@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
+import { useCategoryFilter } from './ColumnFilter'
 import { Balance, Chevron, Cost, StatusGlyph, balanceTitle, num } from './status'
 
 // Состояние привязки: загрузка по id, обновление на `rev` (мутации формы плана) и
@@ -63,6 +64,9 @@ export function AllocationRows({ st, procurementId, editable, onQty,
   openPurchase: (id: number) => void
 }) {
   const { p, err, busy, run } = st
+  // Фильтр по классу изделия — общий движок (2026-08-10), тот же, что в табе «Строки»
+  // этой же закупки и в остальном контуре.
+  const byCat = useCategoryFilter(p?.rows, r => r.item_category, procurementId)
   if (!p) return <div className="tab-empty">Загрузка…</div>
   if (p.rows.length === 0)
     return <div className="tab-empty">В плане нет строк — добавьте позиции в табе «Строки».</div>
@@ -70,8 +74,12 @@ export function AllocationRows({ st, procurementId, editable, onQty,
     <>
       {err && <div className="anomaly">{err}</div>}
       <div className="pgrid pgrid--alloc">
-        <div className="prow prow--head">
-          <span className="tree-cell">Код</span>
+        {/* Заголовок ведущей колонки отступает на раскрыватель и глиф (`head--tree`,
+            §7a): подпись начинается ровно над первым символом кода, а не над знаками
+            строки. «Компонент», а не «Код»: колонка называет СУЩНОСТЬ, а код — лишь то,
+            чем она в ней записана (правка Ивана 2026-08-10). */}
+        <div className="prow prow--head head--tree">
+          <span className="tree-cell">Компонент{byCat.head}</span>
           <span>Описание</span>
           <span className="pnum" title="баланс проекта заказа по этому изделию">
             Баланс</span>
@@ -87,7 +95,7 @@ export function AllocationRows({ st, procurementId, editable, onQty,
           <span className="pnum" title="стоимость строки: кол-во × оценка изделия">
             Стоимость</span>
         </div>
-        {p.rows.map(r => (
+        {byCat.shown.map(r => (
           <LineRow key={r.line_id} r={r} busy={busy} procurementId={procurementId}
             editable={editable} onQty={onQty}
             run={run} openItem={openItem} openProject={openProject}

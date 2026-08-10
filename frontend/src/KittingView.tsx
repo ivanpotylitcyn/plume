@@ -16,6 +16,7 @@ import { CommitInput } from './CommitInput'
 import { ItemPicker } from './Picker'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { useCategoryFilter } from './ColumnFilter'
 import { Glyph, ItemGlyph, Segment, count, num, statusTone } from './status'
 
 export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
@@ -32,6 +33,9 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
       confirmDelete: 'Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.',
     }, isNew)
   const att = useAttachments('kitting', kittingId)   // загрузка — команда шапки (§13.8)
+  // Фильтр состава по классу компонента — общий движок (2026-08-10), как в форме
+  // изделия и в закупочном контуре.
+  const byCat = useCategoryFilter(c?.rows, r => r.component_category, kittingId)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -56,7 +60,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
           : <table className="grid">
               <thead>
                 <tr>
-                  <th className="gl" /><th className="c-key">Компонент</th>
+                  <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
                   <th className="c-desc">Описание</th>
                   <th className="num">Надо</th><th className="uom">Ед.</th>
                   <th className="num">Пробито</th>
@@ -65,7 +69,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
                 </tr>
               </thead>
               <tbody>
-                {c.rows.map(row => (
+                {byCat.shown.map(row => (
                   <Component key={row.component_id} row={row} form={c} wip={!locked}
                     busy={busy} openItem={openItem} run={run} />
                 ))}

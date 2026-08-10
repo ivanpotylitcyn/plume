@@ -5993,9 +5993,16 @@ class ItemStatusTests(EngineTestBase):
         comp = self.make_item('R')                # покупной лист
         engine.lock_item(comp)
         engine.add_bom_line(dev, comp, D(2))
-        # BOM в форме изделия несёт статус компонента
+        # BOM в форме изделия несёт статус компонента и его категорию (фильтр колонки)
         bom = views._item_detail_payload(dev)['bom']
         self.assertTrue(bom[0]['component_locked'])
+        self.assertEqual(bom[0]['component_category'], comp.category.code)
+        # изделие без категории (черновик) не выдумывает её в строке состава
+        bare = models.Item.objects.create(code='BARE', description='без класса')
+        engine.add_bom_line(dev, bare, D(1))
+        row = next(b for b in views._item_detail_payload(dev)['bom']
+                   if b['component_id'] == bare.id)
+        self.assertIsNone(row['component_category'])
         # Потребность проекта: свод по листьям + дерево несут статус компонента
         engine.add_project_demand(self.prj, dev, D(1))
         deficit = engine.project_deficit(self.prj)
@@ -6003,6 +6010,40 @@ class ItemStatusTests(EngineTestBase):
         self.assertTrue(leaf['component_locked'])
         tree_leaf = next(n for n in deficit['demands'][0]['tree'] if n['component_id'] == comp.id)
         self.assertTrue(tree_leaf['component_locked'])
+
+    def test_category_travels_in_every_line_projection(self):
+        """Класс изделия едет В КАЖДОЙ строке документа — под фильтр колонки
+        (2026-08-10). Одна проверка на все пять проекций: разъехаться им нельзя,
+        фильтр в формах один и тот же."""
+        comp = self.make_item('R')
+        dev = self.make_item('DEV', manufactured=True)
+        engine.add_bom_line(dev, comp, D(2))
+        code = comp.category.code
+
+        kit = engine.create_kitting(self.prj, self.user, target_item=dev, qty=D(1))
+        row = engine.kitting_form(kit)['rows'][0]
+        self.assertEqual(row['component_category'], code)
+
+        receipt = engine.create_receipt(self.prj, self.user, number='UPD-1')
+        engine.add_receipt_lot(receipt, comp, D(5))
+        self.assertEqual(engine.receipt_form(receipt)['lots'][0]['item_category'], code)
+
+        purchase = self.make_purchase()
+        engine.add_purchase_line(purchase, comp, D(3))
+        self.assertEqual(engine.purchase_form(purchase)['rows'][0]['item_category'], code)
+
+        proc = engine.create_procurement(self.user)
+        engine.add_procurement_line(proc, comp, D(4))
+        self.assertEqual(engine.procurement_form(proc)['lines'][0]['item_category'], code)
+        alloc = engine.procurement_allocation(proc)
+        self.assertEqual(alloc['rows'][0]['item_category'], code)
+
+        # Изделие без категории (черновик, Ф12e) — `None` во всех проекциях, а не пусто.
+        bare = models.Item.objects.create(code='BARE', description='без класса')
+        engine.add_purchase_line(purchase, bare, D(1))
+        bare_row = next(r for r in engine.purchase_form(purchase)['rows']
+                        if r['item_id'] == bare.id)
+        self.assertIsNone(bare_row['item_category'])
 
     def test_http_post_unpost_endpoints(self):
         get_user_model().objects.filter(username='t').update(

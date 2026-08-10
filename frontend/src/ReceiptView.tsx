@@ -13,6 +13,7 @@ import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
+import { useCategoryFilter } from './ColumnFilter'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
   openCounterparty, onChanged, onDeleted }: {
@@ -35,6 +36,9 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       confirmDelete: 'Удалить поставку (УПД)? Рождённые партии будут сняты. Действие необратимо.',
     }, isNew)
   const att = useAttachments('receipt', receiptId)   // загрузка — команда шапки (§13.8)
+  // Фильтр строк по классу изделия — общий движок (2026-08-10): в УПД на сотню позиций
+  // «покажи только конденсаторы» — тот же вопрос, что к составу прибора.
+  const byCat = useCategoryFilter(c?.lots, l => l.item_category, receiptId)
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -56,7 +60,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
@@ -66,7 +70,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
             </tr>
           </thead>
           <tbody>
-            {c.lots.map(lot => (
+            {byCat.shown.map(lot => (
               <LotRow key={lot.id} lot={lot} locked={locked} draft={!fixed} busy={busy}
                 openItem={openItem} run={run} />
             ))}

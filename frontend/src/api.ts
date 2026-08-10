@@ -107,6 +107,9 @@ export interface ItemDetail {
   estimated_cost: number | null
   bom: { id: number; component_id: number; component_code: string;
          component_description: string; component_uom: string;
+         // `component_category` — код категории (null у изделия без неё): фильтр
+         // колонки «Компонент» на вкладке «Состав».
+         component_category: string | null;
          component_native: boolean; component_synced: boolean; component_locked: boolean;
          qty: number }[]
   where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number
@@ -163,6 +166,7 @@ export interface Ghost {
 }
 export interface KittingFormRow {
   component_id: number; component_code: string; component_description: string; uom: string
+  component_category: string | null      // класс компонента — фильтр колонки
   component_native: boolean; component_synced: boolean; component_locked: boolean
   need: number; pierced: number; remaining: number
   real_lines: RealLine[]; ghost: Ghost | null
@@ -237,6 +241,7 @@ export interface ReceiptRow {
 }
 export interface ReceiptLot {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
+  item_category: string | null           // класс изделия — фильтр колонки
   qty: number; live_qty: number; unit_cost: number; lot_name: string
   part_number: string; consumed: boolean
 }
@@ -259,6 +264,7 @@ export interface PurchaseRow {
 }
 export interface PurchaseFormLine {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
+  item_category: string | null           // класс изделия — фильтр колонки
   item_native: boolean; item_synced: boolean; item_locked: boolean
   qty: number; received: number; remaining: number; status: Status
   // Баланс проекта по этому изделию (2026-08-07) — то же число, что в «Потребности»
@@ -470,6 +476,7 @@ export interface ProcurementRow {
 }
 export interface ProcurementFormLine {
   id: number; item_id: number; item_code: string; item_description: string
+  item_category: string | null           // класс изделия — фильтр колонки
   item_native: boolean; item_synced: boolean; item_locked: boolean
   uom: string; qty: number
 }
@@ -505,6 +512,7 @@ export interface AllocationCell {
 }
 export interface AllocationRow {
   line_id: number; item_id: number; item_code: string; item_description: string
+  item_category: string | null           // класс изделия — фильтр колонки
   uom: string; qty: number; allocated: number; remaining: number; status: Status
   cost: number | null; need: number; overpay_at: number; cost_status: CostStatus  // нужда — по ОХВАТУ
   orders: AllocationCell[]

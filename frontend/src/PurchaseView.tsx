@@ -8,7 +8,7 @@
 // шапки через `OrderFields`, якорь «Закупка» — специфика вида. Заодно снят антипринцип
 // §7a: код и описание изделия разъехались по своим колонкам (эта форма была его
 // последним живым примером).
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type ProcurementRow, type PurchaseForm,
   type PurchaseFormLine, type Status } from './api'
 import { CommitInput } from './CommitInput'
@@ -19,7 +19,7 @@ import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Balance, Cost, CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
   balanceTitle, count, num } from './status'
-import { ColumnFilter } from './ColumnFilter'
+import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 
 // Фильтр остатка: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
@@ -56,6 +56,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   useEffect(() => { api.procurements().then(setProcs) }, [])
   useEffect(() => { reloadSuppliers() }, [])
   const att = useAttachments('purchase', purchaseId)   // владелец заведён Ф12b (§13.8)
+  // Два фильтра на одной таблице и порядок между ними: сперва остаток («что ещё не
+  // приехало»), потом класс. Категории собираются уже по отобранному — меню не обещает
+  // строк, которых первый фильтр не покажет.
+  const byRest = useMemo(() => (c?.rows ?? []).filter(ln => rest === 'any'
+    || (rest === 'open' ? ln.remaining > 0 : ln.remaining <= 0)), [c, rest])
+  const byCat = useCategoryFilter(byRest, ln => ln.item_category, purchaseId)
 
   const run = (p: Promise<PurchaseForm>) => {
     setBusy(true); setErr(null)
@@ -112,8 +118,6 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       .finally(() => setBusy(false))
   }
 
-  const shown = c.rows.filter(ln => rest === 'any'
-    || (rest === 'open' ? ln.remaining > 0 : ln.remaining <= 0))
 
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
@@ -121,7 +125,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
               {/* Баланс проекта по изделию — ПЕРВЫМ числом, как в «Привязке» закупки
                   (Баланс · Кол-во · …): сперва «сколько надо вообще», потом «сколько
@@ -146,7 +150,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             </tr>
           </thead>
           <tbody>
-            {shown.map(ln => (
+            {byCat.shown.map(ln => (
               <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
                 openItem={openItem} run={run} />
             ))}
