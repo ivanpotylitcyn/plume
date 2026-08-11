@@ -117,12 +117,12 @@ urlpatterns = [
     path('relocations/<int:pk>/source-lots/', views.relocation_source_lots, name='relocation-source-lots'),
     path('relocations/<int:pk>/lines/<int:lot_pk>/', views.relocation_line_detail, name='relocation-line'),
     # планирование закупок (волна 7): записываемый Procurement + xlsx-бланк.
-    # Волна 19, Ф13: `/command-deficit/` ×2 сняты — свод живёт витриной закупки
-    # (`deficit/`), мост кладёт позицию в неё же (`take/`).
+    # Свод живёт витриной самой закупки: `/command-deficit/` ×2 сняты волной 19 (Ф13),
+    # а `deficit/` вместе с мостом `take/` — 2026-08-11, при пересборке табов. Ручка
+    # витрины осталась одна: `demand/` — та же «Потребность», что у проекта, но по охвату.
     path('procurements/', views.procurements, name='procurements'),
     path('procurements/<int:pk>/', views.procurement_detail, name='procurement-detail'),
-    path('procurements/<int:pk>/deficit/', views.procurement_deficit, name='procurement-deficit'),
-    path('procurements/<int:pk>/take/', views.procurement_take, name='procurement-take'),
+    path('procurements/<int:pk>/demand/', views.procurement_demand, name='procurement-demand'),
     path('procurements/<int:pk>/lines/', views.procurement_lines, name='procurement-lines'),
     path('procurements/<int:pk>/lock/', views.procurement_lock, name='procurement-lock'),
     path('procurements/<int:pk>/unlock/', views.procurement_unlock, name='procurement-unlock'),

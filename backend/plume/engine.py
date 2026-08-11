@@ -48,16 +48,17 @@
 - Мосты панели: `writeoff_lot` (списать остаток) / `requisition_lot` (на баланс → белый).
 
 Волна 7 (планирование закупок — записываемый Procurement; охват — волна 19, Ф13):
-- `scope_deficit(projects)` — свод по оси Item через **заданный набор** проектов
-  (`Σ` проектных дефицитов, без перенеттинга между проектами). Витрина.
+- `scope_demand(projects)` — свод покупных листьев через **заданный набор** проектов,
+  колонками «Потребности» (Потр. · Компл. · Склад · Заказ · Баланс). Витрина.
 - `procurement_scope(proc)` — охват закупки (проекты её заказов, вычисляемый);
-  `procurement_deficit(proc)` = свод по охвату (таб «К закупке»; заменил экран
-  «Командный свод», у которого не было ни кода, ни замка).
+  `procurement_demand(proc)` = свод по охвату + отметка `in_plan` (таб «Потребность»;
+  2026-08-11 заменил свод «К закупке», а тот — экран «Командный свод»).
 - `procurement_form` / `create_procurement` / `add|update|remove_procurement_line`
   / `send|unsend|cancel|restore_procurement` — записываемый план закупки под охват
-  проектов (мягкий замок `locked`). Нарезка на `Purchase` — волна 8.
-- `add_to_procurement(...)` — мост «витрина → строки плана» (топ-ап до наводки);
-  `procurement_xlsx(...)` / `purchase_xlsx(...)` — xlsx-бланк поставщику (одна форма).
+  проектов (мягкий замок `locked`); количество строки ≥ 0, ноль — «беру, думаю».
+  Нарезка на `Purchase` — волна 8.
+- `procurement_xlsx(...)` / `purchase_xlsx(...)` — xlsx-бланк поставщику (одна форма;
+  нулевые строки наружу не идут).
 
 Волна 8 (нарезка плана на проектные заказы; переделана 2026-08-05):
 - `procurement_allocation(proc)` — проекция «Привязка»: строка плана × ЗАКАЗЫ закупки
@@ -775,6 +776,7 @@ def _leaf_row(item, need, project):
         'component_native': item.native,       # глиф строки по режиму (Ф3a): native→замок,
         'component_synced': item.synced,        # not native→sync (зел. библ. / оранж. ручной)
         'component_locked': item.locked,
+        'component_category': category_code(item),   # фильтр колонки «Компонент»
         'uom': item.uom,
         'supply': _supply_status(row),         # ось «как дела» (цвет прибора/проекта)
         'anomaly': item_has_negative_lot(item, project),
@@ -1603,10 +1605,10 @@ def lines_estimate(lines):
 def demand_map(projects):
     """`{item_id: нужда по листьям}` через набор проектов — знаменатель денег намерения.
 
-    Та же нужда, что в «Потребности» и в своде «К закупке» (`project_leaf_demand`,
+    Та же нужда, что в «Потребности» проекта и закупки (`project_leaf_demand`,
     разузлование насквозь), только сложенная по Item и **без покрытия**: панель бюджета
     отвечает «сколько деталей нужно по-настоящему», а не «сколько осталось докупить».
-    Между проектами не перенеттим — как и `scope_deficit`.
+    Между проектами не перенеттим: нужда проекта — его собственная.
     """
     total = {}
     for project in projects:
@@ -3021,72 +3023,70 @@ def counts_in_scope(project):
     """Проект участвует в арифметике охвата: **активный внешний**.
 
     Внутренние склады — источник покрытия, а не потребитель; закрытый проект не
-    закупают. Правило одно на весь охват (свод «К закупке» и деньги закупки считают
+    закупают. Правило одно на весь охват (витрина «Потребность» и деньги закупки считают
     один и тот же набор — иначе панель и витрина разошлись бы молча).
     """
     return project.kind == models.Project.Kind.EXTERNAL and not project.locked
 
 
-def scope_deficit(projects):
-    """Дефицит по **охвату**: суммарная нужда по оси Item через заданный набор проектов.
+def scope_demand(projects):
+    """Потребность по **охвату**: свод покупных листьев через заданный набор проектов.
 
-    Консолидация-проекция (не таблица): для каждого проекта считаем потребность по
-    покупным **листьям** (Ф5 В16: разузлование насквозь, а не 1 уровень) и покрываем её
-    складом/заказами **этого** проекта (`_coverage`, как дефицит проекта — покрытие на
-    уровне Item в проекте, агрегат), затем складываем сегменты по Item через проекты.
-    Между проектами **не** перенеттим (чужие ФЛС/склады не смешиваем): профицит проекта
-    A не гасит нужду проекта B. Итог по Item: `to_order` = сколько всего докупить (▲
-    красный член), `have`/`on_order` — контекст.
+    Пришла 2026-08-11 на смену `scope_deficit` (витрина «К закупке») вместе с пересборкой
+    формы закупки. Считает то же самое разузлование, но говорит на языке **баланса**, а не
+    клампленного «Закупить»: колонки те же, что в «Потребности» проекта (`_leaf_row`), —
+    Потр. · Компл. · Склад · Заказ · Баланс. Одна витрина потребности на продукт, разница
+    только в области: там один проект, здесь — все проекты закупки.
 
-    Волна 19, Ф13: набор проектов приходит **снаружи** — это охват конкретной закупки
-    (`procurement_scope`: проекты её заказов), а не «все активные внешние». Пустой охват
-    → пустой результат: «общего через отсутствие» в продукте больше нет, и слепая
-    закупка честнее закупки, молча считающей за всю организацию. Read-only витрина.
+    Область та же, что у денег закупки, — **активные внешние** проекты охвата
+    (`counts_in_scope`): внутренние склады это источник покрытия, а не потребитель, а
+    закрытый проект не закупают.
 
-    Считаем только по **активным внешним** проектам охвата: внутренние склады —
-    источник покрытия, а не потребитель, а закрытый проект не закупают (пегать на него
-    движок и так отказывается — наводка на непегаемое была бы враньём). Отсев — общий
-    предикат `counts_in_scope`: это инвариант самой арифметики охвата, и деньги закупки
-    считают по тому же набору.
+    **Члены складываются через проекты, и баланс — их сумма** (решение Ивана 2026-08-11,
+    сознательная смена семантики). Прежний свод не перенеттивал: `to_order` каждого
+    проекта клампился в ноль, поэтому профицит проекта A не гасил нужду проекта B. Баланс
+    знаковый, и в сумме гасит — но это НЕ ложь продукта: остаток соседнего проекта в
+    контуре доступен, просто через документ (`Requisition`, заём B→A — штатный путь
+    домена). Витрина отвечает «хватает ли по закупке в целом»; вопрос «хватает ли ИМЕННО
+    в этом проекте» задают форме проекта, где перенеттивать нечего.
     """
     acc = {}  # item_id → агрегат по Item через проекты
     for project in projects:
         if not counts_in_scope(project):
             continue
-        # потребность проекта по покупным листьям (разузлование насквозь)
         need_by_item, _incomplete = project_leaf_demand(project)
-        for component, need in need_by_item.items():
-            cov = _coverage(need, item_available(component, project),
-                            item_on_order(component, project))
-            row = acc.setdefault(component.id, {
-                'item_id': component.id, 'item_code': component.code,
-                'item_description': component.description, 'uom': component.uom,
-                'native': component.native,
-                'need': ZERO, 'have': ZERO, 'on_order': ZERO, 'to_order': ZERO,
-                'by_project': [],
+        for item, need in need_by_item.items():
+            row = acc.setdefault(item.id, {
+                'item': item,
+                'need': ZERO, 'kitted': ZERO, 'in_stock': ZERO, 'on_order': ZERO,
+                'anomaly': False,
             })
-            row['need'] += cov['need']
-            row['have'] += cov['have']
-            row['on_order'] += cov['on_order']
-            row['to_order'] += cov['to_order']
-            row['by_project'].append({
-                'project_id': project.id, 'project_code': project.code,
-                'project_name': project.description, 'need': cov['need'],
-                'have': cov['have'], 'on_order': cov['on_order'],
-                'to_order': cov['to_order'], 'status': cov['status'],
-            })
+            row['need'] += need
+            row['kitted'] += item_kitted(item, project)
+            row['in_stock'] += item_available(item, project)
+            row['on_order'] += item_on_order(item, project)
+            # Аномалия — свойство лота, а не суммы: хватает одного минусового лота в
+            # одном проекте охвата, чтобы строка просила разбирательства.
+            row['anomaly'] = row['anomaly'] or item_has_negative_lot(item, project)
     rows = []
-    for row in acc.values():
-        # статус Item = тот же словарь по сегментам итога (worst-of)
-        if row['to_order'] > 0:
-            row['status'] = 'to_order'
-        elif row['on_order'] > 0:
-            row['status'] = 'on_order'
-        else:
-            row['status'] = 'available'
+    for agg in acc.values():
+        item = agg['item']
+        row = _balance(agg['need'], agg['kitted'], agg['in_stock'], agg['on_order'])
+        row.update({
+            'component_id': item.id,
+            'component_code': item.code,
+            'component_description': item.description,
+            'component_native': item.native,
+            'component_synced': item.synced,
+            'component_locked': item.locked,
+            'component_category': category_code(item),   # фильтр колонки «Компонент»
+            'uom': item.uom,
+            'supply': _supply_status(row),
+            'anomaly': agg['anomaly'],
+        })
         rows.append(row)
-    # худшее наверх (красное просит внимания), потом по артикулу
-    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['item_code']))
+    # Тот же порядок, что в «Потребности» проекта: горит вперёд, внутри — по коду.
+    rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['component_code']))
     return {'rows': rows}
 
 
@@ -3099,28 +3099,30 @@ def procurement_scope(procurement):
     закупке — проект в охвате. Хранить нечего, и «пусто = пусто» осталось само собой:
     нет заказов → нет охвата → закупка честно ничего не считает.
 
-    Единственный вход в охват для всего движка (витрина «К закупке»), поэтому «что
+    Единственный вход в охват для всего движка (витрина «Потребность»), поэтому «что
     считаем» по-прежнему задано в одном месте.
     """
     return models.Project.objects.filter(
         purchases__procurement=procurement).distinct().order_by('code')
 
 
-def procurement_deficit(procurement):
-    """Дефицит по охвату закупки — таб «К закупке» её формы (бывший «командный свод»).
+def procurement_demand(procurement):
+    """Витрина «Потребность» формы закупки: свод по её охвату + отметка «уже в плане».
 
-    Свод перестал быть отдельным экраном-фантомом (без `code`, без замка, вечно один):
-    он стал витриной конкретной закупки, суженной её охватом. Отметить все проекты =
-    прежний общий свод, отметить один = закупка под проект без шума остальных.
+    Телескоп закупки (2026-08-11): показывает состояние складов и заказов по ВСЕМ
+    проектам закупки и помогает выбрать позицию — больше ничего. Количество выбирают в
+    «Строках», глядя на один компонент в микроскоп; поэтому здесь у строки ровно одна
+    команда — взять позицию в план, и та исчезает, как только позиция взята.
 
-    К каждой строке добавляется `planned` — сколько этого Item **уже в строках плана**:
-    витрина внутри закупки обязана показывать, что из наводки уже взято, иначе мост
-    «＋ в план» вслепую.
+    `in_plan` — есть ли уже строка плана по этому Item. Отметка нужна затем же, зачем
+    прежней витрине было число `planned`: показывать состояние, а не предлагать действие
+    вслепую. Но булево вместо числа принципиально: количество плана — дело «Строк», и
+    дублировать его здесь значило бы заводить второе место правды.
     """
-    data = scope_deficit(procurement_scope(procurement))
-    planned = dict(procurement.lines.values_list('item_id', 'qty'))
+    data = scope_demand(procurement_scope(procurement))
+    in_plan = set(procurement.lines.values_list('item_id', flat=True))
     for row in data['rows']:
-        row['planned'] = planned.get(row['item_id'], ZERO)
+        row['in_plan'] = row['component_id'] in in_plan
     return data
 
 
@@ -3155,7 +3157,7 @@ def procurement_form(procurement):
         'code': procurement.code, 'description': procurement.description,
         'date': procurement.date,
         **_contractor_view(procurement.contractor),          # Ф4: поставщик (Р3)
-        # Охват — область расчёта витрины «К закупке». Вычисляемый (проекты заказов),
+        # Охват — область расчёта витрины «Потребность». Вычисляемый (проекты заказов),
         # правке не подлежит: поле шапки показывает его ссылками и только.
         'projects': [{'id': p.id, 'code': p.code, 'description': p.description}
                      for p in scope],
@@ -3180,11 +3182,21 @@ PROCUREMENT_LOCKED = (
     'Строки правятся только в черновике закупки — снимите замок (unlock).')
 
 
+PROCUREMENT_QTY_NEGATIVE = 'Количество закупки не может быть отрицательным.'
+
+
 def add_procurement_line(procurement, item, qty):
-    """Добавить строку закупки-плана (только в черновике). `(procurement, item)` — одна строка."""
+    """Добавить строку закупки-плана (только в черновике). `(procurement, item)` — одна строка.
+
+    **Ноль разрешён** (2026-08-11, решение Ивана): строка рождается кликом из витрины
+    «Потребность» именно с нулём — «позицию беру, количество ещё думаю». Это рабочее
+    состояние плана, а не брак: количество набирают следом, в «Строках», глядя на баланс
+    конкретного компонента. Отрицательное по-прежнему невозможно. В бланк поставщику
+    нулевые строки не попадают (`procurement_xlsx`).
+    """
     _require_unlocked(procurement, PROCUREMENT_LOCKED)
-    if qty is None or qty <= 0:
-        raise ValidationError('Количество закупки должно быть положительным.')
+    if qty is None or qty < 0:
+        raise ValidationError(PROCUREMENT_QTY_NEGATIVE)
     if procurement.lines.filter(item=item).exists():
         raise ValidationError(
             f'Изделие {item.code} уже в закупке — правьте существующую строку.')
@@ -3193,10 +3205,15 @@ def add_procurement_line(procurement, item, qty):
 
 
 def update_procurement_line(line, qty):
-    """Автосейв количества строки закупки-плана (только в черновике)."""
+    """Автосейв количества строки закупки-плана (только в черновике).
+
+    Ноль допустим на тех же основаниях, что и при рождении строки: план — черновик, и
+    вернуть позицию в состояние «беру, но сколько — ещё думаю» так же законно, как в него
+    прийти. Убрать позицию совсем — корзиной строки, а не нулём.
+    """
     _require_unlocked(line.procurement, PROCUREMENT_LOCKED)
-    if qty is None or qty <= 0:
-        raise ValidationError('Количество закупки должно быть положительным.')
+    if qty is None or qty < 0:
+        raise ValidationError(PROCUREMENT_QTY_NEGATIVE)
     line.qty = qty
     line.save(update_fields=['qty'])
     return line
@@ -3282,26 +3299,11 @@ def delete_procurement(procurement):
 # нечего: фильтр и заглушка умерли одной правкой.
 
 
-def add_to_procurement(procurement, item, qty):
-    """Мост «витрина К закупке → строки плана»: довести строку плана до наводки.
-
-    Волна 19, Ф13: мост стал **внутренним**. Раньше свод был отдельным экраном и не
-    знал, в какую закупку класть, — отсюда магия «найти-или-создать последний
-    черновик»; теперь витрина живёт внутри конкретной закупки, и класть надо в неё.
-    Топ-ап, а не инкремент: повторный клик по той же строке ничего не удваивает, а
-    руками набранное сверх наводки не срезается.
-    """
-    _require_unlocked(procurement, PROCUREMENT_LOCKED)
-    if qty is None or qty <= 0:
-        raise ValidationError('Количество должно быть положительным.')
-    line = procurement.lines.filter(item=item).first()
-    if line is None:
-        models.ProcurementLine.objects.create(
-            procurement=procurement, item=item, qty=qty)
-    elif line.qty < qty:
-        line.qty = qty
-        line.save(update_fields=['qty'])
-    return procurement
+# Мост «витрина → строки плана» (`add_to_procurement`, топ-ап до наводки) снят
+# 2026-08-11 вместе с витриной «К закупке». Новая «Потребность» кладёт позицию в план
+# НУЛЁМ и ничего не досчитывает: витрина выбирает СТРОКУ, количество выбирают в
+# «Строках», глядя на баланс одного компонента. Топ-ап был мостом между двумя числами,
+# из которых одно (наводка) больше не показывается как решение.
 
 
 def our_organization():
@@ -3423,6 +3425,12 @@ def procurement_xlsx(procurement):
     `procurement_form`): нумерация в файле обязана совпадать с тем, что видит человек,
     иначе «позиция 3» в переписке означает разное у нас и у поставщика.
 
+    **Нулевые строки в бланк не идут** (2026-08-11, решение Ивана). Ноль внутри продукта
+    — рабочее состояние черновика («позицию беру, количество думаю»), но спрашивать у
+    поставщика цену на «0 шт» бессмысленно: наружу уходит только то, что решено. Фиксация
+    нулей при этом не запрещает — план вправе быть зафиксирован с недодуманной строкой,
+    просто она не покидает контур.
+
     Синхронно в запросе (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт
     ленивый (зависимость только ради экспорта).
     """
@@ -3435,7 +3443,8 @@ def procurement_xlsx(procurement):
                          procurement.date, procurement.user),
         headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
         rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
-              for line in procurement.lines.select_related('item').order_by('id')],
+              for line in procurement.lines.select_related('item').order_by('id')
+              if line.qty > 0],
         widths=[5, 22, 48, 12, 8])       # «№» узкая; остальные — по содержимому
     return _xlsx_bytes(wb)
 

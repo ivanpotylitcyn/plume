@@ -4,34 +4,29 @@
 // Кнопка выгрузки xlsx-бланка поставщику (имя файла = код закупки). Волна 8 — панель pegging: нарезка плана на
 // проектные заказы (веер Purchase под этим планом-родителем).
 //
-// Волна 19 (Ф12c): форма по канону §13 — табы Привязка · Строки · К закупке · Заказы ·
-// Файлы (порядок правлен 2026-08-06: «Привязка» стала главным экраном закупки и уехала
-// вперёд). Панель pegging разобрана на табы (§13.7), её команда «Разрезать по проектам»
-// уехала в колонку команд шапки.
+// Волна 19 (Ф12c): форма по канону §13. Табы пересобраны 2026-08-11 —
+// Строки · Потребность · Заказы · Файлы (разбор в комментарии к `tabs`).
 //
-// Ф13: у закупки появился ОХВАТ — набор проектов, под которые она ведётся (поле
-// «Проекты» в шапке). Он задаёт область расчёта: и витрина «К закупке» (бывший экран
-// «Командный свод», схлопнутый в таб), и наводка привязки считаются по нему. Общий
-// `OrderFields` тут по-прежнему неприменим — у закупки проектов много, а не один.
+// Ф13: у закупки есть ОХВАТ — проекты её заказов (вычисляемый, поле «Проекты» в шапке).
+// Он задаёт область расчёта: и витрина «Потребность», и деньги намерения считаются по
+// нему. Общий `OrderFields` тут неприменим — у закупки проектов много, а не один.
 import { useEffect, useState } from 'react'
-import { api, type ItemRow, type ProcurementForm, type ProcurementFormLine,
-  type CounterpartyRow } from './api'
-import { CommitInput } from './CommitInput'
+import { api, type ProcurementForm, type CounterpartyRow } from './api'
 import { AuthorField, useFormLock } from './FormHeader'
 import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
 import { Field, TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
-import { ScopeDeficitRows, useScopeDeficit } from './ScopeDeficitPanel'
-import { CounterpartyPicker, ItemPicker } from './Picker'
-import { useCategoryFilter } from './ColumnFilter'
-import { CounterpartyRef, ItemGlyph, count, num, sumByUom } from './status'
-import { EntityLink } from './EntityLink'
+import { DemandRows, useProcurementDemand } from './DemandPanel'
+import { CounterpartyPicker } from './Picker'
+import { CounterpartyRef, count, num, sumByUom } from './status'
 
-export function ProcurementView({ procurementId, items, isNew, openItem,
+// `items` (справочник изделий) форме больше не нужен: своего пикера у неё нет —
+// позицию выбирают в «Потребности», из того, что проекты охвата действительно просят.
+export function ProcurementView({ procurementId, isNew, openItem,
   openProject, openPurchase, openCounterparty, onChanged, onDeleted }: {
-  procurementId: number; items: ItemRow[]; isNew: boolean
+  procurementId: number; isNew: boolean
   openItem: (id: number) => void; openProject: (id: number) => void
   openPurchase: (id: number) => void; openCounterparty: (id: number) => void
   onChanged: () => void
@@ -48,11 +43,8 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
   // пикер поднимает наверх тех, у кого уже покупали, но никого не прячет.
   useEffect(() => { api.counterparties().then(setSuppliers) }, [])
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
-  const alloc = useAllocation(procurementId, rev)            // табы «Привязка» и «Заказы»
-  const need = useScopeDeficit(procurementId, rev)           // таб «К закупке» (Ф13)
-  // Фильтр плана по классу изделия — общий движок (2026-08-10). Тот же фильтр стоит в
-  // «Привязке»: это один и тот же план, показанный двумя способами.
-  const byCat = useCategoryFilter(c?.lines, ln => ln.item_category, procurementId)
+  const alloc = useAllocation(procurementId, rev)            // табы «Строки» и «Заказы»
+  const need = useProcurementDemand(procurementId, rev)      // таб «Потребность»
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -94,43 +86,35 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
     </span>
   ))
 
-  // Порядок табов (правка Ивана 2026-08-06): ПРИВЯЗКА первой. Она стала главным экраном
-  // закупки — там и план правится, и раскладка по заказам видна разом; «Строки» остались
-  // плоским списком того же плана, а «К закупке» — наводкой, к которой идут реже.
+  // Порядок табов (пересборка 2026-08-11, решение Ивана): СТРОКИ · ПОТРЕБНОСТЬ ·
+  // ЗАКАЗЫ · ФАЙЛЫ — содержимое документа первым, как у Заказа.
+  //
+  // Что снято и почему. Плоский таб «Строки» показывал тот же план беднее, чем
+  // «Привязка», и не оправдал себя — поэтому «Привязка» ЗАНЯЛА его имя (функции те же,
+  // название честнее: это содержимое документа) и забрала корзину строки. Таб «К
+  // закупке» тоже снят: наводка «докупить N» предлагала решение вместо того, чтобы
+  // помочь его принять. Его место заняла «Потребность» — та же витрина, что у проекта,
+  // но по всем проектам охвата.
+  //
+  // Два масштаба, и это главное в пересборке. «Потребность» — ТЕЛЕСКОП: весь контур
+  // разом, состояние складов и заказов, помогает выбрать ПОЗИЦИЮ. «Строки» — МИКРОСКОП:
+  // один компонент, его баланс и раскладка по заказам, помогает выбрать КОЛИЧЕСТВО.
+  // Отсюда и разделение команд: взять позицию можно только в телескопе, набрать
+  // количество — только в микроскопе, и ни один экран не делает работу другого.
   const tabs: FormTab[] = [
     // Правимость вкладок — по полному замку (`!locked`), а не по одной фиксации:
-    // в просмотре форма не предлагает ни править количество, ни «взять» позицию.
-    { key: 'pegging', label: 'Привязка', icon: 'flag',
+    // в просмотре форма не предлагает ни править количество, ни брать позиции.
+    { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <AllocationRows st={alloc} procurementId={c.id} editable={!locked}
         openItem={openItem} openProject={openProject} openPurchase={openPurchase}
-        onQty={(lineId, qty) => run(api.updateProcurementLine(lineId, qty))} /> },
-    { key: 'lines', label: 'Строки', icon: 'checklist',
-      content: <>
-        <table className="grid">
-          <thead>
-            <tr>
-              <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
-              <th className="c-desc">Описание</th>
-              <th className="num">Кол-во</th><th className="uom">Ед.</th>
-              {!locked && <th className="act" />}
-            </tr>
-          </thead>
-          <tbody>
-            {byCat.shown.map(ln => (
-              <LineRow key={ln.id} ln={ln} editable={!locked} busy={busy}
-                openItem={openItem} run={run} />
-            ))}
-            {/* Правочные ручки — по ПОЛНОМУ замку, а не по одной фиксации: см. тот же
-                разбор в заказе (2026-08-11). Просмотр обязан быть чистым и здесь. */}
-            {!locked && <GhostRow procurementId={c.id} items={items} busy={busy} run={run} />}
-          </tbody>
-        </table>
-        {c.lines.length === 0 && locked && <div className="tab-empty">Закупка пуста.</div>}
-      </> },
-    { key: 'need', label: 'К закупке', icon: 'law',
-      content: <ScopeDeficitRows st={need} openItem={openItem}
-        editable={!locked} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
-          { item_id: itemId, qty }))} /> },
+        onQty={(lineId, qty) => run(api.updateProcurementLine(lineId, qty))}
+        onDelete={lineId => run(api.deleteProcurementLine(lineId))} /> },
+    { key: 'need', label: 'Потребность', icon: 'chip',
+      content: <DemandRows st={need} procurementId={c.id} editable={!locked}
+        openItem={openItem}
+        /* «Взять» = обычная строка плана с НУЛЁМ: витрина выбирает позицию, количество
+           набирают в «Строках». Путь назад — корзина той же строки. */
+        take={itemId => run(api.addProcurementLine(c.id, { item_id: itemId, qty: 0 }))} /> },
     { key: 'fan', label: 'Заказы', icon: 'package',
       content: <PurchaseFan st={alloc} openPurchase={openPurchase} /> },
     { key: 'files', label: 'Файлы', icon: 'files',
@@ -221,71 +205,7 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
   )
 }
 
-// Строка плана: изделие + кол-во (автосейв, пока расфиксировано).
-function LineRow({ ln, editable, busy, openItem, run }: {
-  ln: ProcurementFormLine; editable: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<ProcurementForm>) => void
-}) {
-  return (
-    <tr className="row">
-      <td className="gl">
-        <ItemGlyph native={ln.item_native} synced={ln.item_synced} locked={ln.item_locked} /></td>
-      <td className="c-key">
-        <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
-      <td className="c-desc">
-        <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
-      <td className="num">
-        {editable
-          ? <CommitInput value={String(ln.qty)} disabled={busy}
-              onCommit={v => run(api.updateProcurementLine(ln.id, Number(v)))}
-              validate={v => Number(v) > 0} />
-          : num(ln.qty)}
-      </td>
-      <td className="uom">{ln.uom}</td>
-      {editable && <td className="act">
-        <button className="fh-ctl icon fh-del" title="Убрать строку плана"
-          disabled={busy} onClick={() => run(api.deleteProcurementLine(ln.id))}>
-          <span className="ci ci-trash" /></button>
-      </td>}
-    </tr>
-  )
-}
-
-// Призрачная строка: добавить позицию в план (только пока расфиксировано).
-function GhostRow({ procurementId, items, busy, run }: {
-  procurementId: number; items: ItemRow[]; busy: boolean
-  run: (p: Promise<ProcurementForm>) => void
-}) {
-  const [itemId, setItemId] = useState<number | ''>('')
-  const [qty, setQty] = useState('')
-  const picked = items.find(i => i.id === itemId)   // единица известна сразу по выбору
-
-  const add = () => {
-    const q = Number(qty)
-    if (!itemId || !(q > 0)) return
-    run(api.addProcurementLine(procurementId, { item_id: itemId, qty: q }))
-    setItemId(''); setQty('')
-  }
-
-  return (
-    <tr className="row ghost">
-      <td className="gl" />
-      {/* Заголовок поля = подпись его колонки, без «＋» (правка Ивана 2026-08-11). */}
-      <td className="c-key" colSpan={2}>
-        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          placeholder="Компонент…" onEnter={add} onClear={() => setItemId('')} />
-      </td>
-      <td className="num">
-        <input className="qty-in" value={qty} disabled={busy} placeholder="0"
-          onChange={e => setQty(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') add() }} />
-      </td>
-      <td className="uom">{picked?.uom ?? ''}</td>
-      <td className="act">
-        <button className="fh-ctl icon fh-add" title="Добавить строку плана"
-          disabled={busy || !itemId || !(Number(qty) > 0)} onClick={add}>
-          <span className="ci ci-add" /></button>
-      </td>
-    </tr>
-  )
-}
+// `LineRow` и `GhostRow` плоского таба «Строки» сняты 2026-08-11 вместе с ним самим:
+// строку плана показывает `AllocationPanel` (тот же план, но с раскладкой по заказам и
+// балансом проекта), а рождает её витрина «Потребность» — нулём. Двух вёрсток одной
+// строки в форме больше нет.

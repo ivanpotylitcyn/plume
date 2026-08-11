@@ -1884,25 +1884,10 @@ def procurement_line_detail(request, pk):
 
 
 @api_view(['GET'])
-def procurement_deficit(request, pk):
-    """Витрина «К закупке»: дефицит по охвату этой закупки (бывший командный свод)."""
+def procurement_demand(request, pk):
+    """Витрина «Потребность» закупки: свод покупных листьев по её охвату + `in_plan`."""
     p = get_object_or_404(models.Procurement, pk=pk)
-    return Response(engine.procurement_deficit(p))
-
-
-@api_view(['POST'])
-def procurement_take(request, pk):
-    """Мост «витрина → строки плана»: довести строку плана до наводки (топ-ап)."""
-    p = get_object_or_404(models.Procurement, pk=pk)
-    d = request.data
-    try:
-        item = models.Item.objects.get(pk=d['item_id'])
-        engine.add_to_procurement(p, item, _dec(d.get('qty')))
-    except (KeyError, models.Item.DoesNotExist) as e:
-        return _bad(f'Нужны item_id, qty ({e}).')
-    except ValidationError as e:
-        return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_form(p))
+    return Response(engine.procurement_demand(p))
 
 
 def _procurement_transition(request, pk, fn):

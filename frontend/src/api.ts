@@ -64,6 +64,7 @@ export interface DeficitDemand {
 export interface DeficitComponent {
   component_id: number; component_code: string; component_description: string; uom: string
   component_native: boolean; component_synced: boolean; component_locked: boolean
+  component_category: string | null      // класс изделия — фильтр колонки «Компонент»
   need: number; kitted: number; in_stock: number; on_order: number; balance: number
   status: Status; supply: Status; anomaly: boolean
 }
@@ -450,21 +451,18 @@ export interface ProjectClosure {
   can_close: boolean; blocker: string
 }
 
-// ── Планирование закупок (волна 7): командный свод + Procurement ──
-// ── Свод по охвату закупки (волна 19, Ф13; бывший «Командный свод») ──
-// Экран-фантом схлопнут в таб «К закупке» обычной закупки: те же строки, но по её
-// охвату проектов. `planned` — сколько уже взято в строки плана.
-export interface ScopeDeficitProject {
-  project_id: number; project_code: string; project_name: string
-  need: number; have: number; on_order: number; to_order: number; status: Status
+// ── Планирование закупок (волна 7): Procurement под охват проектов ──
+// ── Потребность по охвату закупки (2026-08-11; до неё — таб «К закупке», а до него
+//    экран-фантом «Командный свод») ──
+// Строка — ТА ЖЕ, что в «Потребности» проекта (`DeficitComponent`), только сложенная по
+// всем проектам охвата: одна витрина на продукт, разница лишь в области счёта. Своё
+// здесь одно поле — `in_plan`: взята ли позиция в строки закупки. Булево намеренно:
+// количество плана живёт в «Строках», и дублировать его тут значило бы завести второе
+// место правды.
+export interface ProcurementDemandRow extends DeficitComponent {
+  in_plan: boolean
 }
-export interface ScopeDeficitRow {
-  item_id: number; item_code: string; item_description: string; uom: string
-  native: boolean
-  need: number; have: number; on_order: number; to_order: number; planned: number
-  status: Status; by_project: ScopeDeficitProject[]
-}
-export interface ScopeDeficit { rows: ScopeDeficitRow[] }
+export interface ProcurementDemand { rows: ProcurementDemandRow[] }
 
 export interface ProcurementRow {
   id: number; locked: boolean; date: string | null
@@ -877,11 +875,10 @@ export const api = {
     get<RelocationSourceLot[]>(`/api/relocations/${id}/source-lots/`),
 
   // ── Планирование закупок (волна 7; охват — волна 19, Ф13) ──
-  // `/api/command-deficit/` больше нет: свод — витрина конкретной закупки, мост
-  // кладёт позицию в неё же (топ-ап до наводки).
-  procurementDeficit: (id: number) => get<ScopeDeficit>(`/api/procurements/${id}/deficit/`),
-  takeToProcurement: (id: number, b: { item_id: number; qty: number }) =>
-    send<ProcurementForm>('POST', `/api/procurements/${id}/take/`, b),
+  // `/api/command-deficit/` больше нет: витрина — «Потребность» конкретной закупки,
+  // по её охвату. Моста «＋ в план» (топ-ап до наводки) тоже нет с 2026-08-11: позицию
+  // кладёт обычное добавление строки нулём, количество набирают в «Строках».
+  procurementDemand: (id: number) => get<ProcurementDemand>(`/api/procurements/${id}/demand/`),
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementForm>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),

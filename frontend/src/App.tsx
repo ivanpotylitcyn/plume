@@ -479,7 +479,7 @@ export default function App() {
             onChanged={reloadPurchases}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'procurement' &&
-          <ProcurementView procurementId={sel.id} items={items}
+          <ProcurementView procurementId={sel.id}
             openItem={openItem} openProject={openProject}
             openCounterparty={openCounterparty}
             isNew={isFresh('procurement', sel.id)}
