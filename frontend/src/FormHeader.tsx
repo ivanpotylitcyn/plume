@@ -1,6 +1,6 @@
-// Единый заголовок формы (UI_GUIDE §4) + замок формы и чип фиксации (§5).
-// «Название первое»: литературное имя (Inter 500) сверху, мета-строка (mono, dim)
-// снизу; справа — индикатор сохранения + замок формы, ИЛИ чип фиксации.
+// Детали шапки формы: замок формы и хуки её жизненного цикла, общие поля ордера
+// (§13.4a) и колонка команд с корзиной (§5). Раскладку шапки собирает не этот модуль,
+// а канон формы (`FormShell`, §13) — сюда он приходит за частями.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type Authored, type UserRow, type ProjectRow } from './api'
 import { Field, TextField } from './FormField'
@@ -386,35 +386,7 @@ export function FormCornerCommand({ fixed, unlocked, onDelete, download }: FormC
   )
 }
 
-// Шапка формы (§5, Ф9): контролы — вертикальной колонкой справа, подпись слева от
-// иконки, глиф = НАЗНАЧЕНИЕ (куда попадёшь), не состояние. Иконки — Codicons (§2).
-// Индикаторы «✓ сохранено»/«● редактируется» сняты (автосейв → «сохранено» всегда,
-// ничего не различало). Две оси не путаем: замок ФОРМЫ (Редактировать/Просмотр) —
-// личный, режим показа; фиксация ДОКУМЕНТА (Зафиксировать/Расфиксировать) — в данных.
-// У зафиксированного степень свободы ровно одна — расфиксировать; корзины под замком нет.
-export function FormHeader({ code, meta, error, children, ...cmd }: FormCommandProps & {
-  code: ReactNode           // первичная идентичность в H1 (волна 19, Ф11: бывш. `name`)
-  meta: ReactNode
-  error?: string | null
-  children?: ReactNode       // блок свойств (.props) — входит в зону шапки, чтобы корзина
-                             // села у её НИЖНЕЙ границы (§5: слоты разнесены по вертикали)
-}) {
-  return (
-    <>
-      {/* Зона шапки = заголовок+мета+свойства. relative — чтобы корзина легла в её
-          нижний правый угол, а не в плотную колонку под верхними контролами (§5). */}
-      <div className="fhz">
-        <div className="form-head">
-          <div className="fh-main">
-            <div className="fh-name">{code}</div>
-            <div className="fh-meta">{meta}</div>
-          </div>
-          <FormCommands {...cmd} />
-        </div>
-        {children}
-        <FormCornerCommand {...cmd} />
-      </div>
-      {error && <div className="fh-error">ошибка: {error}</div>}
-    </>
-  )
-}
+// Компонент `FormHeader` снят 2026-08-11 — мёртвый с волны 19 (Ф12): канон формы
+// собирает шапку сам (`FormShell`: титул-`code` → панель полей → мета → табы), и
+// «название первое» с зоной `.fhz` не звало ни одну вьюху. Отсюда форма берёт только
+// части: `FormCommands`, `FormCornerCommand`, `OrderFields`, `useFormLock`/`useOrderForm`.

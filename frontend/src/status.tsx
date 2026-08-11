@@ -126,12 +126,6 @@ export function statusTone(s: Status): 'ok' | 'wip' | 'order' {
   return s === 'available' ? 'ok' : s === 'on_order' ? 'wip' : 'order'
 }
 
-export const LABEL: Record<Status, string> = {
-  to_order: 'заказать',
-  on_order: 'заказано/делается',
-  available: 'есть',
-}
-
 export function Glyph({ status }: { status: Status }) {
   return <span className={`glyph g-${status}`}>{GLYPH[status]}</span>
 }
@@ -147,25 +141,11 @@ export function Segment({ status, value }: { status: Status; value: number }) {
   )
 }
 
-// Ось разбора на codicon `layers` (Ф1b, пилот в проекте): глиф = «слои склада»
-// (перекликается с режимом «Склады»), а состояние несёт ЦВЕТ, не форма — треугольники
-// и кружки больше не шумят. `layers` красный (не заказано) → `layers-dot` оранжевый
-// (заказано, ждём) → `layers-active` зелёный (на складе). Пока только форма проекта.
-const LAYER_GLYPH: Record<Status, string> = {
-  to_order: 'layers', on_order: 'layers-dot', available: 'layers-active',
-}
-const STATUS_TONE: Record<Status, string> = {
-  to_order: 'sg-order', on_order: 'sg-wip', available: 'sg-ok',
-}
-export function LayerSeg({ status, value }: { status: Status; value: number }) {
-  if (!value) return null
-  return (
-    <span className="seg">
-      <span className={`ci sg ci-${LAYER_GLYPH[status]} ${STATUS_TONE[status]}`} />
-      {num(value)}
-    </span>
-  )
-}
+// `LayerSeg` (разбор на codicon `layers`: форма одна, состояние — цветом) снят
+// 2026-08-11 вместе с `LABEL`. Пилот в форме проекта не пережил переход на пять
+// СЫРЫХ числовых колонок (2026-08-05): разбор-сегменты там заменил ряд чисел, каждое
+// со своим глифом-членом (`Member` в `ProjectView`), и тройка сегментов больше не
+// собиралась ни на одном экране.
 
 // Стоимость строки (2026-08-07) — одинаково в «Строках» заказа и в «Привязке» закупки,
 // на обоих её уровнях. Знак берём у движка (`cost_status`), сами ничего не решаем:

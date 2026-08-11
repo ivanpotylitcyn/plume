@@ -84,14 +84,10 @@ export interface Budget {
   economy: number            // экономия = cost − spent (польза внутреннего заёма)
 }
 
-export interface StockMapRow {
-  project_id: number; project_code: string; project_name: string
-  project_kind: string; available: number
-}
-export interface StockMap {
-  item_id: number; item_code: string; item_description: string; uom: string
-  rows: StockMapRow[]
-}
+// `StockMap`/`StockMapRow` («карта остатков по складам-проектам») сняты 2026-08-11:
+// эндпойнта под них на бэкенде так и не появилось, а роль карты взяла на себя вкладка
+// «Склад» формы проекта. Тип, описывающий ответ, которого никто не запрашивает, —
+// обещание чужого контракта; понадобится карта — опишем по факту ручки.
 // Лента движений изделия (волна 19, Ф12a): ВСЕ ордера, коснувшиеся его партий —
 // рождение (`born`, знак +) и движения существующих партий (`move`, знак в `qty`).
 // Пришла на смену узкой `ItemShipment` (только передачи).

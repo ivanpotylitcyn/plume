@@ -254,19 +254,12 @@ body { overflow: hidden; }
 /* селектор типа над единой формой создания ордера */
 .work { overflow-y: auto; padding: 16px 22px; grid-column: 3; }
 
-/* ---- заголовок формы (§4) ---- */
-.form-head { display: flex; align-items: flex-start; gap: 16px; margin: 0 0 16px; }
-.form-head .fh-main { flex: 1; min-width: 0; }
-.fh-name { font-family: var(--font-base); font-weight: 500; font-size: 17px; line-height: 1.3;
-  color: var(--fg-bright); margin: 0; }
-.fh-meta { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim);
-  margin-top: 3px; font-variant-numeric: tabular-nums; }
-.fh-meta .glyph { margin-right: 4px; }
-.fh-meta .ci.sg { margin-right: 5px; }   /* StatusGlyph в мета-строке (Ф1b) */
-.fh-meta a.link { color: var(--link); }
-/* Зона шапки (§5, Ф9): заголовок+мета+свойства. relative — якорь для корзины,
-   которая садится в её НИЖНИЙ правый угол (разнесена с верхними контролами). */
-.fhz { position: relative; }
+/* ---- команды шапки формы (§5) ----
+   Дозаголовочная семья (`.form-head`, `.fh-main`, `.fh-name`, `.fh-meta`, зона `.fhz`)
+   снята 2026-08-11 вместе с компонентом `FormHeader`: канон формы (§13) заменил
+   «название первое» титулом-`code` и метой-оглавлением (`.fs-title`, `.fs-meta`), и
+   старые классы не выводились ни в одной вьюхе. `.fhz` держалась дольше всех как
+   якорь для корзины — с уходом абсолюта у команды якорить стало нечего. */
 /* Верхние контролы шапки: вертикальная колонка справа-сверху, иконки по правому краю,
    подпись слева от иконки. Codicons монохромны — цвет от темы. */
 .fh-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
@@ -282,14 +275,18 @@ body { overflow: hidden; }
 .fh-ctl:hover { background: var(--bg-hover); color: var(--fg); }
 /* Корзина — у нижней границы зоны шапки (низ-право), подписана «Удалить». Ховер как у
    «обычных» контролов, но в семантическом цвете (волна 19, Ф11): БЕЗ рамки (border
-   остаётся прозрачным от .fh-ctl), фон — тонкий тон семантики, а не нейтральный серый. */
-.fh-del { position: absolute; right: 0; bottom: 0; }
+   остаётся прозрачным от .fh-ctl), фон — тонкий тон семантики, а не нейтральный серый.
+   Позиционирования тут НЕТ (2026-08-11): корзина живёт В ПОТОКЕ, как любая команда.
+   Прежде умолчанием было `position: absolute` (нижний слот шапки), а каждый список
+   отменял его своим исключением — и строка-грид `.prow` под исключение не попала:
+   корзина прибора улетала в угол страницы, её просто не было видно. Нижний слот шапки
+   прижимает команду сам (`.fs-head`, margin-top: auto), поэтому абсолют не нужен нигде. */
 .fh-del:hover { color: var(--st-order);
   background: color-mix(in srgb, var(--st-order) 15%, transparent); }
 /* Скачать xlsx — нижний слот шапки, НАД корзиной (2026-07-30: у изделия обе команды
    встречаются в одной форме — выгрузка есть всегда, корзина в правке). По умолчанию
    серая; зелёный тон-намёк на xlsx — при наведении (тот же принцип, что «Удалить»). */
-.fh-download { position: absolute; right: 0; bottom: 0; text-decoration: none; }
+.fh-download { text-decoration: none; }
 .fh-download:hover { color: var(--st-ok);
   background: color-mix(in srgb, var(--st-ok) 15%, transparent); }
 /* строка ошибки под шапкой (заменила индикатор в слоте сохранения) */
@@ -321,14 +318,10 @@ body { overflow: hidden; }
    низу колонки (`margin-top: auto`) — встаёт вровень с последним полем. */
 .fs-head .fh-right { gap: var(--row-gap); }
 .fs-head .fh-ctl { height: var(--row-h); padding-top: 0; padding-bottom: 0; }
-.fs-head :is(.fh-del, .fh-download) { position: static; margin-top: auto; }
+.fs-head :is(.fh-del, .fh-download) { margin-top: auto; }
 /* Когда в слоте обе команды («Скачать» + корзина у изделия в правке), свободное место
    съедает ПЕРВАЯ: иначе `margin-top: auto` на обеих растащило бы их по колонке. */
 .fs-head .fh-download + .fh-del { margin-top: 0; }
-
-/* Корзина/«Скачать» (§5) внутри панели садятся по её паддингу, а не встык к рамке:
-   `.fh-del`/`.fh-download` позиционируются от `.fs-head` (у неё position: relative). */
-.fs-head > .fh-del, .fs-head > .fh-download { right: 12px; bottom: 8px; }
 
 /* Мета (§13.6): по центру, НАД ПОЛОСОЙ ТАБОВ (ниже панелей-дополнений), поля НЕ
    повторяет. Отступы несимметричны намеренно: мета — оглавление табов, поэтому к ним
@@ -357,7 +350,6 @@ body { overflow: hidden; }
    и большой отступ делал её «первой высокой строкой» (§7a). */
 .fs-list { padding: 4px 16px 12px; }
 .fs-list > :first-child { margin-top: 0; }
-.fs-list .section-h:first-child { margin-top: 0; }
 /* Замещающий текст пустого таба: дышит одинаково сверху и снизу — иначе липнет к
    полосе табов (принято 2026-07-26). 8px + 4px паддинга тела = 12px, как снизу. */
 .tab-empty { color: var(--fg-dim); padding: 8px 0; }
@@ -393,16 +385,18 @@ body { overflow: hidden; }
 /* Охват закупки (Ф13): отмеченные проекты — ссылки в строке своего поля. Шрифт и
    кегль — как у всех значений шапки (правка Ивана 2026-07-29: моно 11px выбивалось из
    ряда и не вставало на общую базовую линию). Ссылки разделены ЗАПЯТОЙ, и запятая —
-   не ссылка: так видно, что перечислено несколько проектов, а не один длинный. */
-.props dd .scope-links { margin-left: 10px; }
+   не ссылка: так видно, что перечислено несколько проектов, а не один длинный.
+   Обёртки `.scope-links` в разметке давно нет (ссылки идут прямо в `dd`) — её правило
+   снято 2026-08-11. */
 .props dd a.scope-chip { white-space: nowrap; }
 
 /* `h1.title`/`.subtitle` — legacy-заголовок последнего кастомного экрана — сняты
    2026-07-31 вместе с ним: «Синхронизация с библиотекой» переехала на `FormShell`,
-   и разметки под них в продукте не осталось (§13.10 выполнен). */
-.section-h { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
-  color: var(--fg-dim); margin: 20px 0 6px; border-bottom: 1px solid var(--border);
-  padding-bottom: 4px; font-weight: 500; }
+   и разметки под них в продукте не осталось (§13.10 выполнен).
+   `.section-h` (капитель заголовка секции внутри формы) снята 2026-08-11 — решение
+   Ивана вычеркнуть §12 из канона. Секций внутри формы больше нет: их место заняли
+   табы (§13.7), а название секции и её счёт несут подпись таба и мета-оглавление
+   (§13.6). Само ПРАВИЛО §12 живо — просто применяется к ним, а не к капители. */
 .hint { color: var(--fg-dim); font-size: 11px; margin-left: 8px; text-transform: none;
   letter-spacing: 0; font-family: var(--font-base); }
 /* Строка-подсказка НАД списком таба (волна 19, Ф15): «ждут фиксации …». Не статус и не
@@ -450,13 +444,12 @@ table.grid :is(th, td) { line-height: 20px; }
 table.grid :is(th, td).gl { width: 1%; padding-right: 0; white-space: nowrap; }
 /* Команды ВНУТРИ строки списка: тот же язык, что у команд шапки (`.fh-ctl`), но
    ОДНИМИ ГЛИФАМИ — подписи живут в `title`. В списке команд много, текст на каждой
-   строке шумел бы. Колонка команд — крайняя правая, по содержимому. */
-table.grid .fh-ctl { height: 20px; padding: 0 5px; }
-table.grid .fh-ctl .ci { font-size: 14px; }
+   строке шумел бы. Колонка команд — крайняя правая, по содержимому. Правило одно на обе
+   семьи списков (2026-08-11): `table.grid` и строка-грид `.prow` — один и тот же
+   «список со строками», и команда в них обязана выглядеть одинаково. */
+:is(table.grid, .prow) .fh-ctl { height: 20px; padding: 0 5px; }
+:is(table.grid, .prow) .fh-ctl .ci { font-size: 14px; }
 .fh-ctl.icon { gap: 0; }
-/* `.fh-del` в шапке позиционируется абсолютно (нижний слот панели) — в строке списка
-   это уносило кнопку из потока, и корзины просто не было видно. В таблице — в поток. */
-table.grid .fh-del { position: static; }
 table.grid :is(th, td).act { width: 1%; white-space: nowrap; text-align: right; }
 /* Соседние команды в колонке разделяет сама колонка, а не рука (Б2а, 2026-07-30): до
    этого зазор между дропдауном/кнопкой и соседом дописывали `style={{ marginLeft: 6 }}`
@@ -766,14 +759,10 @@ a.link:hover { text-decoration: underline; }
 .btn:hover:not(:disabled) { border-color: var(--fg-dim); color: var(--fg-bright); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.sm { padding: 1px 8px; font-size: 11px; }
-.btn.primary { background: var(--btn); color: var(--btn-fg); border-color: var(--btn); }
-/* Ховер синей кнопки — шаг В СТОРОНУ `--fg-bright`, а не `brightness(1.12)` (Ф3, волна
-   21): осветление верно только на тёмном фоне, в светлой теме кнопка от него бледнела
-   вместо привычного «нажимаемого» потемнения. Через токен направление выбирает ТЕМА
-   (в тёмной `--fg-bright` белый, в светлой чёрный), а правило остаётся одно. */
-.btn.primary:hover:not(:disabled) { color: var(--btn-fg);
-  background: color-mix(in srgb, var(--btn) 88%, var(--fg-bright));
-  border-color: color-mix(in srgb, var(--btn) 88%, var(--fg-bright)); }
+/* `.btn.primary` (синяя кнопка-действие) снята 2026-08-11 — ни одной за 21 волну.
+   Язык команд у продукта другой: «подпись + Codicon» (`.fh-ctl`) в шапке и в строке,
+   а `.btn` служит рабочим кнопкам списков, где выделять главную не из чего. Вместе с
+   правилом ушли токены `--btn`/`--btn-fg` из обеих тем: их не читал больше никто. */
 
 /* Плашка «рождён лот-прибор» — итог фиксации над таблицей строк. */
 .born { color: var(--fg-dim); margin: 6px 0 4px; font-size: 12px; }
