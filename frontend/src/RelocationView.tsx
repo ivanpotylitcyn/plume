@@ -181,8 +181,11 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
     <tr className="row ghost">
       <td className="gl" />
       <td className="c-key" colSpan={2}>
-        <Dropdown value={lotId} disabled={busy} placeholder="＋ лот…"
-          onPick={v => pick(Number(v))}
+        {/* Снятие выбора идёт тем же путём, что и выбор (`pick('')`): вместе с партией
+            уходят и подставленные ею «откуда/куда» — иначе остались бы места от
+            партии, которой в строке уже нет. */}
+        <Dropdown value={lotId} disabled={busy} placeholder="Партия…"
+          onPick={v => pick(Number(v))} onClear={() => pick('')}
           options={lots.map(l => ({ value: l.lot_id,
             label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
               + ` · ${num(l.live_qty)} ${l.uom}` }))} />
@@ -209,9 +212,9 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
           options={locs.filter(l => l.id !== from).map(l => ({ value: l.id, label: l.code }))} />
       </td>
       <td className="act">
-        <button className="btn sm"
+        <button className="fh-ctl icon fh-add" title="Добавить ход перемещения"
           disabled={busy || !lotId || !from || !to || from === to || !(Number(qty) > 0)}
-          onClick={add}>добавить</button>
+          onClick={add}><span className="ci ci-add" /></button>
       </td>
     </tr>
   )

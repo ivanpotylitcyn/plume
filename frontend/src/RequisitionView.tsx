@@ -150,8 +150,8 @@ function GhostRow({ requisitionId, lots, busy, run }: {
     <tr className="row ghost">
       <td className="gl" />
       <td className="c-key" colSpan={2}>
-        <Dropdown value={lotId} disabled={busy} placeholder="＋ лот-источник…"
-          onPick={v => setLotId(Number(v))}
+        <Dropdown value={lotId} disabled={busy} placeholder="Источник…"
+          onPick={v => setLotId(Number(v))} onClear={() => setLotId('')}
           options={lots.map(l => ({ value: l.lot_id,
             label: `${l.project_code} · #${l.lot_id} ${l.item_code}`
               + (l.lot_name ? ` (${l.lot_name})` : '') + ` · ${num(l.live_qty)} ${l.uom}` }))} />
@@ -169,8 +169,9 @@ function GhostRow({ requisitionId, lots, busy, run }: {
         {picked ? num(picked.live_qty) : ''}
       </td>
       <td className="act">
-        <button className="btn sm" disabled={busy || !lotId || !(Number(qty) > 0)}
-          onClick={add}>добавить</button>
+        <button className="fh-ctl icon fh-add" title="Добавить строку требования"
+          disabled={busy || !lotId || !(Number(qty) > 0)} onClick={add}>
+          <span className="ci ci-add" /></button>
       </td>
     </tr>
   )

@@ -163,6 +163,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
   const [cost, setCost] = useState('')
   const [pn, setPn] = useState('')
   const [name, setName] = useState('')
+  const picked = items.find(i => i.id === itemId)   // единица известна сразу по выбору
 
   const add = () => {
     const q = Number(qty)
@@ -181,15 +182,14 @@ function GhostRow({ inventoryId, items, busy, run }: {
       <td className="gl" />
       <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          placeholder="＋ изделие…" onEnter={add} />
+          placeholder="Изделие…" onEnter={add} onClear={() => setItemId('')} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
-      <td className="uom" />
+      <td className="uom">{picked?.uom ?? ''}</td>
       <td className="num">
         <input className="qty-in" value={cost} disabled={busy} placeholder="0"
           onChange={e => setCost(e.target.value)}
@@ -207,8 +207,9 @@ function GhostRow({ inventoryId, items, busy, run }: {
       </td>
       <td className="c-fit">излишек</td>
       <td className="act">
-        <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
-          onClick={add}>добавить</button>
+        <button className="fh-ctl icon fh-add" title="Добавить найденную партию"
+          disabled={busy || !itemId || !(Number(qty) > 0)} onClick={add}>
+          <span className="ci ci-add" /></button>
       </td>
     </tr>
   )

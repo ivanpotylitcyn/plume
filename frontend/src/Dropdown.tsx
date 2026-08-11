@@ -22,10 +22,16 @@ export interface DropdownOption {
   label: string
 }
 
-export function Dropdown({ options, value, onPick, disabled, placeholder, className, title }: {
+export function Dropdown({ options, value, onPick, onClear, disabled, placeholder,
+  className, title }: {
   options: DropdownOption[]
   value: number | string          // '' — ничего не выбрано
   onPick: (v: number | string) => void
+  // Путь назад (2026-08-11, принцип Ивана «интерфейс без дороги в один конец»). У
+  // пикера его роль играет стирание текста, здесь набирать нечего — значит выход там
+  // же, где вход: ПЕРВЫМ пунктом списка. Плюс Delete/Backspace на поле, потому что
+  // клавиатурой сюда тоже ходят. Не задан → выбор обязателен, снимать нечем.
+  onClear?: () => void
   disabled?: boolean
   placeholder?: string
   className?: string              // ширина/тон в месте применения (`peg-into`, `list-proj`)
@@ -75,7 +81,13 @@ export function Dropdown({ options, value, onPick, disabled, placeholder, classN
       box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight
   }, [active, open])
 
+  const clear = () => { close(); onClear?.() }
+
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // Снятие выбора с клавиатуры — там же, где его снимают в любом поле ввода.
+    if (onClear && value !== '' && (e.key === 'Delete' || e.key === 'Backspace')) {
+      e.preventDefault(); clear(); return
+    }
     if (!open) {
       if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show() }
       return
@@ -97,6 +109,13 @@ export function Dropdown({ options, value, onPick, disabled, placeholder, classN
       <span className="ci ci-chevron-down dd-chev" />
       {open &&
         <AnchoredMenu anchor={field} boxRef={menu} className="typeahead-menu">
+          {/* «Ничего» — такой же пункт списка, как остальные: выбор снимают тем же
+              движением, каким делали. Стоит первым и только когда есть что снимать. */}
+          {onClear && value !== '' &&
+            <div className="typeahead-item dd-none"
+              onMouseDown={e => e.preventDefault()} onClick={clear}>
+              <span className="ci" /><span>— не выбрано —</span>
+            </div>}
           {options.map((o, i) => (
             // onMouseDown гасим: иначе blur поля закрыл бы меню до клика.
             <div key={o.value} className={`typeahead-item${i === active ? ' active' : ''}`}

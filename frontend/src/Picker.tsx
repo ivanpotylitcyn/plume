@@ -30,7 +30,10 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
   placeholder?: string
   disabled?: boolean
   onEnter?: () => void
-  onClear?: () => void          // задан → у выбранного появляется «×» (поле обнуляемо)
+  // Задан → поле обнуляемо, и у выбора появляются ДВА пути назад: «×» рукой и стирание
+  // текста дочиста (движок, 2026-08-11). Второй важнее: им выбор снимают тем же
+  // способом, каким делали, — набором в поле.
+  onClear?: () => void
   notFound?: string
   // Ф12e: «нет в справочнике» перестало быть тупиком. Форм создания больше нет, и
   // заводить справочную мелочь (контрагента) надо оттуда, где о ней вспомнили —
@@ -43,7 +46,7 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
   eager?: boolean               // раскрывать весь справочник по клику (выбор из списка)
 }) {
   const t = useTypeahead({ options, value, onPick, keyOf, textOf, searchOf, onEnter,
-    multi, summary, eager })
+    onClear, multi, summary, eager })
   const menu = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)     // якорь меню (портал считает от него)
 

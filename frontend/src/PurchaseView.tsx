@@ -147,18 +147,26 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               {/* Деньги — за границей единицы измерения: «Ед.» квалифицирует количества
                   слева от себя, а стоимость другой размерности и к ней не относится. */}
               <th className="num c-money">Стоимость</th>
-              {editable && <th className="act" />}
+              {!locked && <th className="act" />}
             </tr>
           </thead>
           <tbody>
             {byCat.shown.map(ln => (
-              <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
+              <LineRow key={ln.id} ln={ln} editable={!locked} busy={busy}
                 openItem={openItem} run={run} />
             ))}
-            {editable && <GhostRow purchaseId={c.id} items={items} busy={busy} run={run} />}
+            {/* Правочные ручки строк — и корзина, и строка-призрак — по ПОЛНОМУ замку
+                (`locked` = зафиксирован ИЛИ форма в просмотре), как в шести остальных
+                формах-ордерах. Раньше здесь стоял один `editable` (только фиксация):
+                в просмотре расфиксированного заказа призрак оставался на месте, а если
+                изделие в нём было уже выбрано — застывал строкой-обманкой, которая
+                выглядит как содержимое заказа, но им не является (боль Ивана
+                2026-08-11). Уход из правки теперь СНИМАЕТ призрака вместе с набранным:
+                состояние живёт в нём самом и умирает с ним. */}
+            {!locked && <GhostRow purchaseId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
         </table>
-        {c.rows.length === 0 && !editable && <div className="tab-empty">Заказ пуст.</div>}
+        {c.rows.length === 0 && locked && <div className="tab-empty">Заказ пуст.</div>}
       </> },
     { key: 'receipts', label: 'Поставки', icon: 'inbox',
       content: c.receipts.length === 0
@@ -326,6 +334,10 @@ function GhostRow({ purchaseId, items, busy, run }: {
 }) {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
+  // Выбранное изделие целиком — из него строка берёт всё, что уже известно ДО
+  // добавления (единица измерения). Показывать это — не украшение: единица
+  // квалифицирует количество, которое человек как раз набирает.
+  const picked = items.find(i => i.id === itemId)
 
   const add = () => {
     const q = Number(qty)
@@ -337,9 +349,12 @@ function GhostRow({ purchaseId, items, busy, run }: {
   return (
     <tr className="row ghost">
       <td className="gl" />
+      {/* Заголовок поля — подпись его колонки («Компонент»), без «＋»: строка-призрак
+          и так читается пустой строкой таблицы, а знак прибавления теперь несёт кнопка
+          в конце строки (правка Ивана 2026-08-11). */}
       <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          placeholder="＋ изделие…" onEnter={add} />
+          placeholder="Компонент…" onEnter={add} onClear={() => setItemId('')} />
       </td>
       <td className="num" />
       <td className="num">
@@ -352,12 +367,14 @@ function GhostRow({ purchaseId, items, busy, run }: {
           таблице девятый столбец против восьми в шапке, и весь правый блок колонок
           отлипал от края панели на его ширину (правка Ивана 2026-08-06). */}
       <td className="num" /><td className="num" />
-      {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
-      <td className="uom" />
+      {/* Ед. — единственное, что известно сразу по выбору изделия (правка Ивана
+          2026-08-11). Остальные числа строки родятся вместе с ней. */}
+      <td className="uom">{picked?.uom ?? ''}</td>
       <td className="num c-money" />
       <td className="act">
-        <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
-          onClick={add}>добавить</button>
+        <button className="fh-ctl icon fh-add" title="Добавить строку заказа"
+          disabled={busy || !itemId || !(Number(qty) > 0)} onClick={add}>
+          <span className="ci ci-add" /></button>
       </td>
     </tr>
   )

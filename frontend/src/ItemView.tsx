@@ -338,17 +338,23 @@ function AddComponent({ items, parentId, bom, busy, add }: {
 
   if (options.length === 0)
     return <div className="kit-actions">
-      <span className="lbl">＋ компонент: нет доступных изделий.</span></div>
+      <span className="lbl">Нет доступных изделий — добавить в состав нечего.</span></div>
+  // Язык добавления — общий со строкой-призраком таблиц (правка Ивана 2026-08-11):
+  // ведущая подпись «＋ компонент» снята (её работу делает заголовок поля), а команда —
+  // кнопка-глиф `add`, пара корзины в строке. Панель осталась панелью: она стоит ПОД
+  // таблицей, а не в ней, и колонок у неё нет — совпадают приёмы, не геометрия.
   return (
     <div className="kit-actions">
-      <span className="lbl">＋ компонент</span>
       <ItemPicker items={options} value={componentId} onPick={setComponentId}
-        disabled={busy} onEnter={submit}
+        disabled={busy} onEnter={submit} placeholder="Компонент…"
+        onClear={() => setComponentId('')}
         notFound="ничего не найдено — компонент должен быть в справочнике изделий." />
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && componentId) submit() }} />
-      <button className="btn sm" disabled={busy || !componentId} onClick={submit}>добавить</button>
+      <button className="fh-ctl icon fh-add" title="Добавить компонент в состав"
+        disabled={busy || !componentId} onClick={submit}>
+        <span className="ci ci-add" /></button>
     </div>
   )
 }

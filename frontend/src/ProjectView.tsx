@@ -598,17 +598,20 @@ function AddDevice({ items, demands, busy, add }: {
 
   if (options.length === 0)
     return <div className="kit-actions">
-      <span className="lbl">＋ прибор: все изделия-приборы уже в потребности.</span></div>
+      <span className="lbl">Все изделия-приборы уже в потребности.</span></div>
+  // Тот же язык добавления, что в строке-призраке таблиц (2026-08-11): заголовок поля
+  // вместо ведущей подписи, команда — кнопка-глиф `add` в пару корзине строки.
   return (
     <div className="kit-actions">
-      <span className="lbl">＋ прибор</span>
       <ItemPicker items={options} value={targetId} onPick={setTargetId} disabled={busy}
-        onEnter={submit}
+        onEnter={submit} placeholder="Прибор…" onClear={() => setTargetId('')}
         notFound="ничего не найдено — прибор должен быть изделием (не компонентом)." />
       <input className="qty-in" value={qty} disabled={busy}
         onChange={e => setQty(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') submit() }} />
-      <button className="btn sm" disabled={busy || !targetId} onClick={submit}>добавить</button>
+      <button className="fh-ctl icon fh-add" title="Добавить прибор в потребность"
+        disabled={busy || !targetId} onClick={submit}>
+        <span className="ci ci-add" /></button>
     </div>
   )
 }

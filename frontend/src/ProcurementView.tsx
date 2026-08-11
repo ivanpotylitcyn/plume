@@ -98,8 +98,10 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
   // закупки — там и план правится, и раскладка по заказам видна разом; «Строки» остались
   // плоским списком того же плана, а «К закупке» — наводкой, к которой идут реже.
   const tabs: FormTab[] = [
+    // Правимость вкладок — по полному замку (`!locked`), а не по одной фиксации:
+    // в просмотре форма не предлагает ни править количество, ни «взять» позицию.
     { key: 'pegging', label: 'Привязка', icon: 'flag',
-      content: <AllocationRows st={alloc} procurementId={c.id} editable={editable}
+      content: <AllocationRows st={alloc} procurementId={c.id} editable={!locked}
         openItem={openItem} openProject={openProject} openPurchase={openPurchase}
         onQty={(lineId, qty) => run(api.updateProcurementLine(lineId, qty))} /> },
     { key: 'lines', label: 'Строки', icon: 'checklist',
@@ -110,22 +112,24 @@ export function ProcurementView({ procurementId, items, isNew, openItem,
               <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
-              {editable && <th className="act" />}
+              {!locked && <th className="act" />}
             </tr>
           </thead>
           <tbody>
             {byCat.shown.map(ln => (
-              <LineRow key={ln.id} ln={ln} editable={editable} busy={busy}
+              <LineRow key={ln.id} ln={ln} editable={!locked} busy={busy}
                 openItem={openItem} run={run} />
             ))}
-            {editable && <GhostRow procurementId={c.id} items={items} busy={busy} run={run} />}
+            {/* Правочные ручки — по ПОЛНОМУ замку, а не по одной фиксации: см. тот же
+                разбор в заказе (2026-08-11). Просмотр обязан быть чистым и здесь. */}
+            {!locked && <GhostRow procurementId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
         </table>
-        {c.lines.length === 0 && !editable && <div className="tab-empty">Закупка пуста.</div>}
+        {c.lines.length === 0 && locked && <div className="tab-empty">Закупка пуста.</div>}
       </> },
     { key: 'need', label: 'К закупке', icon: 'law',
       content: <ScopeDeficitRows st={need} openItem={openItem}
-        editable={editable} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
+        editable={!locked} onTake={(itemId, qty) => run(api.takeToProcurement(c.id,
           { item_id: itemId, qty }))} /> },
     { key: 'fan', label: 'Заказы', icon: 'package',
       content: <PurchaseFan st={alloc} openPurchase={openPurchase} /> },
@@ -254,6 +258,7 @@ function GhostRow({ procurementId, items, busy, run }: {
 }) {
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
+  const picked = items.find(i => i.id === itemId)   // единица известна сразу по выбору
 
   const add = () => {
     const q = Number(qty)
@@ -265,20 +270,21 @@ function GhostRow({ procurementId, items, busy, run }: {
   return (
     <tr className="row ghost">
       <td className="gl" />
+      {/* Заголовок поля = подпись его колонки, без «＋» (правка Ивана 2026-08-11). */}
       <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          placeholder="＋ изделие…" onEnter={add} />
+          placeholder="Компонент…" onEnter={add} onClear={() => setItemId('')} />
       </td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      {/* Ед. приезжает вместе с изделием — в призрачной строке её ещё нет. */}
-      <td className="uom" />
+      <td className="uom">{picked?.uom ?? ''}</td>
       <td className="act">
-        <button className="btn sm" disabled={busy || !itemId || !(Number(qty) > 0)}
-          onClick={add}>добавить</button>
+        <button className="fh-ctl icon fh-add" title="Добавить строку плана"
+          disabled={busy || !itemId || !(Number(qty) > 0)} onClick={add}>
+          <span className="ci ci-add" /></button>
       </td>
     </tr>
   )
