@@ -51,8 +51,10 @@
 - `scope_demand(projects)` — свод покупных листьев через **заданный набор** проектов,
   колонками «Потребности» (Потр. · Компл. · Склад · Заказ · Баланс). Витрина.
 - `procurement_scope(proc)` — охват закупки (проекты её заказов, вычисляемый);
-  `procurement_demand(proc)` = свод по охвату + отметка `in_plan` (таб «Потребность»;
+  `procurement_demand(proc)` = свод по охвату + отметка `in_lines` (таб «Потребность»;
   2026-08-11 заменил свод «К закупке», а тот — экран «Командный свод»).
+  `purchase_demand(pu)` = тот же свод, но по ОДНОМУ проекту заказа (2026-08-19): одна
+  витрина потребности на продукт, разница только в области счёта.
 - `procurement_form` / `create_procurement` / `add|update|remove_procurement_line`
   / `send|unsend|cancel|restore_procurement` — записываемый план закупки под охват
   проектов (мягкий замок `locked`); количество строки ≥ 0, ноль — «беру, думаю».
@@ -1837,11 +1839,22 @@ def purchase_form(purchase):
 PURCHASE_LOCKED = 'Строки правятся только в черновике заказа — снимите замок (unlock).'
 
 
+PURCHASE_QTY_NEGATIVE = 'Количество заказа не может быть отрицательным.'
+
+
 def add_purchase_line(purchase, item, qty):
-    """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна."""
+    """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна.
+
+    **Ноль разрешён** (2026-08-19, решение Ивана) — на тех же основаниях, что и в
+    закупке: строка рождается кликом из витрины «Потребность» именно с нулём («позицию
+    беру, количество ещё думаю»), а количество набирают следом в «Строках», глядя на
+    баланс проекта по этому компоненту. Черновик заказа — рабочее состояние, а не
+    обязательство: обязательством он становится на фиксации. Отрицательное невозможно.
+    В бланк поставщику нулевые строки не идут (`purchase_xlsx`).
+    """
     _require_unlocked(purchase, PURCHASE_LOCKED)
-    if qty is None or qty <= 0:
-        raise ValidationError('Количество заказа должно быть положительным.')
+    if qty is None or qty < 0:
+        raise ValidationError(PURCHASE_QTY_NEGATIVE)
     if purchase.lines.filter(item=item).exists():
         raise ValidationError(
             f'Изделие {item.code} уже в заказе — правьте существующую строку.')
@@ -1849,10 +1862,15 @@ def add_purchase_line(purchase, item, qty):
 
 
 def update_purchase_line(line, qty):
-    """Автосейв количества строки заказа (только в черновике)."""
+    """Автосейв количества строки заказа (только в черновике).
+
+    Ноль допустим на тех же основаниях, что при рождении строки: вернуть позицию в
+    состояние «беру, но сколько — ещё думаю» так же законно, как в него прийти. Убрать
+    позицию совсем — корзиной строки, а не нулём.
+    """
     _require_unlocked(line.purchase, PURCHASE_LOCKED)
-    if qty is None or qty <= 0:
-        raise ValidationError('Количество заказа должно быть положительным.')
+    if qty is None or qty < 0:
+        raise ValidationError(PURCHASE_QTY_NEGATIVE)
     line.qty = qty
     line.save(update_fields=['qty'])
     return line
@@ -3029,7 +3047,7 @@ def counts_in_scope(project):
     return project.kind == models.Project.Kind.EXTERNAL and not project.locked
 
 
-def scope_demand(projects):
+def scope_demand(projects, active_only=True):
     """Потребность по **охвату**: свод покупных листьев через заданный набор проектов.
 
     Пришла 2026-08-11 на смену `scope_deficit` (витрина «К закупке») вместе с пересборкой
@@ -3042,6 +3060,13 @@ def scope_demand(projects):
     (`counts_in_scope`): внутренние склады это источник покрытия, а не потребитель, а
     закрытый проект не закупают.
 
+    `active_only=False` снимает этот отсев — им пользуется витрина ЗАКАЗА
+    (`purchase_demand`, 2026-08-19). У заказа проект один и назван явно в шапке: заказ
+    уже заведён именно под него, и ни замок проекта, ни его вид потребность не отменяют.
+    Отсев — правило ВЫБОРА набора (какие из многих проектов охвата считать), а там, где
+    набор задан документом, выбирать нечего. Ровно так же устроены и деньги заказа
+    (`intent_money` по `demand_map([purchase.project])`, без отсева).
+
     **Члены складываются через проекты, и баланс — их сумма** (решение Ивана 2026-08-11,
     сознательная смена семантики). Прежний свод не перенеттивал: `to_order` каждого
     проекта клампился в ноль, поэтому профицит проекта A не гасил нужду проекта B. Баланс
@@ -3052,7 +3077,7 @@ def scope_demand(projects):
     """
     acc = {}  # item_id → агрегат по Item через проекты
     for project in projects:
-        if not counts_in_scope(project):
+        if active_only and not counts_in_scope(project):
             continue
         need_by_item, _incomplete = project_leaf_demand(project)
         for item, need in need_by_item.items():
@@ -3106,24 +3131,44 @@ def procurement_scope(procurement):
         purchases__procurement=procurement).distinct().order_by('code')
 
 
+def _mark_taken(data, lines):
+    """Отметить в своде позиции, уже взятые в строки документа (`in_lines`).
+
+    Одна отметка на обе витрины контура — закупки и заказа (2026-08-19). Смысл ровно
+    один: «строка по этому Item в документе уже есть». Булево вместо числа принципиально
+    — количество живёт в табе «Строки», и дублировать его в витрине значило бы завести
+    второе место правды.
+    """
+    taken = set(lines.values_list('item_id', flat=True))
+    for row in data['rows']:
+        row['in_lines'] = row['component_id'] in taken
+    return data
+
+
 def procurement_demand(procurement):
-    """Витрина «Потребность» формы закупки: свод по её охвату + отметка «уже в плане».
+    """Витрина «Потребность» формы закупки: свод по её охвату + отметка «уже в строках».
 
     Телескоп закупки (2026-08-11): показывает состояние складов и заказов по ВСЕМ
     проектам закупки и помогает выбрать позицию — больше ничего. Количество выбирают в
     «Строках», глядя на один компонент в микроскоп; поэтому здесь у строки ровно одна
     команда — взять позицию в план, и та исчезает, как только позиция взята.
-
-    `in_plan` — есть ли уже строка плана по этому Item. Отметка нужна затем же, зачем
-    прежней витрине было число `planned`: показывать состояние, а не предлагать действие
-    вслепую. Но булево вместо числа принципиально: количество плана — дело «Строк», и
-    дублировать его здесь значило бы заводить второе место правды.
     """
-    data = scope_demand(procurement_scope(procurement))
-    in_plan = set(procurement.lines.values_list('item_id', flat=True))
-    for row in data['rows']:
-        row['in_plan'] = row['component_id'] in in_plan
-    return data
+    return _mark_taken(scope_demand(procurement_scope(procurement)), procurement.lines)
+
+
+def purchase_demand(purchase):
+    """Витрина «Потребность» формы ЗАКАЗА: свод по его проекту + отметка «уже в строках».
+
+    Тот же телескоп, что у закупки (2026-08-19), в области своего проекта: одна витрина
+    потребности на продукт — у проекта она без команд, у закупки по охвату, у заказа по
+    одному проекту. Колонки, порядок и тон совпадают: человек читает их одним навыком.
+
+    Отсев `counts_in_scope` здесь НЕ применяется (`active_only=False`): проект у заказа
+    один и назван в шапке — он и есть область счёта, выбирать не из чего. Так же считают
+    и деньги заказа.
+    """
+    return _mark_taken(scope_demand([purchase.project], active_only=False),
+                       purchase.lines)
 
 
 def procurement_form(procurement):
@@ -3460,6 +3505,10 @@ def purchase_xlsx(purchase):
 
     Порядок позиций — `order_by('id')`, тот же, что в табе «Строки»: нумерация в файле
     обязана совпадать с экраном, иначе «позиция 3» в переписке значит разное.
+
+    **Нулевые строки в бланк не идут** — то же правило, что у закупки (2026-08-19, когда
+    ноль стал законным и в заказе): ноль внутри продукта — состояние черновика, а наружу
+    уходит только решённое.
     """
     from openpyxl import Workbook
 
@@ -3470,7 +3519,8 @@ def purchase_xlsx(purchase):
                          purchase.date, purchase.user),
         headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
         rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
-              for line in purchase.lines.select_related('item').order_by('id')],
+              for line in purchase.lines.select_related('item').order_by('id')
+              if line.qty > 0],
         widths=[5, 22, 48, 12, 8])
     return _xlsx_bytes(wb)
 

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mv /Users/ivanpotylitcyn/Repositories/ant-web/ant-plm /Users/ivanpotylitcyn/Repositories/ant-web/plume)",
+      "Read(//Users/ivanpotylitcyn/Repositories/ant-web/**)",
+      "Read(//Users/ivanpotylitcyn/.claude/projects/**)",
+      "Bash(grep -nE \"\\(^|[^\\\\`/A-Za-z]\\)\\(Item|Lot|Project|Purchase|Procurement\\)\\([^\\\\`/A-Za-z]|$\\)\" README.md)",
+      "Bash(grep -vE \"\\\\`\\(Item|Lot|Project|Purchase|Procurement\\)\")",
+      "Bash(chmod +x deploy/deploy.sh deploy/deploy_local.sh)",
+      "Bash(npm run *)",
+      "Bash(docker compose *)",
+      "Bash(.venv/bin/python manage.py test plume.tests.ReferenceCreateTests plume.tests.ReferenceCreateHttpTests -v1)",
+      "Bash(grep -nA18 \"class Inventory\" backend/plume/models.py)",
+      "Bash(grep -nA14 \"class Attachment\" backend/plume/models.py)",
+      "Bash(grep -nA20 \"class Project\" backend/plume/models.py)",
+      "Bash(.venv/bin/python manage.py test plume.tests.ProjectBudgetTests plume.tests.ProjectBudgetHttpTests -v1)",
+      "Bash(.venv/bin/python manage.py check)",
+      "Bash(python3 -)",
+      "Skill(artifact-design)",
+      "Skill(artifact-design:*)"
+    ]
+  }
+}

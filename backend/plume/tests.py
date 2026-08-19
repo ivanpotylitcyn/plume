@@ -801,10 +801,63 @@ class PurchaseFormTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.add_purchase_line(p, item, D(3))
 
-    def test_add_line_rejects_nonpositive(self):
+    def test_line_allows_zero_and_rejects_negative(self):
+        """Ноль — рабочее состояние строки заказа (2026-08-19), минус — брак.
+
+        Нулём строка рождается из витрины «Потребность»: «позицию беру, количество ещё
+        думаю». Количество набирают следом в «Строках», и вернуться в ноль так же
+        законно, как в него прийти. То же правило, что у закупки-плана.
+        """
         p = engine.create_purchase(self.prj, self.user)
+        line = engine.add_purchase_line(p, self.make_item('A'), D(0))
+        self.assertEqual(line.qty, D(0))
+        engine.update_purchase_line(line, D(5))
+        engine.update_purchase_line(line, D(0))            # и обратно в «думаю»
+        line.refresh_from_db()
+        self.assertEqual(line.qty, D(0))
         with self.assertRaises(ValidationError):
-            engine.add_purchase_line(p, self.make_item('A'), D(0))
+            engine.add_purchase_line(p, self.make_item('B'), D(-1))
+        with self.assertRaises(ValidationError):
+            engine.update_purchase_line(line, D(-1))
+
+    def test_demand_marks_what_is_already_taken(self):
+        """Витрина «Потребность» заказа: свод по ЕГО проекту + отметка `in_lines`.
+
+        Та же витрина, что у проекта и закупки (`scope_demand`), только область — один
+        проект заказа. Отсева `counts_in_scope` здесь нет: проект назван в шапке, и
+        выбирать не из чего.
+        """
+        scr = self.make_item('SCR', kind='material')
+        dev = self.make_item('DEVSCR', manufactured=True, kind='device')
+        models.BomLine.objects.create(parent=dev, component=scr, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(3))
+        p = engine.create_purchase(self.prj, self.user)
+
+        row = {r['component_code']: r for r in engine.purchase_demand(p)['rows']}['SCR']
+        self.assertEqual(row['need'], D(6))
+        self.assertEqual(row['balance'], D(-6))
+        self.assertFalse(row['in_lines'])
+
+        engine.add_purchase_line(p, scr, D(0))             # взяли позицию из витрины
+        row = {r['component_code']: r for r in engine.purchase_demand(p)['rows']}['SCR']
+        self.assertTrue(row['in_lines'])
+        self.assertEqual(row['need'], D(6))                # витрина считает то же самое
+
+    def test_demand_of_closed_project_still_counts(self):
+        """Замок проекта витрину заказа не гасит: заказ заведён именно под этот проект.
+
+        В охвате закупки такой проект отсеивается (`counts_in_scope` — правило ВЫБОРА
+        набора), а у заказа набор задан документом.
+        """
+        scr = self.make_item('SCR', kind='material')
+        dev = self.make_item('DEVSCR', manufactured=True, kind='device')
+        models.BomLine.objects.create(parent=dev, component=scr, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        p = engine.create_purchase(self.prj, self.user)
+        self.prj.locked = True
+        self.prj.save(update_fields=['locked'])
+        rows = engine.purchase_demand(p)['rows']
+        self.assertEqual([r['component_code'] for r in rows], ['SCR'])
 
     def test_update_and_remove_line(self):
         p = engine.create_purchase(self.prj, self.user)
@@ -933,6 +986,16 @@ class PurchaseXlsxTests(EngineTestBase):
         self.assertEqual(rows[table + 2][:4], [2, 'R100', 'R100', 5])
         screen = [ln['item_code'] for ln in engine.purchase_form(p)['rows']]
         self.assertEqual([r[1] for r in rows[table + 1:]], screen)
+
+    def test_zero_line_stays_inside(self):
+        """Нулевая строка в бланк не идёт (2026-08-19) — то же правило, что у закупки:
+        ноль внутри продукта — состояние черновика, наружу уходит только решённое."""
+        p = self.make_purchase(date='2026-08-19')
+        engine.add_purchase_line(p, self.make_item('R900'), D(12))
+        engine.add_purchase_line(p, self.make_item('R100'), D(0))   # «беру, думаю»
+        _title, rows = self._sheet(p)
+        table = rows.index(['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'])
+        self.assertEqual([r[1] for r in rows[table + 1:]], ['R900'])
 
 
 class ReceiptFromPurchaseTests(EngineTestBase):
@@ -2043,8 +2106,8 @@ class ProcurementFormTests(EngineTestBase):
         engine.delete_procurement(p)
         self.assertFalse(models.Procurement.objects.filter(pk=p.pk).exists())
 
-    def test_demand_marks_what_is_already_in_plan(self):
-        """Витрина «Потребность» закупки: `in_plan` — есть ли уже строка по этому Item.
+    def test_demand_marks_what_is_already_taken(self):
+        """Витрина «Потребность» закупки: `in_lines` — есть ли уже строка по этому Item.
 
         Пришла на смену трём тестам моста «＋ в план» (топ-ап до наводки): моста больше
         нет, витрина кладёт позицию НУЛЁМ и ничего не досчитывает — количество набирают
@@ -2061,12 +2124,12 @@ class ProcurementFormTests(EngineTestBase):
         row = {r['component_code']: r
                for r in engine.procurement_demand(p)['rows']}['SCR']
         self.assertEqual(row['need'], D(6))
-        self.assertFalse(row['in_plan'])
+        self.assertFalse(row['in_lines'])
 
         engine.add_procurement_line(p, scr, D(0))        # взяли позицию из витрины
         row = {r['component_code']: r
                for r in engine.procurement_demand(p)['rows']}['SCR']
-        self.assertTrue(row['in_plan'])
+        self.assertTrue(row['in_lines'])
         self.assertEqual(row['need'], D(6))              # витрина считает то же самое
 
     def test_update_header(self):
@@ -2631,14 +2694,39 @@ class ProcurementHttpTests(TestCase):
         rows = {r['component_code']: r for r in svod.json()['rows']}
         self.assertEqual(float(rows['SCR']['need']), 40.0)
         self.assertEqual(float(rows['SCR']['balance']), -40.0)
-        self.assertFalse(rows['SCR']['in_plan'])              # в плане ещё ничего
+        self.assertFalse(rows['SCR']['in_lines'])              # в плане ещё ничего
         # «взять в план» = обычное добавление строки НУЛЁМ (моста-топ-апа больше нет)
         add = self.c.post(f'/api/procurements/{pid}/lines/',
             {'item_id': self.scr.id, 'qty': 0}, content_type='application/json')
         self.assertEqual(add.status_code, 201)
         self.assertEqual(float(add.json()['total_qty']), 0.0)
         again = self.c.get(f'/api/procurements/{pid}/demand/').json()
-        self.assertTrue(again['rows'][0]['in_plan'])
+        self.assertTrue(again['rows'][0]['in_lines'])
+
+    def test_purchase_demand_and_taking_a_line(self):
+        """HTTP-путь витрины ЗАКАЗА (2026-08-19): свод по его проекту + взятие нулём.
+
+        Заказ считает по своему проекту и слепым не бывает: закупке нужен охват, а тут
+        область задана самим документом.
+        """
+        oid = self.c.post('/api/purchases/', {'project_id': self.prj.id},
+            content_type='application/json').json()['id']
+        svod = self.c.get(f'/api/purchases/{oid}/demand/')
+        self.assertEqual(svod.status_code, 200)
+        rows = {r['component_code']: r for r in svod.json()['rows']}
+        self.assertEqual(float(rows['SCR']['need']), 40.0)
+        self.assertFalse(rows['SCR']['in_lines'])
+        # «взять позицию» = обычная строка заказа НУЛЁМ, как в закупке
+        add = self.c.post(f'/api/purchases/{oid}/lines/',
+            {'item_id': self.scr.id, 'qty': 0}, content_type='application/json')
+        self.assertEqual(add.status_code, 201)
+        self.assertEqual(float(add.json()['total_ordered']), 0.0)
+        again = self.c.get(f'/api/purchases/{oid}/demand/').json()
+        self.assertTrue(again['rows'][0]['in_lines'])
+        # отрицательное количество по-прежнему брак
+        bad = self.c.post(f'/api/purchases/{oid}/lines/',
+            {'item_id': self.dev.id, 'qty': -1}, content_type='application/json')
+        self.assertEqual(bad.status_code, 400)
 
     def test_internal_project_never_reaches_the_scope_demand(self):
         """Внутренний склад — источник покрытия, а не потребитель.

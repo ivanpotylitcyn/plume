@@ -71,6 +71,9 @@ urlpatterns = [
     path('purchases/', views.purchases, name='purchases'),
     path('purchases/<int:pk>/', views.purchase_detail, name='purchase-detail'),
     path('purchases/<int:pk>/lines/', views.purchase_lines, name='purchase-lines'),
+    # витрина «Потребность» заказа (2026-08-19): та же, что у проекта и закупки, но по
+    # проекту заказа — телескоп рядом с микроскопом «Строк».
+    path('purchases/<int:pk>/demand/', views.purchase_demand, name='purchase-demand'),
     path('purchases/<int:pk>/lock/', views.purchase_lock, name='purchase-lock'),
     path('purchases/<int:pk>/unlock/', views.purchase_unlock, name='purchase-unlock'),
     path('purchases/<int:pk>/receipt/', views.purchase_receipt, name='purchase-receipt'),

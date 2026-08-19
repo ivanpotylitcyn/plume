@@ -451,18 +451,19 @@ export interface ProjectClosure {
   can_close: boolean; blocker: string
 }
 
-// ── Планирование закупок (волна 7): Procurement под охват проектов ──
-// ── Потребность по охвату закупки (2026-08-11; до неё — таб «К закупке», а до него
-//    экран-фантом «Командный свод») ──
-// Строка — ТА ЖЕ, что в «Потребности» проекта (`DeficitComponent`), только сложенная по
-// всем проектам охвата: одна витрина на продукт, разница лишь в области счёта. Своё
-// здесь одно поле — `in_plan`: взята ли позиция в строки закупки. Булево намеренно:
-// количество плана живёт в «Строках», и дублировать его тут значило бы завести второе
-// место правды.
-export interface ProcurementDemandRow extends DeficitComponent {
-  in_plan: boolean
+// ── Потребность ДОКУМЕНТА закупочного контура (2026-08-11; до неё — таб «К закупке», а
+//    до него экран-фантом «Командный свод») ──
+// Строка — ТА ЖЕ, что в «Потребности» проекта (`DeficitComponent`): одна витрина на
+// продукт, разница лишь в области счёта — у закупки это все проекты её охвата, у заказа
+// (2026-08-19) его единственный проект. Своё здесь одно поле — `in_lines`: взята ли
+// позиция в строки документа. Булево намеренно: количество живёт в табе «Строки», и
+// дублировать его тут значило бы завести второе место правды.
+export interface DemandRow extends DeficitComponent {
+  in_lines: boolean
 }
-export interface ProcurementDemand { rows: ProcurementDemandRow[] }
+export interface Demand { rows: DemandRow[] }
+
+// ── Планирование закупок (волна 7): Procurement под охват проектов ──
 
 export interface ProcurementRow {
   id: number; locked: boolean; date: string | null
@@ -778,6 +779,8 @@ export const api = {
     send<PurchaseForm>('PATCH', `/api/purchase-lines/${id}/`, { qty }),
   deletePurchaseLine: (id: number) =>
     send<PurchaseForm>('DELETE', `/api/purchase-lines/${id}/`),
+  // Витрина «Потребность» заказа (2026-08-19) — та же, что у закупки, но по его проекту.
+  purchaseDemand: (id: number) => get<Demand>(`/api/purchases/${id}/demand/`),
   lockPurchase: (id: number) => send<PurchaseForm>('POST', `/api/purchases/${id}/lock/`),
   unlockPurchase: (id: number) => send<PurchaseForm>('POST', `/api/purchases/${id}/unlock/`),
   // Ф6: заказ → УПД. Отдаёт форму РОЖДЁННОЙ поставки — в неё и переходим.
@@ -878,7 +881,7 @@ export const api = {
   // `/api/command-deficit/` больше нет: витрина — «Потребность» конкретной закупки,
   // по её охвату. Моста «＋ в план» (топ-ап до наводки) тоже нет с 2026-08-11: позицию
   // кладёт обычное добавление строки нулём, количество набирают в «Строках».
-  procurementDemand: (id: number) => get<ProcurementDemand>(`/api/procurements/${id}/demand/`),
+  procurementDemand: (id: number) => get<Demand>(`/api/procurements/${id}/demand/`),
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementForm>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),

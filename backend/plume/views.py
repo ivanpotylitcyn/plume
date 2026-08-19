@@ -1069,6 +1069,13 @@ def purchase_lines(request, pk):
     return Response(engine.purchase_form(p), status=http.HTTP_201_CREATED)
 
 
+@api_view(['GET'])
+def purchase_demand(request, pk):
+    """Витрина «Потребность» заказа: свод покупных листьев его проекта + `in_lines`."""
+    p = get_object_or_404(models.Purchase.objects.select_related('project'), pk=pk)
+    return Response(engine.purchase_demand(p))
+
+
 @api_view(['PATCH', 'DELETE'])
 def purchase_line_detail(request, pk):
     """Автосейв количества строки заказа (PATCH) / удаление строки (DELETE)."""
@@ -1885,7 +1892,7 @@ def procurement_line_detail(request, pk):
 
 @api_view(['GET'])
 def procurement_demand(request, pk):
-    """Витрина «Потребность» закупки: свод покупных листьев по её охвату + `in_plan`."""
+    """Витрина «Потребность» закупки: свод покупных листьев по её охвату + `in_lines`."""
     p = get_object_or_404(models.Procurement, pk=pk)
     return Response(engine.procurement_demand(p))
 

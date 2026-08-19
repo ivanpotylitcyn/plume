@@ -4,10 +4,13 @@
 // ✓/●/▲. Мягкий замок = утверждение (draft→posted): строки read-only, заказ считается
 // в члене «заказано» дашборда дефицита. Отмены нет — отмена = удаление (волна 19, Р1).
 //
-// Волна 19 (Ф12c): форма по канону §13 — табы Строки · Поставки · Файлы, общие поля
-// шапки через `OrderFields`, якорь «Закупка» — специфика вида. Заодно снят антипринцип
-// §7a: код и описание изделия разъехались по своим колонкам (эта форма была его
-// последним живым примером).
+// Волна 19 (Ф12c): форма по канону §13 — общие поля шапки через `OrderFields`, якорь
+// «Закупка» — специфика вида. Заодно снят антипринцип §7a: код и описание изделия
+// разъехались по своим колонкам (эта форма была его последним живым примером).
+//
+// Табы: Строки · Потребность · Поставки · Файлы. «Потребность» пришла 2026-08-19 —
+// тот же телескоп, что у закупки (`DemandPanel`), только область счёта у заказа одна и
+// названа в шапке: его проект.
 import { useEffect, useMemo, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type ProcurementRow, type PurchaseForm,
   type PurchaseFormLine, type Status } from './api'
@@ -17,6 +20,7 @@ import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { DemandRows, useDemand } from './DemandPanel'
 import { Balance, Cost, CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
   balanceTitle, count, num } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
@@ -44,6 +48,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
+  const [rev, setRev] = useState(0)     // растёт на мутациях — освежает витрину «Потребность»
   const [rest, setRest] = useState<RestFilter>('any')        // фильтр колонки «Остаток»
   // Ф17: контрагент заказа («у кого купили») — своё поле, обязательное к фиксации.
   const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
@@ -57,6 +62,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   useEffect(() => { api.procurements().then(setProcs) }, [])
   useEffect(() => { reloadSuppliers() }, [])
   const att = useAttachments('purchase', purchaseId)   // владелец заведён Ф12b (§13.8)
+  const need = useDemand('purchase', purchaseId, rev)  // таб «Потребность» (2026-08-19)
   // Два фильтра на одной таблице и порядок между ними: сперва остаток («что ещё не
   // приехало»), потом класс. Категории собираются уже по отобранному — меню не обещает
   // строк, которых первый фильтр не покажет.
@@ -66,7 +72,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
 
   const run = (p: Promise<PurchaseForm>) => {
     setBusy(true); setErr(null)
-    p.then(next => { setC(next); onChanged() })
+    p.then(next => { setC(next); setRev(n => n + 1); onChanged() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -168,6 +174,19 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         </table>
         {c.rows.length === 0 && locked && <div className="tab-empty">Заказ пуст.</div>}
       </> },
+    /* Второй таб — ТЕЛЕСКОП заказа (2026-08-19), та же витрина, что у проекта и у
+       закупки, но в области ЕГО проекта. Разделение масштабов то же, что в форме
+       закупки: здесь выбирают ПОЗИЦИЮ (весь закупочный состав проекта, состояние
+       складов и заказов), а количество набирают в «Строках», где компонент виден в
+       микроскоп — со своим балансом, поступлением и остатком. */
+    { key: 'need', label: 'Потребность', icon: 'chip',
+      content: <DemandRows st={need} editable={!locked} openItem={openItem}
+        /* Пусто у заказа значит «проекту нечего покупать»: свод считается по его
+           приборам, как «Потребность» самого проекта. */
+        empty="Нет потребностей по проекту — задайте приборы и их составы."
+        /* «Взять» = обычная строка заказа с НУЛЁМ, как в закупке: витрина выбирает
+           позицию, количество набирают в «Строках». Путь назад — корзина той строки. */
+        take={itemId => run(api.addPurchaseLine(c.id, { item_id: itemId, qty: 0 }))} /> },
     { key: 'receipts', label: 'Поставки', icon: 'inbox',
       content: c.receipts.length === 0
         ? <div className="tab-empty">Заказ ещё не закрыт ни одной поставкой.</div>
@@ -308,9 +327,12 @@ function LineRow({ ln, editable, busy, openItem, run }: {
       </td>
       <td className="num">
         {editable
+          /* Ноль допустим (2026-08-19): строку рождает витрина «Потребность» именно
+             нулём («позицию беру, количество думаю»), и вернуться в это состояние так
+             же законно, как в него прийти. Убрать позицию совсем — корзиной строки. */
           ? <CommitInput value={String(ln.qty)} disabled={busy}
               onCommit={v => run(api.updatePurchaseLine(ln.id, Number(v)))}
-              validate={v => Number(v) > 0} />
+              validate={v => Number(v) >= 0} />
           : num(ln.qty)}
       </td>
       <td className="num">{num(ln.received)}</td>

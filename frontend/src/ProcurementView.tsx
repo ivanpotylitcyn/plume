@@ -18,7 +18,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { Field, TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
-import { DemandRows, useProcurementDemand } from './DemandPanel'
+import { DemandRows, useDemand } from './DemandPanel'
 import { CounterpartyPicker } from './Picker'
 import { CounterpartyRef, count, num, sumByUom } from './status'
 
@@ -44,7 +44,7 @@ export function ProcurementView({ procurementId, isNew, openItem,
   useEffect(() => { api.counterparties().then(setSuppliers) }, [])
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
   const alloc = useAllocation(procurementId, rev)            // табы «Строки» и «Заказы»
-  const need = useProcurementDemand(procurementId, rev)      // таб «Потребность»
+  const need = useDemand('procurement', procurementId, rev)  // таб «Потребность»
 
   useEffect(() => {
     setC(null); setErr(null)
@@ -110,8 +110,10 @@ export function ProcurementView({ procurementId, isNew, openItem,
         onQty={(lineId, qty) => run(api.updateProcurementLine(lineId, qty))}
         onDelete={lineId => run(api.deleteProcurementLine(lineId))} /> },
     { key: 'need', label: 'Потребность', icon: 'chip',
-      content: <DemandRows st={need} procurementId={c.id} editable={!locked}
-        openItem={openItem}
+      content: <DemandRows st={need} editable={!locked} openItem={openItem}
+        /* Пусто у закупки значит «нет охвата»: он вычисляется из заказов, и пока их
+           нет — считать нечего. */
+        empty="Нет потребностей по охвату — заведите заказ под эту закупку."
         /* «Взять» = обычная строка плана с НУЛЁМ: витрина выбирает позицию, количество
            набирают в «Строках». Путь назад — корзина той же строки. */
         take={itemId => run(api.addProcurementLine(c.id, { item_id: itemId, qty: 0 }))} /> },
