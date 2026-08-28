@@ -24,6 +24,7 @@ urlpatterns = [
     path('project-demands/<int:pk>/', views.project_demand_detail, name='project-demand'),
     path('projects/<int:pk>/budget/', views.project_budget, name='project-budget'),
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
+    path('projects/<int:pk>/supply/', views.project_supply, name='project-supply'),
     path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),
     # закрытие проекта (волна 6): панель сведения остатков + мосты + мягкий замок
     path('projects/<int:pk>/closure/', views.project_closure, name='project-closure'),

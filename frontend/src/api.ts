@@ -28,6 +28,11 @@ export interface ProjectRow {
 export interface ProjectDetail extends ProjectRow {
   budget: number | null; started: string | null
 }
+// Закупочный контур проекта (табы «Заказы»/«Поставки»): соседние уровни одного
+// контура едут одним ответом — форма спрашивает их всегда вместе.
+export interface ProjectSupply {
+  purchases: FeedPurchaseRow[]; receipts: FeedReceiptRow[]
+}
 // Категория изделия (волна 15): FK-справочник. Волна 19 Ф10: единый интерфейс
 // идентичности `code` + `description` (`label`→`description`, `icon` удалён).
 export interface Category {
@@ -210,12 +215,21 @@ export interface FeedProcurementRow {
   id: number; code: string | null; description: string
   date: string | null; locked: boolean; lines: number; qty: number
 }
+// Обе стороны — в строке: лента контрагента показывает проект, лента проекта —
+// поставщика. Деньги заказа — ОЦЕНКА (`Σ qty × estimated_cost`), позиции без неё
+// перечислены кодами: неполная сумма не выдаёт себя за полную.
 export interface FeedPurchaseRow extends FeedProcurementRow {
   project_code: string; coverage: Status
+  contractor_id: number | null; contractor_code: string; contractor_name: string
+  estimate: number; unestimated: string[]
 }
-export interface CpReceiptRow {
-  id: number; code: string | null; number: string; date: string | null
+// Строка ленты поставок — общая для форм контрагента и проекта (деньги здесь ФАКТ:
+// `Lot.unit_cost` из УПД).
+export interface FeedReceiptRow {
+  id: number; code: string | null; description: string
+  number: string; date: string | null
   locked: boolean; project_code: string; purchase_id: number | null
+  contractor_id: number | null; contractor_code: string; contractor_name: string
   lots: number; total: number
 }
 export interface CpTransferRow {
@@ -227,7 +241,7 @@ export interface CounterpartyForm {
   supply: CounterpartySupply | null
   shipment: CounterpartyShipment | null
   procurements: FeedProcurementRow[]; purchases: FeedPurchaseRow[]
-  receipts: CpReceiptRow[]; transfers: CpTransferRow[]
+  receipts: FeedReceiptRow[]; transfers: CpTransferRow[]
 }
 
 // ── Приход / УПД (волна 3 — записываемое ядро) ──
@@ -787,6 +801,7 @@ export const api = {
   receiptFromPurchase: (id: number) =>
     send<ReceiptForm>('POST', `/api/purchases/${id}/receipt/`),
   projectPurchases: (id: number) => get<ProjectPurchaseRow[]>(`/api/projects/${id}/purchases/`),
+  projectSupply: (id: number) => get<ProjectSupply>(`/api/projects/${id}/supply/`),
 
   transfers: () => get<TransferRow[]>('/api/transfers/'),
   transfer: (id: number) => get<TransferForm>(`/api/transfers/${id}/`),

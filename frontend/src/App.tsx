@@ -451,7 +451,8 @@ export default function App() {
           <ProjectView key={sel.id} projectId={sel.id} items={items}
             isNew={isFresh('project', sel.id)}
             openItem={openItem}
-            openOrder={openOrder}
+            openOrder={openOrder} openPurchase={openPurchase}
+            openCounterparty={openCounterparty}
             onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }}
             onDeleted={() => { reloadProjects(); setSel(null) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}

@@ -1,7 +1,9 @@
 // Форма ПРОЕКТА (волна 19, Ф12c) — канон §13: табы «Приборы» (что делаем, редактируемо
-// + прогресс), «Потребность» (полная картина по компонентам на весь проект), «Склад»
+// + прогресс), «Потребность» (полная картина по компонентам на весь проект), «Заказы» и
+// «Поставки» (закупочный контур проекта, 2026-08-28 — ленты только на чтение), «Склад»
 // (живые лоты + сведение остатков к нулю, бывш. ClosurePanel) и «Файлы» (владелец
-// заведён Ф12b). Панель бюджета — органичное дополнение стека (§13.1), между метой и
+// заведён Ф12b). Порядок табов = поток жизни: что надо → что заказали → что приехало →
+// что лежит. Панель бюджета — органичное дополнение стека (§13.1), между метой и
 // табами. Внутренние склады (белый/серый) идут ЧЕРЕЗ ЭТУ ЖЕ форму (решение Ивана
 // 2026-07-26: «это обычные проекты, унифицируем») — у них просто нет приборов и
 // потребности, поэтому набор табов сужается, как у покупного изделия нет «Состава».
@@ -9,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
-  type ResidualLot } from './api'
+  type ProjectSupply, type ResidualLot } from './api'
 import { Balance, Chevron, LotGlyph, count, money, num, ItemGlyph } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
@@ -17,6 +19,7 @@ import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
+import { PurchaseFeed, ReceiptFeed } from './FeedTables'
 import { BalanceCells, Member, NeedHead, NeedRow, needPass,
   useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
@@ -24,15 +27,18 @@ import { ItemPicker } from './Picker'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { EntityLink } from './EntityLink'
 
-export function ProjectView({ projectId, items, isNew, openItem, openOrder,
-  onChanged, onDeleted }:
+export function ProjectView({ projectId, items, isNew, openItem, openOrder, openPurchase,
+  openCounterparty, onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean
     openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // Ф15: черновики закрытия кликабельны
+    openPurchase: (id: number) => void                 // лента «Заказы» — свой режим
+    openCounterparty: (id: number) => void             // поставщик в лентах — ссылка
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
   const [phead, setPhead] = useState<ProjectDetail | null>(null)  // реквизиты шапки
   const [closure, setClosure] = useState<ProjectClosure | null>(null)   // таб «Склад»
+  const [supply, setSupply] = useState<ProjectSupply | null>(null)  // табы «Заказы»/«Поставки»
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)      // бюджет пересчитывается при правке потребности
@@ -45,10 +51,11 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder,
   const att = useAttachments('project', projectId)   // владелец заведён Ф12b (§13.8)
 
   useEffect(() => {
-    setData(null); setPhead(null); setClosure(null); setErr(null)
+    setData(null); setPhead(null); setClosure(null); setSupply(null); setErr(null)
     api.deficit(projectId).then(setData).catch(e => setErr(String(e)))
     api.project(projectId).then(setPhead).catch(() => {})
     api.closure(projectId).then(setClosure).catch(() => {})
+    api.projectSupply(projectId).then(setSupply).catch(() => {})
   }, [projectId])
 
   // Обёртка мутации потребности: ответ = свежий дефицит (обе секции), + пинок бюджету.
@@ -132,7 +139,21 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder,
                   openItem={openItem} />)}
           </div> },
   )
+  // Закупочный контур проекта — двумя лентами того же вида, что в форме контрагента
+  // (`FeedTables`): разрез другой, строка та же. Стоят между «Потребностью» и «Складом»
+  // по потоку жизни: что надо → что заказали → что приехало → что лежит. Табы есть у
+  // ЛЮБОГО проекта, включая внутренние склады (решение Ивана 2026-08-28): набор табов
+  // предсказуем, у склада они просто пусты. Ленты только читают — заказ и поставку
+  // заводят в своих режимах.
   tabs.push(
+    { key: 'purchases', label: 'Заказы', icon: 'package',
+      content: <PurchaseFeed rows={supply?.purchases ?? []} side="project"
+        open={openPurchase} openCounterparty={openCounterparty}
+        empty="Заказов по этому проекту нет." /> },
+    { key: 'receipts', label: 'Поставки', icon: 'inbox',
+      content: <ReceiptFeed rows={supply?.receipts ?? []} side="project"
+        open={id => openOrder('receipt', id)} openCounterparty={openCounterparty}
+        empty="В этот проект ещё ничего не привозили." /> },
     { key: 'stock', label: 'Склад', icon: 'layers',
       content: residuals.length === 0
         ? <div className="tab-empty">Склад проекта пуст — живых остатков нет.</div>
@@ -175,12 +196,20 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder,
       // не повторяем — они в полях; аномалии остатков всплывают отдельным сегментом.
       meta={<>
         {external && <>
-          {count(data.demands.length, 'прибор', 'прибора', 'приборов')}
-          {' · '}{num(deviceTotal)} шт
+          {/* Приборы считаем ШТУКАМИ, а не строками потребности (2026-08-28): проект
+              делает 8 образцов, и это число, которым живёт НИР. Наименования идут
+              ВТОРЫМ числом и в родительном падеже — «8 образцов 4 приборов» читается
+              одной фразой, тогда как «4 прибора · 8 шт» было двумя сегментами про одно
+              и то же, да ещё и менее важным вперёд. Родительный: 1 → «прибора»,
+              остальные → «приборов» (21 прибора, 11 приборов). */}
+          {count(deviceTotal, 'образец', 'образца', 'образцов')}
+          {' '}{count(data.demands.length, 'прибора', 'приборов', 'приборов')}
           {' · '}{count(data.components.length, 'компонент', 'компонента', 'компонентов')}
           {' · '}
         </>}
-        {count(residuals.length, 'партия', 'партии', 'партий')}
+        {count(supply?.purchases.length ?? 0, 'заказ', 'заказа', 'заказов')}
+        {' · '}{count(supply?.receipts.length ?? 0, 'поставка', 'поставки', 'поставок')}
+        {' · '}{count(residuals.length, 'партия', 'партии', 'партий')}
         {(closure?.anomaly_count ?? 0) > 0 &&
           <span className="anomaly"> · {closure!.anomaly_count} в минусе</span>}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}

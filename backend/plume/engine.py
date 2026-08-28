@@ -2524,6 +2524,27 @@ def relocation_source_lots(project):
     return result
 
 
+# ── Закупочный контур проекта: заказы и поставки одной проекцией ──
+def project_supply(project):
+    """Ленты снабжения проекта: его заказы и его поставки (табы формы проекта).
+
+    Обе ленты — теми же строками, что отдаёт форма контрагента (`_purchase_rows` /
+    `_receipt_rows` берут queryset именно для этого): разрез другой («что приехало В
+    ЭТОТ проект» вместо «что привёз ЭТОТ контрагент»), а строка одна, и второго словаря
+    под тот же смысл заводить незачем.
+
+    Одной проекцией, а не двумя эндпойнтами: заказ и поставка — соседние уровни одного
+    контура, форма показывает их рядом и спрашивает всегда вместе.
+
+    Проект-склад (внутренний) отвечает тем же — пустыми лентами: закупочного контура у
+    него обычно нет, но запрет на поставку прямо в склад из модели не следует.
+    """
+    return {
+        'purchases': _purchase_rows(project.purchases),
+        'receipts': _receipt_rows(models.Receipt.objects.filter(project=project)),
+    }
+
+
 # ── Панель закрытия проекта + мягкий замок статуса ──
 def project_closure(project):
     """Панель сведения остатков проекта к 0 + готовность к закрытию.
@@ -3942,30 +3963,50 @@ def _purchase_rows(queryset):
     (`purchase_coverage`) — знак выбирает вью.
     """
     rows = []
-    qs = (queryset.select_related('project')
-          .prefetch_related('lines').order_by('-id'))
+    qs = (queryset.select_related('project', 'contractor')
+          .prefetch_related('lines__item').order_by('-id'))
     for p in qs:
         lines = list(p.lines.all())
+        estimate, unestimated = lines_estimate(lines)
         rows.append({
             'id': p.id, 'code': p.code, 'description': p.description,
             'date': p.date, 'locked': p.locked,
             'project_code': p.project.code,
+            # Обе стороны заказа сразу: в форме контрагента лента отвечает «в каком
+            # проекте», в форме проекта — «у кого купили». Число одно и то же, меняется
+            # только вопрос, поэтому обе колонки живут в строке, а какую показать —
+            # решает вью ([[engine-view-seam]]).
+            **_contractor_view(p.contractor),
             'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
+            # Деньги намерения: `Σ qty × estimated_cost` (факт рождается только в
+            # поставке). Позиции без оценки — кодами в `unestimated`, чтобы неполная
+            # сумма не выдавала себя за полную (тот же приём, что в `intent_money`).
+            'estimate': estimate, 'unestimated': unestimated,
             'coverage': purchase_coverage(p),
         })
     return rows
 
 
-def _cp_receipt_rows(counterparty):
-    """Таб «Поставки»: УПД, которые привёз этот контрагент («кто привёз», Ф17)."""
+def _receipt_rows(queryset):
+    """Строки ленты поставок — таб «Поставки» любой формы (контрагент, проект).
+
+    Берёт **queryset**, как `_purchase_rows`: у контрагента лента отвечает «что он
+    привёз», у проекта — «что в проект приехало». Строка одна, и обе стороны (проект и
+    поставщик) в ней есть — колонку выбирает вью.
+
+    Деньги здесь — ФАКТ (`Lot.unit_cost` из УПД), а не оценка: поставка тем и отличается
+    от намерения, что цену уже знает.
+    """
     rows = []
-    qs = (models.Receipt.objects.filter(contractor=counterparty)
-          .select_related('project').prefetch_related('lots__item').order_by('-id'))
+    qs = (queryset.select_related('project', 'contractor')
+          .prefetch_related('lots__item').order_by('-id'))
     for r in qs:
         lots = list(r.lots.all())
         rows.append({
-            'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
+            'id': r.id, 'code': r.code, 'description': r.description,
+            'number': r.number, 'date': r.date,
             'locked': r.locked, 'project_code': r.project.code,
+            **_contractor_view(r.contractor),
             'purchase_id': r.purchase_id,
             'lots': len(lots),
             'total': sum((lot.qty * lot.unit_cost for lot in lots), ZERO),
@@ -4009,7 +4050,7 @@ def counterparty_form(counterparty):
         'shipment': _counterparty_shipment(counterparty),
         'procurements': _procurement_rows(counterparty.procurements),
         'purchases': _purchase_rows(counterparty.purchases),
-        'receipts': _cp_receipt_rows(counterparty),
+        'receipts': _receipt_rows(models.Receipt.objects.filter(contractor=counterparty)),
         'transfers': _cp_transfer_rows(counterparty),
     }
 

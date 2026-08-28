@@ -1496,6 +1496,78 @@ class RequisitionFormTests(EngineTestBase):
                             r['project_code'] == self.prj.code for r in rows))
 
 
+class ProjectSupplyTests(EngineTestBase):
+    """Закупочный контур проекта (2026-08-28): табы «Заказы» и «Поставки» формы проекта.
+
+    Тот же разрез, что у контрагента, но с другой стороны: не «что привёз ОН», а «что
+    приехало В ПРОЕКТ». Строки — общие (`_purchase_rows` / `_receipt_rows`), поэтому
+    проверяем главное: отбор по проекту, обе стороны в строке и деньги двух родов —
+    оценка у намерения, факт у поставки.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.make_item('R100')
+        self.item.estimated_cost = D('12.50')
+        self.item.save(update_fields=['estimated_cost'])
+        self.other = models.Project.objects.create(
+            code='P2', description='Чужой', kind=models.Project.Kind.EXTERNAL)
+
+    def test_supply_lists_own_purchases_and_receipts(self):
+        p = self.make_purchase(code='ЗАКАЗ-1')
+        engine.add_purchase_line(p, self.item, D(4))
+        self.receipt_lot(self.item, self.prj, 3)
+        supply = engine.project_supply(self.prj)
+        self.assertEqual([r['code'] for r in supply['purchases']], ['ЗАКАЗ-1'])
+        self.assertEqual(len(supply['receipts']), 1)
+        # Вторая сторона — в строке: форма проекта показывает поставщика там, где форма
+        # контрагента показывает проект.
+        self.assertEqual(supply['purchases'][0]['contractor_id'], self.supplier.id)
+        self.assertEqual(supply['receipts'][0]['contractor_id'], self.supplier.id)
+
+    def test_foreign_project_documents_are_not_listed(self):
+        self.make_purchase(project=self.other, code='ЧУЖОЙ')
+        self.receipt_lot(self.item, self.other, 5)
+        supply = engine.project_supply(self.prj)
+        self.assertEqual(supply['purchases'], [])
+        self.assertEqual(supply['receipts'], [])
+
+    def test_purchase_money_is_estimate_receipt_money_is_fact(self):
+        """Заказ показывает ОЦЕНКУ (намерение), поставка — ФАКТ из УПД."""
+        p = self.make_purchase()
+        engine.add_purchase_line(p, self.item, D(4))
+        blind = self.make_item('NOPRICE')            # без `estimated_cost`
+        engine.add_purchase_line(p, blind, D(2))
+        lot = self.receipt_lot(self.item, self.prj, 3)
+        lot.unit_cost = D('10.00')
+        lot.save(update_fields=['unit_cost'])
+        supply = engine.project_supply(self.prj)
+        row = supply['purchases'][0]
+        self.assertEqual(row['estimate'], D(4) * D('12.50'))
+        # Позиция без оценки в сумму не вошла и молчанием не прикрыта.
+        self.assertEqual(row['unestimated'], ['NOPRICE'])
+        self.assertEqual(supply['receipts'][0]['total'], D(3) * D('10.00'))
+
+    def test_internal_store_answers_with_empty_feeds(self):
+        """Внутренний склад — тот же ответ, просто пустой: табы у него есть всегда."""
+        store = models.Project.objects.create(
+            code='БЕЛЫЙ', description='Собственный склад',
+            kind=models.Project.Kind.INTERNAL_STOCK)
+        self.assertEqual(engine.project_supply(store),
+                         {'purchases': [], 'receipts': []})
+
+    def test_http_endpoint_returns_both_feeds(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.make_purchase(code='ЗАКАЗ-2')
+        self.receipt_lot(self.item, self.prj, 1)
+        got = self.client.get(f'/api/projects/{self.prj.id}/supply/')
+        self.assertEqual(got.status_code, 200)
+        body = got.json()
+        self.assertEqual([r['code'] for r in body['purchases']], ['ЗАКАЗ-2'])
+        self.assertEqual(len(body['receipts']), 1)
+
+
 class ProjectClosureTests(EngineTestBase):
     """Волна 6: панель закрытия (остаточные лоты → 0) + мягкий замок статуса +
     мосты «списать»/«на баланс»."""

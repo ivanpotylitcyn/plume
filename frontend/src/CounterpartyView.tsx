@@ -16,14 +16,14 @@
 // РАВНЫМИ табами, а «чем строка закрыта» остаётся в форме заказа (Ф6), где связь
 // однозначна.
 import { useEffect, useState } from 'react'
-import { api, type CounterpartyForm, type CpReceiptRow, type CpTransferRow,
+import { api, type CounterpartyForm, type CpTransferRow,
   type UomQty } from './api'
 import { count, money, num, StatusGlyph } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField, viewDate } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { ProcurementFeed, PurchaseFeed } from './FeedTables'
+import { ProcurementFeed, PurchaseFeed, ReceiptFeed } from './FeedTables'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import type { OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
@@ -96,19 +96,8 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
       content: <PurchaseFeed rows={c.purchases} open={openPurchase}
         empty="Заказов у этого контрагента нет." /> },
     { key: 'receipts', label: 'Поставки', icon: 'inbox',
-      content: c.receipts.length === 0
-        ? <div className="tab-empty">Этот контрагент ещё ничего не привозил.</div>
-        : <table className="grid">
-            <thead><tr>
-              <th className="gl" /><th className="c-key">Поставка</th>
-              <th className="c-fit">№ УПД</th><th className="c-fit">Проект</th>
-              <th className="c-fit">Дата</th>
-              <th className="num">Партий</th>
-              <th className="num">Сумма</th>
-            </tr></thead>
-            <tbody>{c.receipts.map(r => (
-              <RecRow key={r.id} r={r} open={id => openOrder('receipt', id)} />))}</tbody>
-          </table> },
+      content: <ReceiptFeed rows={c.receipts} open={id => openOrder('receipt', id)}
+        empty="Этот контрагент ещё ничего не привозил." /> },
   )
   if (selling) tabs.push(
     { key: 'transfers', label: 'Передачи', icon: 'export',
@@ -220,25 +209,6 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
       </>}
       tabs={tabs}
     />
-  )
-}
-
-// Строка поставки. Ссылка — по КОДУ (он есть всегда, фолбэк «Поставка 12»); № УПД у
-// только что рождённой пуст, и ссылка на него была бы пустотой (та же правка, что Ф6).
-function RecRow({ r, open }: { r: CpReceiptRow; open: (id: number) => void }) {
-  return (
-    <tr className="row">
-      <td className="gl"><StatusGlyph locked={r.locked} /></td>
-      <td className="c-key">
-        <EntityLink kind="receipt" id={r.id} open={open}>
-          {r.code || `Поставка #${r.id}`}</EntityLink></td>
-      <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
-      <td className="c-fit code">{r.project_code}</td>
-      <td className="c-fit">
-        {r.date ? viewDate(r.date) : ''}</td>
-      <td className="num">{r.lots}</td>
-      <td className="num">{money(r.total)}</td>
-    </tr>
   )
 }
 

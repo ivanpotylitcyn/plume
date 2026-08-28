@@ -93,6 +93,18 @@
      (part number, название из УПД, имя в накладной). */
   --in-num: 72px;
   --col-txt: 160px;
+  /* Ширины СЛУЖЕБНЫХ колонок ленты документов (2026-08-28). Их роли повторяются от
+     таба к табу (контрагент, номер, дата, счёт строк, деньги), и «по содержимому» они
+     вставали каждая по-своему: при переходе «Заказы ↔ Поставки» колонка поставщика и
+     дата ездили по горизонтали, хотя это ОДНА И ТА ЖЕ колонка одной формы. Ширина
+     здесь — свойство роли, ровно как `--col-key` у идентичности. */
+  --col-cp: 160px;
+  --col-no: 120px;
+  --col-date: 92px;
+  --col-count: 72px;
+  /* Деньги: «10 000 000,00 ₽» целиком, без переноса по пробелу разряда — 15 моно-знаков
+     плюс паддинги ячейки. */
+  --col-money: 148px;
 
   font-family: var(--font-base);
   font-size: 13px;
@@ -451,6 +463,11 @@ table.grid td { padding: 3px 10px; border-bottom: 1px solid var(--border); }
 table.grid td { color: var(--fg-dim); }
 table.grid td:is(.c-key, .num, .code),
 table.grid td :is(.code, .seg) { color: var(--fg); }
+/* …но ССЫЛКА сильнее роли ячейки (2026-08-28): код внутри `a.link` красится цветом
+   ссылки, иначе кликабельный контрагент выглядел обычным текстом — щёлкать по нему
+   никто не догадывался. Специфичность правила выше по той же причине, по которой ниже
+   пришлось её считать: `table.grid td :is(.code)` перебивал `a.link` цветом `--fg`. */
+table.grid td a.link :is(.code, .seg) { color: inherit; }
 /* `.sub` — обратный ход той же оси: ВТОРИЧНОЕ значение внутри полноцветной колонки
    (наводка рядом с фактом, прочерк вместо числа, имя проекта под кодом). Класс жил без
    правила (BACKLOG «три мёртвых класса»): в призрачных строках его подменял
@@ -569,7 +586,30 @@ table.grid :is(th, td).num { text-align: right; white-space: nowrap; }
 /* Денежная колонка (2026-08-07): «12 500,00 ₽» не переносится по пробелу разряда —
    ширину задаёт содержимое, как у `.c-fit`. Стоит ПОСЛЕ «Ед.»: единица квалифицирует
    количества, а деньги — другая размерность, и к ней не относятся. */
-table.grid :is(th, td).c-money { width: 1%; }
+table.grid :is(th, td).c-money {
+  width: var(--col-money); min-width: var(--col-money); max-width: var(--col-money); }
+/* Служебные колонки ленты документов — по РОЛИ, не по содержимому (2026-08-28): у
+   контрагента, номера, даты и счёта строк ширина одна во всех табах формы, поэтому
+   вертикали не пляшут при переключении. Тот же приём, что у `.c-key`, и та же причина.
+   Лента без номера (у заказа его нет) держит колонку ПУСТОЙ — пустая ячейка дешевле
+   съехавшей на 120px даты. */
+table.grid :is(th, td):is(.c-cp, .c-no, .c-date, .c-count) {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Тройка width/min/max — не перестраховка: при `table-layout: auto` один `width` это
+   ПОЖЕЛАНИЕ, и рядом стоит `td.c-desc { max-width: 0; width: 100% }` («беру весь
+   остаток»), который спор выигрывает — колонка садится на min-content своей таблицы.
+   Ровно та же грабля, что у `.c-key` (волна 21). Особенно наглядно на ПУСТОЙ колонке
+   номера в ленте заказов: min-content у неё нулевой, и без `min-width` она схлопывалась,
+   утаскивая дату на 65px левее, чем в соседнем табе. */
+table.grid :is(th, td).c-cp {
+  width: var(--col-cp); min-width: var(--col-cp); max-width: var(--col-cp); }
+table.grid :is(th, td).c-no {
+  width: var(--col-no); min-width: var(--col-no); max-width: var(--col-no); }
+table.grid :is(th, td).c-date {
+  width: var(--col-date); min-width: var(--col-date); max-width: var(--col-date); }
+table.grid :is(th, td).c-count {
+  width: var(--col-count); min-width: var(--col-count); max-width: var(--col-count); }
 table.grid td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 /* Описание в одну строку с многоточием (волна 17): «допуск …».
    Сжимается ПЕРВЫМ во всех списках (Ф12d, долг Ф5): `max-width: 0` говорит

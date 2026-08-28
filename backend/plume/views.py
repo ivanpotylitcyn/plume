@@ -1134,6 +1134,13 @@ def purchase_receipt(request, pk):
 
 
 @api_view(['GET'])
+def project_supply(request, pk):
+    """Закупочный контур проекта — заказы и поставки одним ответом (табы формы)."""
+    project = get_object_or_404(models.Project, pk=pk)
+    return Response(engine.project_supply(project))
+
+
+@api_view(['GET'])
 def project_purchases(request, pk):
     """Заказы проекта — пикер связи прихода с заказом (волна 19, Ф1: отсева по
     статусу нет, отменённых не существует — отмена = удаление)."""
