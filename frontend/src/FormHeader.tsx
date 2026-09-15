@@ -261,6 +261,11 @@ export interface FormAction {
 // кнопка та же, но открывает меню выбора. ВИДИМОСТЬ решает вызывающая форма: у
 // закупки бланк даём только у зафиксированной (документ наружу), у изделия — всегда.
 export interface Download {
+  // Подпись кнопки. По умолчанию «Скачать» — глагол один на все формы; форма вправе
+  // дописать, ЧТО скачивается (правка Ивана 2026-09-15: «Скачать план закупок»).
+  // Это не разнобой: там, где цель одна и у неё есть имя, имя экономит наведение
+  // мышью; где целей несколько, их называют пункты меню, и кнопка остаётся глаголом.
+  label?: string
   title?: string
   href?: string                                     // одна цель — прямая ссылка
   // Выбор цели — меню; `icon` берём у ВКЛАДКИ, которую пункт выгружает (§2: одна
@@ -345,7 +350,8 @@ function DownloadMenu({ download }: { download: Download }) {
     <>
       <button ref={btn} className="fh-ctl fh-download" title={download.title ?? 'Скачать'}
         onClick={() => setOpen(v => !v)}>
-        <span className="lbl">Скачать</span><span className="ci ci-file" />
+        <span className="lbl">{download.label ?? 'Скачать'}</span>
+        <span className="ci ci-file" />
       </button>
       {open &&
         <AnchoredMenu anchor={btn} boxRef={menu} className="typeahead-menu dl-menu">
@@ -376,7 +382,8 @@ export function FormCornerCommand({ fixed, unlocked, onDelete, download }: FormC
         ? <DownloadMenu download={download} />
         : <a className="fh-ctl fh-download" href={download.href} download
              title={download.title ?? 'Скачать'}>
-            <span className="lbl">Скачать</span><span className="ci ci-file" />
+            <span className="lbl">{download.label ?? 'Скачать'}</span>
+            <span className="ci ci-file" />
           </a>)}
       {!fixed && unlocked && onDelete &&
         <button className="fh-ctl fh-del" title="Удалить документ" onClick={onDelete}>

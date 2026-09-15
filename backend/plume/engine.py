@@ -113,6 +113,12 @@
 - `user_form(user)` — проекция формы аккаунта: ДНК Django + тема + три ленты «своих»
   документов; `update_user` / `change_password` — правка ДНК и пароля.
 
+План закупок проекта (2026-09-15):
+- `project_plan_xlsx(project)` — вкладка «Потребность» в деньгах одним листом: одна
+  графа количества (`Заказ`, если он покрывает потребность, иначе `Потр.`), цена =
+  `estimated_cost`, стоимость и итог «Всего». Позиция без оценки едет в файл красной
+  строкой (`_xlsx_sheet(alerts=…)`), а не молча нулём.
+
 Следующие волны: логин-экран, UI вложений (`Attachment`).
 """
 import csv
@@ -3417,7 +3423,8 @@ def _doc_date(value):
     return value.strftime('%d.%m.%Y') if value else ''
 
 
-def _xlsx_sheet(ws, title, head, headers, rows, widths):
+def _xlsx_sheet(ws, title, head, headers, rows, widths, alerts=None, foot=None,
+                money=(), center=()):
     """Один лист выгрузки: шапка (B/C) → пустая строка → нумерованная таблица.
 
     Форма листа поднята из `procurement_xlsx` (2026-07-30, выгрузка изделия): бланк
@@ -3425,28 +3432,73 @@ def _xlsx_sheet(ws, title, head, headers, rows, widths):
     значения в **C** (колонка A узкая, она под «№», подпись в ней Excel обрезал бы по
     занятой соседке), жирные заголовки таблицы и сквозная нумерация строк.
 
-    `head` — пары `(подпись, значение)`; **пустые строки шапки не рисуются вовсе**:
+    `head` — пары `(подпись, значение)` или тройки `(подпись, значение, формат)`, где
+    формат — числовой формат ячейки значения (деньги в шапке пишутся так же, как в
+    таблице, иначе одно и то же число выглядит двумя разными вещами). Значение с
+    форматом выключается ВЛЕВО — под текст соседних строк шапки, а не по правому краю,
+    куда Excel сам уводит одинокое число;
+    **пустые строки шапки не рисуются вовсе**:
     пустая графа во внешнем документе читается как брак, а не как «не задано» (внутри
     продукта правило обратное, §13 — там прочерк честнее). `rows` идут БЕЗ номера —
     его проставляет лист.
+
+    `alerts` — параллельный `rows` список флагов «к строке есть вопрос» (2026-09-15,
+    план закупок): движок отдаёт смысл, лист выбирает знак — КРАСНЫЙ шрифт всей строки
+    ([[engine-view-seam]]). `foot` — итоговая строка после таблицы: жирная и БЕЗ
+    номера (её ячейки раскладывает вызывающий — итог стоит в своей колонке).
+
+    `money` / `center` — НОМЕРА колонок (с единицы, «№» тоже считается): денежный формат
+    и выключка по центру на всю колонку, заголовок включительно. Выключка колонки
+    подпись итога не перебивает — та всегда прижата к своему числу (см. `foot`). Оформление задаётся
+    колонкой, а не ячейкой: колонка — это одна графа документа, и разнобой внутри неё
+    читается как ошибка.
     """
-    from openpyxl.styles import Font
+    from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
 
     bold = Font(bold=True)
+    alert = Font(color='FFC00000')      # тот же красный, каким горит строка на экране
+    middle = Alignment(horizontal='center')
+    to_number = Alignment(horizontal='right')
     ws.title = title
-    for label, value in head:
+    for label, value, *fmt in head:
         if value is None or value == '':
             continue
         ws.append([None, label, value])
         ws.cell(row=ws.max_row, column=2).font = bold
+        if fmt:
+            value_cell = ws.cell(row=ws.max_row, column=3)
+            value_cell.number_format = fmt[0]
+            # Значение шапки выключено ВЛЕВО, под текст соседних строк (правка Ивана
+            # 2026-09-15): число само по себе Excel прижал бы к правому краю, и шапка
+            # разъехалась бы на две колонки значений вместо одной.
+            value_cell.alignment = Alignment(horizontal='left')
     if head:
         ws.append([])                  # пустая строка отбивает шапку от таблицы
     ws.append(headers)
+    table_top = ws.max_row                 # заголовки таблицы: с них начинается графа
     for cell in ws[ws.max_row]:
         cell.font = bold
     for n, row in enumerate(rows, start=1):
         ws.append([n, *row])
+        if alerts and alerts[n - 1]:
+            for cell in ws[ws.max_row]:
+                cell.font = alert
+    if foot:
+        ws.append(foot)
+        for cell in ws[ws.max_row]:
+            cell.font = bold
+            # Подпись итога стоит СЛЕВА от своего числа и прижимается к нему: у левого
+            # края широкой графы она снова оказалась бы «через весь лист» от суммы.
+            if isinstance(cell.value, str):
+                cell.alignment = to_number
+    for column in ws.iter_cols(min_row=table_top, max_row=ws.max_row):
+        n = column[0].column
+        for cell in column:
+            if n in money:
+                cell.number_format = MONEY_FORMAT
+            if n in center:
+                cell.alignment = middle
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     return ws
@@ -3543,6 +3595,83 @@ def purchase_xlsx(purchase):
               for line in purchase.lines.select_related('item').order_by('id')
               if line.qty > 0],
         widths=[5, 22, 48, 12, 8])
+    return _xlsx_bytes(wb)
+
+
+# Копейка — шаг округления денег в выгрузке. Округляем КАЖДУЮ строку, а потом
+# складываем округлённое: «Всего» обязано сходиться со столбцом, который человек видит
+# глазами, иначе первый же пересчёт калькулятором объявит файл кривым.
+KOPECK = Decimal('0.01')
+# «Финансовый» формат рубля (правка Ивана 2026-09-15) — тот же, что в Excel под этим
+# именем: знак валюты прижат к правому краю графы, разряды отбиты, ноль рисуется
+# прочерком. Деньги в таблице ЧИСЛА, а не строки: получатель считает по ним формулой.
+MONEY_FORMAT = '_-* #,##0.00\\ "₽"_-;-* #,##0.00\\ "₽"_-;_-* "-"??\\ "₽"_-;_-@_-'
+# Тот же рубль БЕЗ финансовой растяжки — для одиночного числа вне таблицы (шапка).
+# «Финансовый» формат тем и живёт, что растягивает число к правому краю графы, и
+# выключку ячейки при этом игнорирует (свойство Excel, не наша самодеятельность):
+# прижать им значение влево нельзя. В шапке равнять не с чем — графы нет, значение
+# стоит под текстом соседних строк, — поэтому берём тот же рубль, только без растяжки.
+MONEY_PLAIN = '#,##0.00\\ "₽"'
+
+
+def project_plan_xlsx(project):
+    """План закупок проекта (bytes) — вкладка «Потребность», переведённая в деньги.
+
+    Решения Ивана 2026-09-15 (эта выгрузка — документ, состав меняем осознанно):
+
+    - **строки = весь таб**, как на экране, включая позиции, которых уже хватает: файл
+      это снимок потребности проекта, а не остаток к оплате;
+    - **порядок = порядок на экране** (`project_deficit` уже отсортировал: горит вперёд,
+      внутри по коду) — «позиция 7» в разговоре значит одно и то же у файла и у формы;
+    - **одна графа количества** вместо пяти чисел таба: `Заказ`, если он покрывает
+      потребность (позицию взяли, и взяли с запасом — планируем тем числом, которым её
+      реально берут), иначе `Потр.` (недозаказ не прячет остаток нужды);
+    - **цена = оценка изделия** (`estimated_cost`), та же, из которой панель бюджета
+      считает «План (прогноз)». Факт поставок сюда НЕ подмешиваем: цены в одной колонке
+      должны быть одной природы;
+    - **позиция без оценки едет в файл и горит красным** — молча сложить её как 0
+      значило бы выдать неполный итог за полный (тот же приём, что `unestimated` в
+      панели бюджета, только знаком строки, а не счётчиком);
+    - **«Всего» = сумма столбца «Стоимость»**, а не число «План (прогноз)» из панели:
+      итог обязан сходиться со строками файла. С панелью он законно расходится — план
+      считает факт по поставкам и оценку ТОЛЬКО остатка «в пути / к заказу».
+
+    Синхронно в запросе, openpyxl — ленивым импортом (как `procurement_xlsx`).
+    """
+    from openpyxl import Workbook
+
+    components = project_deficit(project, with_tree=False)['components']
+    prices = {i.id: i.estimated_cost for i in models.Item.objects.filter(
+        id__in=[c['component_id'] for c in components]).only('id', 'estimated_cost')}
+    rows, alerts, total = [], [], ZERO
+    for c in components:
+        qty = c['on_order'] if c['on_order'] >= c['need'] else c['need']
+        price = prices.get(c['component_id'])
+        cost = None if price is None else (qty * price).quantize(
+            KOPECK, rounding=ROUND_HALF_UP)
+        if cost is not None:
+            total += cost
+        rows.append((c['component_code'], c['component_description'], float(qty),
+                     c['uom'], '' if price is None else float(price),
+                     '' if cost is None else float(cost)))
+        alerts.append(price is None)
+
+    wb = Workbook()
+    _xlsx_sheet(
+        wb.active, 'План закупок',
+        # Бюджет проекта — в шапке и теми же рублями, что в таблице: читатель сравнивает
+        # его с «Всего» глазами, и два разных вида одного рубля мешают это делать.
+        # Не задан — строки нет вовсе (общее правило шапки).
+        head=[('Проект', project.code), ('Описание', project.description),
+              ('Бюджет', None if project.budget is None else float(project.budget),
+               MONEY_PLAIN)],
+        headers=['№', 'Компонент', 'Описание', 'Кол-во', 'Ед.', 'Цена', 'Стоимость'],
+        rows=rows, alerts=alerts,
+        # Итог — в СВОЕЙ колонке (под «Стоимостью»), подпись — в СОСЕДНЕЙ слева
+        # (правка Ивана 2026-09-15): подпись у самого числа, а не через весь лист.
+        foot=[None, None, None, None, None, 'Всего', float(total)],
+        money=(6, 7), center=(5,),
+        widths=[5, 22, 48, 12, 8, 14, 16])
     return _xlsx_bytes(wb)
 
 

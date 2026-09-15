@@ -2472,6 +2472,162 @@ class ItemXlsxHttpTests(TestCase):
         self.assertIn(quote(f'изделие-{self.item.id} от {_today()}.xlsx'), cd)
 
 
+class ProjectPlanXlsxTests(EngineTestBase):
+    """План закупок проекта (2026-09-15): вкладка «Потребность», переведённая в деньги.
+
+    Здесь проверяются ровно те правила, ради которых выгрузка отличается от экрана:
+    одна графа количества вместо пяти чисел, цена из оценки изделия, красная строка без
+    оценки и итог, сходящийся со столбцом.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dev = self.make_item('DEV', manufactured=True)
+        self.scr = self.make_item('SCR')          # заказ покрывает нужду
+        self.led = self.make_item('LED')          # недозаказ
+        self.cap = self.make_item('CAP')          # без оценки → красная строка
+        self.res = self.make_item('RES')          # уже на складе, в файл всё равно идёт
+        for comp, per in ((self.scr, 4), (self.led, 1), (self.cap, 2), (self.res, 3)):
+            models.BomLine.objects.create(parent=self.dev, component=comp, qty=D(per))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev,
+                                            qty=D(10))   # нужда: 40 / 10 / 20 / 30
+        engine.update_item(self.scr, {'estimated_cost': D('2.50')})
+        engine.update_item(self.led, {'estimated_cost': D('1.00')})
+        engine.update_item(self.res, {'estimated_cost': D('0.10')})
+        self.receipt_lot(self.res, self.prj, 30)          # позиция закрыта складом
+        self._order(self.scr, 50)                          # взяли с запасом
+        self._order(self.led, 4)                           # взяли меньше нужды
+
+    def _order(self, item, qty):
+        """Зафиксированный заказ проекта — то самое «Заказ» из колонок «Потребности»."""
+        pu = self.make_purchase()
+        engine.add_purchase_line(pu, item, D(qty))
+        engine.lock_purchase(pu)
+        return pu
+
+    def _sheet(self, project=None):
+        """Лист словарём `{код: строка}` + флаг красноты, плюс сырые строки по порядку."""
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+        wb = load_workbook(BytesIO(engine.project_plan_xlsx(project or self.prj)))
+        ws = wb.active
+        rows = [([c.value for c in row],
+                 any(c.font.color is not None and c.font.color.rgb == 'FFC00000'
+                     for c in row))
+                for row in ws.iter_rows()]
+        self.ws = ws
+        head = next(i for i, (vals, _) in enumerate(rows)
+                    if vals[0] == '№' and vals[1] == 'Компонент')
+        return ws, rows[:head], rows[head + 1:]
+
+    def test_quantity_is_order_when_it_covers_need_otherwise_need(self):
+        """Одна графа количества: заказ, если он покрывает потребность, иначе нужда."""
+        _ws, _head, body = self._sheet()
+        qty = {vals[1]: vals[3] for vals, _red in body if vals[1]}
+        self.assertEqual(qty['SCR'], 50)      # заказ 50 ≥ нужды 40 → заказ
+        self.assertEqual(qty['LED'], 10)      # заказ 4 < нужды 10 → нужда
+        self.assertEqual(qty['CAP'], 20)      # заказа нет вовсе → нужда
+        self.assertEqual(qty['RES'], 30)      # склад количество не трогает
+
+    def test_every_row_of_the_tab_is_listed_in_screen_order(self):
+        """Строки = весь таб (включая закрытые складом) и в порядке экрана."""
+        _ws, _head, body = self._sheet()
+        screen = [c['component_code']
+                  for c in engine.project_deficit(self.prj, with_tree=False)['components']]
+        *rows, _total = body
+        self.assertEqual([vals[1] for vals, _red in rows], screen)
+        self.assertEqual(sorted(screen), ['CAP', 'LED', 'RES', 'SCR'])
+
+    def test_price_is_item_estimate_and_cost_is_their_product(self):
+        _ws, _head, body = self._sheet()
+        row = {vals[1]: vals for vals, _red in body if vals[1]}
+        self.assertEqual(row['SCR'][5:7], [2.5, 125.0])       # 50 × 2.50
+        self.assertEqual(row['LED'][5:7], [1.0, 10.0])        # 10 × 1.00
+        self.assertEqual(row['RES'][5:7], [0.1, 3.0])         # 30 × 0.10
+        self.assertEqual(row['SCR'][4], self.scr.uom)          # единица измерения — в файле
+
+    def test_position_without_estimate_is_listed_red_and_out_of_the_total(self):
+        """Без оценки: строка есть, цена пуста, шрифт красный, в итог не входит."""
+        _ws, _head, body = self._sheet()
+        cap = next((vals, red) for vals, red in body if vals[1] == 'CAP')
+        self.assertIn(cap[0][5], ('', None))
+        self.assertIn(cap[0][6], ('', None))
+        self.assertTrue(cap[1])
+        self.assertFalse(any(red for vals, red in body if vals[1] in ('SCR', 'LED', 'RES')))
+
+    def test_total_row_closes_the_cost_column(self):
+        """«Всего» = сумма столбца «Стоимость», под ним же; подпись — в соседней слева."""
+        _ws, _head, body = self._sheet()
+        *rows, total = body
+        self.assertEqual(total[0][5], 'Всего')       # подпись у самого числа
+        self.assertEqual(self.ws.cell(row=self.ws.max_row, column=6).alignment.horizontal,
+                         'right')                    # и прижата к нему, а не к краю графы
+        self.assertEqual(total[0][0], None)          # итог не нумеруется
+        self.assertEqual(total[0][6], sum(vals[6] for vals, _red in rows if vals[6]))
+        self.assertEqual(total[0][6], 138.0)         # 125 + 10 + 3, CAP вне суммы
+
+    def test_head_names_the_project_and_sheet_is_the_plan(self):
+        ws, head, _body = self._sheet()
+        self.assertEqual(ws.title, 'План закупок')
+        self.assertEqual({vals[1]: vals[2] for vals, _red in head if vals[1]},
+                         {'Проект': 'P1', 'Описание': 'Проект 1'})
+
+    def test_budget_rides_the_head_in_the_same_roubles_as_the_table(self):
+        """Бюджет — строка шапки и теми же рублями, что «Всего»: их сравнивают глазами.
+        Не задан — строки нет вовсе (общее правило шапки: пустая графа = брак)."""
+        _ws, head, _body = self._sheet()
+        self.assertNotIn('Бюджет', [vals[1] for vals, _red in head])
+        self.prj.budget = D('250000.50')
+        self.prj.save(update_fields=['budget'])
+        ws, head, _body = self._sheet()
+        row = next(i for i, (vals, _red) in enumerate(head) if vals[1] == 'Бюджет')
+        self.assertEqual(head[row][0][2], 250000.5)
+        # Рубль в шапке — БЕЗ финансовой растяжки, и значение выключено влево, под текст
+        # соседних строк: одинокое число Excel иначе уводит к правому краю.
+        self.assertEqual(ws.cell(row=row + 1, column=3).number_format, engine.MONEY_PLAIN)
+        self.assertEqual(ws.cell(row=row + 1, column=3).alignment.horizontal, 'left')
+
+    def test_money_columns_are_roubles_and_units_are_centred(self):
+        """Оформление задаётся КОЛОНКОЙ, заголовок включительно: цена и стоимость —
+        финансовый рубль (числом, не строкой), единицы — по центру."""
+        ws, _head, body = self._sheet()
+        top = ws.max_row - len(body)                  # строка заголовков таблицы
+        for row in (top, top + 1, ws.max_row):        # заголовок · строка · «Всего»
+            for col in (6, 7):
+                self.assertEqual(ws.cell(row=row, column=col).number_format,
+                                 engine.MONEY_FORMAT)
+            self.assertEqual(ws.cell(row=row, column=5).alignment.horizontal, 'center')
+        scr = next(r for r in range(top + 1, ws.max_row)
+                   if ws.cell(row=r, column=2).value == 'SCR')
+        # деньги в ячейке — ЧИСЛО (получатель считает по ним формулой), а рубль ему
+        # рисует формат колонки. Целое Excel хранит целым — тип проверяем от обратного.
+        self.assertNotIsInstance(ws.cell(row=scr, column=7).value, str)
+        self.assertEqual(ws.cell(row=scr, column=7).value, 125)
+
+    def test_project_without_demands_still_downloads(self):
+        """Пустой проект: заголовки и «Всего 0» — отказ скачать хуже пустой таблицы."""
+        empty = models.Project.objects.create(code='P0', description='Пусто',
+                                              kind=models.Project.Kind.EXTERNAL)
+        _ws, _head, body = self._sheet(empty)
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0][0][5], 'Всего')
+        self.assertEqual(body[0][0][6], 0.0)
+
+    def test_download_is_named_by_what_it_is_the_project_and_the_date(self):
+        """«План закупок ЛК-1 от 2026-09-15.xlsx»: файл внутренний, и первая часть имени
+        отвечает «что это», а не «от кого» (наш код — в бланке поставщику)."""
+        c = Client()
+        c.force_login(get_user_model().objects.create(username='dl', is_superuser=True))
+        r = c.get(f'/api/projects/{self.prj.id}/plan-xlsx/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('spreadsheetml', r['Content-Type'])
+        self.assertTrue(r['Content-Disposition'].startswith('attachment'))
+        self.assertIn(quote(f'План закупок P1 от {_today()}.xlsx'),
+                      r['Content-Disposition'])
+        self.assertEqual(r.content[:2], b'PK')            # zip-сигнатура xlsx
+
+
 class AllocationTests(EngineTestBase):
     """Привязка (волна 8, переделана 2026-08-05): раскладка плана по ЗАКАЗАМ закупки."""
 

@@ -706,6 +706,9 @@ export const api = {
   deleteDemand: (demandId: number) =>
     send<Deficit>('DELETE', `/api/project-demands/${demandId}/`),
   budget: (id: number) => get<Budget>(`/api/projects/${id}/budget/`),
+  // План закупок проекта в xlsx (2026-09-15): вкладка «Потребность» в деньгах.
+  // Не запрос, а ссылка — скачивание ведёт браузер (как выгрузка изделия).
+  projectPlanXlsxUrl: (id: number) => `/api/projects/${id}/plan-xlsx/`,
   item: (id: number) => get<ItemDetail>(`/api/items/${id}/`),
   updateItem: (id: number, b: Partial<{ code: string; description: string;
     category_id: number; uom: string; temperature: string; native: boolean;

@@ -156,7 +156,7 @@ _XLSX_TYPE = ('application/vnd.openxmlformats-officedocument'
               '.spreadsheetml.sheet')
 
 
-def _xlsx_response(data, code, fallback):
+def _xlsx_response(data, code, fallback, prefix=None):
     """xlsx-байты → HTTP-ответ с именем «{мы} {код} от {дата скачивания}.xlsx».
 
     Три части, каждая отвечает на свой вопрос получателя:
@@ -171,12 +171,18 @@ def _xlsx_response(data, code, fallback):
       сторон оказывается стопка одноимённых файлов. Дата самого документа живёт внутри,
       в шапке. Формат ISO — файлы одной сущности сортируются по имени хронологически.
 
+    `prefix` замещает первую часть (2026-09-15, план закупок): у документа, который
+    никуда не уходит, «от кого» смысла не имеет, а вот ЧТО это за файл — имеет, и
+    «План закупок ЛК-1 от 2026-09-15.xlsx» называет себя сам. Правило имени при этом
+    одно на все выгрузки: что · про что · когда.
+
     Коды бывают кириллическими и с пробелами, поэтому заголовок собирает
     `content_disposition_header` (RFC 6266: ASCII-фолбэк + `filename*=UTF-8''…`), а не
     f-строка. Пустой `code` сущности (он nullable) → фолбэк по id.
     """
     us = engine.our_organization()
-    parts = [_safe_filename(us.code) if us else '',
+    lead = prefix if prefix is not None else (us.code if us else '')
+    parts = [_safe_filename(lead),
              _safe_filename(code) or fallback,
              f'от {timezone.localdate().isoformat()}']
     resp = HttpResponse(data, content_type=_XLSX_TYPE)
@@ -518,6 +524,21 @@ def project_budget(request, pk):
     """Бюджет проекта (north-star окупаемости): потрачено/план/компас + себестоимость/экономия."""
     project = get_object_or_404(models.Project, pk=pk)
     return Response(engine.project_budget(project))
+
+
+@api_view(['GET'])
+def project_plan_xlsx(request, pk):
+    """План закупок проекта в xlsx — вкладка «Потребность» в деньгах (attachment).
+
+    Кнопка «Скачать» формы проекта (2026-09-15). Состав и правила счёта — в
+    `engine.project_plan_xlsx`; здесь только имя файла: **«План закупок» + код проекта +
+    дата скачивания** («План закупок ЛК-1 от 2026-09-15.xlsx»). Наш код в имени не
+    участвует, в отличие от бланка поставщику: файл внутренний, «от кого» в нём не
+    вопрос — вопрос «что это».
+    """
+    project = get_object_or_404(models.Project, pk=pk)
+    return _xlsx_response(engine.project_plan_xlsx(project), project.code,
+                          f'проект-{project.id}', prefix='План закупок')
 
 
 def _item_detail_payload(item):

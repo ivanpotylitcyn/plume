@@ -216,6 +216,14 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       </>}
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
+      /* План закупок (2026-09-15) — только у внешнего проекта: у складов-проектов нет
+         ни приборов, ни потребности, и выгружать им нечего. Одна цель → обычная
+         ссылка, без меню (меню у изделия, там целей две). */
+      download={external
+        ? { label: 'Скачать план закупок', href: api.projectPlanXlsxUrl(projectId),
+            title: 'xlsx: «Потребность» в деньгах — кол-во, цена, стоимость и «Всего»; '
+              + 'позиции без оценки красные' }
+        : undefined}
       // Фиксация проекта = закрытие (свод остатков в 0 + веха). Гейт бэка тот же,
       // подсказка несёт причину отказа (`blocker`).
       fixed={closed}

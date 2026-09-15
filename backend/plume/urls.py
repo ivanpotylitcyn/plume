@@ -23,6 +23,10 @@ urlpatterns = [
     path('projects/<int:pk>/demands/', views.project_demands, name='project-demands'),
     path('project-demands/<int:pk>/', views.project_demand_detail, name='project-demand'),
     path('projects/<int:pk>/budget/', views.project_budget, name='project-budget'),
+    # план закупок проекта в xlsx (2026-09-15): «Потребность» в деньгах,
+    # одна графа количества + цена/стоимость + «Всего»
+    path('projects/<int:pk>/plan-xlsx/', views.project_plan_xlsx,
+         name='project-plan-xlsx'),
     path('projects/<int:pk>/purchases/', views.project_purchases, name='project-purchases'),
     path('projects/<int:pk>/supply/', views.project_supply, name='project-supply'),
     path('projects/<int:pk>/available-lots/', views.project_available_lots, name='project-available-lots'),
