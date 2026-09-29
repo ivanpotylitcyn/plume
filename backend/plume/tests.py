@@ -1568,6 +1568,90 @@ class ProjectSupplyTests(EngineTestBase):
         self.assertEqual(len(body['receipts']), 1)
 
 
+class QueryScalingTests(EngineTestBase):
+    """Число SQL-запросов витрин не растёт с числом строк (2026-09-28).
+
+    Витрины спрашивали склад/заказано/BOM поштучно — запрос на лист, на строку заказа,
+    на партию. На прод-данных форма проекта стоила ~1500 запросов, список проектов —
+    ~4500, и на shared-хостинге это десятки секунд. Движок теперь поднимает члены
+    баланса снимком (`ProjectSupply`), состав — индексом (`BomIndex`), остатки партий —
+    пачкой (`lots_live_qty`). Тест сторожит главное свойство: сценарий в 2 и в 6 листьев
+    стоит ОДИНАКОВОЕ число запросов, какой бы ни была константа.
+    """
+
+    def build(self, n):
+        prj = models.Project.objects.create(
+            code=f'PX{n}', description='Масштаб', kind=models.Project.Kind.EXTERNAL)
+        device = self.make_item(f'DEV{n}', manufactured=True)
+        sub = self.make_item(f'SUB{n}', manufactured=True)
+        models.BomLine.objects.create(parent=device, component=sub, qty=D(1))
+        models.ProjectDemand.objects.create(project=prj, target_item=device, qty=D(3))
+        proc = engine.create_procurement(self.user)
+        purchase = self.make_purchase(project=prj)
+        purchase.procurement = proc
+        purchase.save(update_fields=['procurement'])
+        receipt = engine.create_receipt(prj, self.user, number=f'У-{n}',
+                                        contractor=self.supplier)
+        leaves = []
+        for i in range(n):
+            leaf = self.make_item(f'L{n}-{i}')
+            leaves.append(leaf)
+            models.BomLine.objects.create(parent=sub if i % 2 else device,
+                                          component=leaf, qty=D(2))
+            engine.add_purchase_line(purchase, leaf, D(10))
+            engine.add_procurement_line(proc, leaf, D(10))
+            engine.add_receipt_lot(receipt, leaf, D(4))
+        engine.lock_purchase(purchase)
+        engine.set_receipt_purchase(receipt, purchase)
+        engine.lock_receipt(receipt)
+        kitting = engine.create_kitting(prj, self.user, target_item=device, qty=D(1))
+        return {'project': prj, 'purchase': models.Purchase.objects.get(pk=purchase.pk),
+                'procurement': proc, 'kitting': kitting,
+                'receipt': models.Receipt.objects.get(pk=receipt.pk)}
+
+    def count(self, fn):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        with CaptureQueriesContext(connection) as ctx:
+            fn()
+        return len(ctx.captured_queries)
+
+    def assertFlat(self, projection):
+        small, big = self.build(2), self.build(6)
+        self.assertEqual(self.count(lambda: projection(small)),
+                         self.count(lambda: projection(big)))
+
+    def test_project_deficit(self):
+        self.assertFlat(lambda s: engine.project_deficit(s['project']))
+
+    def test_project_health_and_budget(self):
+        self.assertFlat(lambda s: (engine.project_health(s['project']),
+                                   engine.project_budget(s['project'])))
+
+    def test_purchase_form_and_demand(self):
+        self.assertFlat(lambda s: (engine.purchase_form(s['purchase']),
+                                   engine.purchase_demand(s['purchase'])))
+
+    def test_procurement_demand_and_allocation(self):
+        self.assertFlat(lambda s: (engine.procurement_demand(s['procurement']),
+                                   engine.procurement_allocation(s['procurement'])))
+
+    def test_receipt_and_kitting_forms(self):
+        self.assertFlat(lambda s: (engine.receipt_form(s['receipt']),
+                                   engine.kitting_form(s['kitting'])))
+
+    def test_lists(self):
+        """Списки режимов: заказы и изделия — константа на весь справочник."""
+        client = Client()
+        client.force_login(self.user)
+        self.build(2)
+        few = (self.count(lambda: client.get('/api/purchases/')),
+               self.count(lambda: client.get('/api/items/')))
+        self.build(6)
+        self.assertEqual((self.count(lambda: client.get('/api/purchases/')),
+                          self.count(lambda: client.get('/api/items/'))), few)
+
+
 class ProjectClosureTests(EngineTestBase):
     """Волна 6: панель закрытия (остаточные лоты → 0) + мягкий замок статуса +
     мосты «списать»/«на баланс»."""

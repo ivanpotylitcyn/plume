@@ -373,6 +373,22 @@ def lot_live_qty(lot, location=None):
     return qs.aggregate(s=Sum('qty'))['s'] or ZERO
 
 
+def lots_live_qty(lots, location=None):
+    """`{lot_id: живой остаток}` для набора партий — одним сгруппированным запросом.
+
+    Та же сумма движений, что `lot_live_qty`, для списков и форм, где партий десятки:
+    поштучно это был запрос на строку. Партия без движений — ноль (как у поштучной).
+    """
+    ids = [lot.id for lot in lots]
+    live = dict.fromkeys(ids, ZERO)
+    if ids:
+        qs = models.StockMovement.objects.filter(lot_id__in=ids)
+        if location is not None:
+            qs = qs.filter(location=location)
+        live.update(_sum_by(qs, 'lot'))
+    return live
+
+
 def lot_locations(lot):
     """Разбивка остатка партии по местам хранения (волна 13, Ф2e).
 
@@ -486,51 +502,141 @@ def delete_location(location):
         raise ValidationError('Склад связан с движениями — удаление заблокировано.')
 
 
+# --------------------------------------------------------------------------- #
+#  Снимок снабжения проекта: члены баланса по всем Item за константу запросов
+# --------------------------------------------------------------------------- #
+def _sum_by(qs, key):
+    """`{key: Σ qty}` одним сгруппированным запросом (пустой ключ пропускаем)."""
+    return {r[key]: r['s'] or ZERO
+            for r in qs.values(key).annotate(s=Sum('qty')).order_by() if r[key] is not None}
+
+
+class ProjectSupply:
+    """Снимок снабжения проекта — все члены баланса (`_balance`) сразу по всем Item.
+
+    Витрины потребности спрашивают склад/впаяно/заказано по каждому листу разузлования;
+    спрашивать поштучно значило платить запрос (а у «заказано» — запрос на строку
+    заказа) за каждое число, и форма проекта стоила тысячи запросов (2026-09-28).
+    Снимок отвечает на те же вопросы словарями: каждый член — ОДИН сгруппированный
+    запрос на проект, поднимается лениво при первом обращении.
+
+    Это не кэш: снимок живёт одну проекцию (один запрос HTTP) и выбрасывается, так что
+    «всё вычислимое держим свежим» не нарушено. Семантика членов — единственная: поштучные
+    `item_*` ниже — те же снимки, спрошенные про один Item.
+    """
+
+    def __init__(self, project):
+        self.project = project
+        self._memo = {}
+
+    def _get(self, name, build):
+        if name not in self._memo:
+            self._memo[name] = build()
+        return self._memo[name]
+
+    def _movements(self):
+        return models.StockMovement.objects.filter(lot__project=self.project)
+
+    def available(self, item):
+        """Доступный остаток Item в проекте — Σ живых остатков своих лотов.
+
+        Может быть отрицательным (недостача) — не клампим, это информативно."""
+        return self._get('available', lambda: _sum_by(self._movements(), 'lot__item')
+                         ).get(item.id, ZERO)
+
+    def kitted(self, item):
+        """Впаяно: Σ количеств Item, ушедших в комплектации проекта (положительное число).
+
+        Четвёртый член баланса потребности (2026-08-05). Берём расход по **зафиксированным**
+        комплектациям — тот же замок, что гейтит склад: `StockMovement` собирается только
+        по запертым ордерам (`rebuild_movements`), поэтому фильтра по `locked` здесь не
+        нужно, он уже в природе таблицы. Черновой акт не двигает ни склад, ни это число.
+
+        Знак: движения расхода отрицательны, наружу отдаём магнитуду — в балансе это
+        слагаемое покрытия («уже стоит в изделии»), а не вычитаемое.
+        """
+        return -self._get('kitted', lambda: _sum_by(self._movements().filter(
+            source_type=models.DocumentKind.KITTING,
+            type=models.StockMovement.Type.ISSUE,
+        ), 'lot__item')).get(item.id, ZERO)
+
+    def has_negative_lot(self, item):
+        """Есть ли лот Item в проекте с отрицательным остатком (аномалия «подбей лоты»)."""
+        def build():
+            per_lot = (self._movements().values('lot', 'lot__item')
+                       .annotate(s=Sum('qty')).order_by())
+            return {r['lot__item'] for r in per_lot if r['s'] is not None and r['s'] < 0}
+        return item.id in self._get('negative', build)
+
+    def done(self, item):
+        """Готово: живой остаток лотов-приборов Item из зафиксированных комплектаций."""
+        return self._get('done', lambda: _sum_by(self._movements().filter(
+            lot__origin__kind=models.StockDocument.Kind.KITTING,
+            lot__origin__locked=True,
+        ), 'lot__item')).get(item.id, ZERO)
+
+    def wip(self, item):
+        """Σ кол-во в расфиксированных комплектациях проекта, делающих этот Item."""
+        return self._get('wip', lambda: _sum_by(models.Kitting.objects.filter(
+            project=self.project, locked=False,
+        ), 'target_item')).get(item.id, ZERO)
+
+    def purchased(self, item):
+        """Σ max(0, PurchaseLine.qty − поступившее) по зафиксированным заказам проекта.
+
+        Поступившее — `_purchase_received` каждого заказа (та же правда, что у
+        `_line_received`); клампим построчно, как и раньше: перебор по одному заказу
+        не гасит недопоставку по другому."""
+        def build():
+            lines = list(models.PurchaseLine.objects.filter(
+                purchase__project=self.project, purchase__locked=True,
+            ).values_list('purchase_id', 'item_id', 'qty'))
+            received = _received_by(models.Lot.objects.filter(
+                origin__purchase__in={pu for pu, _i, _q in lines}))
+            total = {}
+            for pu, item_id, qty in lines:
+                rest = max(ZERO, qty - received.get((pu, item_id), ZERO))
+                total[item_id] = total.get(item_id, ZERO) + rest
+            return total
+        return self._get('purchased', build).get(item.id, ZERO)
+
+    def on_order(self, item):
+        """Оранжевый член, обобщённый по типу Item (покупной/производимый)."""
+        return self.wip(item) if item.native else self.purchased(item)
+
+    def balance(self, item, need):
+        """Строка баланса `_balance` по Item — четыре члена из снимка."""
+        return _balance(need, self.kitted(item), self.available(item), self.on_order(item))
+
+
 def item_available(item, project, location=None):
     """Доступный остаток Item в проекте — Σ живых остатков своих лотов.
 
     Волна 13, Ф2e: опциональный `location` сужает до остатка в этом месте хранения.
     Может быть отрицательным (недостача) — не клампим, это информативно.
     """
-    qs = models.StockMovement.objects.filter(lot__item=item, lot__project=project)
-    if location is not None:
-        qs = qs.filter(location=location)
-    return qs.aggregate(s=Sum('qty'))['s'] or ZERO
+    if location is None:
+        return ProjectSupply(project).available(item)
+    return models.StockMovement.objects.filter(
+        lot__item=item, lot__project=project, location=location,
+    ).aggregate(s=Sum('qty'))['s'] or ZERO
 
 
 def item_kitted(item, project):
-    """Впаяно: Σ количеств Item, ушедших в комплектации проекта (положительное число).
-
-    Четвёртый член баланса потребности (2026-08-05). Берём расход по **зафиксированным**
-    комплектациям — тот же замок, что гейтит склад: `StockMovement` собирается только по
-    запертым ордерам (`rebuild_movements`), поэтому фильтра по `locked` здесь не нужно,
-    он уже в природе таблицы. Черновой акт не двигает ни склад, ни это число — обе
-    колонки видят одну и ту же реальность и не могут разъехаться.
-
-    Знак: движения расхода отрицательны, наружу отдаём магнитуду — в балансе это
-    слагаемое покрытия («уже стоит в изделии»), а не вычитаемое.
-    """
-    total = models.StockMovement.objects.filter(
-        lot__item=item, lot__project=project,
-        source_type=models.DocumentKind.KITTING,
-        type=models.StockMovement.Type.ISSUE,
-    ).aggregate(s=Sum('qty'))['s'] or ZERO
-    return -total
+    """Впаяно (поштучно) — см. `ProjectSupply.kitted`."""
+    return ProjectSupply(project).kitted(item)
 
 
 def item_has_negative_lot(item, project):
-    """Есть ли лот Item в проекте с отрицательным остатком (аномалия «подбей лоты»)."""
-    for lot in models.Lot.objects.filter(item=item, project=project):
-        if lot_live_qty(lot) < 0:
-            return True
-    return False
+    """Аномалия «подбей лоты» (поштучно) — см. `ProjectSupply.has_negative_lot`."""
+    return ProjectSupply(project).has_negative_lot(item)
 
 
 # --------------------------------------------------------------------------- #
 #  «Заказано» (оранжевый член): открытый заказ или wip-комплектация
 # --------------------------------------------------------------------------- #
-def _line_received(line):
-    """Поступило по строке заказа = Σ Lot.qty лотов её item по связанным приходам.
+def _received_by(lots):
+    """`{(purchase_id, item_id): поступило}` по лотам зафиксированных поставок.
 
     Документ = УПД правда: поступившее — приход (`+RECEIPT` через `Receipt.purchase`),
     не текущий остаток (получили 100 → спаяли 40 → заказ закрыт на 100).
@@ -542,40 +648,29 @@ def _line_received(line):
     Ф6: считаем только **зафиксированные** поставки (`origin__locked`). Фильтра не было,
     и это расходилось с собственным обещанием Ф15 («черновая поставка не в потрачено и
     не на складе — её позиции остаются в в пути / к заказу»): черновой УПД гасил заказ,
-    хотя товар не приехал. До Ф6 черновик, привязанный к заказу, был редкостью; кнопка
-    «Создать УПД» делает его штатным первым шагом, и заказ показывал бы ✓ до приёмки.
-    Один и тот же замок теперь гейтит склад, деньги и закрытость заказа.
+    хотя товар не приехал. Один и тот же замок гейтит склад, деньги и закрытость заказа.
     """
-    return models.Lot.objects.filter(
-        item=line.item, origin__purchase=line.purchase, origin__locked=True,
-    ).aggregate(s=Sum('qty'))['s'] or ZERO
+    rows = (lots.filter(origin__locked=True)
+            .values('origin__purchase', 'item').annotate(s=Sum('qty')).order_by())
+    return {(r['origin__purchase'], r['item']): r['s'] or ZERO for r in rows}
 
 
-def _purchased_on_order(item, project):
-    """Σ max(0, PurchaseLine.qty − поступившее) по открытым (sent) заказам проекта."""
-    total = ZERO
-    lines = models.PurchaseLine.objects.filter(
-        item=item, purchase__project=project,
-        purchase__locked=True,
-    ).select_related('purchase')
-    for line in lines:
-        total += max(ZERO, line.qty - _line_received(line))
-    return total
+def _purchase_received(purchase):
+    """`{item_id: поступило}` по заказу — одним запросом на все его строки."""
+    return {item_id: qty for (_pu, item_id), qty
+            in _received_by(models.Lot.objects.filter(origin__purchase=purchase)).items()}
 
 
-def _manufactured_in_progress(item, project):
-    """Σ кол-во в производимых расфиксированных комплектациях, делающих этот Item в проекте."""
-    agg = models.Kitting.objects.filter(
-        target_item=item, project=project, locked=False,
-    ).aggregate(s=Sum('qty'))
-    return agg['s'] or ZERO
+def _line_received(line):
+    """Поступило по строке заказа (поштучно) — см. `_received_by`."""
+    return _received_by(models.Lot.objects.filter(
+        item=line.item_id, origin__purchase=line.purchase_id,
+    )).get((line.purchase_id, line.item_id), ZERO)
 
 
 def item_on_order(item, project):
     """Оранжевый член, обобщённый по типу Item (покупной/производимый)."""
-    if item.native:
-        return _manufactured_in_progress(item, project)
-    return _purchased_on_order(item, project)
+    return ProjectSupply(project).on_order(item)
 
 
 # --------------------------------------------------------------------------- #
@@ -694,7 +789,45 @@ def category_code(item):
 # --------------------------------------------------------------------------- #
 #  Разузлование потребности до покупных листьев (Ф5, волна 16)
 # --------------------------------------------------------------------------- #
-def _explode_demand(item, qty, leaves, incomplete, visiting):
+class BomIndex:
+    """Состав изделий, подгруженный поуровнево: `children(item)` без запроса на узел.
+
+    Разузлование ходит по дереву рекурсией, и `item.bom_lines` на каждом узле стоил
+    запрос — у проекта с десятком приборов это сотни запросов на одну витрину. Индекс
+    при первом вопросе про узел поднимает всё его поддерево волнами (запрос на уровень
+    BOM, а не на узел) и дальше отвечает из памяти. Живёт одну проекцию, как
+    `ProjectSupply`. Порядок строк — по `component_id`: так их отдавал MySQL по
+    уникальному индексу `(parent, component)`, пока порядок был неявным, — закрепляем.
+    """
+
+    def __init__(self):
+        self._children = {}      # parent_id → [BomLine (+component, +category)]
+
+    def children(self, item):
+        if item.id not in self._children:
+            self._load({item.id})
+        return self._children[item.id]
+
+    def preload(self, items):
+        """Поднять поддеревья сразу нескольких изделий (приборы проекта) общими волнами."""
+        self._load({item.id for item in items if item.native} - self._children.keys())
+
+    def _load(self, frontier):
+        while frontier:
+            for pid in frontier:
+                self._children[pid] = []
+            lines = (models.BomLine.objects.filter(parent_id__in=frontier)
+                     .select_related('component', 'component__category')
+                     .order_by('parent_id', 'component_id'))
+            nxt = set()
+            for bl in lines:
+                self._children[bl.parent_id].append(bl)
+                if bl.component.native and bl.component_id not in self._children:
+                    nxt.add(bl.component_id)
+            frontier = nxt
+
+
+def _explode_demand(item, qty, leaves, incomplete, visiting, bom):
     """Разузловать потребность `item × qty` до покупных листьев (структурно).
 
     Покупной `item` (`native=False`) — лист-терминал: копим `qty` в `leaves`.
@@ -710,24 +843,28 @@ def _explode_demand(item, qty, leaves, incomplete, visiting):
     if item.id in visiting:
         raise ValidationError(f'Цикл в составе: {item.code}.')
     visiting.add(item.id)
-    lines = list(item.bom_lines.select_related('component'))
+    lines = bom.children(item)
     if not lines:
         incomplete.append(item.code)
     for bl in lines:
-        _explode_demand(bl.component, qty * bl.qty, leaves, incomplete, visiting)
+        _explode_demand(bl.component, qty * bl.qty, leaves, incomplete, visiting, bom)
     visiting.discard(item.id)
 
 
-def project_leaf_demand(project):
+def project_leaf_demand(project, bom=None):
     """Свод потребности проекта до покупных листьев: `({leaf: qty}, incomplete)`.
 
     Разузловывает каждую потребность (`target_item × demand.qty`) до листьев и
     складывает по Item через все приборы проекта. `incomplete` — производимые узлы
-    без BOM (оценить нечем), для честного флага неполноты.
+    без BOM (оценить нечем), для честного флага неполноты. `bom` — общий `BomIndex`
+    проекции, если она разузловывает не один проект.
     """
+    bom = bom or BomIndex()
+    demands = list(project.demands.select_related('target_item'))
+    bom.preload(d.target_item for d in demands)
     leaves, incomplete = {}, []
-    for demand in project.demands.select_related('target_item'):
-        _explode_demand(demand.target_item, demand.qty, leaves, incomplete, set())
+    for demand in demands:
+        _explode_demand(demand.target_item, demand.qty, leaves, incomplete, set(), bom)
     return leaves, incomplete
 
 
@@ -744,9 +881,10 @@ def _project_usage_map(project):
     строк плана) — аккордеон закупки спрашивает её по каждой строке.
     """
     usage = {}
+    bom = BomIndex()
     for demand in project.demands.select_related('target_item'):
         leaves = {}
-        _explode_demand(demand.target_item, Decimal('1'), leaves, [], set())
+        _explode_demand(demand.target_item, Decimal('1'), leaves, [], set(), bom)
         for leaf, per_unit in leaves.items():
             usage.setdefault(leaf.id, []).append({
                 'target_item_id': demand.target_item_id,
@@ -770,13 +908,13 @@ def item_usage_in_project(item, project):
     return _project_usage_map(project).get(item.id, [])
 
 
-def _leaf_row(item, need, project):
+def _leaf_row(item, need, supply):
     """Строка баланса листа (`_balance` + реквизиты Item) для секций потребности.
 
     Ключи `component_*` сохранены (фронт/сериализатор их ждут): лист — тот же Item.
+    Члены баланса — из снимка проекта (`ProjectSupply`).
     """
-    row = _balance(need, item_kitted(item, project), item_available(item, project),
-                   item_on_order(item, project))
+    row = supply.balance(item, need)
     row.update({
         'component_id': item.id,
         'component_code': item.code,
@@ -787,12 +925,12 @@ def _leaf_row(item, need, project):
         'component_category': category_code(item),   # фильтр колонки «Компонент»
         'uom': item.uom,
         'supply': _supply_status(row),         # ось «как дела» (цвет прибора/проекта)
-        'anomaly': item_has_negative_lot(item, project),
+        'anomaly': supply.has_negative_lot(item),
     })
     return row
 
 
-def _demand_tree(item, qty, project, depth, visiting, out):
+def _demand_tree(item, qty, supply, bom, depth, visiting, out):
     """Плоский pre-order список узлов BOM с `depth` — древовидный аккордеон прибора
     (Ф5b, В16): видно вложенность (прибор → подсборка → лист), а не только листья.
 
@@ -804,7 +942,7 @@ def _demand_tree(item, qty, project, depth, visiting, out):
     полосы слева («где горит под свёрнутым узлом»), а полосы сняты во всём Plume. Считать
     worst-of поддерева, чтобы никто не смотрел, — мёртвая работа."""
     if not item.native:
-        row = _leaf_row(item, qty, project)
+        row = _leaf_row(item, qty, supply)
         row['need'] = qty
         row['depth'] = depth
         row['is_leaf'] = True
@@ -826,15 +964,15 @@ def _demand_tree(item, qty, project, depth, visiting, out):
         'is_leaf': False,
     }
     out.append(row)          # pre-order: узел раньше детей
-    for bl in item.bom_lines.select_related('component'):
-        _demand_tree(bl.component, qty * bl.qty, project, depth + 1, visiting, out)
+    for bl in bom.children(item):
+        _demand_tree(bl.component, qty * bl.qty, supply, bom, depth + 1, visiting, out)
     visiting.discard(item.id)
 
 
 # --------------------------------------------------------------------------- #
 #  Дефицит проекта (главная проекция волны 1)
 # --------------------------------------------------------------------------- #
-def project_deficit(project, with_tree=True):
+def project_deficit(project, with_tree=True, bom=None):
     """Дефицит проекта: по каждой потребности — прибор и его состав (Ф5b: аккордеон —
     дерево BOM со всеми уровнями; свод «Потребность» — плоско по покупным листьям).
 
@@ -843,37 +981,38 @@ def project_deficit(project, with_tree=True):
 
     `with_tree=False` — пропустить построение дерева-аккордеона (нужно только детальной
     форме): `_project_health` считает worst-of без него, чтобы не гонять лишнее в списке.
+    `bom` — общий `BomIndex`, когда проекция идёт по нескольким проектам (список).
     """
     demands = []
+    # Один снимок склада/заказов и один индекс BOM на всю проекцию: члены баланса и
+    # состав спрашиваются по каждому листу каждого прибора, запросом платить нельзя.
+    supply, bom = ProjectSupply(project), bom or BomIndex()
     # Свод потребности по листьям на весь проект (секция «Потребность»): каждый прибор
     # разузловываем до покупных листьев, копим Σ. Склад/заказано — общие по листу.
     need_by_leaf = {}          # leaf Item → суммарная потребность (Decimal)
-    for demand in project.demands.select_related('target_item'):
+    demand_rows = list(project.demands.select_related('target_item'))
+    bom.preload(d.target_item for d in demand_rows)
+    for demand in demand_rows:
         target = demand.target_item
         # Свод листьев этой потребности — для секции «Потребность» и цвета прибора.
         leaves, _incomplete = {}, []
-        _explode_demand(target, demand.qty, leaves, _incomplete, set())
+        _explode_demand(target, demand.qty, leaves, _incomplete, set(), bom)
         statuses = []
         for leaf, need in leaves.items():
             need_by_leaf[leaf] = need_by_leaf.get(leaf, ZERO) + need
-            statuses.append(_supply_status(
-                _balance(need, item_kitted(leaf, project), item_available(leaf, project),
-                         item_on_order(leaf, project))))
+            statuses.append(_supply_status(supply.balance(leaf, need)))
         # Дерево BOM для аккордеона (все уровни, pre-order + depth). Для цвета проекта
         # (`_project_health`) дерево не нужно — пропускаем, чтобы не гонять лишнее в списке.
         tree = []
         if with_tree:
             visiting = {target.id}
-            for bl in target.bom_lines.select_related('component'):
-                _demand_tree(bl.component, demand.qty * bl.qty, project, 0, visiting, tree)
+            for bl in bom.children(target):
+                _demand_tree(bl.component, demand.qty * bl.qty, supply, bom, 0, visiting,
+                             tree)
 
         # триплет прибора: готово (зафиксированные лоты) / делается (в работе) / не начато
-        done = models.StockMovement.objects.filter(
-            lot__item=target, lot__project=project,
-            lot__origin__kind=models.StockDocument.Kind.KITTING,
-            lot__origin__locked=True,
-        ).aggregate(s=Sum('qty'))['s'] or ZERO
-        wip = _manufactured_in_progress(target, project)
+        done = supply.done(target)
+        wip = supply.wip(target)
         not_started = max(ZERO, demand.qty - done - wip)
 
         demands.append({
@@ -893,7 +1032,7 @@ def project_deficit(project, with_tree=True):
         })
 
     # Сводная таблица по листьям (полная покупная картина проекта, всегда видна).
-    components = [_leaf_row(leaf, need, project) for leaf, need in need_by_leaf.items()]
+    components = [_leaf_row(leaf, need, supply) for leaf, need in need_by_leaf.items()]
     # «Горит вперёд» по тону баланса: сначала недобор, затем сошедшиеся в ноль, затем
     # строки с запасом; внутри — по коду.
     components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_code']))
@@ -907,7 +1046,7 @@ def project_deficit(project, with_tree=True):
     }
 
 
-def project_health(project):
+def project_health(project, bom=None):
     """Цвет проекта в списке (Ф1b): worst-of здоровья, вычисляемая проекция (как дефицит —
     НЕ храним в БД). Семантика: `to_order` (красный) — хоть что-то не заказано; `on_order`
     (оранжевый) — хоть что-то в пути ИЛИ прибор не собран; `available` (зелёный) — всё
@@ -915,7 +1054,7 @@ def project_health(project):
     неприменим, глиф нейтрален). Лёгкая версия дефицита (`with_tree=False`)."""
     if project.kind != models.Project.Kind.EXTERNAL:
         return None
-    d = project_deficit(project, with_tree=False)
+    d = project_deficit(project, with_tree=False, bom=bom)
     if not d['demands']:
         return None
     # Здоровье смотрит на ось снабжения (`supply`), а не на тон колонки «Баланс»:
@@ -935,15 +1074,32 @@ def purchase_coverage(purchase):
     ни одного лота; `on_order` (оранжевый) — часть пришла; `available` (зелёный) — все
     строки закрыты остатком. Пустой заказ — `to_order` (ничего нет). Из `_line_received`
     (без разузлования — дёшево)."""
-    lines = list(purchase.lines.all())
+    return purchases_coverage([purchase])[purchase.id]
+
+
+def purchases_coverage(purchases):
+    """`{purchase_id: цвет}` для набора заказов (списки, ленты) — строки и поступления
+    всех заказов поднимаются двумя запросами, а не парой на заказ."""
+    ids = [p.id for p in purchases]
+    lines_by_purchase = {pid: [] for pid in ids}
+    for pid, item_id, qty in models.PurchaseLine.objects.filter(
+            purchase__in=ids).values_list('purchase_id', 'item_id', 'qty'):
+        lines_by_purchase[pid].append((item_id, qty))
+    received = _received_by(models.Lot.objects.filter(origin__purchase__in=ids))
+    return {pid: _coverage_status(pid, lines, received)
+            for pid, lines in lines_by_purchase.items()}
+
+
+def _coverage_status(purchase_id, lines, received):
+    """Цвет одного заказа по его строкам `(item_id, qty)` и карте `_received_by`."""
     if not lines:
         return 'to_order'
     total_received = ZERO
     fully = True
-    for line in lines:
-        received = _line_received(line)
-        total_received += received
-        if received < line.qty:
+    for item_id, qty in lines:
+        received_qty = received.get((purchase_id, item_id), ZERO)
+        total_received += received_qty
+        if received_qty < qty:
             fully = False
     if fully:
         return 'available'
@@ -986,11 +1142,11 @@ def _project_estimate(project):
     покупных листьев без `estimated_cost` (план по ним неполон, не молчим 0).
     """
     leaves, _incomplete = project_leaf_demand(project)
+    supply = ProjectSupply(project)
     estimate = ZERO
     unestimated = []
     for leaf, need in leaves.items():
-        cov = _coverage(need, item_available(leaf, project),
-                        item_on_order(leaf, project))
+        cov = _coverage(need, supply.available(leaf), supply.on_order(leaf))
         remaining = cov['on_order'] + cov['to_order']
         if remaining <= 0:
             continue
@@ -1113,9 +1269,16 @@ def available_lots(item, project, location=None):
     месте хранения** (пикер под конкретную локацию). По умолчанию — как раньше
     (остаток по всем локациям), контракт формы комплектации байт-в-байт.
     """
+    lots = list(models.Lot.objects.filter(item=item, project=project)
+                .select_related('item', 'origin'))
+    return _candidate_rows(lots, lots_live_qty(lots, location))
+
+
+def _candidate_rows(lots, live_by_lot):
+    """Строки пикера `available_lots` по уже поднятым партиям и их остаткам."""
     result = []
-    for lot in models.Lot.objects.filter(item=item, project=project).select_related('item'):
-        live = lot_live_qty(lot, location)
+    for lot in lots:
+        live = live_by_lot[lot.id]
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'live_qty': live, 'unit_cost': lot.unit_cost,
@@ -1166,15 +1329,30 @@ def kitting_form(kitting):
     # цикл не заходил, и баг выглядел вывернутым наизнанку). Пустое кол-во = «потребность
     # ещё не задана» → надо 0, призраков нет; выбор цели её тут же и проставляет
     # (`_set_target_item`), так что состояние мимолётное.
-    for bl in (target.bom_lines.select_related('component', 'component__category')
-               if target else ()):
+    bom_lines = list(target.bom_lines.select_related('component', 'component__category')
+                     if target else ())
+    # Всё, что строки спрашивают про свои компоненты, поднимаем разом: пробитые строки,
+    # члены покрытия (`ProjectSupply`) и лоты-кандидаты с остатками — не по запросу на строку.
+    component_ids = [bl.component_id for bl in bom_lines]
+    pierced_by_item = {}
+    for kl in kitting.lines.filter(lot__item__in=component_ids).select_related('lot'):
+        pierced_by_item.setdefault(kl.lot.item_id, []).append(kl)
+    supply = ProjectSupply(project)
+    lots_by_item = {}
+    if is_wip:
+        project_lots = list(models.Lot.objects.filter(item__in=component_ids, project=project)
+                            .select_related('item', 'origin'))
+        for lot in project_lots:
+            lots_by_item.setdefault(lot.item_id, []).append(lot)
+        live_by_lot = lots_live_qty(project_lots)
+    for bl in bom_lines:
         component = bl.component
         need = bl.qty * (kitting.qty or ZERO)
         real_lines = []
         pierced = ZERO
         # компонент строки выводится из lot.item (StockLine его не хранит);
         # qty знаковый — наружу отдаём магнитуду (положительную), проекция без изменений.
-        for kl in kitting.lines.filter(lot__item=component).select_related('lot'):
+        for kl in pierced_by_item.get(component.id, ()):
             mag = -kl.qty
             pierced += mag
             real_lines.append({
@@ -1185,12 +1363,13 @@ def kitting_form(kitting):
         remaining = max(ZERO, need - pierced)
         ghost = None
         if remaining > 0 and is_wip:
-            cov = _coverage(remaining, item_available(component, project),
-                            item_on_order(component, project))
+            cov = _coverage(remaining, supply.available(component),
+                            supply.on_order(component))
             ghost = {
                 'status': cov['status'], 'have': cov['have'],
                 'on_order': cov['on_order'], 'to_order': cov['to_order'],
-                'candidate_lots': available_lots(component, project),
+                'candidate_lots': _candidate_rows(lots_by_item.get(component.id, []),
+                                                  live_by_lot),
             }
             statuses.append(cov['status'])
         rows.append({
@@ -1328,6 +1507,21 @@ def _lot_consumed_downstream(lot):
             or lot.stock_lines.exists())
 
 
+def _consumed_lot_ids(lots):
+    """Множество id партий набора, потреблённых ниже (`_lot_consumed_downstream`
+    для формы целиком — три запроса на документ, а не на строку)."""
+    ids = [lot.id for lot in lots]
+    if not ids:
+        return set()
+    consumed = set(models.StockMovement.objects.filter(lot_id__in=ids, qty__lt=0)
+                   .values_list('lot_id', flat=True))
+    consumed.update(models.Lot.objects.filter(predecessor_id__in=ids)
+                    .values_list('predecessor_id', flat=True))
+    consumed.update(models.StockLine.objects.filter(lot_id__in=ids)
+                    .values_list('lot_id', flat=True))
+    return consumed
+
+
 def create_receipt(project, user, number='', date=None, contractor=None):
     """Создать поставку (УПД) — рождение переехало из вьюхи в движок (Ф12e).
 
@@ -1348,16 +1542,19 @@ def receipt_form(receipt):
     """
     lots = []
     total = ZERO
-    for lot in receipt.lots.select_related('item', 'item__category').order_by('id'):
+    receipt_lots = list(receipt.lots.select_related('item', 'item__category').order_by('id'))
+    live_by_lot = lots_live_qty(receipt_lots)
+    consumed = _consumed_lot_ids(receipt_lots)
+    for lot in receipt_lots:
         total += lot.qty * lot.unit_cost
         lots.append({
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'item_category': category_code(lot.item),   # фильтр колонки
-            'qty': lot.qty, 'live_qty': lot_live_qty(lot),
+            'qty': lot.qty, 'live_qty': live_by_lot[lot.id],
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
-            'consumed': _lot_consumed_downstream(lot),
+            'consumed': lot.id in consumed,
         })
     return {
         'id': receipt.id, **_author(receipt), 'number': receipt.number, 'date': receipt.date,
@@ -1619,8 +1816,9 @@ def demand_map(projects):
     Между проектами не перенеттим: нужда проекта — его собственная.
     """
     total = {}
+    bom = BomIndex()
     for project in projects:
-        leaves, _incomplete = project_leaf_demand(project)
+        leaves, _incomplete = project_leaf_demand(project, bom)
         for leaf, qty in leaves.items():
             total[leaf.id] = total.get(leaf.id, ZERO) + qty
     return total
@@ -1762,6 +1960,7 @@ def purchase_form(purchase):
     # Нужда своего проекта — знаменатель и панели бюджета, и цвета строк (одно
     # разузлование на форму).
     need_by_item = demand_map([purchase.project])
+    supply = ProjectSupply(purchase.project)
     rows = []
     statuses = []
     total_ordered = ZERO
@@ -1781,10 +1980,7 @@ def purchase_form(purchase):
         statuses.append(st)
         # Баланс считаем ЗДЕСЬ, а не в вью: три обращения к складу на строку — та же
         # цена, что платит ячейка «Привязки», и та же арифметика (`_balance`).
-        bal = _balance(need_by_item.get(line.item_id, ZERO),
-                       item_kitted(line.item, purchase.project),
-                       item_available(line.item, purchase.project),
-                       item_on_order(line.item, purchase.project))
+        bal = supply.balance(line.item, need_by_item.get(line.item_id, ZERO))
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom,
@@ -1946,9 +2142,11 @@ def project_available_lots(project):
     готовое железо — приборы из комплектации, но модель не ограничивает).
     """
     result = []
-    for lot in (models.Lot.objects.filter(project=project)
-                .select_related('item').order_by('item__code', 'id')):
-        live = lot_live_qty(lot)
+    lots = list(models.Lot.objects.filter(project=project)
+                .select_related('item', 'origin').order_by('item__code', 'id'))
+    live_by_lot = lots_live_qty(lots)
+    for lot in lots:
+        live = live_by_lot[lot.id]
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
@@ -1983,7 +2181,9 @@ def transfer_form(transfer):
     """
     lines = []
     total_qty = ZERO
-    for line in transfer.lines.select_related('lot__item', 'lot__origin').order_by('id'):
+    doc_lines = list(transfer.lines.select_related('lot__item', 'lot__origin').order_by('id'))
+    live_by_lot = lots_live_qty([line.lot for line in doc_lines])
+    for line in doc_lines:
         lot = line.lot
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
         total_qty += mag
@@ -1994,7 +2194,7 @@ def transfer_form(transfer):
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'display_name': line.display_name,
-            'lot_live_qty': lot_live_qty(lot),   # остаток источника после отгрузки
+            'lot_live_qty': live_by_lot[lot.id],   # остаток источника после отгрузки
             'lot_name': lot.lot_name,
         })
     return {
@@ -2162,9 +2362,11 @@ def all_available_lots():
     соседнего активного) — поэтому пикер сквозной, с кодом проекта-источника.
     """
     result = []
-    for lot in (models.Lot.objects.select_related('item', 'project')
-                .order_by('project__code', 'item__code', 'id')):
-        live = lot_live_qty(lot)
+    lots = list(models.Lot.objects.select_related('item', 'project', 'origin')
+                .order_by('project__code', 'item__code', 'id'))
+    live_by_lot = lots_live_qty(lots)
+    for lot in lots:
+        live = live_by_lot[lot.id]
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
@@ -2187,7 +2389,9 @@ def writeoff_form(writeoff):
     """
     lines = []
     total_qty = ZERO
-    for line in writeoff.lines.select_related('lot__item', 'lot__origin').order_by('id'):
+    doc_lines = list(writeoff.lines.select_related('lot__item', 'lot__origin').order_by('id'))
+    live_by_lot = lots_live_qty([line.lot for line in doc_lines])
+    for line in doc_lines:
         lot = line.lot
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
         total_qty += mag
@@ -2196,7 +2400,7 @@ def writeoff_form(writeoff):
             'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
-            'qty': mag, 'lot_live_qty': lot_live_qty(lot),
+            'qty': mag, 'lot_live_qty': live_by_lot[lot.id],
             'lot_name': lot.lot_name,
         })
     return {
@@ -2283,9 +2487,11 @@ def requisition_form(requisition):
     """
     lines = []
     total_qty = ZERO
-    for line in (requisition.lines
-                 .select_related('lot__item', 'lot__project', 'lot__origin')
-                 .order_by('id')):
+    doc_lines = list(requisition.lines
+                     .select_related('lot__item', 'lot__project', 'lot__origin')
+                     .order_by('id'))
+    live_by_lot = lots_live_qty([line.lot for line in doc_lines])
+    for line in doc_lines:
         src = line.lot                        # StockLine.lot = лот-источник расхода
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
         total_qty += mag
@@ -2296,7 +2502,7 @@ def requisition_form(requisition):
             'source_project_code': src.project.code,
             'item_id': src.item_id, 'item_code': src.item.code,
             'item_description': src.item.description, 'uom': src.item.uom,
-            'qty': mag, 'source_live_qty': lot_live_qty(src),
+            'qty': mag, 'source_live_qty': live_by_lot[src.id],
             'born_lot_id': born.id if born else None,
             'lot_name': src.lot_name,
         })
@@ -2515,9 +2721,11 @@ def relocation_source_lots(project):
     """Лоты проекта с живым остатком > 0 — кандидаты на перемещение, с разбивкой по
     местам хранения (`lot_locations`): пикер видит, где лот лежит и сколько."""
     result = []
-    for lot in (models.Lot.objects.filter(project=project)
-                .select_related('item').order_by('item__code', 'id')):
-        live = lot_live_qty(lot)
+    lots = list(models.Lot.objects.filter(project=project)
+                .select_related('item', 'origin').order_by('item__code', 'id'))
+    live_by_lot = lots_live_qty(lots)
+    for lot in lots:
+        live = live_by_lot[lot.id]
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'item_id': lot.item_id,
@@ -2570,8 +2778,10 @@ def project_closure(project):
     residuals = []
     positive = ZERO
     anomaly_count = 0
-    for lot in project.lots.select_related('item', 'origin').order_by('item__code', 'id'):
-        live = lot_live_qty(lot)
+    lots = list(project.lots.select_related('item', 'origin').order_by('item__code', 'id'))
+    live_by_lot = lots_live_qty(lots)
+    for lot in lots:
+        live = live_by_lot[lot.id]
         if live == 0:
             continue
         residuals.append({
@@ -3103,10 +3313,12 @@ def scope_demand(projects, active_only=True):
     в этом проекте» задают форме проекта, где перенеттивать нечего.
     """
     acc = {}  # item_id → агрегат по Item через проекты
+    bom = BomIndex()
     for project in projects:
         if active_only and not counts_in_scope(project):
             continue
-        need_by_item, _incomplete = project_leaf_demand(project)
+        supply = ProjectSupply(project)
+        need_by_item, _incomplete = project_leaf_demand(project, bom)
         for item, need in need_by_item.items():
             row = acc.setdefault(item.id, {
                 'item': item,
@@ -3114,12 +3326,12 @@ def scope_demand(projects, active_only=True):
                 'anomaly': False,
             })
             row['need'] += need
-            row['kitted'] += item_kitted(item, project)
-            row['in_stock'] += item_available(item, project)
-            row['on_order'] += item_on_order(item, project)
+            row['kitted'] += supply.kitted(item)
+            row['in_stock'] += supply.available(item)
+            row['on_order'] += supply.on_order(item)
             # Аномалия — свойство лота, а не суммы: хватает одного минусового лота в
             # одном проекте охвата, чтобы строка просила разбирательства.
-            row['anomaly'] = row['anomaly'] or item_has_negative_lot(item, project)
+            row['anomaly'] = row['anomaly'] or supply.has_negative_lot(item)
     rows = []
     for agg in acc.values():
         item = agg['item']
@@ -3737,6 +3949,8 @@ def item_xlsx(item, scope=ITEM_XLSX_BOM):
         rows=[(bl.parent.code, bl.parent.description, float(bl.qty), item.uom)
               for bl in item.used_in.select_related('parent')],
         widths=[5, 22, 48, 12, 8])
+    item_lots = list(item.lots.select_related('project', 'origin'))
+    live_by_lot = lots_live_qty(item_lots)
     _xlsx_sheet(
         wb.create_sheet(), 'Склад',
         head=[],
@@ -3744,9 +3958,9 @@ def item_xlsx(item, scope=ITEM_XLSX_BOM):
                  'Part number', 'Название'],
         # Остаток партии черновика — прочерк, а не 0 (Ф15: «едет, ещё не принято»).
         rows=[(f'#{lot.id}', lot.project.code, float(lot.qty),
-               float(lot_live_qty(lot)) if lot.origin.locked else '—',
+               float(live_by_lot[lot.id]) if lot.origin.locked else '—',
                item.uom, lot.part_number, lot.lot_name)
-              for lot in item.lots.select_related('project', 'origin')],
+              for lot in item_lots],
         widths=[5, 10, 16, 12, 12, 8, 22, 32])
     _xlsx_sheet(
         wb.create_sheet(), 'Движения',
@@ -3835,11 +4049,13 @@ def procurement_allocation(procurement):
     orders = list(procurement.purchases.select_related('project')
                   .order_by('project__code', 'id'))
     # Потребность проекта по листьям — по одному разузлованию на проект, не на ячейку.
-    demand_by_project = {}
+    # Снимок склада/заказов — тоже по одному на проект: ячеек много, проектов мало.
+    demand_by_project, supply_by_project, bom = {}, {}, BomIndex()
     for pu in orders:
         if pu.project_id not in demand_by_project:
-            leaves, _incomplete = project_leaf_demand(pu.project)
+            leaves, _incomplete = project_leaf_demand(pu.project, bom)
             demand_by_project[pu.project_id] = {leaf.id: qty for leaf, qty in leaves.items()}
+            supply_by_project[pu.project_id] = ProjectSupply(pu.project)
 
     # Нужда ОХВАТА для строк плана: у строки плана своего проекта нет, и её деньги
     # меряются тем же знаменателем, что панель бюджета закупки (отсев `counts_in_scope`,
@@ -3862,9 +4078,7 @@ def procurement_allocation(procurement):
             qty = allocations.get((pu.id, line.item_id), ZERO)
             allocated += qty
             need = demand_by_project[pu.project_id].get(line.item_id, ZERO)
-            bal = _balance(need, item_kitted(line.item, pu.project),
-                           item_available(line.item, pu.project),
-                           item_on_order(line.item, pu.project))
+            bal = supply_by_project[pu.project_id].balance(line.item, need)
             cells.append({
                 'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
                 'locked': pu.locked,
@@ -4030,8 +4244,8 @@ def _counterparty_supply(counterparty):
     return {
         'procurements': procurements,
         'purchases': len(purchases),
-        'open_purchases': sum(1 for p in purchases
-                              if purchase_coverage(p) != 'available'),
+        'open_purchases': sum(1 for status in purchases_coverage(purchases).values()
+                              if status != 'available'),
         'receipts': receipt_count,
         # Расхождение «поставок 4, а привёз 0 партий» законно и требует объяснения:
         # черновые УПД считаются документами, но не фактом (Ф15). Отдаём их числом —
@@ -4092,8 +4306,9 @@ def _purchase_rows(queryset):
     (`purchase_coverage`) — знак выбирает вью.
     """
     rows = []
-    qs = (queryset.select_related('project', 'contractor')
-          .prefetch_related('lines__item').order_by('-id'))
+    qs = list(queryset.select_related('project', 'contractor')
+              .prefetch_related('lines__item').order_by('-id'))
+    coverage = purchases_coverage(qs)
     for p in qs:
         lines = list(p.lines.all())
         estimate, unestimated = lines_estimate(lines)
@@ -4111,7 +4326,7 @@ def _purchase_rows(queryset):
             # поставке). Позиции без оценки — кодами в `unestimated`, чтобы неполная
             # сумма не выдавала себя за полную (тот же приём, что в `intent_money`).
             'estimate': estimate, 'unestimated': unestimated,
-            'coverage': purchase_coverage(p),
+            'coverage': coverage[p.id],
         })
     return rows
 
@@ -4269,19 +4484,22 @@ def inventory_form(inventory):
     """
     lots = []
     total = ZERO
-    for lot in (inventory.lots.select_related('item', 'predecessor__project')
-                .order_by('id')):
+    inventory_lots = list(inventory.lots.select_related('item', 'predecessor__project')
+                          .order_by('id'))
+    live_by_lot = lots_live_qty(inventory_lots)
+    consumed = _consumed_lot_ids(inventory_lots)
+    for lot in inventory_lots:
         total += lot.qty * lot.unit_cost
         pred = lot.predecessor
         lots.append({
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
-            'qty': lot.qty, 'live_qty': lot_live_qty(lot),
+            'qty': lot.qty, 'live_qty': live_by_lot[lot.id],
             'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
             'predecessor_id': lot.predecessor_id,
             'predecessor_label': _lot_label(pred) if pred else '',
-            'consumed': _lot_consumed_downstream(lot),
+            'consumed': lot.id in consumed,
         })
     return {
         'id': inventory.id, **_author(inventory), 'number': inventory.number, 'date': inventory.date,
@@ -4429,10 +4647,26 @@ def item_is_used(item):
     кандидат на удаление). Зеркалит guard'ы `delete_item` (used ⇔ неудаляемо):
     вхождение в чужой BOM, лоты, строки заказа/закупки-плана, потребность проекта,
     цель комплектации. Дёшево — набор `Exists` с коротким замыканием на `or`."""
-    return (item.used_in.exists() or item.lots.exists()
-            or item.purchase_lines.exists() or item.demanded_in.exists()
-            or item.kittings.exists()
-            or models.ProcurementLine.objects.filter(item=item).exists())
+    return any(model.objects.filter(**{field: item}).exists()
+               for model, field in _item_usage_refs())
+
+
+def _item_usage_refs():
+    """Живые ссылки на изделие `(модель, поле)` — одна опись для `item_is_used` и
+    `used_item_ids`, чтобы поштучный и списочный признак не разошлись."""
+    return ((models.BomLine, 'component'), (models.Lot, 'item'),
+            (models.PurchaseLine, 'item'), (models.ProjectDemand, 'target_item'),
+            (models.StockDocument, 'target_item'), (models.ProcurementLine, 'item'))
+
+
+def used_item_ids():
+    """Множество id изделий с живыми ссылками — `item_is_used` для всего справочника
+    разом (запрос на вид ссылки, а не на изделие × вид)."""
+    used = set()
+    for model, field in _item_usage_refs():
+        used.update(model.objects.exclude(**{f'{field}__isnull': True})
+                    .values_list(f'{field}_id', flat=True).distinct())
+    return used
 
 
 def create_item(code=None, description='', category_id=None, uom='шт',

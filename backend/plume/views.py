@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from django.contrib.auth import (authenticate, get_user_model, login, logout,
                                 update_session_auth_hash)
 from django.core.exceptions import ValidationError
+from django.db.models import Count
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -327,9 +328,9 @@ def account_password(request):
     return Response(status=http.HTTP_204_NO_CONTENT)
 
 
-def _project_row(p):
+def _project_row(p, bom=None):
     return {'id': p.id, 'code': p.code, 'description': p.description, 'kind': p.kind,
-            'locked': p.locked, 'health': engine.project_health(p)}
+            'locked': p.locked, 'health': engine.project_health(p, bom)}
 
 
 def _project_detail_row(p):
@@ -370,7 +371,9 @@ def projects(request):
             return _bad(e.messages[0] if e.messages else e)
         return Response(_project_row(p), status=http.HTTP_201_CREATED)
 
-    return Response([_project_row(p) for p in models.Project.objects.all()])
+    # Один индекс BOM на весь список: приборы проектов делят подсборки.
+    bom = engine.BomIndex()
+    return Response([_project_row(p, bom) for p in models.Project.objects.all()])
 
 
 def _location_row(loc):
@@ -421,7 +424,7 @@ def _category_row(c):
     return {'id': c.id, 'code': c.code, 'description': c.description}
 
 
-def _item_row(i):
+def _item_row(i, used=None):
     # `id` — PK (для FK-ссылок/мутаций); `code` — бизнес-ключ (канон библиотеки,
     # бывш. `design_item_id`, Ф3b). Категория — вложенным объектом (свои
     # `code`+`description`; вложенность разводит два кода, коллизии ключей нет).
@@ -430,7 +433,10 @@ def _item_row(i):
     return {'id': i.id, 'code': i.code,
             'description': i.description, 'category': _category_row(i.category),
             'uom': i.uom, 'temperature': i.temperature, 'native': i.native,
-            'synced': i.synced, 'locked': i.locked, 'used': engine.item_is_used(i)}
+            'synced': i.synced, 'locked': i.locked,
+            # `used` — множество из `engine.used_item_ids()` у списка (один проход на
+            # справочник); одиночная строка спрашивает поштучно.
+            'used': i.id in used if used is not None else engine.item_is_used(i)}
 
 
 @api_view(['GET'])
@@ -478,7 +484,8 @@ def items(request):
         return Response(_item_row(i), status=http.HTTP_201_CREATED)
 
     items_qs = models.Item.objects.select_related('category').all()
-    return Response([_item_row(i) for i in items_qs])
+    used = engine.used_item_ids()
+    return Response([_item_row(i, used) for i in items_qs])
 
 
 @api_view(['GET'])
@@ -1014,13 +1021,14 @@ def receipt_link(request, pk):
 # --------------------------------------------------------------------------- #
 #  Заказ / Purchase (волна 4 — записываемое ядро) + мост «дефицит → заказ»
 # --------------------------------------------------------------------------- #
-def _purchase_row(p):
-    """Строка списка заказов для дерева навигации."""
+def _purchase_row(p, coverage):
+    """Строка списка заказов для дерева навигации (`coverage` — `purchases_coverage`,
+    `line_count` — аннотация выборки)."""
     return {
         'id': p.id, 'code': p.code, 'description': p.description,
         'project_code': p.project.code, 'locked': p.locked,
-        'date': p.date, 'lines': p.lines.count(),
-        'coverage': engine.purchase_coverage(p),
+        'date': p.date, 'lines': p.line_count,
+        'coverage': coverage[p.id],
     }
 
 
@@ -1039,9 +1047,10 @@ def purchases(request):
             return _bad(e.messages[0] if e.messages else e)
         return Response(engine.purchase_form(p), status=http.HTTP_201_CREATED)
 
-    rows = [_purchase_row(p) for p in models.Purchase.objects
-            .select_related('project').order_by('-id')]
-    return Response(rows)
+    purchases_ = list(models.Purchase.objects.select_related('project')
+                      .annotate(line_count=Count('lines')).order_by('-id'))
+    coverage = engine.purchases_coverage(purchases_)
+    return Response([_purchase_row(p, coverage) for p in purchases_])
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
