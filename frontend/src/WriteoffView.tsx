@@ -32,7 +32,7 @@ export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChang
       onChanged, onDeleted,
       onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
       remove: api.deleteWriteoff,
-      confirmDelete: 'Удалить списание? Действие необратимо.',
+      confirmDelete: { noun: 'списание' },
     }, isNew)
   const att = useAttachments('writeoff', writeoffId)   // загрузка — команда шапки (§13.8)
 
@@ -81,7 +81,8 @@ export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChang
       fixed={fixed}
       onFixate={() => run(api.lockWriteoff(c.id))}
       fixateTitle="Зафиксировать акт списания"
-      onUnfix={() => { if (confirm('Расфиксировать списания?')) run(api.unlockWriteoff(c.id)) }}
+      onUnfix={() => run(api.unlockWriteoff(c.id))}
+      fixation={`writeoffs/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}

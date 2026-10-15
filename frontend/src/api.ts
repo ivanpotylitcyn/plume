@@ -74,11 +74,17 @@ export interface DeficitComponent {
   component_category: string | null      // класс изделия — фильтр колонки «Компонент»
   need: number; kitted: number; in_stock: number; on_order: number; balance: number
   status: Status; supply: Status; anomaly: boolean
+  // Деньги строки (волна 23, Ф2): оценка Item — для Потр./Заказа/Баланса (`null` — без
+  // оценки); факт партий — для Компл./Склада. Суммы над колонками считает `NeedSums`.
+  price: number | null; kitted_cost: number; in_stock_cost: number
 }
 export interface Deficit {
   project_id: number; project_code: string; project_name: string
   demands: DeficitDemand[]
   components: DeficitComponent[]
+  // Масштаб работы (волна 23, Ф4): штуки наших изделий по дереву, по категориям канона;
+  // `forms` — формы числа (один / два / пять) для склонения в мете.
+  scale: { category: string | null; count: number; forms: [string, string, string] }[]
 }
 
 export interface Budget {
@@ -144,6 +150,13 @@ export interface LibraryDiffRow {
   changes?: Partial<Record<'description' | 'temperature' | 'category', LibraryChange>>
 }
 export interface LibraryDiff { rows: LibraryDiffRow[] }
+// Окно перед фиксацией (волна 23, Ф1): последствия живыми числами + честный отказ
+// движка (пробная фиксация с откатом). `warn` — строка-предупреждение.
+export interface FixationPreview {
+  title: string; verb: string
+  lines: { text: string; warn?: boolean }[]
+  refusal: string | null
+}
 export interface LibraryApplySummary { created: number; updated: number; marked: number; deleted: number }
 // Роллап стоимости: детальный экран изделия + сводка пересчёта.
 export interface RollupResult {
@@ -694,6 +707,9 @@ export const api = {
   categories: () => get<Category[]>('/api/categories/'),
   // Гигиена текста поля ДО сохранения (2026-10-15): правило одно — в движке;
   // `dirty` → поле показывает очищенный вариант на выбор «Принять / Перепишу сам».
+  // `path` — сегмент сущности, как у `…/lock/`: `purchases/12`, `receipts/7`.
+  fixation: (path: string, lock: boolean) =>
+    get<FixationPreview>(`/api/${path}/fixation/?action=${lock ? 'lock' : 'unlock'}`),
   hygiene: (value: string, code: boolean) =>
     send<{ cleaned: string; dirty: boolean }>('POST', '/api/hygiene/', { value, code }),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),

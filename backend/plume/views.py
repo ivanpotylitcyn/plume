@@ -450,6 +450,20 @@ def categories(request):
     return Response([_category_row(c) for c in models.Category.objects.all()])
 
 
+@api_view(['GET'])
+def fixation(request, entity, pk):
+    """Окно перед фиксацией / расфиксацией (волна 23, Ф1): `?action=lock|unlock` →
+    `{title, verb, lines, refusal}`. Последствия живыми числами и честный отказ
+    (пробная фиксация с откатом) — `engine.fixation_preview`. `entity` — тот же
+    сегмент URL, что у `…/lock/` (`purchases`, `receipts`, …)."""
+    if entity not in engine.FIXATION_KINDS:
+        return Response({'detail': 'Нет такой сущности.'}, status=http.HTTP_404_NOT_FOUND)
+    model = engine.FIXATION_KINDS[entity][0]
+    get_object_or_404(model, pk=pk)
+    lock = request.query_params.get('action', 'lock') != 'unlock'
+    return Response(engine.fixation_preview(entity, pk, lock))
+
+
 @api_view(['POST'])
 @parser_classes([JSONParser])          # вопрос к гигиене — о СЫРОМ тексте
 def hygiene(request):

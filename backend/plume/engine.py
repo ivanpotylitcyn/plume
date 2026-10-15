@@ -133,7 +133,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 from django.db import transaction
-from django.db.models import Exists, OuterRef, Sum
+from django.db.models import Exists, F, OuterRef, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -182,6 +182,31 @@ CATEGORY_CANON = (
     ('РМ-И', 'Расходный материал', True),
     ('ДР-И', 'Другое', True),
 )
+
+
+# Формы числа категорий изделий — для меты проекта «21 система · 137 приборов · …»
+# (волна 23, Ф4). Слова — смысл, поэтому здесь; склоняет по ним вью (`count`).
+# Категория, заведённая потом в админке, получит запасную форму (`_count_forms`).
+CATEGORY_COUNT_FORMS = {
+    'СИС': ('система', 'системы', 'систем'),
+    'ПРБ': ('прибор', 'прибора', 'приборов'),
+    'УП': ('узел печатный', 'узла печатных', 'узлов печатных'),
+    'КС': ('кабельная сеть', 'кабельные сети', 'кабельных сетей'),
+    'КПА': ('КПА', 'КПА', 'КПА'),
+    'ОСН': ('оснастка', 'оснастки', 'оснасток'),
+    'РМ-И': ('набор расходников', 'набора расходников', 'наборов расходников'),
+    'ДР-И': ('прочее изделие', 'прочих изделия', 'прочих изделий'),
+}
+
+
+def _count_forms(category):
+    if category is None:
+        return ('изделие без категории', 'изделия без категории', 'изделий без категории')
+    forms = CATEGORY_COUNT_FORMS.get(category.code)
+    if forms:
+        return forms
+    word = f'«{category.description}»'
+    return (f'изделие {word}', f'изделия {word}', f'изделий {word}')
 
 
 def recategorize_items(mapping, prune=False):
@@ -573,6 +598,13 @@ def _sum_by(qs, key):
             for r in qs.values(key).annotate(s=Sum('qty')).order_by() if r[key] is not None}
 
 
+def _cost_by(qs, key):
+    """`{key: Σ qty × цена партии}` одним запросом — деньги движений по факту УПД."""
+    return {r[key]: r['s'] or ZERO
+            for r in qs.values(key).annotate(s=Sum(F('qty') * F('lot__unit_cost'))).order_by()
+            if r[key] is not None}
+
+
 class ProjectSupply:
     """Снимок снабжения проекта — все члены баланса (`_balance`) сразу по всем Item.
 
@@ -618,6 +650,21 @@ class ProjectSupply:
         слагаемое покрытия («уже стоит в изделии»), а не вычитаемое.
         """
         return -self._get('kitted', lambda: _sum_by(self._movements().filter(
+            source_type=models.DocumentKind.KITTING,
+            type=models.StockMovement.Type.ISSUE,
+        ), 'lot__item')).get(item.id, ZERO)
+
+    # Деньги членов по ФАКТУ партий (волна 23, Ф2, решение Ивана: склад и впаянное —
+    # «сразу по лотам», цена из УПД / себестоимость; потребность, заказ и баланс — по
+    # оценке Item, там факта нет). Те же движения, что у количеств, — один запрос на член.
+    def available_cost(self, item):
+        """Стоимость живого остатка Item в проекте: Σ остаток лота × его цена."""
+        return self._get('available_cost', lambda: _cost_by(self._movements(), 'lot__item')
+                         ).get(item.id, ZERO)
+
+    def kitted_cost(self, item):
+        """Стоимость впаянного: Σ расход в зафиксированных комплектациях × цена лота."""
+        return -self._get('kitted_cost', lambda: _cost_by(self._movements().filter(
             source_type=models.DocumentKind.KITTING,
             type=models.StockMovement.Type.ISSUE,
         ), 'lot__item')).get(item.id, ZERO)
@@ -988,8 +1035,17 @@ def _leaf_row(item, need, supply):
         'uom': item.uom,
         'supply': _supply_status(row),         # ось «как дела» (цвет прибора/проекта)
         'anomaly': supply.has_negative_lot(item),
+        **_money_fields(item, supply.kitted_cost(item), supply.available_cost(item)),
     })
     return row
+
+
+def _money_fields(item, kitted_cost, in_stock_cost):
+    """Деньги строки потребности (волна 23, Ф2): цена-оценка для Потр./Заказа/Баланса
+    (`price`, `None` — оценки нет) и факт партий для Компл./Склада. Суммы над колонками
+    складывает вью по ОТФИЛЬТРОВАННЫМ строкам — фильтры живут там же."""
+    return {'price': item.estimated_cost, 'kitted_cost': kitted_cost,
+            'in_stock_cost': in_stock_cost}
 
 
 def _demand_tree(item, qty, supply, bom, depth, visiting, out):
@@ -1052,7 +1108,7 @@ def project_deficit(project, with_tree=True, bom=None):
     # Свод потребности по листьям на весь проект (секция «Потребность»): каждый прибор
     # разузловываем до покупных листьев, копим Σ. Склад/заказано — общие по листу.
     need_by_leaf = {}          # leaf Item → суммарная потребность (Decimal)
-    demand_rows = list(project.demands.select_related('target_item'))
+    demand_rows = list(project.demands.select_related('target_item', 'target_item__category'))
     bom.preload(d.target_item for d in demand_rows)
     for demand in demand_rows:
         target = demand.target_item
@@ -1105,7 +1161,37 @@ def project_deficit(project, with_tree=True, bom=None):
         'project_name': project.description,
         'demands': demands,
         'components': components,
+        # Масштаб для меты формы (Ф4) — только детальной форме, список проектов его не ждёт.
+        'scale': _project_scale(demand_rows, bom) if with_tree else [],
     }
+
+
+def _project_scale(demand_rows, bom):
+    """Масштаб работы проекта (волна 23, Ф4, вариант Ивана «А»): сколько ШТУК наших
+    изделий предстоит собрать, по категориям — «21 система · 137 приборов · 116 узлов
+    печатных». Разузлование по `native`-узлам: штуки перемножаются по дереву, поэтому
+    дубль (МУДМ в двух системах по 2 шт.) честно даёт 4 сборки; система сама тоже
+    считается — её тоже собирают. Покупное сюда не входит — его считает «Потребность».
+    Порядок — канон категорий (`CATEGORY_CANON`), незнакомые — в хвосте."""
+    counts, cats = {}, {}
+
+    def add(item, qty, visiting):
+        key = item.category_id
+        counts[key] = counts.get(key, ZERO) + qty
+        cats[key] = item.category
+        if item.id in visiting:                # страховка от цикла (гасит add_bom_line)
+            return
+        for bl in bom.children(item):
+            if bl.component.native:
+                add(bl.component, qty * bl.qty, visiting | {item.id})
+
+    for demand in demand_rows:
+        add(demand.target_item, demand.qty, frozenset())
+    rank = {code: i for i, (code, _, _) in enumerate(CATEGORY_CANON)}
+    keys = sorted(counts, key=lambda k: (rank.get(cats[k].code, 99) if cats[k] else 100,
+                                         cats[k].code if cats[k] else ''))
+    return [{'category': cats[k].code if cats[k] else None, 'count': counts[k],
+             'forms': _count_forms(cats[k])} for k in keys]
 
 
 def project_health(project, bom=None):
@@ -3423,11 +3509,13 @@ def scope_demand(projects, active_only=True):
             row = acc.setdefault(item.id, {
                 'item': item,
                 'need': ZERO, 'kitted': ZERO, 'in_stock': ZERO, 'on_order': ZERO,
-                'anomaly': False,
+                'kitted_cost': ZERO, 'in_stock_cost': ZERO, 'anomaly': False,
             })
             row['need'] += need
             row['kitted'] += supply.kitted(item)
             row['in_stock'] += supply.available(item)
+            row['kitted_cost'] += supply.kitted_cost(item)
+            row['in_stock_cost'] += supply.available_cost(item)
             row['on_order'] += supply.on_order(item)
             # Аномалия — свойство лота, а не суммы: хватает одного минусового лота в
             # одном проекте охвата, чтобы строка просила разбирательства.
@@ -3447,6 +3535,7 @@ def scope_demand(projects, active_only=True):
             'uom': item.uom,
             'supply': _supply_status(row),
             'anomaly': agg['anomaly'],
+            **_money_fields(item, agg['kitted_cost'], agg['in_stock_cost']),
         })
         rows.append(row)
     # Тот же порядок, что в «Потребности» проекта: горит вперёд, внутри — по коду.
@@ -4813,6 +4902,11 @@ def lock_item(item):
     Ф12e: категория обязательна ЗДЕСЬ, а не при рождении (изделие заводится по
     клику пустым). Дружелюбный отказ до CHECK `item_locked_has_category` — тот
     остаётся страховкой от прямого ORM/админки."""
+    if item.synced:
+        # Ф5 (волна 23): фиксируется всё, кроме библиотечного — его защищает библиотека
+        # (CHECK `item_synced_implies_not_locked`; здесь — человеческий отказ вместо 500).
+        raise ValidationError('Библиотечный компонент не фиксируется — его защищает '
+                              'библиотека: правится только цена.')
     if item.category_id is None:
         raise ValidationError('Перед фиксацией выберите категорию изделия.')
     if not item.locked:
@@ -4838,8 +4932,14 @@ def update_item(item, changes):
     Матрица `synced × locked` (Ф3a): зафиксированное (`locked`) — read-only целиком;
     библиотечное расфиксированное (`synced`) — правится ТОЛЬКО оценочная стоимость
     (остальные поля приходят из библиотеки, руками не трогаем); ручное расфиксированное
-    — правится всё. `synced` руками не переключается (ставит только синк)."""
-    _require_item_unlocked(item)
+    — правится всё. `synced` руками не переключается (ставит только синк).
+
+    Волна 23, Ф5 (решение Ивана): у ЗАФИКСИРОВАННОГО компонента (ручного — у
+    библиотечного замка не бывает) цена остаётся правимой — синхронно с библиотечным:
+    цена компонента живёт рынком, а не КД. Изделие (`native`) заперто целиком: его цена —
+    роллап по составу («Переоценить»)."""
+    if item.locked and (item.native or set(changes) - {'estimated_cost'}):
+        _require_item_unlocked(item)
     if item.synced:
         illegal = set(changes) - {'estimated_cost'}
         if illegal:
@@ -5682,3 +5782,261 @@ def change_password(user, current, new, repeat):
     user.set_password(new)
     user.save(update_fields=['password'])
     return user
+
+
+# --------------------------------------------------------------------------- #
+#  Предпросмотр фиксации (волна 23, Ф1) — «осознанная шероховатость»
+# --------------------------------------------------------------------------- #
+# Фиксация — самое весомое действие формы, и решение Ивана — сделать его ощутимым:
+# перед «Зафиксировать» / «Расфиксировать» окно говорит, к чему это приведёт, ЖИВЫМИ
+# числами («41 позиция на 359 364 ₽ начнёт считаться в „Заказано“ ЛК-1»). Последствия —
+# смысл, поэтому живут здесь; вью только рисует окно. Отказ (`refusal`) не
+# пересказываем, а получаем честно: настоящая фиксация в транзакции с откатом — та же
+# проверка, что у кнопки, без второй копии гейтов.
+
+class _DryRun(Exception):
+    """Откат пробной фиксации в `fixation_preview`."""
+
+
+def _plural(n, one, few, many):
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def _count(n, one, few, many):
+    return f'{n} {_plural(n, one, few, many)}'
+
+
+def _agree(n, one, many):
+    """Глагол при числительном: «41 позиция начнёт», «42/89 позиций начнут»."""
+    n = abs(int(n))
+    return one if n % 10 == 1 and n % 100 != 11 else many
+
+
+def _rub(value):
+    """Рубли для текста окна: разряды узким пробелом, копейки — только если есть."""
+    value = Decimal(value or 0)
+    text = f'{value:,.2f}' if value != value.to_integral() else f'{value:,.0f}'
+    return text.replace(',', ' ').replace('.', ',') + ' ₽'
+
+
+def _qty(value):
+    value = Decimal(value or 0).normalize()
+    return format(value, 'f').replace('.', ',')
+
+
+def _estimate(lines):
+    """Оценка строк `(item, qty)`: сумма по `estimated_cost` + число позиций без оценки."""
+    total, missing = ZERO, 0
+    for item, qty in lines:
+        if item.estimated_cost is None:
+            missing += 1
+        else:
+            total += qty * item.estimated_cost
+    return total, missing
+
+
+def _estimate_lines(n, total, missing, verb_phrase):
+    """«41 позиция на 359 364 ₽ (оценка) …» + предупреждение о позициях без оценки.
+    `verb_phrase` — `(при одной, при многих)`: глагол согласуется с числом позиций."""
+    head = _count(n, 'позиция', 'позиции', 'позиций') + (
+        f' на {_rub(total)} (оценка)' if total else ' без оценки')
+    verb_phrase = _agree(n, *verb_phrase)
+    out = [{'text': f'{head} {verb_phrase}'}]
+    if missing and total:
+        out.append({'text': f'у {_count(missing, "позиции", "позиций", "позиций")} нет '
+                            f'оценки — в сумму они не вошли', 'warn': True})
+    return out
+
+
+def _lots_word(n):
+    return _count(n, 'партия', 'партии', 'партий')
+
+
+def _lots_cost(lots):
+    return sum((lot.qty * lot.unit_cost for lot in lots), ZERO)
+
+
+def _doc_lines_lots(doc):
+    """Строки расхода документа (`qty < 0`) → (число партий, сумма шт.)."""
+    lines = [sl for sl in doc.lines.all() if sl.qty < 0]
+    return len({sl.lot_id for sl in lines}), sum((-sl.qty for sl in lines), ZERO)
+
+
+def _consequences(entity, obj, lock):
+    """Строки последствий по виду. `lock` — фиксация (True) / расфиксация (False)."""
+    if entity == 'purchases':
+        lines = [(pl.item, pl.qty) for pl in obj.lines.select_related('item')]
+        total, missing = _estimate(lines)
+        p = obj.project.code
+        out = _estimate_lines(
+            len(lines), total, missing,
+            (f'начнёт считаться в «Заказано» проекта {p}',
+             f'начнут считаться в «Заказано» проекта {p}') if lock else
+            (f'выйдет из «Заказано» проекта {p} — дефицит вырастет',
+             f'выйдут из «Заказано» проекта {p} — дефицит вырастет'))
+        receipts = models.StockDocument.objects.filter(purchase=obj).count()
+        if not lock and receipts:
+            out.append({'text': f'привязанные поставки ({receipts}) останутся привязанными'})
+        return out
+    if entity == 'procurements':
+        lines = [(pl.item, pl.qty) for pl in obj.lines.select_related('item')]
+        total, missing = _estimate(lines)
+        out = _estimate_lines(len(lines), total, missing,
+                              ('станет утверждённым планом', 'станут утверждённым планом')
+                              if lock else ('вернётся в черновик плана',
+                                            'вернутся в черновик плана'))
+        out.append({'text': 'на баланс проектов закупка не влияет — в «Заказано» '
+                            'считаются только заказы'})
+        return out
+    if entity == 'items':
+        # На склад и балансы фиксация изделия не влияет — последствие у неё одно, и
+        # оно же последняя строка (`_editability`), поэтому здесь пусто.
+        return []
+    if entity == 'projects':
+        if lock:
+            return [{'text': f'проект {obj.code} станет архивным — веха «работа завершена»'},
+                    {'text': 'остатков нет: все партии проекта сведены в 0'}]
+        return [{'text': f'проект {obj.code} снова станет активным'}]
+
+    # Складские ордера: фиксация двигает склад (Ф15), расфиксация — откатывает.
+    # Глагол везде согласуется с числом партий: «1 партия уйдёт», «3 партии уйдут».
+    project = obj.project.code if obj.project_id else '—'
+    if entity in ('receipts', 'inventories'):
+        lots = list(obj.lots.all())
+        n, cost = len(lots), _lots_cost(lots)
+        head = (_count(n, 'найденная партия', 'найденные партии', 'найденных партий')
+                if entity == 'inventories' else _lots_word(n))
+        if cost:
+            head += f' на {_rub(cost)}' + (' (по УПД)' if entity == 'receipts' else '')
+        out = [{'text': f'{head} ' + (f'{_agree(n, "ляжет", "лягут")} на склад проекта {project}'
+                                      if lock else
+                                      f'{_agree(n, "уйдёт", "уйдут")} со склада проекта {project}')}]
+        if entity == 'receipts' and obj.purchase_id:
+            out.append({'text': f'строки заказа «{obj.purchase.code}» '
+                                + ('будут закрыты поставкой' if lock
+                                   else 'снова станут ожидаемыми')})
+        if not lock:
+            used = len(_consumed_lot_ids(lots))
+            if used:
+                out.append({'text': f'{_lots_word(used)} уже '
+                                    f'{_agree(used, "израсходована", "израсходованы")} в '
+                                    f'других документах — {_agree(used, "её", "их")} остаток '
+                                    f'уйдёт в минус', 'warn': True})
+        return out
+    if entity == 'kittings':
+        target = obj.target_item.code if obj.target_item_id else '—'
+        n, _ = _doc_lines_lots(obj)
+        n_items = len({sl.lot.item_id for sl in obj.lines.select_related('lot') if sl.qty < 0})
+        if lock:
+            return [{'text': f'родится партия-прибор {target} × {_qty(obj.qty)} в проекте '
+                             f'{project}, себестоимость {_rub(_device_unit_cost(obj))} за шт.'},
+                    {'text': f'со склада {_agree(n, "спишется", "спишутся")} {_lots_word(n)} '
+                             f'компонентов ({_count(n_items, "позиция", "позиции", "позиций")})'}]
+        return [{'text': f'партия-прибор {target} × {_qty(obj.qty)} будет удалена'},
+                {'text': f'{_lots_word(n)} компонентов {_agree(n, "вернётся", "вернутся")} '
+                         f'на склад'}]
+    if entity in ('transfers', 'writeoffs'):
+        n, units = _doc_lines_lots(obj)
+        head = f'{_lots_word(n)} ({_qty(units)} шт.)'
+        if not lock:
+            return [{'text': f'{head} {_agree(n, "вернётся", "вернутся")} на склад проекта {project}'}]
+        if entity == 'transfers':
+            to = obj.contractor.description if obj.contractor_id else 'заказчику'
+            return [{'text': f'{head} {_agree(n, "уйдёт", "уйдут")} со склада проекта '
+                             f'{project} → {to}'}]
+        return [{'text': f'{head} {_agree(n, "будет списана", "будут списаны")} со склада '
+                         f'проекта {project}'}]
+    if entity == 'requisitions':
+        lines = [sl for sl in obj.lines.select_related('lot__project') if sl.qty < 0]
+        sources = ', '.join(sorted({sl.lot.project.code for sl in lines})) or '—'
+        n = len({sl.lot_id for sl in lines})
+        return [{'text': f'{_lots_word(n)} {_agree(n, "перейдёт", "перейдут")}: {sources} → {project}'
+                 if lock else
+                 f'{_lots_word(n)} {_agree(n, "вернётся", "вернутся")}: {project} → {sources}'}]
+    if entity == 'relocations':
+        lines = list(obj.lines.select_related('location'))
+        src = ', '.join(sorted({sl.location.code for sl in lines if sl.qty < 0})) or '—'
+        dst = ', '.join(sorted({sl.location.code for sl in lines if sl.qty > 0})) or '—'
+        n = len({sl.lot_id for sl in lines})
+        return [{'text': f'{_lots_word(n)} {_agree(n, "переедет", "переедут")}: {src} → {dst}'
+                 if lock else
+                 f'{_lots_word(n)} {_agree(n, "вернётся", "вернутся")}: {dst} → {src}'}]
+    return []
+
+
+# Вид → (модель, винительный падеж) — заголовок окна. Ключ = сегмент URL
+# сущности (`purchases/12/lock/`), тот же, по которому вью находит объект.
+FIXATION_KINDS = {
+    'items': (models.Item, 'изделие'),
+    'projects': (models.Project, 'проект'),
+    'purchases': (models.Purchase, 'заказ'),
+    'procurements': (models.Procurement, 'закупку'),
+    'receipts': (models.Receipt, 'поставку'),
+    'kittings': (models.Kitting, 'комплектацию'),
+    'transfers': (models.Transfer, 'передачу'),
+    'writeoffs': (models.Writeoff, 'списание'),
+    'requisitions': (models.Requisition, 'требование'),
+    'inventories': (models.Inventory, 'инвентаризацию'),
+    'relocations': (models.Relocation, 'перемещение'),
+}
+
+
+def _fixation_fns():
+    return {
+        'items': (lock_item, unlock_item), 'projects': (lock_project, unlock_project),
+        'purchases': (lock_purchase, unlock_purchase),
+        'procurements': (lock_procurement, unlock_procurement),
+        'receipts': (lock_receipt, unlock_receipt), 'kittings': (lock_kitting, unlock_kitting),
+        'transfers': (lock_transfer, unlock_transfer),
+        'writeoffs': (lock_writeoff, unlock_writeoff),
+        'requisitions': (lock_requisition, unlock_requisition),
+        'inventories': (lock_inventory, unlock_inventory),
+        'relocations': (lock_relocation, unlock_relocation),
+    }
+
+
+def _editability(entity, obj, lock):
+    """Последняя строка окна — что станет с правкой формы. Расфиксация называет и
+    кнопку (вариант Ивана): после неё форма остаётся в просмотре, правку открывает
+    «Редактировать» — отдельным решением (UI_GUIDE §5)."""
+    what = ('строки и шапка', 'строки и шапку')            # им. / вин. падеж
+    if entity == 'items':
+        n = obj.bom_lines.count()
+        bom = f'состав ({_count(n, "строка", "строки", "строк")}) и свойства'
+        what = (bom, bom) if n else ('свойства', 'свойства')
+    if lock:
+        if entity == 'items' and not obj.native:
+            return {'text': f'{what[0]} станут только для чтения — кроме цены'}
+        return {'text': f'{what[0]} станут только для чтения'}
+    return {'text': f'{what[1]} снова можно будет редактировать — кнопкой «Редактировать»'}
+
+
+def fixation_preview(entity, pk, lock):
+    """Окно перед фиксацией (`lock=True`) / расфиксацией: `{title, verb, lines,
+    refusal}`. `lines` — `[{text, warn?}]`, последней всегда строка про правимость
+    (решение Ивана: «для человека, который знает, как оно работает», но оставить —
+    удалить потом легко). `refusal` — текст отказа движка или `None`."""
+    model, accusative = FIXATION_KINDS[entity]
+    obj = model.objects.get(pk=pk)
+    code = getattr(obj, 'code', '') or f'#{obj.pk}'
+    verb = 'Зафиксировать' if lock else 'Расфиксировать'
+    refusal = None
+    try:
+        with transaction.atomic():
+            fn = _fixation_fns()[entity][0 if lock else 1]
+            fn(model.objects.get(pk=pk))       # свежая копия: пробный прогон её портит
+            raise _DryRun
+    except _DryRun:
+        pass
+    except ValidationError as e:
+        refusal = e.messages[0] if e.messages else str(e)
+    # При отказе последствий не перечисляем: их не будет, а строка вроде «остатков нет»
+    # рядом с отказом «есть остатки» соврала бы.
+    lines = [] if refusal else _consequences(entity, obj, lock) + [_editability(entity, obj, lock)]
+    return {'title': f'{verb} {accusative} «{code}»?', 'verb': verb,
+            'lines': lines, 'refusal': refusal}

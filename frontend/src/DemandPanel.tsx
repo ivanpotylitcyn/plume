@@ -19,7 +19,7 @@
 // заказа — «у проекта нет приборов».
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type Demand } from './api'
-import { NeedHead, NeedRow, needPass, useNeedFilters } from './NeedTable'
+import { NeedHead, NeedRow, NeedSums, needPass, useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
 
 // Вид документа-хозяина витрины. Он же выбирает ручку движка и падеж в подсказках —
@@ -69,6 +69,7 @@ export function DemandRows({ st, editable, empty, openItem, take }: {
   const shown = byCat.shown.filter(r => needPass(r, f))
   return (
     <div className="pgrid pgrid--acts">
+      <NeedSums rows={shown} acts />
       <NeedHead f={f} catHead={byCat.head} acts />
       {shown.length === 0
         ? <div className="prow prow--comp prow--empty">

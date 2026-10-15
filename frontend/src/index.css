@@ -388,7 +388,11 @@ body { overflow: hidden; }
 
 /* Тело активного таба. Сверху тесно: заголовок списка — такая же строка, как данные,
    и большой отступ делал её «первой высокой строкой» (§7a). */
-.fs-list { padding: 4px 16px 12px; }
+/* Тело таба прокручивается ВБОК, когда таблица шире окна (волна 23, Ф3): на телефоне в
+   режиме «как десктоп» (~980px) «Потребность» резалась после «Склада» — `.fs-body`
+   обрезает переполнение (скругление панели), а прокрутки не было. Прокручивается только
+   тело: полоса табов остаётся на месте. Липких заголовков нет — прокрутке не мешает. */
+.fs-list { padding: 4px 16px 12px; overflow-x: auto; }
 .fs-list > :first-child { margin-top: 0; }
 /* Замещающий текст пустого таба: дышит одинаково сверху и снизу — иначе липнет к
    полосе табов (принято 2026-07-26). 8px + 4px паддинга тела = 12px, как снизу. */
@@ -647,6 +651,10 @@ tr.row { border-left: 2px solid transparent; }
    код↔«Компонент» стоят по одной вертикали. Все треки фиксированы/fr (без content-
    auto) — колонки выравниваются между всеми строками. Имя усекается, не расталкивает.
    Ширину НЕ фиксируем (волна 19, Ф11): строки занимают всю ширину рабочего поля. */
+/* Сетка не уже своих колонок (Ф3): в узком окне строка иначе оставалась шириной окна,
+   а колонки вылезали за неё — разделитель и подсветка обрывались посреди прокрутки.
+   В широком окне `min-content` не мешает: строки по-прежнему во всю ширину. */
+.pgrid { min-width: min-content; }
 .prow { display: grid; align-items: center; column-gap: 8px;
   line-height: var(--line-row);   /* та же единица строки, что в таблицах (§7a) */
   min-height: calc(var(--line-row) + 7px);   /* тот же пол высоты, что у ячейки таблицы */
@@ -733,7 +741,13 @@ table.grid td.num .ci.sg { margin-left: 6px; }
    в «Потребности», глиф и раскрыватель (36) — в «Приборах», дереве состава и «Строках»
    закупки. Первое число подросло с 18 вместе с зазором ведущей ячейки (`lead--item`,
    2026-08-11): подпись обязана ехать за кодом, иначе колонка называет пустое место. */
-.prow--head .tree-cell { padding-left: 23px; }
+.prow--head .tree-cell, .prow--sums .tree-cell { padding-left: 23px; }
+/* Строка сумм над шапкой (волна 23, Ф2): числа — обычным цветом (это ответ, ради
+   которого смотрят), подпись ведущей ячейки приглушена и стоит над кодом, как у шапки.
+   Разделитель под ней — обычный, как у строк (правило `.prow--comp` ниже): линию во всю
+   ширину панели пробовали и отказались — своя разметка ради одной линии не стоит того. */
+.prow--sums .tree-cell { color: var(--fg-dim); }
+.prow--sums .unest { color: var(--st-order); }
 .prow--head.head--tree .tree-cell { padding-left: 36px; }
 /* Фильтр внутри ВЕДУЩЕЙ ячейки: зазор ей уже даёт `gap` флекса, свой отступ фильтра
    сложился бы с ним в двойной. В `th` таблиц флекса нет — там отступ несёт сам фильтр. */
@@ -761,7 +775,7 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
 /* Тонкая серая полоса-разделитель — у ВСЕХ строк-данных единообразно (правило строк,
    UI_GUIDE §7a). Раньше её несли только `--comp`; device-строки «Приборов» шли без неё
    и без общего margin-top (снят) разъезжались с «Потребностью». */
-.prow--comp, .prow--device { border-bottom: 1px solid var(--border); }
+.prow--comp, .prow--device, .prow--sums { border-bottom: 1px solid var(--border); }
 .prow .chev { background: none; border: none; color: var(--fg-dim); cursor: pointer;
   padding: 0; font-size: 12px; line-height: 1; justify-self: start; }
 .prow .chev:hover { color: var(--fg-bright); }
@@ -1003,12 +1017,27 @@ tr.row.ghost .glyph { opacity: 1; }
 .form-locked .lot-sel { pointer-events: none; }
 .form-locked select.lot-sel { background-image: none; }
 
-/* ---- палитра ⌘K (§8) ---- */
-.palette-scrim { position: fixed; inset: 0; background: var(--scrim);
+/* ---- модальный слой: палитра ⌘K (§8) и окно фиксации (волна 23, Ф1) ----
+   Затемнение — одна роль на оба окна (`.scrim`, было `.palette-scrim`): страница под
+   окном гаснет, окно встаёт в верхней трети. */
+.scrim { position: fixed; inset: 0; background: var(--scrim);
   display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 50; }
 .palette { width: 560px; max-width: 92vw; background: var(--bg-widget);
   border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden;
   box-shadow: 0 12px 40px var(--shadow-modal); }
+/* Окно фиксации: та же коробка, что у палитры. Последствия — список, предупреждение
+   тоном «ждём» (оранжевый), отказ — тоном «нужна работа» (красный). Кнопки — язык
+   команд шапки (`.fh-ctl`: подпись + Codicon), справа внизу. */
+.dialog { width: 520px; max-width: 92vw; background: var(--bg-widget);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 16px 18px 12px;
+  box-shadow: 0 12px 40px var(--shadow-modal); font-size: 13px; }
+.dialog h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--fg-bright); }
+.dialog ul { margin: 0 0 12px; padding-left: 18px; }
+.dialog li { margin: 4px 0; color: var(--fg); }
+.dialog li.warn { color: var(--st-wip); }
+.dialog .refusal { margin: 0 0 12px; color: var(--st-order); }
+.dialog .wait { margin: 0 0 12px; color: var(--fg-dim); }
+.dialog .dialog-cmds { display: flex; justify-content: flex-end; gap: 6px; }
 .palette input { width: 100%; background: none; border: none; color: var(--fg-bright);
   font-family: var(--font-mono); font-size: 15px; padding: 14px 16px; outline: none;
   border-bottom: 1px solid var(--border); }

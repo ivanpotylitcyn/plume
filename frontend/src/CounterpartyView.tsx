@@ -27,6 +27,7 @@ import { ProcurementFeed, PurchaseFeed, ReceiptFeed } from './FeedTables'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import type { OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
+import { ask } from './dialog'
 
 // Итог в натуре — вектор по единицам, а не одно число: штуки с метрами не складываем
 // (§13.6). Пустой вектор — прочерк, как у пустого поля шапки.
@@ -64,8 +65,8 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
 
   // Удаление под замком: friendly-guard бэка (поставки/передачи/заказы держат наглухо,
   // закупки-планы просто потеряют контрагента — `SET_NULL`, Ф17).
-  const del = () => {
-    if (!c || !confirm('Удалить контрагента? Действие необратимо.')) return
+  const del = async () => {
+    if (!c || !(await ask({ title: `Удалить контрагента «${c.code || c.description}»?`, verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     api.deleteCounterparty(c.id).then(() => { onChanged?.(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))

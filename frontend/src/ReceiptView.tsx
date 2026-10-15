@@ -34,7 +34,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       onChanged, onDeleted,
       onLoad: c => { api.projectPurchases(c.project_id).then(setPurchases) },
       remove: api.deleteReceipt,
-      confirmDelete: 'Удалить поставку (УПД)? Рождённые партии будут сняты. Действие необратимо.',
+      confirmDelete: { noun: 'поставку', lines: ['рождённые партии будут сняты'] },
     }, isNew)
   const att = useAttachments('receipt', receiptId)   // загрузка — команда шапки (§13.8)
   // Фильтр строк по классу изделия — общий движок (2026-08-10): в УПД на сотню позиций
@@ -102,7 +102,8 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       fixed={fixed}
       onFixate={() => run(api.lockReceipt(c.id))}
       fixateTitle="Сверено со сканом — зафиксировать поставку"
-      onUnfix={() => { if (confirm('Расфиксировать поставки?')) run(api.unlockReceipt(c.id)) }}
+      onUnfix={() => run(api.unlockReceipt(c.id))}
+      fixation={`receipts/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (скан УПД) — появится в табе «Файлы»', disabled: att.busy }]}

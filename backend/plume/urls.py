@@ -40,6 +40,8 @@ urlpatterns = [
     path('categories/', views.categories, name='categories'),
     # правка описания класса из таба «Категории» формы синхронизации (волна 22)
     path('hygiene/', views.hygiene, name='hygiene'),
+    # Волна 23, Ф1: окно перед фиксацией — один маршрут на все 11 сущностей.
+    path('<str:entity>/<int:pk>/fixation/', views.fixation, name='fixation'),
     path('items/', views.items, name='items'),
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),

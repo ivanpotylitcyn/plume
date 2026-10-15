@@ -38,7 +38,7 @@ export function TransferView({ transferId, isNew, openItem, openProject,
       onChanged, onDeleted,
       onLoad: c => { api.projectAvailableLots(c.project_id).then(setLots) },
       remove: api.deleteTransfer,
-      confirmDelete: 'Удалить передачу (накладную)? Действие необратимо.',
+      confirmDelete: { noun: 'передачу' },
     }, isNew)
   const att = useAttachments('transfer', transferId)   // загрузка — команда шапки (§13.8)
 
@@ -88,7 +88,8 @@ export function TransferView({ transferId, isNew, openItem, openProject,
       fixed={fixed}
       onFixate={() => run(api.lockTransfer(c.id))}
       fixateTitle="Отгружено — зафиксировать передачу"
-      onUnfix={() => { if (confirm('Расфиксировать передачу? Отгрузка откатится.')) run(api.unlockTransfer(c.id)) }}
+      onUnfix={() => run(api.unlockTransfer(c.id))}
+      fixation={`transfers/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (скан накладной) — появится в табе «Файлы»', disabled: att.busy }]}

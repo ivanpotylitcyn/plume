@@ -16,7 +16,7 @@
 // «Скомплектовано» распирало колонку под слово, которое ни одно число не заполняет.
 import { useState, type ReactNode } from 'react'
 import type { DeficitComponent, Status } from './api'
-import { Balance, balanceTitle, num, ItemGlyph } from './status'
+import { Balance, balanceTitle, money, num, ItemGlyph } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
 
@@ -106,6 +106,70 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
         Баланс{f && <ColumnFilter opts={BALANCE_OPTS} value={f.balance}
           onPick={v => f.set('balance', v)} />}</span>
       <span className="puom" title="единица измерения строки">Ед.</span>
+      {acts && <span />}
+    </div>
+  )
+}
+
+// ─── Суммы над колонками (волна 23, Ф2) ───
+//
+// «Сколько стоит то, что показано»: строка над шапкой, по ОТФИЛЬТРОВАННЫМ строкам —
+// фильтр по категории даёт деньги на детали, электронику, крепёж по отдельности. Это и
+// было нужно для планирования закупок (решения Ивана 2026-10-15):
+//   · Потр., Заказ, Баланс — по оценке Item (факта тут нет и быть не может);
+//   · Компл., Склад — по факту партий (цена УПД / себестоимость);
+//   · над Балансом — ТОЛЬКО минусы, «предстоит купить»: излишек одной позиции не
+//     покупает другую, а плюсы и нули уже учтены в Компл./Складе/Заказе.
+// В тысячах, единица — в колонке «Ед.» («тыс ₽», правка Ивана: единица квалифицирует
+// всю строку, как «шт» у строк): с суффиксом «тыс» в ячейке число с глифом не влезало в
+// 74px (замер); точное число в рублях — под курсором.
+// Глифы после сумм — те же, что у строк: так суммы встают ровно над числами.
+function kRub(x: number): string {
+  if (x === 0) return '0'
+  const k = x / 1000
+  return (Math.abs(k) < 10
+    ? k.toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+    : Math.round(k).toLocaleString('ru-RU'))
+}
+
+function SumCell({ value, glyph, tone, what }: {
+  value: number; glyph?: string; tone?: string; what: string
+}) {
+  return (
+    <span className="pnum" title={`${what}: ${money(value)}`}>
+      {kRub(value)}
+      {glyph && <span className={`ci sg ci-${glyph} sg-${value ? tone : 'none'}`} />}
+    </span>
+  )
+}
+
+export function NeedSums({ rows, acts }: { rows: DeficitComponent[]; acts?: boolean }) {
+  let need = 0, kitted = 0, stock = 0, order = 0, short = 0
+  const unestimated: string[] = []
+  for (const r of rows) {
+    kitted += r.kitted_cost
+    stock += r.in_stock_cost
+    if (r.price == null) { if (r.need || r.on_order) unestimated.push(r.component_code); continue }
+    need += r.need * r.price
+    order += r.on_order * r.price
+    if (r.balance < 0) short += r.balance * r.price
+  }
+  return (
+    <div className="prow prow--sums">
+      <span className="tree-cell">Оценка</span>
+      {/* Без ▲ (правка Ивана): треугольник занят статусами — здесь просто красный текст. */}
+      <span className="name">
+        {unestimated.length > 0 &&
+          <span className="unest" title={'без оценки: ' + unestimated.join(', ')}>
+            {unestimated.length} поз. без оценки — суммы неполны</span>}
+      </span>
+      <SumCell value={need} what="потребность по оценке" />
+      <SumCell value={kitted} glyph="notebook" tone="ok" what="впаяно, по цене партий" />
+      <SumCell value={stock} glyph="layers" tone="ok" what="на складе, по цене партий" />
+      <SumCell value={order} glyph="package" tone="wip" what="в заказе, по оценке" />
+      <SumCell value={short} glyph="warning" tone="order"
+        what="предстоит купить (только минусы баланса), по оценке" />
+      <span className="puom">тыс ₽</span>
       {acts && <span />}
     </div>
   )

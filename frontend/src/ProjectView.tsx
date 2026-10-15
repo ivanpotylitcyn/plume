@@ -20,12 +20,13 @@ import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { PurchaseFeed, ReceiptFeed } from './FeedTables'
-import { BalanceCells, Member, NeedHead, NeedRow, needPass,
+import { BalanceCells, Member, NeedHead, NeedRow, NeedSums, needPass,
   useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
 import { ItemPicker } from './Picker'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { EntityLink } from './EntityLink'
+import { ask } from './dialog'
 
 export function ProjectView({ projectId, items, isNew, openItem, openOrder, openPurchase,
   openCounterparty, onChanged, onDeleted }:
@@ -88,8 +89,9 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
   }
 
   // Удаление проекта (WAVE14 Ф2) под замком: только пустой (guard бэка), иначе — закрытие.
-  const del = () => {
-    if (!confirm('Удалить проект? Возможно только для пустого проекта. Действие необратимо.')) return
+  const del = async () => {
+    if (!(await ask({ title: 'Удалить проект?',
+      lines: ['возможно только для пустого проекта'], verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     api.deleteProject(projectId).then(() => { onChanged?.(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -99,7 +101,6 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
   if (err && !data) return <div className="empty">Ошибка: {err}</div>
   if (!data) return <div className="empty">Загрузка…</div>
 
-  const deviceTotal = data.demands.reduce((s, d) => s + d.qty, 0)
   const code = phead?.code ?? data.project_code   // после правки кода — из phead (живо)
   const closed = phead?.locked ?? false           // зафиксирован = закрыт (§5)
   const locked = closed || !unlocked
@@ -130,6 +131,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       content: data.components.length === 0
         ? <div className="tab-empty">Нет компонентов — задайте приборы и их составы.</div>
         : <div className="pgrid">
+            <NeedSums rows={shown} />
             <NeedHead f={filters} catHead={byCat.head} />
             {shown.length === 0
               ? <div className="prow prow--comp prow--empty">
@@ -195,24 +197,26 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       // Мета (§13.6): счёт по табам в их порядке + приборы штуками. Описание и бюджет
       // не повторяем — они в полях; аномалии остатков всплывают отдельным сегментом.
       meta={<>
-        {external && <>
-          {/* Приборы считаем ШТУКАМИ, а не строками потребности (2026-08-28): проект
-              делает 8 образцов, и это число, которым живёт НИР. Наименования идут
-              ВТОРЫМ числом и в родительном падеже — «8 образцов 4 приборов» читается
-              одной фразой, тогда как «4 прибора · 8 шт» было двумя сегментами про одно
-              и то же, да ещё и менее важным вперёд. Родительный: 1 → «прибора»,
-              остальные → «приборов» (21 прибора, 11 приборов). */}
-          {count(deviceTotal, 'образец', 'образца', 'образцов')}
-          {' '}{count(data.demands.length, 'прибора', 'приборов', 'приборов')}
-          {' · '}{count(data.components.length, 'компонент', 'компонента', 'компонентов')}
-          {' · '}
-        </>}
-        {count(supply?.purchases.length ?? 0, 'заказ', 'заказа', 'заказов')}
-        {' · '}{count(supply?.receipts.length ?? 0, 'поставка', 'поставки', 'поставок')}
-        {' · '}{count(residuals.length, 'партия', 'партии', 'партий')}
-        {(closure?.anomaly_count ?? 0) > 0 &&
-          <span className="anomaly"> · {closure!.anomaly_count} в минусе</span>}
-        {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+        {/* Масштаб работы (волна 23, Ф4, вариант Ивана): ШТУКИ наших изделий по всему
+            дереву, по категориям — «21 система · 137 приборов · 116 узлов печатных».
+            Сменил «8 образцов 4 приборов» (2026-08-28), который видел только верхний
+            уровень потребности. Слова и порядок — из движка (`scale`), склонение здесь.
+            Отдельной ПЕРВОЙ строкой (правка Ивана): масштаб — свой разговор, счёт по
+            табам — второй строкой, оглавлением, как у остальных форм. */}
+        {external && data.scale.length > 0 &&
+          <div>{data.scale.map(x => count(x.count, ...x.forms)).join(' · ')}</div>}
+        <div>
+          {external && <>
+            {count(data.components.length, 'компонент', 'компонента', 'компонентов')}
+            {' · '}
+          </>}
+          {count(supply?.purchases.length ?? 0, 'заказ', 'заказа', 'заказов')}
+          {' · '}{count(supply?.receipts.length ?? 0, 'поставка', 'поставки', 'поставок')}
+          {' · '}{count(residuals.length, 'партия', 'партии', 'партий')}
+          {(closure?.anomaly_count ?? 0) > 0 &&
+            <span className="anomaly"> · {closure!.anomaly_count} в минусе</span>}
+          {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
+        </div>
       </>}
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
@@ -227,17 +231,14 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       // Фиксация проекта = закрытие (свод остатков в 0 + веха). Гейт бэка тот же,
       // подсказка несёт причину отказа (`blocker`).
       fixed={closed}
-      onFixate={closure?.is_external
-        ? () => {
-            if (!closure.can_close) { setErr(closure.blocker); return }
-            if (confirm('Зафиксировать проект? Остатков быть не должно.'))
-              runC(api.lockProject(projectId))
-          }
-        : undefined}
+      // Отказ (остатки не сведены) теперь говорит окно фиксации — пробной фиксацией в
+      // движке, той же проверкой, что у кнопки (волна 23, Ф1).
+      onFixate={closure?.is_external ? () => runC(api.lockProject(projectId)) : undefined}
       fixateTitle={closure?.can_close
         ? 'Остатков нет — закрыть проект (веха)'
         : closure?.blocker || 'Зафиксировать проект'}
       onUnfix={closure?.is_external ? () => runC(api.unlockProject(projectId)) : undefined}
+      fixation={`projects/${projectId}`}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (договор, ТЗ) — появится в табе «Файлы»', disabled: att.busy }]}
       fields={<>
@@ -388,7 +389,10 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
           {editable &&
             <button className="fh-ctl icon fh-del" title="Убрать прибор из потребности"
               disabled={busy}
-              onClick={() => { if (confirm(`Убрать ${d.target_code} из потребности проекта?`)) run(api.deleteDemand(d.demand_id)) }}>
+              onClick={async () => {
+                if (await ask({ title: `Убрать ${d.target_code} из потребности проекта?`,
+                  verb: 'Убрать', icon: 'ci-trash' })) run(api.deleteDemand(d.demand_id))
+              }}>
               <span className="ci ci-trash" /></button>}
         </span>
       </div>

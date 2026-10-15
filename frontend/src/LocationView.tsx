@@ -14,6 +14,7 @@ import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { EntityLink } from './EntityLink'
+import { ask } from './dialog'
 
 export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted }: {
   locationId: number
@@ -40,8 +41,8 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
   }
 
   // Удаление склада (WAVE14 Ф2) под замком: confirm + friendly-guard (склад с движениями).
-  const del = () => {
-    if (!d || !confirm('Удалить склад? Действие необратимо.')) return
+  const del = async () => {
+    if (!d || !(await ask({ title: `Удалить склад «${d.code}»?`, verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     api.deleteLocation(d.id).then(() => { onChanged?.(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))

@@ -31,7 +31,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
     kittingId, api.kitting, {
       onChanged, onDeleted,
       remove: api.deleteKitting,
-      confirmDelete: 'Удалить комплектацию? Рождённый прибор будет снят. Действие необратимо.',
+      confirmDelete: { noun: 'комплектацию', lines: ['рождённый прибор будет снят'] },
     }, isNew)
   const att = useAttachments('kitting', kittingId)   // загрузка — команда шапки (§13.8)
   // Фильтр состава по классу компонента — общий движок (2026-08-10), как в форме
@@ -95,7 +95,8 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
       fixed={fixed}
       onFixate={() => run(api.lockKitting(c.id))}
       fixateTitle="Зафиксировать комплектацию — родить прибор"
-      onUnfix={() => { if (confirm('Расфиксировать комплектацию? Рождённый прибор откатится.')) run(api.unlockKitting(c.id)) }}
+      onUnfix={() => run(api.unlockKitting(c.id))}
+      fixation={`kittings/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (акт комплектации) — появится в табе «Файлы»', disabled: att.busy }]}

@@ -10,6 +10,7 @@ import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
 import { Login } from './Login'
 import { Dropdown } from './Dropdown'
 import { CommandPalette, type PaletteEntry } from './CommandPalette'
+import { DialogHost } from './DialogHost'
 import { ProjectView } from './ProjectView'
 import { ItemView } from './ItemView'
 import { LibraryImportView } from './LibraryImportView'
@@ -22,7 +23,7 @@ import { CounterpartyView } from './CounterpartyView'
 import { AccountView } from './AccountView'
 import { applyTheme } from './core/theme'
 import { parsePath, pathOf, type Mode, type Sel } from './core/route'
-import { StatusGlyph, SyncGlyph, statusTone } from './status'
+import { ItemGlyph, StatusGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
@@ -399,7 +400,8 @@ export default function App() {
             rows={[...items].filter(i => !i.native)
               .sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
                 id: i.id, code: i.code, name: i.description, category: i.category?.description,
-                glyph: <SyncGlyph synced={i.synced} /> }))} />}
+                // Ф5 (волна 23): библиотечный — стрелки, ручной — замок (`ItemGlyph`).
+                glyph: <ItemGlyph native={false} synced={i.synced} locked={i.locked} /> }))} />}
 
         {/* Волна 20: глиф строки = СТОРОНА контрагента по фактам документооборота
             (своей оси фиксации у справочника нет) — семейство `fold-*`, см. `SideGlyph`. */}
@@ -516,6 +518,8 @@ export default function App() {
 
       {paletteOpen &&
         <CommandPalette entries={paletteEntries} onClose={() => setPaletteOpen(false)} />}
+      {/* Фирменные окна вместо confirm()/alert() (волна 23, Ф1): хост один на продукт. */}
+      <DialogHost />
     </div>
   )
 }

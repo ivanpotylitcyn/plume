@@ -25,6 +25,7 @@
 // `src/`; в Ф7 он переедет в `themes/ide/` целиком, одним движением.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { FormCommands, FormCornerCommand, type FormCommandProps } from './FormHeader'
+import { tell } from './dialog'
 
 // Таб = один список формы. Счётчиков в табах НЕТ (решение 2026-07-26): числа рядом с
 // подписью шумели — счёт переехал в мету, которая без него была скудной (§13.6).
@@ -66,7 +67,8 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
     gone.current = false
     return () => {
       if (!gone.current && !codeRef.current.trim())
-        alert(`Код оставлять пустым нельзя. Задайте поле Код или удалите ${entityRef.current}.`)
+        void tell({ title: 'Код оставлять пустым нельзя',
+          lines: [`Задайте поле «Код» или удалите ${entityRef.current}.`] })
     }
   }, [id])
 

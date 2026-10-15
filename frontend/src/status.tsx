@@ -44,17 +44,22 @@ export function SyncGlyph({ synced, title }: { synced: boolean; title?: string }
     title={title ?? (synced ? 'из библиотеки' : 'заведено вручную')} />
 }
 
-// Глиф строки Item по режиму (Ф3a): РОВНО ОДИН. `native` → замок (`StatusGlyph`, ось
-// фиксации); `not native` → sync (`SyncGlyph`). Раскатан во ВСЕ списки, где встречается
+// Глиф строки Item (Ф3a): РОВНО ОДИН. Раскатан во ВСЕ списки, где встречается
 // изделие/компонент: справочник, BOM, дерево дефицита, потребность, закупка. Так глиф
 // «перетекает» с сущностью одинаково везде.
+//
+// Волна 23, Ф5 (решение Ивана): глиф выбирает не `native`, а ЧЕМ защищена сущность.
+// Библиотечный компонент (`synced`) защищён библиотекой — зелёные стрелки, фиксации у
+// него нет. Всё остальное — изделие И ручной компонент — защищено фиксацией: замок
+// (оранжевый открыт / зелёный заперт). Синк, подтвердив ручной компонент, снимает замок
+// и метит `synced` — глиф сам меняется на стрелки.
 export function ItemGlyph({ native, synced, locked, tone, title }: {
   native: boolean; synced: boolean; locked: boolean
   tone?: 'fix' | 'ok' | 'wip' | 'order' | 'none'; title?: string
 }) {
-  return native
-    ? <StatusGlyph locked={locked} tone={tone} title={title} />
-    : <SyncGlyph synced={synced} title={title} />
+  return synced && !native
+    ? <SyncGlyph synced title={title} />
+    : <StatusGlyph locked={locked} tone={tone} title={title} />
 }
 
 // Глиф вложения (волна 19, Ф12a). ФОРМА = вид файла (по расширению: pdf, картинка,

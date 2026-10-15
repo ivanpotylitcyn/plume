@@ -16,6 +16,7 @@ import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
 import { useCategoryFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
+import { ask } from './dialog'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
@@ -57,8 +58,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
   }
 
   // Удаление изделия (WAVE14 Ф2) под замком: confirm + friendly-guard бэка → сброс выбора.
-  const del = () => {
-    if (!d || !confirm('Удалить изделие из справочника? Действие необратимо.')) return
+  const del = async () => {
+    if (!d || !(await ask({ title: `Удалить изделие «${d.code}» из справочника?`, verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     api.deleteItem(d.id).then(() => { onChanged?.(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -80,6 +81,11 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
   // ТОЛЬКО оценочная стоимость; остальные поля приходят из библиотеки (read-only).
   // `metaLocked` запирает «библиотечные» свойства; Оценка гейтится обычным `locked`.
   const metaLocked = locked || d.synced
+  // Цена зафиксированного КОМПОНЕНТА правится (волна 23, Ф5, решение Ивана) — синхронно
+  // с библиотечным: под «Редактировать» открывается только «Оценка». Изделие заперто
+  // целиком — его цена роллап по составу. Форма read-only, когда заперто и то и другое.
+  const priceLocked = !unlocked || (fixed && d.native)
+  const formLocked = metaLocked && priceLocked
 
   // Табы (§13.7): порядок — от сути изделия к его следам на складе. Глифы взяты у
   // РЕЖИМОВ навигации (§2): состав = `chip` (Компоненты), применение = `rocket`
@@ -228,7 +234,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
 
   return (
     <FormShell
-      id={d.id} code={d.code} entity="изделие" locked={locked} error={err}
+      id={d.id} code={d.code} entity="изделие" locked={formLocked} error={err}
       // Мета (§13.6) — СЧЁТ ПО ТАБАМ в их порядке, число впереди подписи («17
       // компонентов · 2 вхождения»): читается фразой. Поля не повторяет, глифа нет
       // (он есть в списке и однозначно читается по доступным командам).
@@ -242,7 +248,8 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         {count(d.movements.length, 'движение', 'движения', 'движений')} ·{' '}
         {count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
         {!d.used && <span className="sub"> · спящий</span>}
-        {d.synced && !locked && <span className="sub"> · правится только цена</span>}
+        {(d.synced || (fixed && !d.native)) && unlocked &&
+          <span className="sub"> · правится только цена</span>}
         {d.native && rollup && <span className="sub">
           {' · '}переоценено узлов {rollup.updated.length}
           {rollup.incomplete.length > 0 &&
@@ -250,13 +257,17 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         </span>}
       </>}
       unlocked={unlocked} onToggleLock={toggle}
-      fixed={fixed}
-      onFixate={d.native ? () => run(api.lockItem(d.id)) : undefined}
-      fixateTitle="Зафиксировать: заморозить состав (BOM) и свойства изделия"
-      onUnfix={() => { if (confirm('Расфиксировать изделие? Форма снова станет редактируемой.')) run(api.unlockItem(d.id)) }}
+      fixed={fixed} editWhenFixed={fixed && !d.native}
+      // Фиксация — у всего, что не библиотечное (Ф5, волна 23): изделие и ручной
+      // компонент. Библиотечный защищён библиотекой (`synced ⟹ not locked`).
+      onFixate={d.synced ? undefined : () => run(api.lockItem(d.id))}
+      fixateTitle={d.native ? 'Зафиксировать: заморозить состав (BOM) и свойства изделия'
+        : 'Зафиксировать: заморозить свойства компонента'}
+      onUnfix={() => run(api.unlockItem(d.id))}
+      fixation={`items/${d.id}`}
       onDelete={del}
       /* Выгрузка (2026-07-30) — ВСЕГДА, в отличие от бланка закупки: состав нужен и
-         черновиком, а покупной компонент не фиксируется вовсе (synced ⟹ not locked),
+         черновиком, а библиотечный компонент не фиксируется вовсе (synced ⟹ not locked),
          и правило «только у запертого» оставило бы его без кнопки навсегда. Две цели
          → меню; глиф пункта — глиф вкладки, которую он выгружает (§2). */
       download={{
@@ -268,8 +279,6 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             title: 'Листы по вкладкам формы, кроме «Файлов»' },
         ],
       }}
-      // Фиксация — только у Изделий (native): у Компонентов замок из UI недостижим,
-      // синк держит их расфиксированными (инвариант `synced ⟹ not locked`).
       actions={[
         ...(d.native ? [{ onClick: recalc, label: 'Переоценить', icon: 'ci-symbol-operator',
           title: 'Пересчитать стоимость: оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев',
@@ -306,7 +315,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         <TextField label="Температура" value={d.temperature} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
         {/* «Оценка» без «₽» в подписи: рубль приезжает со значением в просмотре. */}
-        <TextField label="Оценка" locked={locked} busy={busy}
+        <TextField label="Оценка" locked={priceLocked} busy={busy}
           value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
           view={d.estimated_cost != null ? money(d.estimated_cost) : ''}
           onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}

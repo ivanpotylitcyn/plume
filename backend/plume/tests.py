@@ -7337,3 +7337,189 @@ class RecategorizeTests(EngineTestBase):
         models.Item.objects.create(code='C1', description='', category=_cat())
         with self.assertRaises(ValidationError):
             engine.recategorize_items({'C1': 'НЕТ'})
+
+
+class FixationPreviewTests(EngineTestBase):
+    """Волна 23, Ф1: окно перед фиксацией — живые последствия и честный отказ."""
+
+    def texts(self, entity, pk, lock=True):
+        r = engine.fixation_preview(entity, pk, lock)
+        return r, [l['text'] for l in r['lines']]
+
+    def test_purchase_numbers_and_agreement(self):
+        p = self.make_purchase(code='З-1')
+        a = self.make_item('A'); a.estimated_cost = D('100'); a.save()
+        b = self.make_item('B')                                  # без оценки
+        engine.add_purchase_line(p, a, D(3))
+        engine.add_purchase_line(p, b, D(1))
+        r, t = self.texts('purchases', p.id)
+        self.assertEqual(r['title'], 'Зафиксировать заказ «З-1»?')
+        self.assertIsNone(r['refusal'])
+        self.assertEqual(t[0], '2 позиции на 300 ₽ (оценка) начнут считаться в «Заказано» проекта P1')
+        self.assertTrue(r['lines'][1]['warn'])                  # 1 позиция без оценки
+        self.assertEqual(t[-1], 'строки и шапка станут только для чтения')
+
+    def test_refusal_is_engine_gate_and_dry_run_changes_nothing(self):
+        p = engine.create_purchase(self.prj, self.user)          # без контрагента
+        engine.add_purchase_line(p, self.make_item('A'), D(1))
+        r, t = self.texts('purchases', p.id)
+        self.assertIn('контрагента', r['refusal'])
+        self.assertEqual(t, [])                                  # при отказе — без последствий
+        p.refresh_from_db()
+        self.assertFalse(p.locked)
+
+    def test_kitting_preview_rolls_back_born_lot(self):
+        comp = self.make_item('R')
+        lot = self.receipt_lot(comp, self.prj, 10)
+        lot.unit_cost = D('5'); lot.save()
+        dev = self.make_item('DEV', manufactured=True)
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev, code='К-1',
+                                          user=self.user, qty=D(2))
+        engine.add_kitting_line(k, comp, lot, D(4))
+        r, t = self.texts('kittings', k.id)
+        self.assertIsNone(r['refusal'])
+        self.assertEqual(t[0], 'родится партия-прибор DEV × 2 в проекте P1, себестоимость 10 ₽ за шт.')
+        self.assertEqual(t[1], 'со склада спишется 1 партия компонентов (1 позиция)')
+        self.assertFalse(models.Lot.objects.filter(item=dev).exists())   # пробный прогон откатан
+        k.refresh_from_db()
+        self.assertFalse(k.locked)
+
+    def test_receipt_unlock_warns_consumed_lots(self):
+        comp = self.make_item('R')
+        lot = self.receipt_lot(comp, self.prj, 10)
+        wo = engine.create_writeoff(self.prj, self.user, number='А-1')
+        engine.add_writeoff_line(wo, lot, D(3))
+        engine.lock_writeoff(wo)
+        r, t = self.texts('receipts', lot.origin_id, lock=False)
+        self.assertEqual(t[0], '1 партия уйдёт со склада проекта P1')
+        self.assertEqual(t[1], '1 партия уже израсходована в других документах — её '
+                               'остаток уйдёт в минус')
+        self.assertTrue(r['lines'][1]['warn'])
+
+    def test_every_kind_previews(self):
+        comp = self.make_item('R')
+        lot = self.receipt_lot(comp, self.prj, 10)
+        other = models.Location.objects.create(code='B', description='Пайка')
+        dst = models.Project.objects.create(code='P2', description='П2')
+        tr = engine.create_transfer(self.prj, self.user, number='Н-1', contractor=self.supplier)
+        engine.add_transfer_line(tr, lot, D(1))
+        wo = engine.create_writeoff(self.prj, self.user, number='А-1')
+        engine.add_writeoff_line(wo, lot, D(1))
+        rq = engine.create_requisition(dst, self.user, number='Т-1')
+        engine.add_requisition_line(rq, lot, D(1))
+        rl = engine.create_relocation(self.prj, self.user, number='П-1')
+        engine.add_relocation_line(rl, lot, D(1), self.main, other)
+        inv = engine.create_inventory(self.prj, self.user, number='И-1')
+        engine.add_inventory_lot(inv, comp, D(2), unit_cost=D('7'))
+        cases = [('transfers', tr.id, '1 партия (1 шт.) уйдёт со склада проекта P1 → Поставщик'),
+                 ('writeoffs', wo.id, '1 партия (1 шт.) будет списана со склада проекта P1'),
+                 ('requisitions', rq.id, '1 партия перейдёт: P1 → P2'),
+                 ('relocations', rl.id, '1 партия переедет: MAIN → B'),
+                 ('inventories', inv.id, '1 найденная партия на 14 ₽ ляжет на склад проекта P1'),
+                 ('items', comp.id, 'свойства станут только для чтения — кроме цены')]
+        for entity, pk, first in cases:
+            r, t = self.texts(entity, pk)
+            self.assertIsNone(r['refusal'], (entity, r['refusal']))
+            self.assertEqual(t[0], first, entity)
+            r2, _ = self.texts(entity, pk, lock=False)
+            self.assertTrue(r2['title'].startswith('Расфиксировать'))
+
+    def test_endpoint(self):
+        c = Client(); c.force_login(self.user)
+        p = self.make_purchase()
+        engine.add_purchase_line(p, self.make_item('A'), D(1))
+        r = c.get(f'/api/purchases/{p.id}/fixation/?action=unlock')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()['verb'], 'Расфиксировать')
+        self.assertEqual(c.get(f'/api/nonsense/{p.id}/fixation/').status_code, 404)
+
+
+class NeedMoneyTests(EngineTestBase):
+    """Волна 23, Ф2: деньги строки «Потребности» — оценка + факт партий."""
+
+    def test_row_money_fields(self):
+        dev = self.make_item('DEV', manufactured=True)
+        comp = self.make_item('R'); comp.estimated_cost = D('10'); comp.save()
+        bare = self.make_item('B')                                 # без оценки
+        engine.add_bom_line(dev, comp, D(5))
+        engine.add_bom_line(dev, bare, D(1))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(2))
+        lot = self.receipt_lot(comp, self.prj, 4)
+        lot.unit_cost = D('7.5'); lot.save()
+        k = models.Kitting.objects.create(project=self.prj, target_item=dev, number='К1',
+                                          user=self.user, qty=D(1))
+        engine.add_kitting_line(k, comp, lot, D(1))
+        engine.lock_kitting(k)
+        rows = {r['component_code']: r for r in
+                engine.project_deficit(self.prj, with_tree=False)['components']}
+        r = rows['R']
+        self.assertEqual(r['price'], D('10'))                     # оценка Item
+        self.assertEqual(r['kitted_cost'], D('7.5'))              # 1 шт по цене партии
+        self.assertEqual(r['in_stock_cost'], D('22.5'))           # остаток 3 × 7,5
+        self.assertIsNone(rows['B']['price'])
+        # Та же правда в своде заказа (scope_demand).
+        p = self.make_purchase()
+        sd = {r['component_code']: r for r in engine.purchase_demand(p)['rows']}
+        self.assertEqual(sd['R']['in_stock_cost'], D('22.5'))
+
+
+class ProjectScaleTests(EngineTestBase):
+    """Волна 23, Ф4: масштаб проекта — штуки наших изделий по дереву, по категориям."""
+
+    def test_scale_multiplies_through_tree(self):
+        cat = {c.code: c for c in models.Category.objects.all()}
+        sys_ = models.Item.objects.create(code='SYS', description='', native=True,
+                                          category=cat['СИС'])
+        dev = models.Item.objects.create(code='DEV', description='', native=True,
+                                         category=cat['ПРБ'])
+        pcb = models.Item.objects.create(code='PCB', description='', native=True,
+                                         category=cat['УП'])
+        res = self.make_item('R')                                   # покупное — не считаем
+        engine.add_bom_line(sys_, dev, D(2))
+        engine.add_bom_line(dev, pcb, D(3))
+        engine.add_bom_line(pcb, res, D(10))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=sys_, qty=D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(1))
+        scale = engine.project_deficit(self.prj)['scale']
+        self.assertEqual([(x['category'], x['count']) for x in scale],
+                         [('СИС', D(2)), ('ПРБ', D(5)), ('УП', D(15))])
+        self.assertEqual(scale[2]['forms'], ('узел печатный', 'узла печатных', 'узлов печатных'))
+        self.assertEqual(engine.project_deficit(self.prj, with_tree=False)['scale'], [])
+
+
+class ManualComponentFixationTests(EngineTestBase):
+    """Волна 23, Ф5: ручной компонент фиксируется, библиотечный — нет."""
+
+    def test_manual_locks_library_refuses(self):
+        manual = self.make_item('M')
+        engine.lock_item(manual)
+        manual.refresh_from_db()
+        self.assertTrue(manual.locked)
+        lib = self.make_item('L'); lib.synced = True; lib.save()
+        with self.assertRaises(ValidationError):
+            engine.lock_item(lib)
+        self.assertIn('библиотека', engine.fixation_preview('items', lib.id, True)['refusal'])
+
+    def test_locked_component_keeps_price_editable(self):
+        # Решение Ивана: цена зафиксированного компонента правится, как у библиотечного.
+        comp = self.make_item('C'); engine.lock_item(comp)
+        engine.update_item(comp, {'estimated_cost': D('12')})
+        comp.refresh_from_db()
+        self.assertEqual(comp.estimated_cost, D('12'))
+        with self.assertRaises(ValidationError):
+            engine.update_item(comp, {'description': 'x'})
+        dev = self.make_item('D', manufactured=True); engine.lock_item(dev)
+        with self.assertRaises(ValidationError):           # изделие заперто целиком
+            engine.update_item(dev, {'estimated_cost': D('1')})
+        self.assertEqual(engine.fixation_preview('items', self.make_item('E').id, True)
+                         ['lines'][-1]['text'], 'свойства станут только для чтения — кроме цены')
+
+    def test_sync_turns_locked_manual_into_library(self):
+        m = models.Item.objects.create(code='S-1', description='датчик',
+                                       category=engine.library_category())
+        engine.lock_item(m)
+        parsed = engine.parse_library([('s.csv', _lib_csv([('S-1', 'датчик', '')]))])
+        engine.apply_library_diff(parsed, ['S-1'])
+        m.refresh_from_db()
+        self.assertTrue(m.synced)
+        self.assertFalse(m.locked)              # замок снят — глиф станет стрелками

@@ -26,6 +26,7 @@ import { Balance, Cost, CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
+import { ask } from './dialog'
 
 // Фильтр остатка: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
 // духу, что у фильтров «Потребности»: первый вариант нейтральный, дальше — состояния
@@ -80,8 +81,9 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   // Удаление заказа (WAVE14 Ф2): корзина в шапке живёт только у расфиксированного
   // (§5: у запертого одна степень свободы — расфиксировать); friendly-guard бэка
   // держит привязанный приход.
-  const del = () => {
-    if (!c || !confirm('Удалить заказ? Строки заказа будут сняты. Действие необратимо.')) return
+  const del = async () => {
+    if (!c || !(await ask({ title: `Удалить заказ «${c.code ?? `#${c.id}`}»?`,
+      lines: ['строки заказа будут сняты'], verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     api.deletePurchase(c.id).then(() => { onChanged(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -244,9 +246,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       fixed={fixed}
       onFixate={() => run(api.lockPurchase(c.id))}
       fixateTitle="Зафиксировать заказ — строки станут read-only"
-      onUnfix={() => {
-        if (confirm('Расфиксировать заказ?')) run(api.unlockPurchase(c.id))
-      }}
+      onUnfix={() => run(api.unlockPurchase(c.id))}
+      fixation={`purchases/${c.id}`}
       actions={[
         { onClick: makeReceipt, label: 'Создать поставку', icon: 'ci-inbox',
           title: receiptWhy, disabled: busy || !fixed || !open },

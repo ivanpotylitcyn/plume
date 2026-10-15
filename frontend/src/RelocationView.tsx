@@ -34,7 +34,7 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
       onChanged, onDeleted,
       onLoad: c => { api.relocationSourceLots(c.id).then(setLots) },
       remove: api.deleteRelocation,
-      confirmDelete: 'Удалить перемещение? Ходы откатятся, действие необратимо.',
+      confirmDelete: { noun: 'перемещение', lines: ['ходы откатятся'] },
     }, isNew)
   const att = useAttachments('relocation', relocationId)   // загрузка — команда шапки (§13.8)
 
@@ -84,7 +84,8 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
       fixed={fixed}
       onFixate={() => run(api.lockRelocation(c.id))}
       fixateTitle="Зафиксировать перемещение"
-      onUnfix={() => { if (confirm('Расфиксировать перемещения?')) run(api.unlockRelocation(c.id)) }}
+      onUnfix={() => run(api.unlockRelocation(c.id))}
+      fixation={`relocations/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}

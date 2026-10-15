@@ -29,7 +29,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
     inventoryId, api.inventory, {
       onChanged, onDeleted,
       remove: api.deleteInventory,
-      confirmDelete: 'Удалить инвентаризацию? Действие необратимо.',
+      confirmDelete: { noun: 'инвентаризацию' },
     }, isNew)
   const att = useAttachments('inventory', inventoryId)   // загрузка — команда шапки (§13.8)
 
@@ -86,7 +86,8 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
       fixed={fixed}
       onFixate={() => run(api.lockInventory(c.id))}
       fixateTitle="Зафиксировать акт инвентаризации"
-      onUnfix={() => { if (confirm('Расфиксировать инвентаризации?')) run(api.unlockInventory(c.id)) }}
+      onUnfix={() => run(api.unlockInventory(c.id))}
+      fixation={`inventories/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}

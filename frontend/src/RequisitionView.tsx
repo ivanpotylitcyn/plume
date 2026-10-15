@@ -32,7 +32,7 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
       onChanged, onDeleted,
       onLoad: () => { api.allAvailableLots().then(setLots) },
       remove: api.deleteRequisition,
-      confirmDelete: 'Удалить требование? Действие необратимо.',
+      confirmDelete: { noun: 'требование' },
     }, isNew)
   const att = useAttachments('requisition', requisitionId)   // загрузка — команда шапки (§13.8)
 
@@ -83,7 +83,8 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
       fixed={fixed}
       onFixate={() => run(api.lockRequisition(c.id))}
       fixateTitle="Зафиксировать требование"
-      onUnfix={() => { if (confirm('Расфиксировать требования?')) run(api.unlockRequisition(c.id)) }}
+      onUnfix={() => run(api.unlockRequisition(c.id))}
+      fixation={`requisitions/${c.id}`}
       onDelete={del}
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл — появится в табе «Файлы»', disabled: att.busy }]}

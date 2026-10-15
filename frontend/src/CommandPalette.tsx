@@ -38,7 +38,7 @@ export function CommandPalette({ entries, onClose }:
   }
 
   return (
-    <div className="palette-scrim" onMouseDown={onClose}>
+    <div className="scrim" onMouseDown={onClose}>
       <div className="palette" onMouseDown={e => e.stopPropagation()}>
         <input ref={inputRef} value={q} placeholder="Перейти к… (код, номер, название)"
           onChange={e => setQ(e.target.value)} onKeyDown={onKey} />

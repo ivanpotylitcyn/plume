@@ -7,6 +7,8 @@ import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
 import { AnchoredMenu } from './AnchoredMenu'
 import { EntityLink } from './EntityLink'
+import { FixationDialog } from './FixationDialog'
+import { ask } from './dialog'
 
 // Замок формы — интерфейсный, бесплатный, личный: открыт=правим, закрыт=чистый текст.
 // Канон §5 (Ф9): всё существующее открывается В ПРОСМОТРЕ; исключение ровно одно —
@@ -36,7 +38,9 @@ export function useOrderForm<C extends { id: number }>(
     onDeleted: () => void          // документ удалён — сбросить выбор
     onLoad?: (c: C) => void        // side-load после загрузки/мутации (пикеры лотов/заказов)
     remove: (id: number) => Promise<unknown>   // DELETE-эндпойнт вида
-    confirmDelete: string          // текст подтверждения удаления
+    // Окно удаления (волна 23, Ф1): вид в винительном («поставку») + последствия;
+    // заголовок «Удалить поставку «код»?» и «действие необратимо» достраивает окно.
+    confirmDelete: { noun: string; lines?: string[] }
   },
   isNew = false,                   // §5: только что созданный открыть в правке
 ) {
@@ -62,8 +66,12 @@ export function useOrderForm<C extends { id: number }>(
       .finally(() => setBusy(false))
   }
 
-  const del = () => {
-    if (!c || !confirm(ref.current.confirmDelete)) return
+  const del = async () => {
+    if (!c) return
+    const { noun, lines } = ref.current.confirmDelete
+    const code = (c as { code?: string | null }).code || `#${c.id}`
+    if (!(await ask({ title: `Удалить ${noun} «${code}»?`, lines,
+      verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     ref.current.remove(c.id).then(() => ref.current.onDeleted())
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -245,6 +253,12 @@ export interface FormCommandProps {
   onFixate?: () => void      // зафиксировать документ (draft→locked); только у расфиксированного
   fixateTitle?: string       // подсказка-последствие («…родить прибор») — слово в кнопке едино
   onUnfix?: () => void       // расфиксировать документ (locked→draft)
+  // У зафиксированного остаётся «Редактировать» (волна 23, Ф5): цена зафиксированного
+  // компонента правится, как у библиотечного. Остальным формам замок морозит всё.
+  editWhenFixed?: boolean
+  // Волна 23, Ф1: сегмент сущности (`purchases/12`) — фиксация и расфиксация идут через
+  // окно последствий (`FixationDialog`). Задан у всех форм с фиксацией.
+  fixation?: string
   onDelete?: () => void      // удалить документ (только расфиксированный; под замком корзины нет)
   download?: Download        // скачать (xlsx) — нижний слот шапки; см. `Download`
 
@@ -276,30 +290,42 @@ export interface Download {
 // Верхние команды: вертикальная колонка справа-сверху. `children` — нижний слот
 // колонки (корзина/«Скачать»), который в каноне §13.3 прижимается к её низу.
 export function FormCommands({ unlocked, onToggleLock, fixed, onFixate, fixateTitle,
-  onUnfix, actions, children }: FormCommandProps & { children?: ReactNode }) {
+  onUnfix, fixation, editWhenFixed, actions, children }: FormCommandProps & { children?: ReactNode }) {
+  // Окно последствий: какое действие спрашиваем (null — окна нет). Без `fixation`
+  // кнопки зовут действие напрямую, как до волны 23.
+  const [ask, setAsk] = useState<'lock' | 'unlock' | null>(null)
+  const fix = onFixate && (fixation ? () => setAsk('lock') : onFixate)
+  const unfix = onUnfix && (fixation ? () => setAsk('unlock') : onUnfix)
+  // Режим показа: подпись/иконка говорят, КУДА ведёт клик (§5).
+  const toggleBtn = onToggleLock && (
+    <button className="fh-ctl" onClick={onToggleLock}
+      title={unlocked ? 'Просмотр — закрыть форму (чистый текст)'
+                      : 'Редактировать — открыть форму для правки'}>
+      <span className="lbl">{unlocked ? 'Просмотр' : 'Редактировать'}</span>
+      <span className={'ci ' + (unlocked ? 'ci-eye' : 'ci-edit')} />
+    </button>
+  )
   return (
     <div className="fh-right">
+      {ask && fixation &&
+        <FixationDialog path={fixation} lock={ask === 'lock'}
+          onConfirm={(ask === 'lock' ? onFixate : onUnfix)!} onClose={() => setAsk(null)} />}
       {fixed ? (
-        // Зафиксирован: единственная степень свободы — расфиксировать. Корзины нет
-        // (движок всё равно не даст удалить запертое — «сперва расфиксируйте»).
-        onUnfix && (
-          <button className="fh-ctl" title="Снять фиксацию документа" onClick={onUnfix}>
-            <span className="lbl">Расфиксировать</span><span className="ci ci-unlock" />
-          </button>
-        )
-      ) : (
+        // Зафиксирован: степень свободы — расфиксировать (и, у компонента, править цену).
+        // Корзины нет (движок не даст удалить запертое — «сперва расфиксируйте»).
         <>
-          {/* Режим показа: подпись/иконка говорят, КУДА ведёт клик (§5). */}
-          {onToggleLock && (
-            <button className="fh-ctl" onClick={onToggleLock}
-              title={unlocked ? 'Просмотр — закрыть форму (чистый текст)'
-                              : 'Редактировать — открыть форму для правки'}>
-              <span className="lbl">{unlocked ? 'Просмотр' : 'Редактировать'}</span>
-              <span className={'ci ' + (unlocked ? 'ci-eye' : 'ci-edit')} />
+          {editWhenFixed && toggleBtn}
+          {unfix && (
+            <button className="fh-ctl" title="Снять фиксацию документа" onClick={unfix}>
+              <span className="lbl">Расфиксировать</span><span className="ci ci-unlock" />
             </button>
           )}
-          {onFixate && (
-            <button className="fh-ctl" onClick={onFixate}
+        </>
+      ) : (
+        <>
+          {toggleBtn}
+          {fix && (
+            <button className="fh-ctl" onClick={fix}
               title={fixateTitle ?? 'Зафиксировать документ'}>
               <span className="lbl">Зафиксировать</span><span className="ci ci-lock" />
             </button>

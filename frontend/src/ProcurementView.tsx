@@ -21,6 +21,7 @@ import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
 import { DemandRows, useDemand } from './DemandPanel'
 import { CounterpartyPicker } from './Picker'
 import { CounterpartyRef, count, num, sumByUom } from './status'
+import { ask } from './dialog'
 
 // `items` (справочник изделий) форме больше не нужен: своего пикера у неё нет —
 // позицию выбирают в «Потребности», из того, что проекты охвата действительно просят.
@@ -61,8 +62,9 @@ export function ProcurementView({ procurementId, isNew, openItem,
   // Удаление закупки-плана (WAVE14 Ф2): корзина в шапке только у расфиксированной
   // (§5: у запертой одна степень свободы — расфиксировать); friendly-guard бэка
   // держит привязанные заказы.
-  const del = () => {
-    if (!c || !confirm('Удалить закупку-план? Строки будут сняты. Действие необратимо.')) return
+  const del = async () => {
+    if (!c || !(await ask({ title: `Удалить закупку «${c.code ?? `#${c.id}`}»?`,
+      lines: ['строки плана будут сняты'], verb: 'Удалить', icon: 'ci-trash', danger: true }))) return
     setBusy(true); setErr(null)
     api.deleteProcurement(c.id).then(() => { onChanged(); onDeleted?.() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
@@ -139,9 +141,8 @@ export function ProcurementView({ procurementId, isNew, openItem,
       fixed={fixed}
       onFixate={() => run(api.lockProcurement(c.id))}
       fixateTitle="Зафиксировать закупку — строки станут read-only"
-      onUnfix={() => {
-        if (confirm('Расфиксировать закупку?')) run(api.unlockProcurement(c.id))
-      }}
+      onUnfix={() => run(api.unlockProcurement(c.id))}
+      fixation={`procurements/${c.id}`}
       /* Бланк наружу отдаём только у ЗАФИКСИРОВАННОЙ закупки: до фиксации план ещё
          не решение (правило переехало сюда 2026-07-30, когда «Скачать» перестала
          быть исключительно «командой запертого» — у изделия она есть всегда). */
