@@ -216,6 +216,13 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # Гигиена текста (2026-10-15): JSON-тело чистится до вьюхи (`plume/parsers.py`).
+    # Пароли и вопрос к гигиене берут сырой `JSONParser` у себя (`@parser_classes`).
+    'DEFAULT_PARSER_CLASSES': [
+        'plume.parsers.HygieneJSONParser',
+        'rest_framework.parsers.FormParser',
+        'rest_framework.parsers.MultiPartParser',
+    ],
 }
 
 # CORS — локальный фронт Vite (см. frontend/). На проде фронт отдаёт сам Django

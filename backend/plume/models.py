@@ -95,6 +95,12 @@ CONTRACTOR_KINDS = (DocumentKind.RECEIPT, DocumentKind.TRANSFER)
 KITTING_TARGET_NATIVE = ('Комплектуем только свои изделия — целью может быть '
                          'производимое изделие, не покупное.')
 
+# Категория своей стороны (2026-10-15): у изделия — категория изделий, у компонента —
+# компонентов. Тот же приём, что выше: один текст на движок (`_resolve_category`) и
+# страховку модели (`Item.clean`).
+ITEM_CATEGORY_SIDE = ('Категория с другой стороны справочника: изделию — категория '
+                      'изделий, компоненту — категория компонентов.')
+
 
 # Волна 19, Ф1c: строковый `DocStatus {draft,posted}` снят — ось стала `bool locked`
 # на всех пяти сущностях (Item / StockDocument / Procurement / Purchase / Project).
@@ -301,10 +307,19 @@ class Category(models.Model):
     Волна 19, Ф10: единый интерфейс идентичности — пара `code` + `description`
     (`label` → `description`). Поле `icon` (коды Codicon) удалено: per-категорийный
     глиф отпал (различение разрешилось режимами Изделия/Компоненты), заодно снята
-    протечка темы в API (Ф7)."""
+    протечка темы в API (Ф7).
+
+    2026-10-15: категории разделены по оси `native` — та же ось, что у `Item`:
+    категория принадлежит ЛИБО изделиям (наше собираемое: Система/Прибор/Узел
+    печатный/…), ЛИБО компонентам (покупное: Электронный компонент/Деталь/…).
+    Изделие берёт только категорию своей стороны (`Item.clean` + гейт в движке; CHECK
+    на чужую таблицу MySQL не умеет). Библиотека Altium больше не задаёт класс по
+    имени файла: всё синкаемое — одна категория «Электронный компонент»
+    (`engine.LIBRARY_CATEGORY`)."""
 
     code = models.CharField('код', max_length=64, unique=True)
     description = models.CharField('описание', max_length=128)
+    native = models.BooleanField('категория изделий', default=False)
 
     class Meta:
         verbose_name = 'категория'
@@ -379,6 +394,16 @@ class Item(models.Model):
                 condition=models.Q(locked=False) | models.Q(category__isnull=False),
                 name='item_locked_has_category'),
         ]
+
+    def clean(self):
+        # Категория своей стороны (2026-10-15): чужая СБРАСЫВАЕТСЯ, а не запрещает
+        # смену `native` — решение Ивана: сброс устойчив, переключение оси бывает раз
+        # на тысячу (через админку). Зафиксированному пустая категория запрещена
+        # (`item_locked_has_category`) — там честный отказ вместо IntegrityError.
+        if self.category_id and self.category.native != self.native:
+            if self.locked:
+                raise ValidationError({'category': ITEM_CATEGORY_SIDE})
+            self.category = None
 
     def __str__(self):
         return f'{self.code} — {self.description}'

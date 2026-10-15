@@ -14,23 +14,25 @@
 //    менять нечего, есть что ЗАПУСТИТЬ. Поэтому зону полей шапки занимает инструкция
 //    (`.fs-note`), а всё исполнение — команды справа. Тот же приём, что с `username`
 //    в форме аккаунта: чего форма не правит, то полем не рисуется.
-// 2. **Фиксации и корзины нет.** Сверка — не документ; фиксировать и удалять нечего.
-//    Замок формы остаётся — личный, и у него ровно одна работа: под открытым замком
-//    правятся описания классов в табе «Категории».
+// 2. **Фиксации, корзины и замка нет.** Сверка — не документ; фиксировать и удалять
+//    нечего. Замок формы жил ради правки описаний в табе «Категории» — таб снят
+//    2026-10-15 вместе с классами по имени файла, и замку стало нечего запирать.
 // 3. **Табов до загрузки нет вовсе** (решение Ивана 2026-07-31): пустая полоса табов
 //    обещала бы содержимое, которого ещё нет. Файлы загружены → появляются мета и
-//    восемь табов, последний из которых показывает сами загруженные файлы.
+//    семь табов, последний из которых показывает сами загруженные файлы.
+//
+// **2026-10-15: библиотека грузится ЦЕЛИКОМ.** Класс по имени файла упразднён — всё
+// библиотечное получает категорию «Электронный компонент», а «пропавшие» ищутся среди
+// всех библиотечных изделий, а не в классах загруженных файлов.
 //
 // Действенные статусы разведены по ЧЕТЫРЁМ табам (Новые / Изменения / Пометки /
 // Пропавшие), а не свалены в один список со статусом-колонкой: массовая галочка тогда
 // бьёт ровно по своему блоку, а необратимое удаление стоит отдельной вкладкой, а не
 // вперемешку с безопасным.
-import { useEffect, useMemo, useState } from 'react'
-import { api, type Category, type LibraryDiff, type LibraryDiffRow, type LibraryStatus,
+import { useMemo, useState } from 'react'
+import { api, type LibraryDiff, type LibraryDiffRow, type LibraryStatus,
   type LibraryApplySummary } from './api'
 import { FormShell, type FormTab } from './FormShell'
-import { useFormLock } from './FormHeader'
-import { CommitInput } from './CommitInput'
 import { count } from './status'
 import { EntityLink } from './EntityLink'
 
@@ -59,7 +61,7 @@ const ST: Record<LibraryStatus, {
   },
   gone: {
     tab: 'Пропавшие', icon: 'trash', col: 'Что удалим',
-    empty: 'Из загруженных классов ничего не пропало.', actionable: true,
+    empty: 'Из библиотеки ничего не пропало.', actionable: true,
     word: ['пропавшее', 'пропавших', 'пропавших'],
   },
   same: {
@@ -82,13 +84,6 @@ const PRESELECT = new Set<LibraryStatus>(['new', 'changed', 'mark'])
 const FIELD_RU: Record<string, string> = {
   description: 'Описание', category: 'Категория', temperature: 'Температура' }
 
-// Категория = стем имени файла (зеркало `_category_code_from_filename` движка):
-// таб «Файлы» подписывает каждый файл его классом ещё до ответа сервера.
-function categoryOf(filename: string): string {
-  const base = filename.split(/[\\/]/).pop() ?? ''
-  return base.replace(/\.[^.]*$/, '').trim().toLowerCase()
-}
-
 function humanSize(n: number): string {
   if (n < 1024) return `${n} Б`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`
@@ -99,26 +94,15 @@ export function LibraryImportView({ onApplied, openItem }:
   { onApplied: () => void; openItem: (id: number) => void }) {
   const [files, setFiles] = useState<File[]>([])
   const [diff, setDiff] = useState<LibraryDiff | null>(null)
-  const [cats, setCats] = useState<Category[]>([])
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [summary, setSummary] = useState<LibraryApplySummary | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Замок формы — личный и здесь один на всю форму: под открытым правятся описания
-  // классов в табе «Категории». `id` = 0 — сущности, на смену которой сбрасывать
-  // режим, у экрана нет.
-  const { unlocked, toggle } = useFormLock(0)
-
-  // Справочник классов держим полным (не только загруженными): таб «Категории»
-  // показывает ВСЕ категории БД, а участие в текущей сверке — глифом.
-  useEffect(() => { api.categories().then(setCats).catch(e => setErr(String(e))) }, [])
-
   // Один путь освежения на «Сверить» и на автосверку после применения: диф теми же
-  // файлами + перечитанный справочник классов (сверка заводит недостающие).
+  // файлами.
   const refresh = (next: File[]) => api.libraryDiff(next).then(d => {
     setDiff(d)
     setConfirmed(new Set(d.rows.filter(r => PRESELECT.has(r.status)).map(r => r.code)))
-    return api.categories().then(setCats)
   })
 
   const run = (p: Promise<unknown>) => {
@@ -173,10 +157,6 @@ export function LibraryImportView({ onApplied, openItem }:
     diff?.rows.forEach(r => m[r.status].push(r))
     return m
   }, [diff])
-  // Классы, участвовавшие в этой сверке (нашлись среди загруженных файлов).
-  const synced = useMemo(() => new Set(diff?.categories ?? []), [diff])
-
-  const locked = !unlocked
   const loaded = files.length > 0
 
   const tabs: FormTab[] = loaded ? [
@@ -185,19 +165,14 @@ export function LibraryImportView({ onApplied, openItem }:
       content: <DiffTable status={s} rows={byStatus[s]} confirmed={confirmed}
         busy={busy} onToggle={toggleRow} onBulk={bulk} openItem={openItem} />,
     })),
-    { key: 'categories', label: 'Категории', icon: 'symbol-class',
-      content: <CategoryTable cats={cats} synced={synced} locked={locked} busy={busy}
-        onCommit={(id, v) => run(api.updateCategory(id, v)
-          .then(next => setCats(cs => cs.map(c => (c.id === next.id ? next : c)))))} /> },
     { key: 'files', label: 'Файлы', icon: 'files',
-      content: <FileTable files={files} diff={diff} /> },
+      content: <FileTable files={files} /> },
   ] : []
 
   return (
     <FormShell
       id={0} code="Синхронизация с библиотекой" entity="синхронизацию"
-      locked={locked} error={err}
-      unlocked={unlocked} onToggleLock={toggle}
+      locked={false} error={err}
       actions={[
         { onClick: pick, label: 'Загрузить', icon: 'ci-new-file', disabled: busy,
           title: 'Выбрать CSV-таблицы библиотеки (мульти-файл) — сверка пойдёт сразу' },
@@ -212,11 +187,12 @@ export function LibraryImportView({ onApplied, openItem }:
       fields={
         <div className="fs-note">
           <p>Библиотека компонентов Altium — источник правды по покупным изделиям.</p>
-          <p>«Загрузить» берёт CSV-таблицы библиотеки (мульти-файл, CP1251). Ключ
-            сверки — «Design Item Id», класс изделия — имя файла.</p>
+          <p>«Загрузить» берёт CSV-таблицы библиотеки (мульти-файл, CP1251) — <b>всю
+            библиотеку целиком</b>. Ключ сверки — «Design Item Id», категория всего
+            загруженного — «Электронный компонент».</p>
           <p>Расхождения раскладываются по вкладкам: отметьте строки и нажмите
-            «Применить». Пропавшие ищутся только в загруженных классах — тот, чей файл
-            не грузили, не пострадает.</p>
+            «Применить». Библиотечное, чего нет ни в одном файле, попадает в
+            «Пропавшие» — поэтому грузить нужно все таблицы разом.</p>
         </div>}
       extra={summary &&
         <div className="panel fs-applied">
@@ -226,7 +202,6 @@ export function LibraryImportView({ onApplied, openItem }:
         </div>}
       meta={loaded && <>
         {ORDER.map(s => count(byStatus[s].length, ...ST[s].word)).join(' · ')}
-        {' · '}{count(cats.length, 'категория', 'категории', 'категорий')}
         {' · '}{count(files.length, 'файл', 'файла', 'файлов')}
       </>}
       tabs={tabs}
@@ -306,71 +281,20 @@ function RowDetail({ row }: { row: LibraryDiffRow }) {
   return <>—</>
 }
 
-// Таб «Категории» — справочник классов ЦЕЛИКОМ, а не только загруженных: класс живёт
-// дольше одной сверки, и прятать соседей незачем. Глиф — участие в ЭТОЙ сверке
-// (зелёный синк = файл класса был среди загруженных). Описание — единственная степень
-// свободы, и правится оно под открытым замком формы, как поля любой другой формы (§5).
-// До волны 22 задать его можно было только в админке.
-function CategoryTable({ cats, synced, locked, busy, onCommit }: {
-  cats: Category[]
-  synced: Set<string>
-  locked: boolean
-  busy: boolean
-  onCommit: (id: number, description: string) => void
-}) {
-  if (cats.length === 0)
-    return <div className="tab-empty">Классов пока нет — они заводятся сверкой.</div>
-  return (
-    <>
-      <div className="hint-row">
-        {locked
-          ? 'Описание класса правится под открытым замком — «Редактировать» в шапке.'
-          : 'Код класса — ключ синхронизации (имя CSV-файла), он не правится.'}
-      </div>
-      <table className="grid">
-        <thead><tr><th className="gl" /><th className="c-key">Код</th>
-          <th className="c-desc">Описание</th></tr></thead>
-        <tbody>{cats.map(c => (
-          <tr key={c.id} className="row">
-            <td className="gl">
-              {synced.has(c.code)
-                ? <span className="ci sg ci-sync sg-ok"
-                    title="класс участвовал в этой сверке — его файл был загружен" />
-                : <span className="ci sg ci-sync-ignored sg-none"
-                    title="в этой сверке не участвовал — файла класса не загружали" />}
-            </td>
-            <td className="c-key">{c.code}</td>
-            <td className="c-desc">{locked
-              ? (c.description || '—')
-              : <CommitInput value={c.description} disabled={busy}
-                  onCommit={v => onCommit(c.id, v)} />}</td>
-          </tr>))}</tbody>
-      </table>
-    </>
-  )
-}
-
 // Таб «Файлы» — что именно сейчас загружено (последняя вкладка, как у любой формы).
-// Строк считаем по классу файла: у каждой строки дифа с `incoming` класс = стем имени
-// файла, из которого она пришла.
-function FileTable({ files, diff }: { files: File[]; diff: LibraryDiff | null }) {
+// Колонки «Класс» и «Строк» сняты 2026-10-15: класс по имени файла упразднён, а
+// строка дифа не помнит, из какого файла пришла.
+function FileTable({ files }: { files: File[] }) {
   return (
     <table className="grid">
       <thead><tr><th className="gl" /><th className="c-key">Файл</th>
-        <th className="c-desc">Класс</th>
-        <th className="c-fit num">Строк</th><th className="c-fit num">Размер</th></tr></thead>
-      <tbody>{files.map(f => {
-        const cat = categoryOf(f.name)
-        const rows = diff?.rows.filter(r => r.incoming?.category === cat).length
-        return (
-          <tr key={f.name} className="row">
-            <td className="gl"><span className="ci sg ci-file-text sg-ok" /></td>
-            <td className="c-key">{f.name}</td>
-            <td className="c-desc">{cat}</td>
-            <td className="c-fit num">{rows ?? '—'}</td>
-            <td className="c-fit num">{humanSize(f.size)}</td>
-          </tr>)
-      })}</tbody>
+        <th className="c-fit num">Размер</th></tr></thead>
+      <tbody>{files.map(f => (
+        <tr key={f.name} className="row">
+          <td className="gl"><span className="ci sg ci-file-text sg-ok" /></td>
+          <td className="c-key">{f.name}</td>
+          <td className="c-fit num">{humanSize(f.size)}</td>
+        </tr>))}</tbody>
     </table>
   )
 }

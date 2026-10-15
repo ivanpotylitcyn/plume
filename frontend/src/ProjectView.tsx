@@ -241,7 +241,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       actions={[{ onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
         title: 'Загрузить файл (договор, ТЗ) — появится в табе «Файлы»', disabled: att.busy }]}
       fields={<>
-        <TextField label="Код" value={phead?.code ?? code} locked={locked}
+        <TextField label="Код" code value={phead?.code ?? code} locked={locked}
           busy={busy || !phead}
           onCommit={v => runP(api.updateProject(projectId, { code: v }))}
           validate={v => v.trim() !== ''} />

@@ -47,20 +47,21 @@ export function Field({ label, locked, view, wide, children }:
 
 // Текстовое поле с автосейвом — самый частый случай шапки (код, описание, номер,
 // дата, число). `view` по умолчанию = само значение, у даты — человеческий формат.
-export function TextField({ value, onCommit, busy, validate, type, view, ...f }:
+export function TextField({ value, onCommit, busy, validate, type, view, code, ...f }:
   FieldProps & {
     value: string
     onCommit: (v: string) => void
     busy?: boolean
     validate?: (v: string) => boolean
     type?: string
+    code?: boolean          // поле «Код»: гигиена текста по кодовому правилу
   }) {
   return (
     <Field {...f} view={view ?? (type === 'date' ? viewDate(value) : value)}>
       {/* `disabled` — только про `busy`: под замком контрола в DOM нет вовсе, а
           мигать «контрол → текст → контрол» на время PATCH нельзя (та же боль, что
           у пикера в Ф13: элемент, отключённый под фокусом, роняет ввод). */}
-      <CommitInput value={value} type={type} disabled={busy}
+      <CommitInput value={value} type={type} disabled={busy} code={code}
         onCommit={onCommit} validate={validate} />
     </Field>
   )

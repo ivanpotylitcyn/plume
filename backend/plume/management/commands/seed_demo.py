@@ -40,16 +40,12 @@ class Command(BaseCommand):
         models.Counterparty.objects.create(
             code='ЗАКАЗ', description='АО «Заказчик»', inn='7811111111')
 
-        # --- категории: 5 канонических из библиотеки + демо-классы под демо-BOM --- #
-        # 5 библиотечных всплывают через ensure_category (канон description); демо-классы
-        # (прибор/плата/механика/крепёж/резистор) — синтетические, только для дебага.
-        for code in engine.LIBRARY_CATEGORIES:
-            engine.ensure_category(code)
-        cat_device = models.Category.objects.create(code='device', description='Приборы')
-        cat_board = models.Category.objects.create(code='board', description='Платы')
-        cat_mech = models.Category.objects.create(code='mechanical', description='Механика')
-        cat_fastener = models.Category.objects.create(code='fasteners', description='Крепёж')
-        cat_res = models.Category.objects.create(code='resistors', description='Резисторы')
+        # --- категории: канон заводит миграция 0005 (обе стороны `native`) ------- #
+        # Справочник категорий — опорные данные, а не демо: `_wipe` их не сносит.
+        cat = {c.code: c for c in models.Category.objects.all()}
+        cat_device, cat_board = cat['ПРБ'], cat['УП']
+        cat_mech, cat_fastener = cat['ДЕТ'], cat['КРП']
+        cat_res = engine.library_category()
 
         # --- справочник изделий + BOM ---------------------------------- #
         device = models.Item.objects.create(
@@ -156,7 +152,7 @@ class Command(BaseCommand):
                   models.Receipt, models.Kitting, models.Transfer, models.Writeoff,
                   models.Requisition, models.Inventory, models.Relocation,
                   models.Purchase,
-                  models.Procurement, models.Item, models.Category,
+                  models.Procurement, models.Item,
                   models.Counterparty, models.Project, models.Location):
             m.objects.all().delete()
 

@@ -151,27 +151,89 @@ def _num(value):
 # --------------------------------------------------------------------------- #
 #  Категории изделий (волна 15) — канон внешней библиотеки компонентов
 # --------------------------------------------------------------------------- #
-# Стем имени CSV-файла → рус. описание. Синк и сид зовут `ensure_category`;
-# неизвестный стем всплывает с description=code (сырой — юзер правит в аппе/админке).
-# Стартовый набор — только эти 5 (прочие классы прибор/крепёж/деталь юзер добавит сам).
-# Волна 19, Ф10: иконки убраны (per-категорийный глиф отпал — режимы Изделия/Компоненты).
-LIBRARY_CATEGORIES = {
-    'capacitors': 'Конденсаторы',
-    'mcu':        'Микроконтроллеры',
-    'regulators': 'Стабилизаторы',
-    'sensors':    'Датчики',
-    'interfaces': 'Интерфейсы',
-}
+# Решение Ивана 2026-10-15: класс библиотеки по имени CSV-файла (`capacitors`/`mcu`/…)
+# больше НЕ становится категорией — всё пришедшее из библиотеки Altium получает одну
+# категорию «Электронный компонент». Резисторы от конденсаторов отделяет текстовый
+# фильтр по описанию; категории делят справочник по смыслу для человека (Изделия /
+# Компоненты, см. `Category.native`), а не повторяют раскладку папки библиотеки.
+LIBRARY_CATEGORY = ('ЭК', 'Электронный компонент')
+
+# Канон категорий (решения Ивана 2026-10-15): `(code, description, native)`. Заводит
+# миграция 0005 (замороженная копия), здесь — для уборки `recategorize_items(prune=…)`:
+# пустая категория вне канона — остаток прежней раскладки по файлам библиотеки.
+CATEGORY_CANON = (
+    # Компоненты — покупное (native=False)
+    ('ЭК', 'Электронный компонент', False),
+    ('МК', 'Механический компонент', False),
+    ('ПП', 'Печатная плата', False),
+    ('ДЕТ', 'Деталь', False),
+    ('МАТ', 'Материал', False),
+    ('КРП', 'Крепёж', False),
+    ('ИНС', 'Инструмент', False),
+    ('РМ-К', 'Расходный материал', False),
+    ('ДР-К', 'Другое', False),
+    # Изделия — наше собираемое (native=True)
+    ('СИС', 'Система', True),
+    ('ПРБ', 'Прибор', True),
+    ('УП', 'Узел печатный', True),
+    ('КС', 'Кабельная сеть', True),
+    ('КПА', 'Контрольно-проверочная аппаратура', True),
+    ('ОСН', 'Оснастка', True),
+    ('РМ-И', 'Расходный материал', True),
+    ('ДР-И', 'Другое', True),
+)
 
 
-def ensure_category(code):
-    """get_or_create категории по стему CSV-файла. Канон `description` — из
-    `LIBRARY_CATEGORIES`; неизвестный код всплывает с сырым `description=code`.
-    Существующую (юзер уже правил описание) НЕ перезаписываем."""
-    code = (code or '').strip()
-    description = LIBRARY_CATEGORIES.get(code, code)
+def recategorize_items(mapping, prune=False):
+    """Разложить изделия по категориям: `mapping` — `{item_code: category_code}`.
+    Разовая уборка справочника (2026-10-15), запускается командой `recategorize`
+    с таблицей ВНЕ репозитория (названия изделий в открытый репо не кладём).
+
+    Правит в обход `update_item` — как синк библиотеки: это операция администратора,
+    замок и матрица `synced` её не касаются (замок держит категорию непустой — мы и не
+    пустим). Сторона категории сверяется ВСЕГДА (`category.native == item.native`):
+    ошибка в таблице — отказ целиком, а не полуразложенный справочник.
+
+    `prune=True` — после раскладки удалить пустые категории вне `CATEGORY_CANON`.
+    Возвращает отчёт `{changed, same, missing_items, untouched, pruned}`."""
+    cats = {c.code: c for c in models.Category.objects.all()}
+    items = {i.code: i for i in models.Item.objects.select_related('category')}
+    unknown = sorted({c for c in mapping.values() if c not in cats})
+    if unknown:
+        raise ValidationError(f'Нет таких категорий: {", ".join(unknown)}.')
+    wrong_side = sorted(code for code, cat in mapping.items()
+                        if code in items and cats[cat].native != items[code].native)
+    if wrong_side:
+        raise ValidationError(f'{models.ITEM_CATEGORY_SIDE} Позиции: {", ".join(wrong_side)}.')
+    report = {'changed': 0, 'same': 0, 'pruned': [],
+              'missing_items': sorted(c for c in mapping if c not in items),
+              'untouched': sorted(c for c in items if c not in mapping)}
+    with transaction.atomic():
+        for code, cat_code in mapping.items():
+            item = items.get(code)
+            if item is None:
+                continue
+            if item.category_id == cats[cat_code].id:
+                report['same'] += 1
+                continue
+            item.category = cats[cat_code]
+            item.save(update_fields=['category'])
+            report['changed'] += 1
+        if prune:
+            canon = {code for code, _, _ in CATEGORY_CANON}
+            for cat in models.Category.objects.filter(items__isnull=True).exclude(code__in=canon):
+                report['pruned'].append(cat.code)
+                cat.delete()
+    return report
+
+
+def library_category():
+    """Категория всего синкаемого. Заводится миграцией 0005; `get_or_create` —
+    страховка для пустой БД (тесты, свежий dev). Описание существующей не трогаем —
+    справочник правят в админке."""
+    code, description = LIBRARY_CATEGORY
     cat, _ = models.Category.objects.get_or_create(
-        code=code, defaults={'description': description})
+        code=code, defaults={'description': description, 'native': False})
     return cat
 
 
@@ -2976,6 +3038,44 @@ def _apply(instance, updates):
 _UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
 
 
+# --------------------------------------------------------------------------- #
+#  Гигиена текстовых полей (2026-10-15, запрос Ивана)
+# --------------------------------------------------------------------------- #
+# Правило ОДНО и живёт здесь: поле формы спрашивает его через `/api/hygiene/` до
+# сохранения (всплывашка «Принять / Перепишу сам»), а запись в БД чистится им же
+# молча (`views._clean_payload`, синк библиотеки) — грязь не проходит никаким путём.
+_HYGIENE_SPACE = str.maketrans({c: ' ' for c in
+                                '\t\n\r\v\f   　'
+                                + ''.join(map(chr, range(0x2000, 0x200b)))})
+_HYGIENE_DROP = str.maketrans({c: None for c in '​‌‍⁠﻿­'})
+# Двойники дефиса — только в КОДЕ: код ищут набором с клавиатуры, а `−` (минус) в
+# `AR0144…−CPBR` поиск по `-` не находит. В описании минус и тире — законная
+# типографика («−34…+14 дБм», «2.2–5.5 В»), их не трогаем.
+_HYGIENE_DASH = str.maketrans({c: '-' for c in '−‐‑‒'})
+
+
+def clean_text(value, code=False):
+    """Очищенный текст: пробельные двойники (табуляция, переводы строк, неразрывный и
+    прочие юникод-пробелы) → пробел, невидимые символы нулевой ширины → прочь, серии
+    пробелов → один, края обрезаны; у кода (`code=True`) ещё и двойники дефиса → `-`.
+    Не строка → как есть (числа/None/списки чистить нечего)."""
+    if not isinstance(value, str):
+        return value
+    text = value.translate(_HYGIENE_SPACE).translate(_HYGIENE_DROP)
+    if code:
+        text = text.translate(_HYGIENE_DASH)
+    return ' '.join(part for part in text.split(' ') if part)
+
+
+def text_hygiene(value, code=False):
+    """Вердикт для всплывашки поля: `{cleaned, dirty}`. `dirty` — очистка изменила
+    больше, чем края: пробелы по краям обрезаем молча (решение Ивана — иначе вопрос
+    выскакивал бы на каждый случайный пробел), остальное показываем на выбор."""
+    raw = value if isinstance(value, str) else ''
+    cleaned = clean_text(raw, code=code)
+    return {'cleaned': cleaned, 'dirty': cleaned != raw.strip()}
+
+
 def require_unique_code(model, code, pk=None):
     """Мягкая уникальность `code` (волна 19, Ф10, правило Ивана): плохой/занятый код
     ловим дружелюбно ДО IntegrityError, чтобы трение не уходило команде в оффлайн.
@@ -4630,15 +4730,19 @@ def written_off_lots():
 # --------------------------------------------------------------------------- #
 #  Справочники: создание изделий и проектов (канон «＋ Новая», 2026-07-03)
 # --------------------------------------------------------------------------- #
-def _resolve_category(category_id):
+def _resolve_category(category_id, native):
     """Категория изделия из справочника по PK (обязательна). Волна 15: `kind`-enum
-    сменён FK-справочником `Category`."""
+    сменён FK-справочником `Category`. С 2026-10-15 — только своей стороны
+    (`category.native == native`): чужая — дружелюбный отказ (страховка — `Item.clean`)."""
     if not category_id:
         raise ValidationError('Нужно выбрать категорию изделия.')
     try:
-        return models.Category.objects.get(pk=category_id)
+        category = models.Category.objects.get(pk=category_id)
     except (models.Category.DoesNotExist, ValueError, TypeError):
         raise ValidationError('Неизвестная категория изделия.')
+    if category.native != bool(native):
+        raise ValidationError(models.ITEM_CATEGORY_SIDE)
+    return category
 
 
 def item_is_used(item):
@@ -4682,7 +4786,7 @@ def create_item(code=None, description='', category_id=None, uom='шт',
     require_unique_code(models.Item, code)
     fields = dict(
         description=(description or '').strip(),
-        category=_resolve_category(category_id) if category_id else None,
+        category=_resolve_category(category_id, native) if category_id else None,
         uom=(uom or '').strip() or 'шт',
         temperature=(temperature or '').strip(),
         native=bool(native),
@@ -4755,11 +4859,21 @@ def update_item(item, changes):
         # держит `code`, а изделие рождается по клику незаполненным.
         item.description = (changes['description'] or '').strip()
         fields.append('description')
+    if 'native' in changes:
+        # Ось — раньше категории: категорию сверяем уже с новой стороной. Чужая
+        # категория при смене оси СБРАСЫВАЕТСЯ (решение Ивана 2026-10-15: сброс
+        # устойчив, черновику пустая законна, к фиксации выберут заново).
+        item.native = bool(changes['native'])
+        fields.append('native')
+        if item.category_id and item.category.native != item.native:
+            item.category = None
+            fields.append('category')
     if 'category_id' in changes:
         # Пустая категория легальна в черновике; гейт — на фиксации (`lock_item`).
-        item.category = (_resolve_category(changes['category_id'])
+        item.category = (_resolve_category(changes['category_id'], item.native)
                          if changes['category_id'] else None)
-        fields.append('category')
+        if 'category' not in fields:
+            fields.append('category')
     if 'uom' in changes:
         item.uom = (changes['uom'] or '').strip() or 'шт'
         fields.append('uom')
@@ -4769,9 +4883,6 @@ def update_item(item, changes):
     if 'estimated_cost' in changes:
         item.estimated_cost = changes['estimated_cost']    # Decimal или None (сброс)
         fields.append('estimated_cost')
-    if 'native' in changes:
-        item.native = bool(changes['native'])
-        fields.append('native')
     if fields:
         item.save(update_fields=fields)
     return item
@@ -4821,21 +4932,14 @@ LIBRARY_DESC_COL = 'Description'
 LIBRARY_TEMP_COL = 'Temperature'
 
 
-def _category_code_from_filename(name):
-    """Класс компонента = стем имени файла (`csv/capacitors.csv` → `capacitors`)."""
-    base = (name or '').rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
-    return base.rsplit('.', 1)[0].strip().lower()
-
-
 def parse_library_file(filename, raw):
-    """Разобрать один CSV библиотеки → (category_code, [row...]). `raw` — bytes
-    (CP1251). Заголовок = эталон: нужные колонки ищем по имени (терпимо к порядку),
-    отсутствие любой из трёх — ошибка. Строки нормализуем в
-    `{code, description, temperature, category}`; дубль ключа в файле,
-    пустой ключ или недобор колонок — человеческий отказ (не молчим)."""
-    category = _category_code_from_filename(filename)
-    if not category:
-        raise ValidationError(f'{filename}: не удалось определить категорию по имени файла.')
+    """Разобрать один CSV библиотеки → [row...]. `raw` — bytes (CP1251). Заголовок =
+    эталон: нужные колонки ищем по имени (терпимо к порядку), отсутствие любой из трёх —
+    ошибка. Строки нормализуем в `{code, description, temperature, category}`
+    (категория — всегда `LIBRARY_CATEGORY`, имя файла классом больше не служит, решение
+    2026-10-15); текст проходит гигиену (`clean_text`) молча — спросить тут некого.
+    Дубль ключа в файле, пустой ключ или недобор колонок — человеческий отказ."""
+    category = LIBRARY_CATEGORY[0]
     try:
         text = bytes(raw).decode(LIBRARY_ENCODING)
     except (UnicodeDecodeError, TypeError):
@@ -4856,52 +4960,40 @@ def parse_library_file(filename, raw):
             continue                       # пустая строка (в т.ч. финальный LF)
         if len(rec) <= max(ki, di, ti):
             raise ValidationError(f'{filename}, строка {lineno}: мало колонок.')
-        key = rec[ki].strip()
+        key = clean_text(rec[ki], code=True)
         if not key:
             raise ValidationError(f'{filename}, строка {lineno}: пустой Design Item Id.')
         if key in seen:
             raise ValidationError(f'{filename}: дубль Design Item Id «{key}».')
         seen.add(key)
-        rows.append({'code': key, 'description': rec[di].strip(),
-                     'temperature': rec[ti].strip(), 'category': category})
-    return category, rows
-
-
-def ensure_library_categories(codes):
-    """Завести недостающие категории загруженной библиотеки → список `Category`
-    всех перечисленных кодов (волна 22).
-
-    **Сверка ЗАПИСЫВАЕТ ровно это и ничего больше.** До волны 22 категория рождалась
-    только внутри `apply_library_diff` (побочно, при создании первого изделия класса),
-    и до применения править её описание было негде — а таб «Категории» экрана
-    синхронизации существует именно ради этого: описание класса задаётся из продукта,
-    а не только из админки. Класс без изделий безобиден: это строка справочника, не
-    документ и не движение, — поэтому «диф без записи» ослаблен здесь осознанно."""
-    return [ensure_category(code) for code in codes]
+        rows.append({'code': key, 'description': clean_text(rec[di]),
+                     'temperature': clean_text(rec[ti]), 'category': category})
+    return rows
 
 
 def parse_library(files):
     """Разобрать мульти-файл загрузку. `files` — список `(filename, raw_bytes)`.
-    Возвращает `{'categories': [code...], 'rows': [row...]}`. Одна категория дважды
-    или один `code` в двух файлах — ошибка (в библиотеке ключ глобально
-    уникален). Категории нужны для scoping «пропавших» (сверяем только загруженные
-    классы)."""
+    Возвращает `{'rows': [row...]}`. Один файл дважды или один `code` в двух файлах —
+    ошибка (в библиотеке ключ глобально уникален).
+
+    Загрузка = **вся библиотека целиком** (решение Ивана 2026-10-15): «пропавшие»
+    ищутся среди всех `synced`, а не в классах загруженных файлов — класса по имени
+    файла больше нет. Частичная загрузка объявила бы остальное пропавшим."""
     if not files:
         raise ValidationError('Не выбрано ни одного файла.')
-    categories, rows, owner = [], [], {}
+    names, rows, owner = set(), [], {}
     for filename, raw in files:
-        cat, file_rows = parse_library_file(filename, raw)
-        if cat in categories:
-            raise ValidationError(f'Категория «{cat}» пришла дважды (файл {filename}).')
-        categories.append(cat)
-        for r in file_rows:
+        if filename in names:
+            raise ValidationError(f'Файл {filename} выбран дважды.')
+        names.add(filename)
+        for r in parse_library_file(filename, raw):
             key = r['code']
             if key in owner:
                 raise ValidationError(
-                    f'Design Item Id «{key}» есть в двух файлах ({owner[key]} и {cat}).')
-            owner[key] = cat
-        rows.extend(file_rows)
-    return {'categories': categories, 'rows': rows}
+                    f'Design Item Id «{key}» есть в двух файлах ({owner[key]} и {filename}).')
+            owner[key] = filename
+            rows.append(r)
+    return {'rows': rows}
 
 
 # Порядок статусов в диф-вью: сперва требующие действия, потом флаги, потом «совпало».
@@ -4911,12 +5003,13 @@ _DIFF_ORDER = {'new': 0, 'changed': 1, 'mark': 2, 'gone': 3, 'orphan': 4, 'same'
 def _library_changes(item, row):
     """Что изменилось у существующего изделия против библиотеки: сравниваем только
     синкаемые поля (`description`/`category`/`temperature`). Категорию — по `code`
-    (стем файла). `estimated_cost`/`uom`/`native` — собственность Plume, не сверяем."""
+    (у синкаемого всегда `LIBRARY_CATEGORY`). `estimated_cost`/`uom`/`native` —
+    собственность Plume, не сверяем."""
     changes = {}
     if item.description != row['description']:
         changes['description'] = {'old': item.description, 'new': row['description']}
     # Ф12e: у изделия-черновика категории может не быть — тогда это тоже
-    # изменение («было пусто → станет `capacitors`»), а не падение.
+    # изменение («было пусто → станет `ЭК`»), а не падение.
     if category_code(item) != row['category']:
         changes['category'] = {'old': category_code(item), 'new': row['category']}
     if item.temperature != row['temperature']:
@@ -4953,8 +5046,8 @@ def library_diff(parsed):
       библиотечным (`synced=true`, замок снять). Путь бэкфилла после Ф3a: все
       существующие библиотечные приходят `synced=false` и помечаются первым же синком;
     - `same`    — есть, совпадает И уже `synced` → ничего;
-    - `gone`    — в БД (в одном из загруженных классов), нет в загрузке, не
-      используется → кандидат на удаление;
+    - `gone`    — библиотечное (`synced`) в БД, нет в загрузке, не используется →
+      кандидат на удаление;
     - `orphan`  — то же, но используется (живые ссылки) → флаг «сирота, нет в
       библиотеке» (не действие: удалить нельзя, обновлять нечем).
 
@@ -4964,10 +5057,9 @@ def library_diff(parsed):
     (Раньше здесь стояло «`locked` не трогаем» — докстринг отстал от инварианта,
     аудит-1 Б1а-6.)
 
-    Scoping «пропавших» — по категории: изделие из класса, которого нет среди
-    загруженных файлов, не считается пропавшим (его библиотеку просто не грузили)."""
+    «Пропавшие» — только среди библиотечных (`synced`): загрузка = вся библиотека
+    (2026-10-15), ручное изделие библиотеке не принадлежит и пропасть из неё не может."""
     by_key = {r['code']: r for r in parsed['rows']}
-    categories = set(parsed['categories'])
     existing = {i.code: i
                 for i in models.Item.objects.select_related('category')}
     result = []
@@ -4985,9 +5077,7 @@ def library_diff(parsed):
             status = 'same'
         result.append(_diff_row(status, row, item, changes))
     for key, item in existing.items():
-        # Изделие без категории (Ф12e, черновик) не принадлежит ни одному
-        # синкаемому классу — сиротой библиотеки объявлять его не за что.
-        if key in by_key or category_code(item) not in categories:
+        if key in by_key or not item.synced:
             continue
         result.append(_diff_row('orphan' if item_is_used(item) else 'gone', None, item))
     result.sort(key=lambda d: (_DIFF_ORDER[d['status']], d['code']))
@@ -5001,7 +5091,7 @@ def apply_library_diff(parsed, confirmed):
     поля — из `parsed`. Всё в одной транзакции (bulk = всё-или-ничего).
 
     - `new`     → создать `Item` (`native=false`, `synced=true`, `locked=false`,
-      категория `ensure_category`);
+      категория `library_category`);
     - `changed` → обновить description/category/temperature (+ пометить `synced`,
       снять замок — инвариант 0008 `synced ⟹ not locked`);
     - `mark`    → пометить библиотечным (`synced=true`, замок снять);
@@ -5025,7 +5115,7 @@ def apply_library_diff(parsed, confirmed):
                 # (Ф3a, решение Ивана 2026-07-24). Защита остального — матрицей `synced`.
                 models.Item.objects.create(
                     code=key, description=src['description'],
-                    category=ensure_category(src['category']),
+                    category=library_category(),
                     temperature=src['temperature'], native=False,
                     synced=True, locked=False)
                 summary['created'] += 1
@@ -5033,7 +5123,7 @@ def apply_library_diff(parsed, confirmed):
                 src = by_key[key]
                 item = models.Item.objects.get(code=key)
                 item.description = src['description']
-                item.category = ensure_category(src['category'])
+                item.category = library_category()
                 item.temperature = src['temperature']
                 # Синк подтверждает библиотечное происхождение → метим `synced` и
                 # снимаем стухший замок (инвариант `synced ⟹ not locked`; библиотечное

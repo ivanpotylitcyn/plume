@@ -279,17 +279,21 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
           disabled: att.busy },
       ]}
       fields={<>
-        <TextField label="Код" value={d.code} locked={metaLocked} busy={busy}
+        <TextField label="Код" code value={d.code} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { code: v }))}
           validate={v => v.trim() !== ''} />
         {/* Единственное длинное поле шапки (§13.3) — описание бывает в строку и больше. */}
         <TextField label="Описание" wide value={d.description} locked={metaLocked} busy={busy}
           onCommit={v => run(api.updateItem(d.id, { description: v }))}
           validate={v => v.trim() !== ''} />
-        <Field label="Категория" locked={metaLocked} view={d.category?.code}>
+        {/* Категория — описанием, не кодом (решение Ивана 2026-10-15: имена короткие,
+            целые слова читаются лучше), и только своей стороны: у изделия — категории
+            изделий, у компонента — компонентов (`Category.native`, гейт в движке). */}
+        <Field label="Категория" locked={metaLocked} view={d.category?.description}>
           {/* Ф12e: изделие рождается по клику без категории — пустое поле честно
               говорит «ещё не выбрана» (фиксация без неё не пройдёт). */}
-          <Dropdown options={categories.map(c => ({ value: c.id, label: c.code }))}
+          <Dropdown options={categories.filter(c => c.native === d.native)
+            .map(c => ({ value: c.id, label: c.description }))}
             value={d.category?.id ?? ''} disabled={busy} placeholder="— не выбрана —"
             onPick={v => run(api.updateItem(d.id, { category_id: Number(v) }))} />
         </Field>

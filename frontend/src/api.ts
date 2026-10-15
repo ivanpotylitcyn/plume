@@ -35,8 +35,10 @@ export interface ProjectSupply {
 }
 // Категория изделия (волна 15): FK-справочник. Волна 19 Ф10: единый интерфейс
 // идентичности `code` + `description` (`label`→`description`, `icon` удалён).
+// `native` — сторона категории (2026-10-15): категории изделий / компонентов, как и
+// сама ось у `Item`. Пикер в форме изделия берёт только свою сторону.
 export interface Category {
-  id: number; code: string; description: string
+  id: number; code: string; description: string; native: boolean
 }
 export interface ItemRow {
   // `id` — PK (FK-ссылки/мутации); `code` — бизнес-ключ (канон библиотеки).
@@ -141,7 +143,7 @@ export interface LibraryDiffRow {
   incoming?: LibrarySnapshot; current?: LibrarySnapshot
   changes?: Partial<Record<'description' | 'temperature' | 'category', LibraryChange>>
 }
-export interface LibraryDiff { categories: string[]; rows: LibraryDiffRow[] }
+export interface LibraryDiff { rows: LibraryDiffRow[] }
 export interface LibraryApplySummary { created: number; updated: number; marked: number; deleted: number }
 // Роллап стоимости: детальный экран изделия + сводка пересчёта.
 export interface RollupResult {
@@ -690,10 +692,10 @@ export const api = {
   projects: () => get<ProjectRow[]>('/api/projects/'),
   items: () => get<ItemRow[]>('/api/items/'),
   categories: () => get<Category[]>('/api/categories/'),
-  // Описание класса правится из таба «Категории» формы синхронизации (волна 22).
-  // `code` — ключ синка (стем имени CSV), в теле его нет намеренно.
-  updateCategory: (id: number, description: string) =>
-    send<Category>('PATCH', `/api/categories/${id}/`, { description }),
+  // Гигиена текста поля ДО сохранения (2026-10-15): правило одно — в движке;
+  // `dirty` → поле показывает очищенный вариант на выбор «Принять / Перепишу сам».
+  hygiene: (value: string, code: boolean) =>
+    send<{ cleaned: string; dirty: boolean }>('POST', '/api/hygiene/', { value, code }),
   project: (id: number) => get<ProjectDetail>(`/api/projects/${id}/`),
   updateProject: (id: number, b: Partial<{ code: string; description: string; budget: number | null; started: string | null }>) =>
     send<ProjectDetail>('PATCH', `/api/projects/${id}/`, b),

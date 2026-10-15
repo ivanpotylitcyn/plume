@@ -20,7 +20,8 @@ from django.utils import timezone
 from django.utils.http import content_disposition_header
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status as http
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.parsers import JSONParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -258,6 +259,7 @@ def me(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@parser_classes([JSONParser])          # пароль — сырой, без гигиены текста
 def login_view(request):
     """Вход по логину/паролю → сессия. Пользователи заводятся в admin
     (внутренний инструмент, сам-регистрации нет)."""
@@ -309,6 +311,7 @@ def account(request):
 
 
 @api_view(['POST'])
+@parser_classes([JSONParser])          # пароли — сырые, без гигиены текста
 def account_password(request):
     """Смена пароля: `{current, new, repeat}` → 204 либо 400 с человеческим текстом.
 
@@ -421,7 +424,7 @@ def _category_row(c):
     # фиксации, а не к рождению) — отдаём `null`, а не выдуманную запись.
     if c is None:
         return None
-    return {'id': c.id, 'code': c.code, 'description': c.description}
+    return {'id': c.id, 'code': c.code, 'description': c.description, 'native': c.native}
 
 
 def _item_row(i, used=None):
@@ -441,29 +444,20 @@ def _item_row(i, used=None):
 
 @api_view(['GET'])
 def categories(request):
-    """Справочник категорий — пикер класса изделия в форме «＋ Новое»/правке и таб
-    «Категории» экрана синхронизации (волна 22)."""
+    """Справочник категорий — пикер класса изделия в форме. Обе стороны разом
+    (`native`), пикер берёт свою; правят справочник в админке (таб «Категории»
+    экрана синхронизации снят 2026-10-15 вместе с классами по имени файла)."""
     return Response([_category_row(c) for c in models.Category.objects.all()])
 
 
-@api_view(['PATCH'])
-def category(request, pk):
-    """Правка описания категории (волна 22) — из таба «Категории» экрана
-    синхронизации, а не только из админки.
-
-    Правится РОВНО описание. `code` — ключ синхронизации (стем имени CSV-файла
-    библиотеки), сменить его значит развязать класс с библиотекой, поэтому в API его
-    нет вовсе (тот же приём, что с `username` в форме аккаунта: признак, задаваемый
-    вне формы, полем не рисуем)."""
-    cat = get_object_or_404(models.Category, pk=pk)
-    if 'description' in request.data:
-        value = (request.data['description'] or '').strip()
-        limit = models.Category._meta.get_field('description').max_length
-        if len(value) > limit:
-            return _bad(f'Описание длиннее {limit} символов.')
-        cat.description = value
-        cat.save(update_fields=['description'])
-    return Response(_category_row(cat))
+@api_view(['POST'])
+@parser_classes([JSONParser])          # вопрос к гигиене — о СЫРОМ тексте
+def hygiene(request):
+    """Гигиена текста поля до сохранения (2026-10-15): `{value, code}` →
+    `{cleaned, dirty}`. Правило одно — `engine.clean_text`; поле формы показывает
+    очищенный вариант с выбором «Принять / Перепишу сам», если `dirty`."""
+    return Response(engine.text_hygiene(request.data.get('value'),
+                                        code=bool(request.data.get('code'))))
 
 
 @api_view(['GET', 'POST'])
@@ -2075,17 +2069,14 @@ def library_diff(request):
     сервер декодит CP1251/парсит и возвращает строки со статусом
     (новый/изменился/пропал→сирота|совпадает) для показа с чекбоксами.
 
-    Волна 22: единственная запись сверки — недостающие КАТЕГОРИИ загруженных классов
-    (`ensure_library_categories`); изделия по-прежнему не трогаются до «Применить».
-    Так таб «Категории» формы синхронизации получает полный справочник классов сразу
-    после загрузки, а не после применения дифа."""
+    Сверка ничего не пишет: изделия не трогаются до «Применить». (Волна 22 заводила
+    здесь категории загруженных классов ради таба «Категории» — снято 2026-10-15:
+    класс по имени файла упразднён, всё библиотечное — `engine.LIBRARY_CATEGORY`.)"""
     try:
-        parsed = engine.parse_library(_library_files(request))
-        engine.ensure_library_categories(parsed['categories'])
-        rows = engine.library_diff(parsed)
+        rows = engine.library_diff(engine.parse_library(_library_files(request)))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response({'categories': parsed['categories'], 'rows': rows})
+    return Response({'rows': rows})
 
 
 @api_view(['POST'])

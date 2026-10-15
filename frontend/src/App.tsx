@@ -367,10 +367,11 @@ export default function App() {
               glyph: <StatusGlyph locked={p.locked} tone={p.health ? statusTone(p.health) : 'none'}
                 title={p.locked ? 'архивный (закрыт)' : 'активный'} /> }))} />}
 
-        {/* Режим «Изделия» (волна 17): только производимые; без фильтра категорий и
-            синка. Открывает ту же форму изделия (sel.kind='item'). */}
+        {/* Режим «Изделия» (волна 17): только производимые. Фильтр категорий — как у
+            «Компонентов» (2026-10-15: категории разделены по оси, у изделий свои).
+            Открывает ту же форму изделия (sel.kind='item'). */}
         {mode === 'products' &&
-          <ModeList heading="Изделия" newLabel="＋ Новое изделие"
+          <ModeList heading="Изделия" newLabel="＋ Новое изделие" categoryFilter
             onNew={() => born('items', 'item', reloadItems,
               id => { setMode('products'); setSel({ kind: 'item', id }) }, { native: true })}
             selId={sel?.kind === 'item' ? sel.id : null}
@@ -381,16 +382,20 @@ export default function App() {
                 glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'items' &&
-          <ModeList heading="Компоненты" newLabel="＋ Новое изделие" categoryFilter
+          <ModeList heading="Компоненты" newLabel="＋ Новый компонент" categoryFilter
             onNew={() => born('items', 'item', reloadItems, openItem)}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
-            extraTop={
-              <div className={'tree-item' + (sel?.kind === 'library-sync' ? ' sel' : '')}
+            // Синхронизация нужна куда реже остального (решение Ивана 2026-10-15):
+            // глиф-команда в заголовке списка, без подписи (она в `title`) — канон
+            // команды-глифа (UI_GUIDE §9.1). Открывает экран, поэтому, пока он открыт,
+            // глиф горит выделением, как выбранная строка.
+            headAction={
+              <button className={'fh-ctl icon' + (sel?.kind === 'library-sync' ? ' on' : '')}
+                title="Синхронизация с библиотекой"
                 onClick={() => setSel({ kind: 'library-sync' })}>
                 <span className="ci ci-sync" />
-                <span className="code">Синхронизация с библиотекой</span>
-              </div>}
+              </button>}
             rows={[...items].filter(i => !i.native)
               .sort((a, b) => a.code.localeCompare(b.code)).map(i => ({
                 id: i.id, code: i.code, name: i.description, category: i.category?.description,
@@ -558,10 +563,10 @@ const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
 interface ListRow { id: number; code: string; name: string; glyph: ReactNode; projectCode?: string; category?: string }
 // Ф12e: `newSel` больше нет — «＋ Новый» не выбирает форму создания, а рождает
 // сущность и уводит в её каноничную форму, так что подсвечивать нечего.
-function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilter, categoryFilter, extraTop }: {
+function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilter, categoryFilter, headAction }: {
   heading: string; newLabel: string; onNew: () => void
   rows: ListRow[]; selId: number | null; onSelect: (id: number) => void
-  projectFilter?: boolean; categoryFilter?: boolean; extraTop?: ReactNode
+  projectFilter?: boolean; categoryFilter?: boolean; headAction?: ReactNode
 }) {
   const [q, setQ] = useState('')
   const [proj, setProj] = useState('')
@@ -593,7 +598,7 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
 
   return (
     <>
-      <h2>{heading}</h2>
+      <h2>{heading}{headAction}</h2>
       <div className="list-filters">
         <input className="list-filter" value={q} placeholder="фильтр — код или название"
           onChange={e => setQ(e.target.value)} />
@@ -613,7 +618,6 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
           </div>}
       </div>
       <div className="list-scroll">
-        {extraTop}
         <div className="tree-item new" onClick={onNew}>
           <span className="code">{newLabel}</span>
         </div>

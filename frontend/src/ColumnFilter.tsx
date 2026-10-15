@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AnchoredMenu } from './AnchoredMenu'
 import { Chevron } from './status'
+import { api } from './api'
 
 export function ColumnFilter({ opts, value, onPick }: {
   opts: [string, string][]      // [значение, подпись]
@@ -66,6 +67,22 @@ const NO_CATEGORY = '\0'
 // на каждый рендер загрузки.
 const NO_ROWS: never[] = []
 
+// Подписи вариантов — ОПИСАНИЯ категорий, не коды (решение Ивана 2026-10-15: имена
+// короткие, целые слова читаются лучше). Значение фильтра по-прежнему код. Справочник
+// крошечный и меняется в админке раз в сто лет — грузим один раз на жизнь страницы,
+// общий на все таблицы.
+let labelsCache: Map<string, string> | null = null
+let labelsLoad: Promise<Map<string, string>> | null = null
+function useCategoryLabels(): Map<string, string> | null {
+  const [labels, setLabels] = useState(labelsCache)
+  useEffect(() => {
+    if (labelsCache) return
+    labelsLoad ??= api.categories().then(cs => (labelsCache = new Map(cs.map(c => [c.code, c.description]))))
+    labelsLoad.then(setLabels).catch(() => { labelsLoad = null })
+  }, [])
+  return labels
+}
+
 export function useCategoryFilter<T>(
   rows: T[] | undefined,
   categoryOf: (row: T) => string | null | undefined,
@@ -77,15 +94,22 @@ export function useCategoryFilter<T>(
   // Варианты — из САМИХ строк, а не из справочника категорий: класса, которого в этой
   // таблице нет, в меню быть не должно — он обещал бы строки, которых не покажет.
   const list = rows ?? NO_ROWS
+  const labels = useCategoryLabels()
   const opts = useMemo<[string, string][]>(() => {
-    const present = [...new Set(list.map(categoryOf).filter((x): x is string => !!x))].sort()
-    return [['', 'все категории'], ...present.map(c => [c, c] as [string, string]),
+    const present = [...new Set(list.map(categoryOf).filter((x): x is string => !!x))]
+    const named = present.map(c => [c, labels?.get(c) ?? c] as [string, string])
+    // «Другое» и «Расходный материал» есть у обеих сторон: встретились в одной таблице —
+    // подпись уточняется кодом, иначе два одинаковых пункта меню значили бы разное.
+    const twice = new Set(named.map(([, t]) => t).filter((t, i, all) => all.indexOf(t) !== i))
+    const opt = named.map(([c, t]) => [c, twice.has(t) ? `${t} (${c})` : t] as [string, string])
+      .sort((a, b) => a[1].localeCompare(b[1]))
+    return [['', 'все категории'], ...opt,
       ...(list.some(r => !categoryOf(r))
         ? [[NO_CATEGORY, 'без категории'] as [string, string]] : [])]
     // `categoryOf` — стрелка на месте вызова, в зависимости её не берём (иначе memo
     // пересчитывался бы каждый рендер, что и есть отсутствие memo).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [list])
+  }, [list, labels])
 
   // Выбранный класс мог уйти из таблицы (строку удалили, приехали другие данные) —
   // тогда значение читается сброшенным, иначе фильтр застрял бы на пропавшем и прятал

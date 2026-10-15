@@ -210,7 +210,7 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
 }) {
   return (
     <>
-      <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
+      <TextField label="Код" code value={c.code ?? ''} locked={locked} busy={busy}
         onCommit={v => patch({ code: v })} />
       {/* Единственное длинное поле шапки (§13.3). */}
       <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}

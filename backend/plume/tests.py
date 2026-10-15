@@ -30,10 +30,12 @@ def _today():
     return timezone.localdate().isoformat()
 
 
-def _cat(code='test', description='Тест'):
+def _cat(code='test', description='Тест', native=False):
     """Категория-заглушка для тестов (волна 15: `Item.category` — обязательный FK).
-    Класс изделия в движке логику не ветвит, поэтому одной общей категории хватает."""
-    c, _ = models.Category.objects.get_or_create(code=code, defaults={'description': description})
+    Класс изделия в движке логику не ветвит, поэтому одной общей категории хватает.
+    `native` — сторона категории (2026-10-15): изделию через движок — только своя."""
+    c, _ = models.Category.objects.get_or_create(
+        code=code, defaults={'description': description, 'native': native})
     return c
 
 
@@ -4277,7 +4279,7 @@ class ItemProjectUpdateTests(EngineTestBase):
 
     def test_update_item_fields(self):
         it = self.make_item('X')
-        cat2 = _cat('mcu', 'Микроконтроллеры')
+        cat2 = _cat('dev', 'Приборы', native=True)   # native=True ниже → категория изделий
         engine.update_item(it, {'description': 'Новое имя', 'category_id': cat2.id,
                                 'uom': 'кг', 'estimated_cost': D('12.50'),
                                 'temperature': '-40-85°C', 'native': True})
@@ -6248,15 +6250,23 @@ class LibraryParseTests(TestCase):
     def test_parse_basic(self):
         raw = _lib_csv([('CAP-1', 'Конденсатор 1', '-55-125°C'),
                         ('CAP-2', 'Конденсатор 2', '-40-85°C')])
-        cat, rows = engine.parse_library_file('csv/capacitors.csv', raw)
-        self.assertEqual(cat, 'capacitors')
+        rows = engine.parse_library_file('csv/capacitors.csv', raw)
         self.assertEqual(len(rows), 2)
+        # 2026-10-15: класс по имени файла упразднён — всё библиотечное в `ЭК`.
         self.assertEqual(rows[0], {'code': 'CAP-1', 'description': 'Конденсатор 1',
-                                   'temperature': '-55-125°C', 'category': 'capacitors'})
+                                   'temperature': '-55-125°C', 'category': 'ЭК'})
+
+    def test_parse_cleans_text(self):
+        # Гигиена (2026-10-15): синк чистит молча — табуляция, неразрывный пробел,
+        # серии пробелов (минуса U+2212 в CP1251 нет — его ловит гигиена форм).
+        raw = _lib_csv([('CAP\u00a0X ', 'Матрица\tЧБ  1МП', '')])
+        rows = engine.parse_library_file('sensors.csv', raw)
+        self.assertEqual(rows[0]['code'], 'CAP X')
+        self.assertEqual(rows[0]['description'], 'Матрица ЧБ 1МП')
 
     def test_trailing_blank_line_skipped(self):
         raw = _lib_csv([('X', 'Икс', '')]) + b'\n'      # лишний финальный перевод
-        _, rows = engine.parse_library_file('sensors.csv', raw)
+        rows = engine.parse_library_file('sensors.csv', raw)
         self.assertEqual(len(rows), 1)
 
     def test_missing_column(self):
@@ -6277,7 +6287,7 @@ class LibraryParseTests(TestCase):
     def test_cp1251_decode(self):
         # Кириллица в CP1251 читается верно (в отличие от наивного UTF-8-декода).
         raw = _lib_csv([('X', 'Микросхема ЦАП', '-40-125°C')])
-        _, rows = engine.parse_library_file('mcu.csv', raw)
+        rows = engine.parse_library_file('mcu.csv', raw)
         self.assertEqual(rows[0]['description'], 'Микросхема ЦАП')
         self.assertEqual(rows[0]['temperature'], '-40-125°C')
 
@@ -6285,10 +6295,9 @@ class LibraryParseTests(TestCase):
         files = [('capacitors.csv', _lib_csv([('C1', 'к', '')])),
                  ('mcu.csv', _lib_csv([('M1', 'м', '')]))]
         parsed = engine.parse_library(files)
-        self.assertEqual(set(parsed['categories']), {'capacitors', 'mcu'})
         self.assertEqual(len(parsed['rows']), 2)
 
-    def test_duplicate_category(self):
+    def test_duplicate_file(self):
         files = [('capacitors.csv', _lib_csv([('C1', 'к', '')])),
                  ('capacitors.csv', _lib_csv([('C2', 'к', '')]))]
         with self.assertRaises(ValidationError):
@@ -6308,13 +6317,11 @@ class LibraryParseTests(TestCase):
 class LibraryDiffTests(TestCase):
     """Волна 15 Ф2: диф загруженной библиотеки против справочника."""
 
-    def _cat(self, code):
-        return engine.ensure_category(code)
-
-    def _item(self, did, cat, desc='desc', temp='', native=False):
+    def _item(self, did, desc='desc', temp='', native=False, synced=False, cat=None):
+        # Библиотечная категория по умолчанию: «совпадает с библиотекой» включает её.
         return models.Item.objects.create(
-            code=did, description=desc, category=self._cat(cat),
-            temperature=temp, native=native)
+            code=did, description=desc, category=cat or engine.library_category(),
+            temperature=temp, native=native, synced=synced)
 
     def _diff(self, files):
         return engine.library_diff(engine.parse_library(files))
@@ -6323,9 +6330,9 @@ class LibraryDiffTests(TestCase):
         return {r['code']: r for r in rows}
 
     def test_new_changed_same(self):
-        self._item('CAP-1', 'capacitors', desc='старое', temp='-40-85°C')
-        c2 = self._item('CAP-2', 'capacitors', desc='совпадает', temp='-55-125°C')
-        c2.synced = True; c2.save()          # совпадает И уже помечено библиотечным → same
+        self._item('CAP-1', desc='старое', temp='-40-85°C')
+        self._item('CAP-2', desc='совпадает', temp='-55-125°C',
+                   synced=True)              # совпадает И уже помечено библиотечным → same
         files = [('capacitors.csv', _lib_csv([
             ('CAP-1', 'новое', '-40-85°C'),     # description изменился
             ('CAP-2', 'совпадает', '-55-125°C'), # без изменений
@@ -6339,32 +6346,33 @@ class LibraryDiffTests(TestCase):
 
     def test_mark_when_unsynced_matches_library(self):
         # Ф3a: содержимое совпадает, но изделие ещё не помечено библиотечным → mark.
-        self._item('CAP-9', 'capacitors', desc='совп', temp='')   # synced=False по умолчанию
+        self._item('CAP-9', desc='совп', temp='')   # synced=False по умолчанию
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-9', 'совп', '')]))]))
         self.assertEqual(rows['CAP-9']['status'], 'mark')
         self.assertFalse(rows['CAP-9']['current']['synced'])
 
     def test_gone_when_unused(self):
-        self._item('CAP-OLD', 'capacitors')      # в БД, не в загрузке, не используется
+        self._item('CAP-OLD', synced=True)      # библиотечное, не в загрузке, не используется
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
         self.assertEqual(rows['CAP-OLD']['status'], 'gone')
 
     def test_orphan_when_used(self):
-        used = self._item('CAP-USED', 'capacitors')
-        parent = self._item('DEV', 'capacitors', native=True)
+        used = self._item('CAP-USED', synced=True)
+        parent = self._item('DEV', native=True, cat=_cat('dev', native=True))
         models.BomLine.objects.create(parent=parent, component=used, qty=D(1))
-        # DEV тоже в капаситорах и не в загрузке → сам gone/orphan; CAP-USED — orphan.
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
         self.assertEqual(rows['CAP-USED']['status'], 'orphan')
 
-    def test_missing_scoped_by_category(self):
-        # Изделие класса mcu не считается пропавшим, если грузили только capacitors.
-        self._item('MCU-X', 'mcu')
+    def test_missing_only_among_synced(self):
+        # 2026-10-15: загрузка = вся библиотека, пропавшие — только среди `synced`;
+        # ручное изделие библиотеке не принадлежит и пропасть из неё не может.
+        self._item('MANUAL-X')
         rows = self._by_key(self._diff([('capacitors.csv', _lib_csv([('CAP-1', 'к', '')]))]))
-        self.assertNotIn('MCU-X', rows)
+        self.assertNotIn('MANUAL-X', rows)
 
     def test_category_change_detected(self):
-        self._item('MULTI', 'capacitors')
+        # Позиция в другой категории, чем библиотечная, — изменение «→ ЭК».
+        self._item('MULTI', cat=_cat('mcu'))
         rows = self._by_key(self._diff([('mcu.csv', _lib_csv([('MULTI', 'desc', '')]))]))
         self.assertEqual(rows['MULTI']['status'], 'changed')
         self.assertIn('category', rows['MULTI']['changes'])
@@ -6373,10 +6381,11 @@ class LibraryDiffTests(TestCase):
 class LibraryApplyTests(TestCase):
     """Волна 15 Ф2: применение подтверждённых строк дифа."""
 
-    def _item(self, did, cat, desc='desc', temp='', native=False):
+    def _item(self, did, desc='desc', temp='', native=False, synced=False):
         return models.Item.objects.create(
-            code=did, description=desc, category=engine.ensure_category(cat),
-            temperature=temp, native=native)
+            code=did, description=desc,
+            category=_cat('dev', native=True) if native else engine.library_category(),
+            temperature=temp, native=native, synced=synced)
 
     def test_apply_creates_new(self):
         files = [('sensors.csv', _lib_csv([('S-1', 'Датчик', '-40-85°C')]))]
@@ -6388,11 +6397,10 @@ class LibraryApplyTests(TestCase):
         self.assertTrue(item.synced)                     # рождается библиотечным
         self.assertFalse(item.locked)                    # но НЕ запертым — готово под цену
         self.assertIsNone(item.estimated_cost)           # цена — за Plume
-        self.assertEqual(item.category.code, 'sensors')  # категория заведена на лету
-        self.assertEqual(item.category.description, 'Датчики') # канон LIBRARY_CATEGORIES
+        self.assertEqual(item.category.code, 'ЭК')       # всё библиотечное — ЭК
 
     def test_apply_updates_changed(self):
-        self._item('S-1', 'sensors', desc='старое', temp='')
+        self._item('S-1', desc='старое', temp='')
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
         engine.apply_library_diff(parsed, ['S-1'])
         item = models.Item.objects.get(code='S-1')
@@ -6401,14 +6409,14 @@ class LibraryApplyTests(TestCase):
         self.assertTrue(item.synced)                     # синк подтвердил библиотечность
 
     def test_apply_deletes_gone(self):
-        self._item('S-OLD', 'sensors')
+        self._item('S-OLD', synced=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-OLD'])
         self.assertEqual(summary['deleted'], 1)
         self.assertFalse(models.Item.objects.filter(code='S-OLD').exists())
 
     def test_apply_only_confirmed(self):
-        self._item('S-OLD', 'sensors')                   # gone, НЕ подтверждаем
+        self._item('S-OLD', synced=True)                 # gone, НЕ подтверждаем
         parsed = engine.parse_library([('sensors.csv', _lib_csv([
             ('S-1', 'новый A', ''), ('S-2', 'новый B', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])   # только S-1
@@ -6420,7 +6428,7 @@ class LibraryApplyTests(TestCase):
     def test_apply_mark_sets_synced(self):
         # Ф3a: совпадающее по содержимому непомеченное изделие → mark → synced=True,
         # locked не трогаем (решение Ивана 2026-07-24).
-        it = self._item('S-1', 'sensors', desc='датчик', temp='')   # synced=False, совпадает
+        it = self._item('S-1', desc='датчик', temp='')   # synced=False, совпадает
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])
         self.assertEqual(summary['marked'], 1)
@@ -6431,7 +6439,7 @@ class LibraryApplyTests(TestCase):
 
     def test_apply_mark_only_confirmed(self):
         # Не подтверждённый mark — не помечается.
-        it = self._item('S-1', 'sensors', desc='датчик', temp='')
+        it = self._item('S-1', desc='датчик', temp='')
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, [])   # ничего не подтверждаем
         self.assertEqual(summary['marked'], 0)
@@ -6439,8 +6447,8 @@ class LibraryApplyTests(TestCase):
         self.assertFalse(it.synced)
 
     def test_orphan_not_deleted_even_if_confirmed(self):
-        used = self._item('S-USED', 'sensors')
-        parent = self._item('DEV', 'sensors', native=True)
+        used = self._item('S-USED', synced=True)
+        parent = self._item('DEV', native=True)
         models.BomLine.objects.create(parent=parent, component=used, qty=D(1))
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-USED'])   # подтверждаем сироту
@@ -6520,7 +6528,7 @@ class ItemStatusTests(EngineTestBase):
         # заведено руками и залочено (наследие волны 17), затем совпало с библиотекой →
         # синк метит synced И снимает стухший замок (инвариант synced ⟹ not locked)
         models.Item.objects.create(code='S-1', description='старое',
-                                   category=engine.ensure_category('sensors'), locked=True)
+                                   category=engine.library_category(), locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'новое', '-40-85°C')]))])
         engine.apply_library_diff(parsed, ['S-1'])
         item = models.Item.objects.get(code='S-1')
@@ -6532,23 +6540,13 @@ class ItemStatusTests(EngineTestBase):
         # содержимое совпадает, но изделие залочено со времён волны 17 → mark снимает
         # замок вместе с пометкой synced (инвариант synced ⟹ not locked)
         models.Item.objects.create(code='S-1', description='датчик',
-                                   category=engine.ensure_category('sensors'), locked=True)
+                                   category=engine.library_category(), locked=True)
         parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'датчик', '')]))])
         summary = engine.apply_library_diff(parsed, ['S-1'])
         self.assertEqual(summary['marked'], 1)
         item = models.Item.objects.get(code='S-1')
         self.assertTrue(item.synced)
         self.assertFalse(item.locked)
-
-    def test_library_deletes_gone_locked(self):
-        # ушедшее из библиотеки изделие — зафиксировано; синк расфиксирует и удалит (гейт не мешает)
-        gone = models.Item.objects.create(code='S-OLD', description='ушло',
-                                          category=engine.ensure_category('sensors'),
-                                          locked=True)
-        parsed = engine.parse_library([('sensors.csv', _lib_csv([('S-1', 'к', '')]))])
-        summary = engine.apply_library_diff(parsed, ['S-OLD'])
-        self.assertEqual(summary['deleted'], 1)
-        self.assertFalse(models.Item.objects.filter(pk=gone.pk).exists())
 
     def test_status_in_item_serialization(self):
         i = self.make_item('R')
@@ -6739,12 +6737,11 @@ class LibrarySyncHttpTests(TestCase):
 
     def test_diff_then_apply(self):
         models.Item.objects.create(code='CAP-OLD', description='старьё',
-                                   category=engine.ensure_category('capacitors'))
+                                   category=engine.library_category(), synced=True)
         up = self._upload('capacitors.csv', [('CAP-1', 'Конденсатор', '-55-125°C')])
         r = self.c.post('/api/library/diff/', {'files': up})
         self.assertEqual(r.status_code, 200)
         body = r.json()
-        self.assertEqual(body['categories'], ['capacitors'])
         by = {row['code']: row for row in body['rows']}
         self.assertEqual(by['CAP-1']['status'], 'new')
         self.assertEqual(by['CAP-OLD']['status'], 'gone')
@@ -6757,51 +6754,15 @@ class LibrarySyncHttpTests(TestCase):
         self.assertTrue(models.Item.objects.filter(code='CAP-1').exists())
         self.assertFalse(models.Item.objects.filter(code='CAP-OLD').exists())
 
-    def test_diff_creates_missing_categories(self):
-        """Волна 22: сверка заводит недостающие КЛАССЫ (изделия не трогает) — иначе
-        таб «Категории» формы синхронизации нечего было бы показывать до применения."""
-        self.assertFalse(models.Category.objects.filter(code='inductors').exists())
+    def test_diff_writes_nothing(self):
+        """Сверка ничего не пишет: ни изделий, ни категорий (волна 22 заводила классы
+        по именам файлов — снято 2026-10-15 вместе с табом «Категории»)."""
+        n = models.Category.objects.count()
         up = self._upload('inductors.csv', [('L-4R7', 'Дроссель 4.7 мкГн', '')])
         r = self.c.post('/api/library/diff/', {'files': up})
         self.assertEqual(r.status_code, 200)
-        cat = models.Category.objects.get(code='inductors')
-        # Класса нет в `LIBRARY_CATEGORIES` — всплывает с сырым описанием, юзер правит.
-        self.assertEqual(cat.description, 'inductors')
-        # Изделия при этом НЕ заведены: диф остаётся дифом.
+        self.assertEqual(models.Category.objects.count(), n)
         self.assertFalse(models.Item.objects.filter(code='L-4R7').exists())
-
-    def test_diff_keeps_edited_category_description(self):
-        """Повторная сверка не затирает описание, которое человек уже правил."""
-        cat = engine.ensure_category('inductors')
-        cat.description = 'Индуктивности'
-        cat.save(update_fields=['description'])
-        up = self._upload('inductors.csv', [('L-4R7', 'Дроссель', '')])
-        self.c.post('/api/library/diff/', {'files': up})
-        cat.refresh_from_db()
-        self.assertEqual(cat.description, 'Индуктивности')
-
-    def test_patch_category_description(self):
-        """Волна 22: описание класса правится из продукта (таб «Категории»), а не
-        только из админки. `code` — ключ синка и в теле не принимается."""
-        cat = engine.ensure_category('capacitors')
-        r = self.c.patch(f'/api/categories/{cat.id}/',
-                         data=json.dumps({'description': '  Конденсаторы SMD  ',
-                                          'code': 'hacked'}),
-                         content_type='application/json')
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()['description'], 'Конденсаторы SMD')
-        cat.refresh_from_db()
-        self.assertEqual(cat.description, 'Конденсаторы SMD')
-        self.assertEqual(cat.code, 'capacitors')
-
-    def test_patch_category_description_too_long(self):
-        cat = engine.ensure_category('capacitors')
-        r = self.c.patch(f'/api/categories/{cat.id}/',
-                         data=json.dumps({'description': 'я' * 129}),
-                         content_type='application/json')
-        self.assertEqual(r.status_code, 400)
-        cat.refresh_from_db()
-        self.assertEqual(cat.description, 'Конденсаторы')
 
     def test_recalc_cost_endpoint(self):
         cat = _cat()
@@ -7248,3 +7209,131 @@ class AccountTests(TestCase):
         self.assertEqual(form['documents'][0]['project_code'], 'P1')
         self.assertEqual([p['code'] for p in form['procurements']], ['Закупка моя'])
         self.assertEqual([p['code'] for p in form['purchases']], ['Заказ мой'])
+
+
+class CategorySideTests(EngineTestBase):
+    """2026-10-15: категория своей стороны (`Category.native == Item.native`)."""
+
+    def test_canon_seeded_both_sides(self):
+        # Миграция 0005 заводит канон с обеих сторон; библиотечная — компонентная.
+        sides = dict(models.Category.objects.values_list('code', 'native'))
+        for code, _, native in engine.CATEGORY_CANON:
+            self.assertEqual(sides[code], native, code)
+        self.assertFalse(engine.library_category().native)
+
+    def test_create_rejects_foreign_category(self):
+        with self.assertRaises(ValidationError):
+            engine.create_item(code='X', native=True,
+                               category_id=engine.library_category().id)
+        it = engine.create_item(code='Y', native=True,
+                                category_id=models.Category.objects.get(code='ПРБ').id)
+        self.assertEqual(it.category.code, 'ПРБ')
+
+    def test_update_rejects_foreign_category(self):
+        it = self.make_item('C')                                     # компонент
+        with self.assertRaises(ValidationError):
+            engine.update_item(it, {'category_id': models.Category.objects.get(code='СИС').id})
+
+    def test_native_flip_resets_foreign_category(self):
+        # Решение Ивана: смена оси сбрасывает чужую категорию, а не запрещается.
+        it = self.make_item('C')
+        it.category = engine.library_category(); it.save()
+        engine.update_item(it, {'native': True})
+        it.refresh_from_db()
+        self.assertTrue(it.native)
+        self.assertIsNone(it.category)
+
+    def test_native_flip_with_new_category_same_patch(self):
+        it = self.make_item('C')
+        it.category = engine.library_category(); it.save()
+        prb = models.Category.objects.get(code='ПРБ')
+        engine.update_item(it, {'native': True, 'category_id': prb.id})
+        it.refresh_from_db()
+        self.assertEqual(it.category, prb)
+
+    def test_model_clean_resets_for_draft_refuses_for_locked(self):
+        # Админка: `full_clean` → чужая категория черновика сбрасывается, у
+        # зафиксированного — отказ (пустая категория ему запрещена CHECK'ом).
+        it = self.make_item('C')
+        it.category = engine.library_category(); it.native = True
+        it.full_clean()
+        self.assertIsNone(it.category)
+        it2 = self.make_item('D')
+        it2.category = engine.library_category(); it2.locked = True; it2.native = True
+        with self.assertRaises(ValidationError):
+            it2.full_clean()
+
+
+class TextHygieneTests(TestCase):
+    """2026-10-15: гигиена текстовых полей — правило в движке, страховка в парсере."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create(username='u')
+        self.user.set_password('pa  ss\t1'); self.user.save()
+        self.c = Client()
+        self.c.force_login(self.user)
+
+    def test_clean_text_rules(self):
+        self.assertEqual(engine.clean_text('  a\tb\n c  '), 'a b c')
+        self.assertEqual(engine.clean_text('a b​c'), 'a bc')
+        # Минус в описании — типографика, в коде — двойник дефиса.
+        self.assertEqual(engine.clean_text('−34…+14 дБм'), '−34…+14 дБм')
+        self.assertEqual(engine.clean_text('AR0144−CPBR', code=True), 'AR0144-CPBR')
+        self.assertEqual(engine.clean_text(None), None)
+
+    def test_hygiene_verdict_trim_is_silent(self):
+        self.assertEqual(engine.text_hygiene('  abc '), {'cleaned': 'abc', 'dirty': False})
+        self.assertEqual(engine.text_hygiene('a  b'), {'cleaned': 'a b', 'dirty': True})
+
+    def test_hygiene_endpoint_sees_raw_text(self):
+        r = self.c.post('/api/hygiene/', data=json.dumps({'value': 'X−Y', 'code': True}),
+                        content_type='application/json')
+        self.assertEqual(r.json(), {'cleaned': 'X-Y', 'dirty': True})
+
+    def test_parser_cleans_mutation_body(self):
+        # Страховка: что пришло мимо всплывашки, в БД ложится чистым.
+        cat = _cat()
+        it = models.Item.objects.create(code='I', description='', category=cat)
+        r = self.c.patch(f'/api/items/{it.id}/',
+                         data=json.dumps({'code': 'A−B', 'description': 'x\ty  z'}),
+                         content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        it.refresh_from_db()
+        self.assertEqual((it.code, it.description), ('A-B', 'x y z'))
+
+    def test_password_is_not_cleaned(self):
+        self.c.logout()
+        r = self.c.post('/api/auth/login/', data=json.dumps(
+            {'username': 'u', 'password': 'pa  ss\t1'}), content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+
+
+class RecategorizeTests(EngineTestBase):
+    """2026-10-15: разовая раскладка справочника по категориям (`recategorize`)."""
+
+    def test_apply_and_prune(self):
+        old = _cat('capacitors')
+        c = models.Item.objects.create(code='C1', description='', category=old)
+        d = models.Item.objects.create(code='D1', description='', category=old, native=True)
+        report = engine.recategorize_items({'C1': 'ЭК', 'D1': 'ПРБ', 'GONE': 'ЭК'}, prune=True)
+        c.refresh_from_db(); d.refresh_from_db()
+        self.assertEqual((c.category.code, d.category.code), ('ЭК', 'ПРБ'))
+        self.assertEqual(report['changed'], 2)
+        self.assertEqual(report['missing_items'], ['GONE'])
+        self.assertIn('capacitors', report['pruned'])
+        self.assertFalse(models.Category.objects.filter(code='capacitors').exists())
+        self.assertTrue(models.Category.objects.filter(code='ОСН').exists())   # канон цел
+
+    def test_wrong_side_refuses_whole_table(self):
+        c = models.Item.objects.create(code='C1', description='', category=_cat())
+        models.Item.objects.create(code='C2', description='', category=_cat())
+        with self.assertRaises(ValidationError):
+            engine.recategorize_items({'C2': 'ЭК', 'C1': 'СИС'})
+        c.refresh_from_db()
+        self.assertEqual(c.category.code, 'test')
+        self.assertEqual(models.Item.objects.get(code='C2').category.code, 'test')
+
+    def test_unknown_category_refuses(self):
+        models.Item.objects.create(code='C1', description='', category=_cat())
+        with self.assertRaises(ValidationError):
+            engine.recategorize_items({'C1': 'НЕТ'})

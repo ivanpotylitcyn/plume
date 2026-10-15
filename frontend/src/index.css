@@ -234,6 +234,13 @@ body { overflow: hidden; }
   overflow-y: auto; display: flex; flex-direction: column; }
 .sidebar h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--fg-dim); padding: 10px 12px 6px; margin: 0; font-weight: 500; }
+/* Команда-глиф в заголовке списка (2026-10-15: синхронизация у «Компонентов»): справа,
+   а коробка ужата отрицательным полем — заголовок не растёт, список не сдвигается.
+   `.on` — открыт экран команды, тот же тон, что у выбранной строки. */
+.sidebar h2 { display: flex; align-items: center; justify-content: space-between; }
+.sidebar h2 .fh-ctl { margin: -4px -6px; }
+.sidebar h2 .fh-ctl .ci { font-size: 13px; }
+.sidebar h2 .fh-ctl.on { background: var(--bg-sel); color: var(--fg-bright); }
 /* фильтр-строка + дропдаун проекта над списком */
 /* Фильтры списка режима: строка ввода во всю ширину, под ней — строка выпадающих
    (один во всю ширину, два делят её пополам). Все контролы РОВНО по ширине списка —
@@ -947,6 +954,13 @@ tr.row.ghost .glyph { opacity: 1; }
    остальные, но он не значение, а его снятие, поэтому приглушён. Стоит первым и только
    когда есть что снимать. */
 .typeahead-item.dd-none { color: var(--fg-dim); }
+/* Всплывашка гигиены текста (2026-10-15): меню-выбор под полем — подпись, очищенный
+   вариант и два пункта тем же `.typeahead-item`, что у пикеров. */
+.hygiene-pop { font-size: 12px; }
+.hygiene-pop .hy-note { padding: 4px 8px 0; color: var(--fg-dim); }
+.hygiene-pop .hy-text { padding: 2px 8px 4px; color: var(--fg); white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+.hygiene-pop .hy-text.code { font-family: var(--font-mono); }
 /* Меню кнопки «Скачать» (2026-07-30): слой и знак строки — от пикера, но пункты здесь
    ССЫЛКИ (скачивание ведёт браузер). Браузерное оформление ссылки снимаем: строка
    меню — команда, а у команд подчёркиваний нет нигде (§5). */

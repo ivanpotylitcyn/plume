@@ -147,7 +147,7 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
       // Порядок полей — от модели (§13.4a): идентичность (код + описание) → внешние
       // атрибуты (ИНН). Больше в ДНК контрагента ничего и нет (Ф3).
       fields={<>
-        <TextField label="Код" value={c.code ?? ''} locked={locked} busy={busy}
+        <TextField label="Код" code value={c.code ?? ''} locked={locked} busy={busy}
           onCommit={v => run(api.updateCounterparty(c.id, { code: v }))}
           validate={v => v.trim() !== ''} />
         <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
