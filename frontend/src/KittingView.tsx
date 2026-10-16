@@ -17,7 +17,7 @@ import { ItemPicker } from './Picker'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { useCategoryFilter } from './ColumnFilter'
-import { Glyph, ItemGlyph, Segment, count, num, statusTone } from './status'
+import { Glyph, ItemGlyph, Segment, count, num, rowNumbers, statusTone } from './status'
 import { EntityLink } from './EntityLink'
 
 export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
@@ -37,6 +37,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
   // Фильтр состава по классу компонента — общий движок (2026-08-10), как в форме
   // изделия и в закупочном контуре.
   const byCat = useCategoryFilter(c?.rows, r => r.component_category, kittingId)
+  const no = rowNumbers(c?.rows)        // постоянный номер строки — по всему составу
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -61,7 +62,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
           : <table className="grid">
               <thead>
                 <tr>
-                  <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
+                  <th className="rn">№</th><th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
                   <th className="c-desc">Описание</th>
                   <th className="num">Надо</th><th className="uom">Ед.</th>
                   <th className="num">Пробито</th>
@@ -71,7 +72,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
               </thead>
               <tbody>
                 {byCat.shown.map(row => (
-                  <Component key={row.component_id} row={row} form={c} wip={!locked}
+                  <Component key={row.component_id} no={no.get(row)} row={row} form={c} wip={!locked}
                     busy={busy} openItem={openItem} run={run} />
                 ))}
               </tbody>
@@ -145,7 +146,8 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
 // компонент был отдельным блоком `.kit-comp` со своей таблицей: колонки не
 // выстраивались между компонентами, описания разливались на три строки, а «надо ·
 // пробито · остаток» шло свободным текстом справа — то, что Иван назвал мусором.
-function Component({ row, form, wip, busy, openItem, run }: {
+function Component({ no, row, form, wip, busy, openItem, run }: {
+  no?: number
   row: KittingFormRow; form: KittingForm; wip: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<KittingForm>) => void
 }) {
@@ -154,6 +156,7 @@ function Component({ row, form, wip, busy, openItem, run }: {
   return (
     <>
       <tr className={`row s-${status}`}>
+      <td className="rn">{no}</td>
         {/* Глиф строки (§7a), как в заказе: ФОРМА = изделие/компонент (оси компонента),
             ЦВЕТ = покрытие строки складом проекта. Одна строка — один глиф. */}
         <td className="gl"><ItemGlyph native={row.component_native}
@@ -175,6 +178,7 @@ function Component({ row, form, wip, busy, openItem, run }: {
           «Пробито» — строка пайки в неё и складывается. */}
       {row.real_lines.map(ln => (
         <tr key={ln.id} className="row">
+          <td className="rn" />
           <td className="gl" />
           <td className="c-key ind">{ln.lot_label}</td>
           <td className="c-desc">{ln.date ?? ''}</td>
@@ -225,6 +229,7 @@ function GhostRow({ row, ghost, form, busy, run }: {
   const empty = lots.length === 0
   return (
     <tr className={`row ghost s-${ghost.status}`}>
+      <td className="rn" />
       <td className="gl"><Glyph status={ghost.status} /></td>
       {/* Пикер занимает колонки идентичности и описания — канон призрачной строки
           (`.c-key colSpan={2}`, тот же в девяти формах). */}

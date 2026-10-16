@@ -239,16 +239,18 @@ function DiffTable({ status, rows, confirmed, busy, onToggle, onBulk, openItem }
       <table className="grid lib-diff">
         <thead><tr>
           {m.actionable && <th className="pick" />}
+          <th className="rn">№</th>
           <th className="c-key">Изделие</th>
           <th className="c-desc">{m.col}</th>
         </tr></thead>
-        <tbody>{rows.map(r => (
+        <tbody>{rows.map((r, i) => (
           <tr key={r.code} className="row">
             {m.actionable &&
               <td className="pick">
                 <input type="checkbox" checked={confirmed.has(r.code)} disabled={busy}
                   onChange={() => onToggle(r.code)} />
               </td>}
+            <td className="rn">{i + 1}</td>
             {/* Код изделия — идентичность (`.code`): у уже заведённого он ссылка
                 со своим цветом, у нового — просто код, и приглушать его нельзя. */}
             <td className="c-key">{r.item_id
@@ -287,10 +289,11 @@ function RowDetail({ row }: { row: LibraryDiffRow }) {
 function FileTable({ files }: { files: File[] }) {
   return (
     <table className="grid">
-      <thead><tr><th className="gl" /><th className="c-key">Файл</th>
+      <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-key">Файл</th>
         <th className="c-fit num">Размер</th></tr></thead>
-      <tbody>{files.map(f => (
+      <tbody>{files.map((f, i) => (
         <tr key={f.name} className="row">
+          <td className="rn">{i + 1}</td>
           <td className="gl"><span className="ci sg ci-file-text sg-ok" /></td>
           <td className="c-key">{f.name}</td>
           <td className="c-fit num">{humanSize(f.size)}</td>

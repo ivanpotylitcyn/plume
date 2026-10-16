@@ -13,7 +13,8 @@ import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
 import { useCategoryFilter } from './ColumnFilter'
-import { Balance, Chevron, Cost, CounterpartyRef, StatusGlyph, balanceTitle, num } from './status'
+import { Balance, Chevron, Cost, CounterpartyRef, StatusGlyph, balanceTitle, num,
+  rowNumbers } from './status'
 import { EntityLink } from './EntityLink'
 
 // Состояние распределения: загрузка по id и обновление на `rev` (мутации формы
@@ -57,6 +58,7 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
   const { p, err } = st
   // Фильтр по классу изделия — общий движок (2026-08-10), тот же, что в остальном контуре.
   const byCat = useCategoryFilter(p?.rows, r => r.item_category, procurementId)
+  const no = rowNumbers(p?.rows)        // постоянный номер строки плана
   if (!p) return <div className="tab-empty">Загрузка…</div>
   if (p.rows.length === 0)
     return <div className="tab-empty">
@@ -69,6 +71,7 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
         {/* Заголовок ведущей колонки отступает на раскрыватель и глиф (`head--tree`,
             §7a): подпись начинается ровно над первым символом кода. */}
         <div className="prow prow--head head--tree">
+          <span className="rn" title="номер строки — постоянный, фильтр его не меняет">№</span>
           <span className="tree-cell">Компонент{byCat.head}</span>
           <span>Описание</span>
           <span className="pnum" title="баланс проекта закупки по этому изделию">
@@ -85,7 +88,7 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
           {editable && <span />}
         </div>
         {byCat.shown.map(r => (
-          <LineRow key={r.line_id} r={r} editable={editable} onQty={onQty}
+          <LineRow key={r.line_id} r={r} no={no.get(r)} editable={editable} onQty={onQty}
             onDelete={onDelete} openItem={openItem} openPurchase={openPurchase}
             openCounterparty={openCounterparty} />
         ))}
@@ -108,14 +111,15 @@ export function PurchaseFan({ st, openPurchase, openCounterparty }: {
   return (
     <table className="grid">
       <thead><tr>
-        <th className="gl" /><th className="c-key">Заказ</th>
+        <th className="rn">№</th><th className="gl" /><th className="c-key">Заказ</th>
         <th className="c-desc">Контрагент</th>
         <th className="num">Строк</th>
         <th className="num">Всего</th>
       </tr></thead>
       <tbody>
-        {p.fan.map(f => (
+        {p.fan.map((f, i) => (
           <tr key={f.purchase_id} className="row">
+            <td className="rn">{i + 1}</td>
             <td className="gl"><StatusGlyph locked={f.locked} /></td>
             <td className="c-key">
               <EntityLink kind="purchase" id={f.purchase_id} open={openPurchase}>
@@ -135,9 +139,9 @@ export function PurchaseFan({ st, openPurchase, openCounterparty }: {
 // Строка плана: сколько взяли заказы и сколько осталось + раскрытие в заказы.
 // Глиф (правило Ивана 2026-08-05): взята в ноль — зелёный check; не тронута или
 // перебор — красный warning; между — оранжевый warning.
-function LineRow({ r, editable, onQty, onDelete, openItem, openPurchase,
+function LineRow({ r, no, editable, onQty, onDelete, openItem, openPurchase,
   openCounterparty }: {
-  r: AllocationRow
+  r: AllocationRow; no?: number
   editable: boolean; onQty: (lineId: number, qty: number) => void
   onDelete: (lineId: number) => void
   openItem: (id: number) => void
@@ -149,6 +153,7 @@ function LineRow({ r, editable, onQty, onDelete, openItem, openPurchase,
   return (
     <>
       <div className="prow prow--device">
+        <span className="rn">{no}</span>
         <span className="tree-cell">
           <button className="chev" title={open ? 'свернуть' : 'распределение по заказам'}
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
@@ -213,6 +218,7 @@ function OrderCell({ c, uom, editable, openPurchase, openCounterparty }: {
 }) {
   return (
     <div className="prow prow--comp">
+      <span className="rn" />
       <span className="tree-cell alloc-sub">
         <span className="tree-lead" />
         <StatusGlyph locked={c.locked} />

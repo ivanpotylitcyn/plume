@@ -89,6 +89,7 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
 }) {
   return (
     <div className={'prow prow--head' + (tree ? ' head--tree' : '')}>
+      <span className="rn" title="номер строки — постоянный, фильтр его не меняет">№</span>
       <span className="tree-cell">{lead}{catHead}</span>
       <span>Описание</span>
       <span className="pnum" title="потребность: разузлование BOM на все приборы">
@@ -188,6 +189,7 @@ export function NeedSums({ rows, acts }: { rows: DeficitComponent[]; acts?: bool
   }
   return (
     <div className="prow prow--sums">
+      <span className="rn" />
       <span className="tree-cell">Оценка</span>
       {/* Без ▲ (правка Ивана): треугольник занят статусами — здесь просто красный текст. */}
       <span className="name">
@@ -259,11 +261,12 @@ export function BalanceCells({ code, need, kitted, inStock, onOrder, planned = 0
 // Строка компонента в своде: те же пять чисел, read-only. Команда строки приходит
 // СНАРУЖИ (`action`) — витрина сама ничего не умеет, она показывает и помогает выбрать.
 // У проекта команды нет вовсе; у закупки это «взять в план» / отметка «уже взято».
-export function NeedRow({ ln, openItem, action }: {
-  ln: DeficitComponent; openItem: (id: number) => void; action?: ReactNode
+export function NeedRow({ ln, no, openItem, action }: {
+  ln: DeficitComponent; no?: number; openItem: (id: number) => void; action?: ReactNode
 }) {
   return (
     <div className="prow prow--comp">
+      <span className="rn">{no}</span>
       {/* `lead--item` — ведущая ячейка «глиф + код» в ТОЙ ЖЕ геометрии, что у строк
           компонентов в таблицах (§7a, 2026-08-11): один и тот же зазор глиф→код, где бы
           строка компонента ни стояла. Без модификатора здесь работал зазор дерева (5px),

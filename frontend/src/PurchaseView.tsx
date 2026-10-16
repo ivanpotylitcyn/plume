@@ -22,7 +22,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CounterpartyRef, ItemGlyph, StatusGlyph,
-  count, money, num } from './status'
+  count, money, num, rowNumbers } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
@@ -67,6 +67,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   const byRest = useMemo(() => (c?.rows ?? []).filter(ln => rest === 'any'
     || (rest === 'open' ? ln.remaining > 0 : ln.remaining <= 0)), [c, rest])
   const byCat = useCategoryFilter(byRest, ln => ln.item_category, purchaseId)
+  const no = rowNumbers(c?.rows)        // постоянный номер строки — по всему заказу
 
   const run = (p: Promise<PurchaseForm>) => {
     setBusy(true); setErr(null)
@@ -124,7 +125,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
               {/* Баланса проекта здесь нет (волна 24, решение Ивана): «сколько надо» —
                   вопрос закупки. «Остаток» тоже снят: он повторял соседние числа и шумел;
@@ -151,7 +152,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
           </thead>
           <tbody>
             {byCat.shown.map(ln => (
-              <LineRow key={ln.id} ln={ln} editable={!locked} busy={busy}
+              <LineRow key={ln.id} no={no.get(ln)} ln={ln} editable={!locked} busy={busy}
                 openItem={openItem} run={run} />
             ))}
             {/* Правочные ручки строк — и корзина, и строка-призрак — по ПОЛНОМУ замку
@@ -173,14 +174,15 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         ? <div className="tab-empty">Заказ ещё не закрыт ни одной поставкой.</div>
         : <table className="grid">
             <thead><tr>
-              <th className="gl" /><th className="c-key">Поставка</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Поставка</th>
               <th className="c-fit">№ поставки</th><th className="c-fit">Дата</th>
               <th className="c-desc">Поставщик</th>
               <th className="num">Строк</th>
             </tr></thead>
             <tbody>
-              {c.receipts.map(r => (
+              {c.receipts.map((r, i) => (
                 <tr key={r.id} className="row">
+                  <td className="rn">{i + 1}</td>
                   {/* Глиф-замок: черновая накладная заказ ещё не гасит (Ф6) — видно,
                       что она заведена, но «поступило» по строкам пока ноль. */}
                   <td className="gl"><StatusGlyph locked={r.locked} /></td>
@@ -299,13 +301,15 @@ function parsePrice(v: string): number | null {
 }
 
 // Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
-function LineRow({ ln, editable, busy, openItem, run }: {
+function LineRow({ no, ln, editable, busy, openItem, run }: {
+  no?: number
   ln: PurchaseFormLine; editable: boolean; busy: boolean
   openItem: (id: number) => void
   run: (p: Promise<PurchaseForm>) => void
 }) {
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       {/* Глиф строки — ИЗДЕЛИЕ, как в списке «Компоненты» и в форме закупки (правка
           Ивана 2026-08-08, разворот решения 2026-08-05). Циферблат «ждём поставку» снят:
           приехало ли — и так видно цветом «Поступило» и фильтром на нём,
@@ -395,6 +399,7 @@ function GhostRow({ purchaseId, items, rev, busy, run }: {
 
   return (
     <tr className="row ghost">
+      <td className="rn" />
       <td className="gl" />
       {/* Заголовок поля — подпись его колонки («Компонент»), без «＋»: строка-призрак
           и так читается пустой строкой таблицы, а знак прибавления несёт кнопка в конце

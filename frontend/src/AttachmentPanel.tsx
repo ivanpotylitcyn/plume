@@ -77,13 +77,14 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
       {busy && <div className="hint">загружаю…</div>}
       {rows && rows.length > 0 &&
         <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Файл</th>
+          <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-key">Файл</th>
             <th className="c-desc">Описание</th>
             <th className="c-fit num">Размер</th>
             <th className="c-fit">Загружено</th><th className="c-fit">Загрузил</th>
             <th className="act" /></tr></thead>
-          <tbody>{rows.map(a => (
+          <tbody>{rows.map((a, i) => (
             <tr key={a.id} className="row">
+              <td className="rn">{i + 1}</td>
               <td className="gl"><FileGlyph filename={a.filename} state={a.state} /></td>
               <td className="c-key">
                 <a className="link" href={a.url} target="_blank" rel="noreferrer">{a.filename}</a></td>

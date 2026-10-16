@@ -5,7 +5,7 @@
 // ордеров, коснувшихся изделия (рождение партий + расходы), `engine.item_movements`.
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num, money, count, ItemGlyph, LotGlyph, StatusGlyph } from './status'
+import { num, money, count, ItemGlyph, LotGlyph, StatusGlyph, rowNumbers } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -32,6 +32,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
   // Фильтр состава по категории компонента — общий движок (2026-08-10): «покажи только
   // конденсаторы». Ключ сброса — изделие: у другого прибора состав свой.
   const bomFilter = useCategoryFilter(d?.bom, b => b.component_category, itemId)
+  const bomNo = rowNumbers(d?.bom)      // постоянный номер строки состава
 
   useEffect(() => {
     setD(null); setErr(null); setRollup(null)
@@ -100,7 +101,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         {locked ? 'Состав пуст.' : 'Состав пуст — добавьте компонент ниже.'}</div>}
       {d.bom.length > 0 &&
         <table className="grid">
-          <thead><tr><th className="gl" />
+          <thead><tr><th className="rn">№</th><th className="gl" />
             {/* Фильтр — в ячейке подписи, как «Остаток» заказа и члены баланса
                 «Потребности»: он относится к колонке, а не к таблице целиком. */}
             <th className="c-key">Компонент{bomFilter.head}</th>
@@ -109,6 +110,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             {!locked && <th className="act" />}</tr></thead>
           <tbody>{bomFilter.shown.map(b => (
             <tr key={b.id} className="row">
+              <td className="rn">{bomNo.get(b)}</td>
               <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
               <td className="c-key">
                 <EntityLink kind="item" id={b.component_id} open={openItem}>
@@ -141,11 +143,12 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
     content: d.where_used.length === 0
       ? <div className="tab-empty">Нигде (не входит в BOM)</div>
       : <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Изделие</th><th className="c-desc">Описание</th>
+          <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-key">Изделие</th><th className="c-desc">Описание</th>
             <th className="num">Кол-во</th>
             <th className="uom">Ед.</th></tr></thead>
-          <tbody>{d.where_used.map(w => (
+          <tbody>{d.where_used.map((w, i) => (
             <tr key={w.parent_id} className="row">
+              <td className="rn">{i + 1}</td>
               {/* Глиф родителя — по его собственным осям (Ф3a: ровно один по режиму). */}
               <td className="gl"><ItemGlyph native={w.parent_native} synced={w.parent_synced}
                 locked={w.parent_locked} /></td>
@@ -168,15 +171,16 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       // один знак). Ф15: партия расфиксированного origin остаётся в списке (видно
       // входящий поток), но идёт нейтральным тоном — она не «исчерпана», а не принята.
       : <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Партия</th>
+          <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-key">Партия</th>
             <th className="c-fit">Проект</th>
             <th className="num">Рожд.</th>
             <th className="num">Остаток</th>
             <th className="uom">Ед.</th>
             <th className="c-fit">Part number</th><th className="c-desc">Название</th>
           </tr></thead>
-          <tbody>{d.lots.map(l => (
+          <tbody>{d.lots.map((l, i) => (
             <tr key={l.id} className="row">
+              <td className="rn">{i + 1}</td>
               <td className="gl"><LotGlyph origin={l.origin} liveQty={l.live_qty}
                 draft={!l.origin_locked} /></td>
               <td className="c-key">#{l.id}</td>
@@ -203,13 +207,14 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
     content: d.movements.length === 0
       ? <div className="tab-empty">Изделие ещё не двигалось по складу</div>
       : <table className="grid">
-          <thead><tr><th className="gl" /><th className="c-key">Ордер</th><th>Вид</th><th>Дата</th><th>Проект</th>
+          <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-key">Ордер</th><th>Вид</th><th>Дата</th><th>Проект</th>
             <th>Партия</th>
             <th className="num">Кол-во</th>
             <th className="uom">Ед.</th></tr></thead>
           <tbody>{d.movements.map((m, i) => (
             <tr key={`${m.kind}-${m.document_id}-${m.lot_id}-${i}`}
               className="row">
+              <td className="rn">{i + 1}</td>
               <td className="gl"><StatusGlyph locked={m.locked} /></td>
               <td className="c-key">
                 <EntityLink kind={m.kind as OrderKind} id={m.document_id}

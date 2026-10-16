@@ -50,7 +50,7 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Партия</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="c-fit">Откуда</th><th className="c-fit">Куда</th>
@@ -58,8 +58,8 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
             </tr>
           </thead>
           <tbody>
-            {c.moves.map(m => (
-              <MoveRow key={m.lot_id} m={m} relocationId={c.id} locs={locs}
+            {c.moves.map((m, i) => (
+              <MoveRow key={m.lot_id} no={i + 1} m={m} relocationId={c.id} locs={locs}
                 locked={locked} busy={busy} openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow relocationId={c.id} lots={lots} locs={locs}
@@ -99,7 +99,8 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
 }
 
 // Реальный ход перемещения (ключ — лот): автосейв кол-ва/мест, удаление хода.
-function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
+function MoveRow({ no, m, relocationId, locs, locked, busy, openItem, run }: {
+  no?: number
   m: RelocationMove; relocationId: number; locs: LocationRow[]
   locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<RelocationForm>) => void
@@ -107,6 +108,7 @@ function MoveRow({ m, relocationId, locs, locked, busy, openItem, run }: {
   const negative = m.from_live_qty < 0   // источник в минусе — переместили больше, чем лежало
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       <td className="gl"><LotGlyph origin={m.origin} liveQty={m.from_live_qty} /></td>
       <td className="c-key"><span className="code">{m.lot_label}</span></td>
       <td className="c-fit">
@@ -180,6 +182,7 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
 
   return (
     <tr className="row ghost">
+      <td className="rn" />
       <td className="gl" />
       <td className="c-key" colSpan={2}>
         {/* Снятие выбора идёт тем же путём, что и выбор (`pick('')`): вместе с партией

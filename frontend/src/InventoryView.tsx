@@ -45,7 +45,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Изделие</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="num">Цена, ₽</th>
@@ -54,8 +54,8 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
             </tr>
           </thead>
           <tbody>
-            {c.lots.map(lot => (
-              <LotRow key={lot.id} lot={lot} locked={locked} draft={!fixed} busy={busy}
+            {c.lots.map((lot, i) => (
+              <LotRow key={lot.id} no={i + 1} lot={lot} locked={locked} draft={!fixed} busy={busy}
                 openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />}
@@ -103,13 +103,15 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
 // Реальная строка акта (найденный лот): автосейв кол-ва/цены/названия, удаление.
 // `draft` — акт не проведён (Ф15): найденная партия ещё не на складе, живости у неё
 // нет — остаток не показываем, глиф нейтральный (иначе «остаток 0» на каждой строке).
-function LotRow({ lot, locked, draft, busy, openItem, run }: {
+function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
+  no?: number
   lot: InventoryFormLot; locked: boolean; draft: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<InventoryForm>) => void
 }) {
   const short = !draft && lot.live_qty !== lot.qty   // просел под последующий расход
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       {/* Строка = партия, рождённая этим актом (origin = инвентаризация). */}
       <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
@@ -180,6 +182,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
 
   return (
     <tr className="row ghost">
+      <td className="rn" />
       <td className="gl" />
       <td className="c-key" colSpan={2}>
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
@@ -237,7 +240,7 @@ function RematerializeTab({ inventoryId, busy, run }: {
     <table className="grid">
       <thead>
         <tr>
-          <th className="gl" /><th className="c-key">Изделие</th>
+          <th className="rn">№</th><th className="gl" /><th className="c-key">Изделие</th>
           <th className="c-desc">Описание</th>
           <th className="c-fit">Проект-источник</th>
           <th className="num">Списано</th><th className="uom">Ед.</th>
@@ -245,8 +248,9 @@ function RematerializeTab({ inventoryId, busy, run }: {
         </tr>
       </thead>
       <tbody>
-        {lots.map(l => (
+        {lots.map((l, i) => (
           <tr key={l.lot_id} className="row">
+            <td className="rn">{i + 1}</td>
             {/* Партия списана — живого остатка нет: глиф приглушён по определению. */}
             <td className="gl"><LotGlyph origin={null} liveQty={0} /></td>
             <td className="c-key">{l.item_code}</td>

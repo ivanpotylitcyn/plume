@@ -103,15 +103,16 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
         ? <div className="tab-empty">Этому контрагенту ещё ничего не передавали.</div>
         : <table className="grid">
             <thead><tr>
-              <th className="gl" /><th className="c-key">Передача</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Передача</th>
               <th className="c-fit">№ накладной</th><th className="c-fit">Проект</th>
               <th className="c-fit">Дата</th>
               <th className="num">Строк</th>
               <th className="num">Кол-во</th>
               <th className="num">Сумма</th>
             </tr></thead>
-            <tbody>{c.transfers.map(t => (
-              <TransRow key={t.id} t={t} open={id => openOrder('transfer', id)} />))}</tbody>
+            <tbody>{c.transfers.map((t, i) => (
+              <TransRow key={t.id} t={t} no={i + 1}
+                open={id => openOrder('transfer', id)} />))}</tbody>
           </table> },
   )
   tabs.push(
@@ -208,9 +209,12 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
   )
 }
 
-function TransRow({ t, open }: { t: CpTransferRow; open: (id: number) => void }) {
+function TransRow({ t, no, open }: {
+  t: CpTransferRow; no: number; open: (id: number) => void
+}) {
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       <td className="gl"><StatusGlyph locked={t.locked} /></td>
       <td className="c-key">
         <EntityLink kind="transfer" id={t.id} open={open}>

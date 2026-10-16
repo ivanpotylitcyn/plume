@@ -19,6 +19,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, type Demand } from './api'
 import { NeedHead, NeedRow, NeedSums, needPass, useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
+import { rowNumbers } from './status'
 
 // Состояние витрины: перечитывается на `rev` (мутации формы — взяли позицию, убрали
 // строку, сменился проект), как и распределение.
@@ -57,6 +58,7 @@ export function DemandRows({ st, editable, empty, openItem, take }: {
   // пустую таблицу. Причина у форм разная — текст приходит от формы.
   if (d.rows.length === 0) return <div className="tab-empty">{empty}</div>
   const shown = byCat.shown.filter(r => needPass(r, f))
+  const no = rowNumbers(d.rows)          // постоянный номер строки — по полному своду
   return (
     <div className="pgrid pgrid--acts">
       <NeedSums rows={shown} acts />
@@ -66,7 +68,7 @@ export function DemandRows({ st, editable, empty, openItem, take }: {
             <span>Ни одна строка не подходит под фильтры колонок.</span>
           </div>
         : shown.map(r => (
-            <NeedRow key={r.component_id} ln={r} openItem={openItem}
+            <NeedRow key={r.component_id} ln={r} no={no.get(r)} openItem={openItem}
               action={r.in_lines
                 /* Взято — состояние, а не команда: глиф без кнопки и без тона. Цвета у
                    него нет намеренно (правка Ивана): зелёный означал бы «хорошо», а

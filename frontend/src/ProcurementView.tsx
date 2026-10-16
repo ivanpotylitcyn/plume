@@ -216,17 +216,18 @@ function NewPurchaseDialog({ rows, code, onConfirm, onClose }: {
       <div className="dialog-body">
         <table className="grid">
           <thead><tr>
-            <th className="pick" /><th className="c-key">Компонент</th>
+            <th className="pick" /><th className="rn">№</th><th className="c-key">Компонент</th>
             <th className="c-desc">Описание</th>
             <th className="num" title="хотим − уже в заказах; столько уйдёт в новый заказ">
               Остаток</th>
             <th className="uom">Ед.</th>
           </tr></thead>
-          <tbody>{rows.map(r => (
+          <tbody>{rows.map((r, i) => (
             <tr key={r.item_id} className="row">
               <td className="pick">
                 <input type="checkbox" checked={picked.has(r.item_id)}
                   onChange={() => toggle(r.item_id)} /></td>
+              <td className="rn">{i + 1}</td>
               <td className="c-key"><span className="code">{r.item_code}</span></td>
               <td className="c-desc">
                 <span className="cell-ellip" title={r.item_description}>

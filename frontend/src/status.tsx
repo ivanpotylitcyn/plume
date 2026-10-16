@@ -174,6 +174,15 @@ export function Cost({ cost, status, overpayAt, uom }: {
   return <span className={tone} title={title}>{money(cost)}</span>
 }
 
+// Номера строк документа (2026-10-16): постоянный адрес строки — позиция в ПОЛНОМ
+// списке, а не в отфильтрованном. Фильтр скрывает строки, номера не переезжают
+// (решение Ивана: «проверь строку 12» значит одно и то же при любом фильтре).
+export function rowNumbers<T>(rows: readonly T[] | undefined): Map<T, number> {
+  const m = new Map<T, number>()
+  rows?.forEach((r, i) => m.set(r, i + 1))
+  return m
+}
+
 export function num(x: number): string {
   return Number.isInteger(x) ? String(x) : String(x)
 }

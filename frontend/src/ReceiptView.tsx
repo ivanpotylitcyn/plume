@@ -7,7 +7,7 @@ import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
 import { num, money, count, sumByUom, CounterpartyRef, LotGlyph,
-  MismatchGlyph } from './status'
+  MismatchGlyph, rowNumbers } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -40,6 +40,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   // Фильтр строк по классу изделия — общий движок (2026-08-10): в УПД на сотню позиций
   // «покажи только конденсаторы» — тот же вопрос, что к составу прибора.
   const byCat = useCategoryFilter(c?.lots, l => l.item_category, receiptId)
+  const no = rowNumbers(c?.lots)        // постоянный номер строки — по всем партиям
 
   if (err && !c) return <div className="empty">Ошибка: {err}</div>
   if (!c) return <div className="empty">Загрузка…</div>
@@ -61,7 +62,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
@@ -72,7 +73,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
           </thead>
           <tbody>
             {byCat.shown.map(lot => (
-              <LotRow key={lot.id} lot={lot} locked={locked} draft={!fixed} busy={busy}
+              <LotRow key={lot.id} no={no.get(lot)} lot={lot} locked={locked} draft={!fixed} busy={busy}
                 openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow receiptId={c.id} items={items} busy={busy} run={run} />}
@@ -158,13 +159,15 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
 // `draft` — поставка ещё не сверена (Ф15): партия на складе не лежит, живого остатка
 // у неё нет вовсе. Показывать «остаток 0» было бы враньём про израсходованную партию,
 // поэтому в черновике остаток не показываем, а глиф гасим в нейтральный.
-function LotRow({ lot, locked, draft, busy, openItem, run }: {
+function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
+  no?: number
   lot: ReceiptLot; locked: boolean; draft: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<ReceiptForm>) => void
 }) {
   const short = !draft && lot.live_qty !== lot.qty   // просел под пайку/расход
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       {/* Строка = партия, рождённая этой поставкой: глиф партии (форма — origin,
           цвет — живость остатка, §7a), код и описание — РАЗНЫМИ колонками. */}
       <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} draft={draft} /></td>
@@ -230,6 +233,7 @@ function GhostRow({ receiptId, items, busy, run }: {
 
   return (
     <tr className="row ghost">
+      <td className="rn" />
       <td className="gl" />
       {/* Пикер занимает пару «код + описание»: ищет по обоим, и ширину берёт по ним
           (inline-`width` контрола не задаём — §7a). */}

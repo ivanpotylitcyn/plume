@@ -60,13 +60,14 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
         ? <div className="tab-empty">Пусто — на этом месте нет живых партий.</div>
         : <table className="grid">
             <thead><tr>
-              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Партия</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="c-fit">Проект</th>
               <th className="num">Остаток</th><th className="uom">Ед.</th>
             </tr></thead>
-            <tbody>{d.stock.map(l => (
+            <tbody>{d.stock.map((l, i) => (
               <tr key={l.lot_id} className="row">
+                <td className="rn">{i + 1}</td>
                 <td className="gl"><LotGlyph origin={l.origin} liveQty={l.qty} /></td>
                 <td className="c-key"><span className="code">{l.lot_label}</span></td>
                 <td className="c-fit">

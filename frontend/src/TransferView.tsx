@@ -54,7 +54,7 @@ export function TransferView({ transferId, isNew, openItem, openProject,
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Партия</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Партия</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="num">Остаток</th>
@@ -63,8 +63,8 @@ export function TransferView({ transferId, isNew, openItem, openProject,
             </tr>
           </thead>
           <tbody>
-            {c.lines.map(ln => (
-              <LineRow key={ln.id} ln={ln} locked={locked} busy={busy}
+            {c.lines.map((ln, i) => (
+              <LineRow key={ln.id} no={i + 1} ln={ln} locked={locked} busy={busy}
                 openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow transferId={c.id} lots={lots} busy={busy} run={run} />}
@@ -118,13 +118,15 @@ export function TransferView({ transferId, isNew, openItem, openProject,
 }
 
 // Реальная строка передачи (лот): автосейв кол-ва/имени, удаление (коррекция).
-function LineRow({ ln, locked, busy, openItem, run }: {
+function LineRow({ no, ln, locked, busy, openItem, run }: {
+  no?: number
   ln: TransferFormLine; locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<TransferForm>) => void
 }) {
   const negative = ln.lot_live_qty < 0   // переотдали — источник в минусе
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
       <td className="c-key"><span className="code">{ln.lot_label}</span></td>
       <td className="c-fit">
@@ -175,6 +177,7 @@ function GhostRow({ transferId, lots, busy, run }: {
 
   return (
     <tr className="row ghost">
+      <td className="rn" />
       <td className="gl" />
       <td className="c-key" colSpan={2}>
         <Dropdown value={lotId} disabled={busy} placeholder="Партия…"

@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
   type ProjectSupply, type ResidualLot } from './api'
-import { Balance, Chevron, LotGlyph, count, money, num, ItemGlyph } from './status'
+import { Balance, Chevron, LotGlyph, count, money, num, ItemGlyph, rowNumbers } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
 import { useFormLock } from './FormHeader'
@@ -111,6 +111,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
   // Внешний проект (НИР/контракт) делает приборы; внутренние склады — только хранят.
   const external = phead ? phead.kind === 'external' : true
   const shown = byCat.shown.filter(c => needPass(c, filters))
+  const needNo = rowNumbers(data.components)   // постоянный номер строки «Потребности»
   const residuals = closure?.residuals ?? []
   const drafts = closure?.closing_drafts ?? []   // Ф15: закрывающие документы-черновики
 
@@ -123,7 +124,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
               {locked ? 'Приборов нет.' : 'Пока ничего — добавьте прибор ниже.'}</div>
           : <div className="pgrid pgrid--acts">
               <NeedHead lead="Прибор" tree acts />
-              {data.demands.map(d => <DeviceRow key={d.demand_id} d={d}
+              {data.demands.map((d, i) => <DeviceRow key={d.demand_id} d={d} no={i + 1}
                 editable={!locked}
                 busy={busy} openItem={openItem} run={run} />)}
             </div>}
@@ -141,7 +142,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
               ? <div className="prow prow--comp prow--empty">
                   <span>Ни одна строка не подходит под фильтры колонок.</span>
                 </div>
-              : shown.map(c => <NeedRow key={c.component_id} ln={c}
+              : shown.map(c => <NeedRow key={c.component_id} ln={c} no={needNo.get(c)}
                   openItem={openItem} />)}
           </div> },
   )
@@ -182,14 +183,14 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
             </div>}
             <table className="grid">
               <thead><tr>
-                <th className="gl" /><th className="c-key">Партия</th>
+                <th className="rn">№</th><th className="gl" /><th className="c-key">Партия</th>
                 <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
                 <th className="num">Остаток</th><th className="uom">Ед.</th>
                 {!locked && <th className="act" />}
               </tr></thead>
               <tbody>
-                {residuals.map(r => (
-                  <ResidualRow key={r.lot_id} r={r} projectId={projectId} locked={locked}
+                {residuals.map((r, i) => (
+                  <ResidualRow key={r.lot_id} no={i + 1} r={r} projectId={projectId} locked={locked}
                     busy={busy} openItem={openItem} run={runC} />
                 ))}
               </tbody>
@@ -267,13 +268,15 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
 
 // Живой лот проекта: один клик сводит его в 0 (списать → серый / на баланс → белый).
 // Переехала сюда из `ClosurePanel` вместе со всей панелью закрытия (Ф12c).
-function ResidualRow({ r, projectId, locked, busy, openItem, run }: {
+function ResidualRow({ no, r, projectId, locked, busy, openItem, run }: {
+  no?: number
   r: ResidualLot; projectId: number; locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<ProjectClosure>) => void
 }) {
   const positive = r.live_qty > 0
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       <td className="gl"><LotGlyph origin={r.origin} liveQty={r.live_qty} /></td>
       <td className="c-key"><span className="code">{r.lot_label}</span></td>
       <td className="c-fit">
@@ -349,8 +352,8 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
 // Прибор в потребности: строка в том же шаблоне колонок, что и его состав.
 // Статус — тонкой полосой слева (без ведущего глифа); название серым. Клик по
 // шеврону раскрывает аккордеон с дефицитом по этому прибору.
-function DeviceRow({ d, editable, busy, openItem, run }: {
-  d: DeficitDemand; editable: boolean; busy: boolean
+function DeviceRow({ d, no, editable, busy, openItem, run }: {
+  d: DeficitDemand; no: number; editable: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<Deficit>) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -358,6 +361,7 @@ function DeviceRow({ d, editable, busy, openItem, run }: {
   return (
     <>
       <div className="prow prow--device">
+        <span className="rn">{no}</span>
         <span className="tree-cell">
           <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
@@ -448,6 +452,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
   const indent = (n.depth + 1) * 18
   return (
     <div className="prow prow--comp">
+      <span className="rn" />
       <span className="tree-cell" style={{ paddingLeft: indent }}>
         {hasChildren
           ? <button className="chev" title={expanded ? 'свернуть подсборку' : 'раскрыть подсборку'}

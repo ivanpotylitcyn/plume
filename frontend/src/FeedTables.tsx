@@ -23,13 +23,14 @@ export function ProcurementFeed({ rows, empty, open }: {
   return (
     <table className="grid">
       <thead><tr>
-        <th className="gl" /><th className="c-key">Закупка</th>
+        <th className="rn">№</th><th className="gl" /><th className="c-key">Закупка</th>
         <th className="c-desc">Описание</th><th className="c-fit">Дата</th>
         <th className="num">Строк</th>
         <th className="num">Кол-во</th>
       </tr></thead>
-      <tbody>{rows.map(p => (
+      <tbody>{rows.map((p, i) => (
         <tr key={p.id} className="row">
+          <td className="rn">{i + 1}</td>
           <td className="gl"><StatusGlyph locked={p.locked} /></td>
           <td className="c-key">
             <EntityLink kind="procurement" id={p.id} open={open}>
@@ -64,7 +65,7 @@ export function PurchaseFeed({ rows, empty, open, openCounterparty, side = 'coun
   return (
     <table className="grid">
       <thead><tr>
-        <th className="gl" /><th className="c-key">Заказ</th>
+        <th className="rn">№</th><th className="gl" /><th className="c-key">Заказ</th>
         <th className="c-desc">Описание</th>
         <th className="c-cp">{byProject ? 'Поставщик' : 'Проект'}</th>
         {/* Своего номера у заказа нет — колонка стоит ПУСТОЙ, чтобы дата и всё правее
@@ -77,8 +78,9 @@ export function PurchaseFeed({ rows, empty, open, openCounterparty, side = 'coun
             ленте она шумит, а её место — форма заказа, где с ценами и работают. */}
         <th className="num c-money">{byProject ? 'Цена' : 'Кол-во'}</th>
       </tr></thead>
-      <tbody>{rows.map(p => (
+      <tbody>{rows.map((p, i) => (
         <tr key={p.id} className="row">
+          <td className="rn">{i + 1}</td>
           <td className="gl">
             {/* Волна 24: чистый замок, как в списке «Заказы» — обязательство, не поставка. */}
             <StatusGlyph locked={p.locked} /></td>
@@ -116,7 +118,7 @@ export function ReceiptFeed({ rows, empty, open, openCounterparty, side = 'count
   return (
     <table className="grid">
       <thead><tr>
-        <th className="gl" /><th className="c-key">Поставка</th>
+        <th className="rn">№</th><th className="gl" /><th className="c-key">Поставка</th>
         <th className="c-desc">Описание</th>
         <th className="c-cp">{byProject ? 'Поставщик' : 'Проект'}</th>
         <th className="c-no">{byProject ? '№' : '№ УПД'}</th>
@@ -125,8 +127,9 @@ export function ReceiptFeed({ rows, empty, open, openCounterparty, side = 'count
         {/* Сумма поставки — ФАКТ по партиям (`Σ qty × unit_cost` из УПД). */}
         <th className="num c-money">Сумма</th>
       </tr></thead>
-      <tbody>{rows.map(r => (
+      <tbody>{rows.map((r, i) => (
         <tr key={r.id} className="row">
+          <td className="rn">{i + 1}</td>
           <td className="gl"><StatusGlyph locked={r.locked} /></td>
           <td className="c-key">
             <EntityLink kind="receipt" id={r.id} open={open}>
@@ -159,12 +162,13 @@ export function DocumentFeed({ rows, empty, open }: {
   return (
     <table className="grid">
       <thead><tr>
-        <th className="gl" /><th className="c-key">Ордер</th>
+        <th className="rn">№</th><th className="gl" /><th className="c-key">Ордер</th>
         <th className="c-fit">Тип</th><th className="c-desc">Описание</th>
         <th className="c-fit">Проект</th><th className="c-fit">Дата</th>
       </tr></thead>
-      <tbody>{rows.map(d => (
+      <tbody>{rows.map((d, i) => (
         <tr key={d.id} className="row">
+          <td className="rn">{i + 1}</td>
           <td className="gl"><StatusGlyph locked={d.locked} /></td>
           {/* Ссылка — по КОДУ (он есть всегда, фолбэк «Поставка 12»); номер у только что
               рождённого пуст, и ссылка на него была бы пустотой. */}

@@ -50,7 +50,7 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
         <table className="grid">
           <thead>
             <tr>
-              <th className="gl" /><th className="c-key">Источник</th>
+              <th className="rn">№</th><th className="gl" /><th className="c-key">Источник</th>
               <th className="c-fit">Изделие</th><th className="c-desc">Описание</th>
               <th className="c-fit">Откуда</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
@@ -59,8 +59,8 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
             </tr>
           </thead>
           <tbody>
-            {c.lines.map(ln => (
-              <LineRow key={ln.id} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
+            {c.lines.map((ln, i) => (
+              <LineRow key={ln.id} no={i + 1} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
             ))}
             {!locked && <GhostRow requisitionId={c.id} lots={pickable} busy={busy} run={run} />}
           </tbody>
@@ -98,13 +98,15 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
 }
 
 // Реальная строка требования: автосейв кол-ва (синхронит источник и потомок), удаление.
-function LineRow({ ln, locked, busy, openItem, run }: {
+function LineRow({ no, ln, locked, busy, openItem, run }: {
+  no?: number
   ln: RequisitionFormLine; locked: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<RequisitionForm>) => void
 }) {
   const negative = ln.source_live_qty < 0
   return (
     <tr className="row">
+      <td className="rn">{no}</td>
       <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.source_live_qty} /></td>
       <td className="c-key"><span className="code">{ln.lot_label}</span></td>
       <td className="c-fit">
@@ -149,6 +151,7 @@ function GhostRow({ requisitionId, lots, busy, run }: {
 
   return (
     <tr className="row ghost">
+      <td className="rn" />
       <td className="gl" />
       <td className="c-key" colSpan={2}>
         <Dropdown value={lotId} disabled={busy} placeholder="Источник…"
