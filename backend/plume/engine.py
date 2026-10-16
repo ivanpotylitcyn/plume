@@ -1959,7 +1959,7 @@ def create_purchase(procurement, user, item_ids=(), date=None, code=None, descri
         raise ValidationError('Позиция не в плане закупки — заказ берёт только строки плана.')
     rest = procurement_remainders(procurement)
     p = models.Purchase.objects.create(
-        procurement=procurement, user=user, contractor=procurement.contractor,
+        procurement=procurement, user=user,
         locked=False, date=date, code=code, description=description or '')
     models.PurchaseLine.objects.bulk_create([
         models.PurchaseLine(purchase=p, item_id=iid, qty=max(ZERO, rest[iid]))
@@ -2295,10 +2295,6 @@ def purchase_form(purchase):
         'procurement_id': purchase.procurement_id,   # якорь #A (Ф2k)
         'procurement_code': purchase.procurement.code,
         **_contractor_view(purchase.contractor),      # Ф17: у кого купили
-        # Расхождение с намерением плана считает ДВИЖОК, вью только выбирает знак
-        # ([[engine-view-seam]]): отдаём готовый флаг, а не два id на сравнение во фронте.
-        'contractor_mismatch': _contractor_mismatch(purchase.contractor_id,
-                                                    purchase.procurement),
         'code': purchase.code, 'description': purchase.description,
         'date': purchase.date,
         'editable': editable,                       # строки правятся только пока не зафиксировано
@@ -2336,7 +2332,7 @@ def add_purchase_line(purchase, item, qty, price=None):
     if purchase.lines.filter(item=item).exists():
         raise ValidationError(
             f'Изделие {item.code} уже в заказе — правьте существующую строку.')
-    _check_price(price)
+    price = _check_price(price)
     return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty,
                                               price=price)
 
@@ -2345,8 +2341,13 @@ PURCHASE_PRICE_NEGATIVE = 'Цена не может быть отрицател�
 
 
 def _check_price(price):
-    if price is not None and price < 0:
+    """Цена строки — неотрицательные рубли и копейки; лишние знаки округляем до копейки
+    (поле денег — два знака, и сумма заказа обязана сходиться со счётом)."""
+    if price is None:
+        return None
+    if price < 0:
         raise ValidationError(PURCHASE_PRICE_NEGATIVE)
+    return price.quantize(KOPECK, rounding=ROUND_HALF_UP)
 
 
 def update_purchase_line(line, qty=_UNSET, price=_UNSET):
@@ -2365,8 +2366,7 @@ def update_purchase_line(line, qty=_UNSET, price=_UNSET):
         line.qty = qty
         fields.append('qty')
     if price is not _UNSET:
-        _check_price(price)
-        line.price = price
+        line.price = _check_price(price)
         fields.append('price')
     if fields:
         line.save(update_fields=fields)
@@ -3736,7 +3736,6 @@ def procurement_form(procurement):
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
         'code': procurement.code, 'description': procurement.description,
         'date': procurement.date,
-        **_contractor_view(procurement.contractor),          # Ф4: поставщик (Р3)
         'project_id': project.id, 'project_code': project.code,
         'project_name': project.description,
         # Проект меняется, только пока заказов нет: у заказов он выводится отсюда, и
@@ -3834,7 +3833,7 @@ def unlock_procurement(procurement):
 
 
 def update_procurement(procurement, date=None, code=_UNSET, description=None, user=_UNSET,
-                       contractor=_UNSET, project=_UNSET):
+                       project=_UNSET):
     """Правка шапки закупки-плана (дата / код / описание / автор / контрагент). Только в черновике.
 
     Дата закупки nullable — пустая строка очищает её в NULL (как заказ). `code` —
@@ -3867,9 +3866,6 @@ def update_procurement(procurement, date=None, code=_UNSET, description=None, us
     if description is not None:
         procurement.description = description.strip()
         fields.append('description')
-    if contractor is not _UNSET:
-        procurement.contractor = contractor
-        fields.append('contractor')
     if fields:
         procurement.save(update_fields=fields)
     return procurement
@@ -4085,8 +4081,8 @@ def procurement_xlsx(procurement):
     wb = Workbook()
     _xlsx_sheet(
         wb.active, 'Заказ',
-        head=_blank_head(procurement.contractor if procurement.contractor_id else None,
-                         procurement.date, procurement.user),
+        # Волна 24: у закупки контрагента нет — строка «Поставщик» в шапке не рисуется.
+        head=_blank_head(None, procurement.date, procurement.user),
         headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
         rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
               for line in procurement.lines.select_related('item').order_by('id')
@@ -4441,8 +4437,7 @@ def counterparty_sides(queryset):
     transfers = models.StockDocument.objects.filter(
         contractor=OuterRef('pk'), kind=models.StockDocument.Kind.TRANSFER)
     return queryset.annotate(
-        has_supply=(Exists(models.Procurement.objects.filter(contractor=OuterRef('pk')))
-                    | Exists(models.Purchase.objects.filter(contractor=OuterRef('pk')))
+        has_supply=(Exists(models.Purchase.objects.filter(contractor=OuterRef('pk')))
                     | Exists(receipts)),
         has_shipment=Exists(transfers))
 
@@ -4476,20 +4471,19 @@ def _counterparty_receipt_lots(counterparty):
 def _counterparty_supply(counterparty):
     """Интеграл закупочной стороны — «сколько у него куплено и что привёз».
 
-    Три счёта контура (закупок-планов / заказов / поставок) + материальный итог
+    Два счёта контура (заказов / поставок; закупок у контрагента с волны 24 нет) +
+    материальный итог
     (партий, штук по единицам, сумма). `open_purchases` — заказы, не закрытые
     поставками целиком (`purchase_coverage` ≠ ✓): единственное число панели, которое
     смотрит вперёд, а не назад. `None` — на этой стороне ни одного документа.
     """
-    procurements = counterparty.procurements.count()
     purchases = list(counterparty.purchases.all())
     receipts = models.Receipt.objects.filter(contractor=counterparty)
     receipt_count = receipts.count()
-    if not (procurements or purchases or receipt_count):
+    if not (purchases or receipt_count):
         return None
     lots = list(_counterparty_receipt_lots(counterparty))
     return {
-        'procurements': procurements,
         'purchases': len(purchases),
         'open_purchases': sum(1 for status in purchases_coverage(purchases).values()
                               if status != 'available'),
@@ -4641,7 +4635,8 @@ def counterparty_form(counterparty):
         # и два источника одной правды в одной проекции разошлись бы (Ф3).
         'supply': _counterparty_supply(counterparty),
         'shipment': _counterparty_shipment(counterparty),
-        'procurements': _procurement_rows(counterparty.procurements),
+        # Волна 24: закупок у контрагента нет — это внутреннее планирование; его лента —
+        # обязательства (заказы) и движение (поставки, передачи).
         'purchases': _purchase_rows(counterparty.purchases),
         'receipts': _receipt_rows(models.Receipt.objects.filter(contractor=counterparty)),
         'transfers': _cp_transfer_rows(counterparty),
@@ -4695,8 +4690,6 @@ def delete_counterparty(counterparty):
     функции движка, только админка. Друзья-guard'ы:
     — поставки/передачи (`StockDocument.contractor`, PROTECT) и заказы
       (`Purchase.contractor`, PROTECT) держат наглухо: документ без стороны не бывает;
-    — закупки-планы (`Procurement.contractor`, SET_NULL) НЕ держат — так решено в Ф17
-      (план-черновик не должен падать из-за справочника), поле просто опустеет;
     — вложения («карточка предприятия», Ф12b) сносим ЯВНО: каскад БД унёс бы строки и
       оставил файлы сиротами на диске (та же беда, что у `delete_project`).
     """

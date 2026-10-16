@@ -510,7 +510,7 @@ export default function App() {
         {sel?.kind === 'counterparty' &&
           <CounterpartyView counterpartyId={sel.id}
             isNew={isFresh('counterparty', sel.id)}
-            openProcurement={openProcurement} openPurchase={openPurchase}
+            openPurchase={openPurchase}
             openOrder={openOrder}
             onChanged={reloadCounterparties}
             onDeleted={() => { reloadCounterparties(); setSel(null) }} />}

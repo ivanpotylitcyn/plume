@@ -23,7 +23,7 @@ import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField, viewDate } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { ProcurementFeed, PurchaseFeed, ReceiptFeed } from './FeedTables'
+import { PurchaseFeed, ReceiptFeed } from './FeedTables'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import type { OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
@@ -35,11 +35,10 @@ function uoms(rows: UomQty[]): string {
   return rows.length === 0 ? '—' : rows.map(r => `${num(r.qty)} ${r.uom}`).join(' · ')
 }
 
-export function CounterpartyView({ counterpartyId, isNew, openProcurement, openPurchase,
+export function CounterpartyView({ counterpartyId, isNew, openPurchase,
   openOrder, onChanged, onDeleted }: {
   counterpartyId: number
   isNew: boolean
-  openProcurement: (id: number) => void
   openPurchase: (id: number) => void
   openOrder: (kind: OrderKind, id: number) => void
   onChanged?: () => void
@@ -88,11 +87,9 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
 
   const tabs: FormTab[] = []
   if (buying) tabs.push(
-    // Ленты закупок и заказов — общие с формой аккаунта (`FeedTables`, волна 21):
-    // строка одна, отличается только вопрос, который к ней задают.
-    { key: 'procurements', label: 'Закупки', icon: 'law',
-      content: <ProcurementFeed rows={c.procurements} open={openProcurement}
-        empty="Закупок-планов на этого контрагента нет." /> },
+    // Ленты — общие с формой аккаунта (`FeedTables`, волна 21): строка одна, отличается
+    // только вопрос. Закупок здесь нет (волна 24, решение Ивана): закупка — внутреннее
+    // планирование; с контрагентом нас связывают обязательства — заказы.
     { key: 'purchases', label: 'Заказы', icon: 'package',
       content: <PurchaseFeed rows={c.purchases} open={openPurchase}
         empty="Заказов у этого контрагента нет." /> },
@@ -129,8 +126,7 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
       // деньги живут в панелях (иначе одно и то же число читалось бы дважды).
       meta={<>
         {buying && <>
-          {count(c.procurements.length, 'закупка', 'закупки', 'закупок')}
-          {' · '}{count(c.purchases.length, 'заказ', 'заказа', 'заказов')}
+          {count(c.purchases.length, 'заказ', 'заказа', 'заказов')}
           {' · '}{count(c.receipts.length, 'поставка', 'поставки', 'поставок')}
           {' · '}
         </>}
@@ -170,7 +166,6 @@ export function CounterpartyView({ counterpartyId, isNew, openProcurement, openP
           </StatPanel>}
         {supply && <StatPanel caption="Поставки" icon="inbox">
           <StatGroup>
-            <Stat label="закупок (план)" value={num(supply.procurements)} />
             <Stat label="заказов" value={num(supply.purchases)} />
             <Stat label="не закрыто" value={num(supply.open_purchases)}
               title="заказы, которые поставки закрыли не полностью"

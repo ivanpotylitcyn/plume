@@ -221,7 +221,7 @@ export interface UomQty { uom: string; qty: number }
 // `draft_*` — сколько документов стороны ещё черновики: они считаются документами,
 // но в материальный итог не входят (замок гейтит склад, Ф15).
 export interface CounterpartySupply {
-  procurements: number; purchases: number; open_purchases: number
+  purchases: number; open_purchases: number
   receipts: number; draft_receipts: number
   lots: number; qty_by_uom: UomQty[]; total: number
 }
@@ -263,7 +263,7 @@ export interface CounterpartyForm {
   id: number; code: string | null; description: string; inn: string
   supply: CounterpartySupply | null
   shipment: CounterpartyShipment | null
-  procurements: FeedProcurementRow[]; purchases: FeedPurchaseRow[]
+  purchases: FeedPurchaseRow[]          // волна 24: закупок у контрагента нет
   receipts: FeedReceiptRow[]; transfers: CpTransferRow[]
 }
 
@@ -316,10 +316,9 @@ export interface PurchaseReceiptRow {
 export interface PurchaseForm extends Authored {
   id: number; locked: boolean; project_id: number; project_code: string
   // Волна 24: заказ рождается из закупки (она обязательна), проект — через неё.
-  // Контрагент — своё поле заказа («у кого купили»), копией из закупки при рождении.
+  // Контрагент — только у заказа («у кого купили»), выбирается в его форме.
   project_name: string; procurement_id: number; procurement_code: string | null
   contractor_id: number | null; contractor_code: string; contractor_name: string
-  contractor_mismatch: boolean   // расхождение с контрагентом закупки — знак, не гейт
   code: string | null; description: string; date: string | null
   editable: boolean; worst_status: Status
   total_ordered: number; total_received: number
@@ -508,8 +507,8 @@ export interface ProcurementFormLine {
 export interface ProcurementForm extends Authored {
   id: number; locked: boolean; date: string | null
   code: string | null; description: string; editable: boolean
-  contractor_id: number | null; contractor_code: string; contractor_name: string
-  // Волна 24: проект — верхний якорь; меняется, пока у закупки нет заказов.
+  // Волна 24: проект — верхний якорь; меняется, пока у закупки нет заказов. Контрагента
+  // у закупки нет — он только у заказа.
   project_id: number; project_code: string; project_name: string
   project_editable: boolean
   total_qty: number
@@ -924,7 +923,7 @@ export const api = {
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementForm>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
-  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; contractor_id: number | null; project_id: number }>) =>
+  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; project_id: number }>) =>
     send<ProcurementForm>('PATCH', `/api/procurements/${id}/`, b),
   addProcurementLine: (id: number, b: { item_id: number; qty: number }) =>
     send<ProcurementForm>('POST', `/api/procurements/${id}/lines/`, b),

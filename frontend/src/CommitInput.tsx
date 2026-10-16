@@ -21,11 +21,17 @@ import { api } from './api'
 import { AnchoredMenu } from './AnchoredMenu'
 
 const PLAIN_NUMBER = /^-?[\d.,]*$/
+// Любые пробелы — обычные, неразрывные, узкие (разряды в счетах и PDF).
+const SPACES = /\s/g
 
-export function CommitInput({ value, onCommit, disabled, validate, type, code }: {
+export function CommitInput({ value, onCommit, disabled, validate, type, code, numeric }: {
   value: string; onCommit: (v: string) => void; disabled?: boolean
   validate?: (v: string) => boolean; type?: string
   code?: boolean               // поле кода: гигиена по кодовому правилу (дефисы)
+  // Числовое поле (волна 24, цена строки заказа): пробелы разрядов, скопированные из
+  // счёта, вычищаются сразу при вводе — молча, без вопроса гигиены: в числе пробел не
+  // смысл, а оформление.
+  numeric?: boolean
 }) {
   const [v, setV] = useState(value)
   const [offer, setOffer] = useState<string | null>(null)   // очищенный вариант на выбор
@@ -66,7 +72,8 @@ export function CommitInput({ value, onCommit, disabled, validate, type, code }:
     <>
       <input ref={input} className="qty-in"
         value={v} disabled={disabled} type={type}
-        onChange={e => setV(e.target.value)} onBlur={commit}
+        onChange={e => setV(numeric ? e.target.value.replace(SPACES, '') : e.target.value)}
+        onBlur={commit}
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
       {offer !== null && <>
         {/* Подложка на всё окно: клик мимо = «Перепишу сам» (как у меню фильтров). */}

@@ -21,7 +21,7 @@ import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
+import { CounterpartyRef, ItemGlyph, StatusGlyph,
   count, money, num } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
@@ -99,11 +99,6 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   // пришло — серое, частично — оранжевое, полностью — зелёное. Красного нет.
   const coverage = c.total_received === 0 ? 'sub'
     : c.rows.every(r => r.remaining <= 0) ? 'g-available' : 'g-on_order'
-  // Ф17: расхождение с контрагентом указанной закупки — предупреждение, не гейт.
-  // Флаг считает движок ([[engine-view-seam]]), форма только выбирает знак.
-  const mismatch = c.contractor_mismatch
-    ? <MismatchGlyph title="Не совпадает с контрагентом указанной закупки" />
-    : null
 
   // Ф6, поток «Заказ → УПД»: накладная повторяет заказ 1:1, набивать её заново незачем.
   // Кнопка живёт у ЗАФИКСИРОВАННОГО заказа (черновик ещё правится — поставки по
@@ -253,12 +248,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               view={<EntityLink kind="procurement" id={c.procurement_id}
                 open={openProcurement}>{c.procurement_code || `Закупка #${c.procurement_id}`}
               </EntityLink>} />
-            {/* Ф17: «у кого купили» — своё поле заказа, а не чтение сквозь план.
-                Обязательно к ФИКСАЦИИ (движок откажет внятно), не к рождению. */}
+            {/* «У кого купили» — только у заказа (волна 24: у закупки контрагента нет,
+                сравнивать не с чем). Обязательно к ФИКСАЦИИ (движок откажет внятно). */}
             <Field label="Контрагент" locked={locked}
               view={c.contractor_id
-                ? <><CounterpartyRef code={c.contractor_code} name={c.contractor_name}
-                    id={c.contractor_id} open={openCounterparty} />{mismatch}</>
+                ? <CounterpartyRef code={c.contractor_code} name={c.contractor_name}
+                    id={c.contractor_id} open={openCounterparty} />
                 : ''}>
               <CounterpartyPicker counterparties={suppliers} side="supply"
                 value={c.contractor_id ?? ''}
@@ -268,7 +263,6 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                 onCreate={name => api.createCounterparty({ description: name })
                   .then(cp => { reloadSuppliers()
                     run(api.updatePurchase(c.id, { contractor_id: cp.id })) })} />
-              {mismatch}
             </Field>
           </>} />}
       // Деньги заказа (волна 24, решение Ивана): заказ — онлайн-зеркало оффлайн-счёта,
@@ -287,6 +281,21 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       tabs={tabs}
     />
   )
+}
+
+// Цена строки в поле ввода: ровно два знака после запятой, без разрядов («35197,80») —
+// так поле читается тем же числом, что и просмотр, а ввод остаётся простым числом.
+function priceField(x: number): string {
+  return Number(x).toFixed(2).replace('.', ',')
+}
+
+// Разбор ввода цены: запятая или точка; пробелы разрядов и знак рубля из скопированного
+// счёта допустимы; до копейки. Пусто — `null` (цена стирается); не число — `NaN`, его
+// отобьёт `validate`.
+function parsePrice(v: string): number | null {
+  const s = v.replace(/\s|₽|руб\.?/gi, '').replace(',', '.')
+  if (s === '') return null
+  return Math.round(Number(s) * 100) / 100
 }
 
 // Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
@@ -332,11 +341,13 @@ function LineRow({ ln, editable, busy, openItem, run }: {
         title={ln.unit_price === null ? undefined
           : `за штуку ${money(Math.round(ln.unit_price * 100) / 100)}`}>
         {editable
-          ? <CommitInput value={ln.price === null ? '' : String(ln.price)}
-              disabled={busy}
-              onCommit={v => run(api.updatePurchaseLine(ln.id,
-                { price: v.trim() === '' ? null : Number(v.replace(',', '.')) }))}
-              validate={v => v.trim() === '' || Number(v.replace(',', '.')) >= 0} />
+          /* Всегда два знака после запятой — и в поле, и в просмотре (решение Ивана):
+             числа с разным числом знаков глазами не сравнить. Ввод — с точкой или
+             запятой, лишнее округляется до копейки. */
+          ? <CommitInput value={ln.price === null ? '' : priceField(ln.price)}
+              disabled={busy} numeric
+              onCommit={v => run(api.updatePurchaseLine(ln.id, { price: parsePrice(v) }))}
+              validate={v => v.trim() === '' || (parsePrice(v) ?? -1) >= 0} />
           : ln.price === null ? <span className="sub">—</span> : money(ln.price)}
       </td>
       {editable && <td className="act">

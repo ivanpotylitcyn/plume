@@ -1860,7 +1860,7 @@ def procurements(request):
 @api_view(['GET', 'PATCH', 'DELETE'])
 def procurement_detail(request, pk):
     """Форма закупки-плана: охват (вычисляемый) + строки (item, qty) + итог.
-    PATCH — правка шапки (дата / код / описание / контрагент).
+    PATCH — правка шапки (дата / код / описание / проект).
     DELETE — удаление закупки (WAVE14 Ф2) под замком; friendly-guard (заказы/отправка)."""
     p = get_object_or_404(models.Procurement, pk=pk)
     if request.method == 'DELETE':
@@ -1873,12 +1873,9 @@ def procurement_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                contractor=_resolve_contractor(d),
                 project=_resolve_project(d))          # волна 24: закупка проектная
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
-        except models.Counterparty.DoesNotExist:
-            return _bad('Контрагент не найден.')
         except User.DoesNotExist:
             return _bad('Пользователь не найден.')
         except ValidationError as e:

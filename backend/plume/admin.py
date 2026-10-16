@@ -190,7 +190,7 @@ class LocationAdmin(admin.ModelAdmin):
 # --- закупки -------------------------------------------------------------- #
 @admin.register(models.Procurement)
 class ProcurementAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'project', 'locked', 'contractor', 'date', 'user')
+    list_display = ('__str__', 'project', 'locked', 'date', 'user')
     list_filter = ('locked', 'project')
     inlines = [ProcurementLineInline]
 

@@ -7,17 +7,16 @@
 // Волна 19 (Ф12c): форма по канону §13. Табы — Строки · Потребность · Заказы · Файлы
 // (разбор в комментарии к `tabs`).
 import { useEffect, useState } from 'react'
-import { api, type ProcurementForm, type CounterpartyRow, type AllocationRow } from './api'
+import { api, type ProcurementForm, type AllocationRow } from './api'
 import { AuthorField, ProjectField, useFormLock } from './FormHeader'
 import { IntentBudget } from './IntentBudget'
 import { FormShell, type FormTab } from './FormShell'
-import { Field, TextField } from './FormField'
+import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
 import { DemandRows, useDemand } from './DemandPanel'
 import { DialogBox } from './DialogHost'
-import { CounterpartyPicker } from './Picker'
-import { CounterpartyRef, count, num, sumByUom } from './status'
+import { count, num, sumByUom } from './status'
 import { ask } from './dialog'
 
 // `items` (справочник изделий) форме не нужен: своего пикера у неё нет — позицию
@@ -35,13 +34,9 @@ export function ProcurementView({ procurementId, isNew, openItem,
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [rev, setRev] = useState(0)     // растёт на мутациях — освежает панель pegging
-  const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
   const { unlocked, toggle } = useFormLock(procurementId, isNew)
   const [picking, setPicking] = useState(false)   // открыто окно «Новый заказ»
 
-  // Контрагенты (Ф4): закупка = поток общения с поставщиком. Список ВЕСЬ (Ф3) —
-  // пикер поднимает наверх тех, у кого уже покупали, но никого не прячет.
-  useEffect(() => { api.counterparties().then(setSuppliers) }, [])
   const att = useAttachments('procurement', procurementId)   // владелец заведён Ф12b (§13.8)
   const alloc = useAllocation(procurementId, rev)   // «Строки», «Заказы», окно «Новый заказ»
   const need = useDemand(procurementId, rev)        // таб «Потребность»
@@ -131,7 +126,7 @@ export function ProcurementView({ procurementId, isNew, openItem,
         onConfirm={bornPurchase} onClose={() => setPicking(false)} />}
     <FormShell
       id={c.id} code={c.code ?? ''} entity="закупку" locked={locked} error={err}
-      // Мета (§13.6): счёт по табам + итог плана в натуре. Контрагент и дата — в полях.
+      // Мета (§13.6): счёт по табам + итог плана в натуре. Проект и дата — в полях.
       meta={<>
         {count(c.lines.length, 'позиция', 'позиции', 'позиций')}
         {sumByUom(c.lines).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
@@ -171,20 +166,8 @@ export function ProcurementView({ procurementId, isNew, openItem,
         <ProjectField projectId={c.project_id} projectLabel={c.project_code}
           locked={locked || !c.project_editable} busy={busy} onOpen={openProject}
           onChange={id => run(api.updateProcurement(c.id, { project_id: id }))} />
-        {/* Контрагент закупки — НАМЕРЕНИЕ плана («у кого собираемся купить»): «Новый
-            заказ» копирует его в заказ, дальше поля живут независимо. */}
-        <Field label="Контрагент" locked={locked}
-          view={<CounterpartyRef code={c.contractor_code} name={c.contractor_name}
-            id={c.contractor_id} open={openCounterparty} />}>
-          <CounterpartyPicker counterparties={suppliers} side="supply"
-            value={c.contractor_id ?? ''}
-            disabled={busy} placeholder="— не указан —"
-            onPick={id => run(api.updateProcurement(c.id, { contractor_id: id }))}
-            onClear={() => run(api.updateProcurement(c.id, { contractor_id: null }))}
-            onCreate={name => api.createCounterparty({ description: name })
-              .then(cp => { api.counterparties().then(setSuppliers)
-                run(api.updateProcurement(c.id, { contractor_id: cp.id })) })} />
-        </Field>
+        {/* Контрагента у закупки нет (волна 24, решение Ивана): закупка — внутреннее
+            планирование, контрагент появляется только у заказа — обязательства. */}
         <TextField label="Дата" type="date" value={c.date ?? ''} locked={locked}
           busy={busy} onCommit={v => run(api.updateProcurement(c.id, { date: v }))} />
         <AuthorField userId={c.user_id} userName={c.user_name} locked={locked} busy={busy}

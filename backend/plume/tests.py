@@ -1157,49 +1157,6 @@ class PurchaseContractorTests(EngineTestBase):
         self.assertEqual(r.contractor_id, self.supplier.id)   # из ЗАКАЗА, не сквозь план
         self.assertEqual(r.lots.get(item=self.item).qty, D(7))
 
-    def test_plan_and_order_contractors_live_apart(self):
-        """Контрагенты плана и заказа независимы: одна закупка законно идёт к разным.
-
-        Волна 24 вернула наследование «копией при рождении»: «Новый заказ» копирует
-        контрагента закупки, дальше поля живут независимо.
-        """
-        plan = engine.create_procurement(self.prj, self.user)
-        engine.add_procurement_line(plan, self.item, D(10))
-        engine.update_procurement(plan, contractor=self.supplier)
-        pu = engine.create_purchase(plan, self.user, item_ids=[self.item.id])
-        self.assertEqual(pu.contractor_id, self.supplier.id)
-        # правка заказа план не трогает…
-        engine.update_purchase(pu, contractor=self.other_cp)
-        plan.refresh_from_db()
-        self.assertEqual(plan.contractor_id, self.supplier.id)
-        # …и наоборот
-        engine.update_procurement(plan, contractor=None)
-        pu.refresh_from_db()
-        self.assertEqual(pu.contractor_id, self.other_cp.id)
-
-    # ── расхождение: флаг, а не гейт ──────────────────────────────────────
-    def test_mismatch_flag_is_advisory_and_does_not_block_lock(self):
-        plan = engine.create_procurement(self.prj, self.user)
-        engine.update_procurement(plan, contractor=self.supplier)
-        p = engine.create_purchase(plan, self.user)
-        _line(p, self.item, D(3))
-        engine.update_purchase(p, contractor=self.other_cp)
-        self.assertTrue(engine.purchase_form(p)['contractor_mismatch'])
-        engine.lock_purchase(p)                    # предупреждение не останавливает
-        self.assertTrue(p.locked)
-
-    def test_no_mismatch_when_either_side_empty_or_equal(self):
-        """Пустой сверху/снизу — это «не выбран», а не расхождение."""
-        plan = engine.create_procurement(self.prj, self.user)          # у плана контрагента нет
-        p = engine.create_purchase(plan, self.user)
-        engine.update_purchase(p, contractor=self.supplier)
-        self.assertFalse(engine.purchase_form(p)['contractor_mismatch'])
-        engine.update_purchase(p, contractor=None)           # нет и у заказа
-        self.assertFalse(engine.purchase_form(p)['contractor_mismatch'])
-        engine.update_procurement(plan, contractor=self.supplier)
-        engine.update_purchase(p, contractor=self.supplier)  # совпали
-        self.assertFalse(engine.purchase_form(p)['contractor_mismatch'])
-
     def test_receipt_mismatch_compares_with_its_purchase(self):
         """У поставки тот же флаг — «кто привёз» против «у кого купили»."""
         p = self.make_purchase()
@@ -2156,6 +2113,9 @@ class ProcurementFormTests(EngineTestBase):
         self.assertEqual(f['estimate'], D('100.00'))                 # до копейки, как в счёте
         with self.assertRaises(ValidationError):
             engine.update_purchase_line(line, price=D(-1))
+        engine.update_purchase_line(line, price=D('12.345'))         # лишний знак —
+        line.refresh_from_db()
+        self.assertEqual(line.price, D('12.35'))                     # до копейки
         engine.update_purchase_line(line, price=D(0))                # образец — законно
         engine.lock_purchase(pu)
         self.assertTrue(pu.locked)
@@ -2326,36 +2286,6 @@ class ProcurementFormTests(EngineTestBase):
         engine.create_procurement(self.prj, self.user)
         engine.create_procurement(self.prj, self.user)      # не бросает
 
-    def test_update_contractor(self):
-        # Волна 19, Ф4: контрагент-поставщик у закупки-плана. Часовой `_UNSET`:
-        # не передан → не трогаем; Counterparty → выставить; None → снять.
-        p = engine.create_procurement(self.prj, self.user)
-        self.assertIsNone(p.contractor_id)
-        engine.update_procurement(p, contractor=self.supplier)
-        p.refresh_from_db()
-        self.assertEqual(p.contractor_id, self.supplier.id)
-        # проекция формы отдаёт контрагента
-        cock = engine.procurement_form(p)
-        self.assertEqual(cock['contractor_id'], self.supplier.id)
-        self.assertEqual(cock['contractor_name'], self.supplier.description)
-        # не передан → не трогаем (правка только даты)
-        engine.update_procurement(p, date='2026-07-10')
-        p.refresh_from_db()
-        self.assertEqual(p.contractor_id, self.supplier.id)
-        # None → снять
-        engine.update_procurement(p, contractor=None)
-        p.refresh_from_db()
-        self.assertIsNone(p.contractor_id)
-        self.assertEqual(engine.procurement_form(p)['contractor_name'], '')
-
-    def test_contractor_set_null_on_counterparty_delete(self):
-        # SET_NULL: удаление контрагента не роняет план-закупку — поле опустевает.
-        p = engine.create_procurement(self.prj, self.user)
-        engine.update_procurement(p, contractor=self.supplier)
-        self.supplier.delete()
-        p.refresh_from_db()
-        self.assertIsNone(p.contractor_id)
-
     def _xlsx_rows(self, procurement):
         """Лист бланка списком строк — бланк уходит наружу, читаем его как получатель."""
         from io import BytesIO
@@ -2387,7 +2317,8 @@ class ProcurementFormTests(EngineTestBase):
                 if r[0] is None and r[1]}
 
     def test_xlsx_head_carries_both_parties_date_and_author(self):
-        """Шапка запроса — поставщик · заказчик (мы) · дата · автор с контактами.
+        """Шапка запроса — заказчик (мы) · дата · автор с контактами. Волна 24: у закупки
+        контрагента нет — строки «Поставщик» в бланке закупки не бывает.
 
         2026-08-10: ИНН из бланка снят (реквизиты живут в договоре, в запросе цен они
         шумят), у автора появились почта и телефон — графа отвечает на вопрос «кому
@@ -2399,11 +2330,10 @@ class ProcurementFormTests(EngineTestBase):
         self.user.save()
         engine.set_phone(self.user, '89859634231')
         p = engine.create_procurement(self.prj, self.user, date='2026-07-30')
-        engine.update_procurement(p, contractor=self.supplier)
         engine.add_procurement_line(p, self.make_item('R100'), D(1))
         with self.settings(ORG_COUNTERPARTY_ID=us.id):
             head = self._xlsx_head(p)
-            self.assertEqual(head['Поставщик'], self.supplier.description)
+            self.assertNotIn('Поставщик', head)
             self.assertEqual(head['Заказчик'], 'Наша сторона')      # без ИНН
             self.assertEqual(head['Дата запроса'], '30.07.2026')
             self.assertEqual(head['Автор запроса'],
@@ -2742,19 +2672,23 @@ class AllocationTests(EngineTestBase):
         models.BomLine.objects.create(parent=dev, component=self.nut, qty=D(1))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
         self.plan = engine.create_procurement(self.prj, self.user, description='свод')
-        engine.update_procurement(self.plan, contractor=self.supplier)
         engine.add_procurement_line(self.plan, self.scr, D(40))
         engine.add_procurement_line(self.plan, self.nut, D(10))
+
+    def _order(self, item_ids):
+        """Заказ из закупки с контрагентом (обязателен к фиксации; у закупки его нет)."""
+        pu = engine.create_purchase(self.plan, self.user, item_ids=item_ids)
+        return engine.update_purchase(pu, contractor=self.supplier)
 
     def _cells(self, item_code='SCR'):
         rows = {r['item_code']: r for r in engine.procurement_allocation(self.plan)['rows']}
         return rows[item_code], {c['purchase_id']: c for c in rows[item_code]['orders']}
 
-    def test_new_purchase_takes_remainders_and_copies_contractor(self):
+    def test_new_purchase_takes_remainders_without_contractor(self):
         pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id, self.nut.id])
         self.assertEqual(pu.procurement, self.plan)
         self.assertEqual(pu.project, self.prj)                     # проект — через закупку
-        self.assertEqual(pu.contractor, self.supplier)              # копией при рождении
+        self.assertIsNone(pu.contractor)          # волна 24: контрагент — только у заказа
         self.assertEqual({ln.item_id: ln.qty for ln in pu.lines.all()},
                          {self.scr.id: D(40), self.nut.id: D(10)})
         self.assertFalse(pu.locked)
@@ -2803,7 +2737,7 @@ class AllocationTests(EngineTestBase):
         self.assertEqual(codes(), [])                              # и своим — тоже
 
     def test_distribution_is_read_only_projection(self):
-        a = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        a = self._order([self.scr.id])
         engine.update_purchase_line(a.lines.get(item=self.scr), D(30))
         row, cells = self._cells()
         self.assertEqual(set(cells), {a.id})                       # только заказы с позицией
@@ -2824,7 +2758,7 @@ class AllocationTests(EngineTestBase):
         row, _ = self._cells()
         self.assertEqual((row['on_order'], row['planned'], row['balance']),
                          (D(40), D(40), D(0)))
-        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        pu = self._order([self.scr.id])
         engine.update_purchase_line(pu.lines.get(item=self.scr), D(30), price=D(1))
         engine.lock_purchase(pu)
         row, _ = self._cells()
@@ -2838,7 +2772,7 @@ class AllocationTests(EngineTestBase):
         self.assertEqual(leaf()['supply'], 'to_order')
         engine.lock_procurement(self.plan)
         self.assertEqual(leaf()['supply'], 'on_order')             # держится на плане
-        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        pu = self._order([self.scr.id])
         engine.update_purchase_line(pu.lines.get(item=self.scr), price=D(1))
         engine.lock_purchase(pu)
         self.assertEqual(leaf()['planned'], D(0))
@@ -2846,7 +2780,7 @@ class AllocationTests(EngineTestBase):
 
     def test_locked_purchase_over_the_plan_does_not_go_negative(self):
         engine.lock_procurement(self.plan)
-        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        pu = self._order([self.scr.id])
         engine.unlock_procurement(self.plan)
         engine.update_purchase_line(pu.lines.get(item=self.scr), D(55), price=D(1))
         engine.lock_procurement(self.plan)
@@ -2861,7 +2795,7 @@ class AllocationTests(EngineTestBase):
         self.scr.save(update_fields=['estimated_cost'])
         budget = lambda: engine.project_budget(self.prj)
         self.assertEqual((budget()['spent'], budget()['plan']), (D(0), D(400)))  # 40 × 10
-        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        pu = self._order([self.scr.id])
         engine.update_purchase_line(pu.lines.get(item=self.scr), D(30), price=D('255.00'))
         self.assertEqual(budget()['spent'], D(0))             # черновик — не обязательство
         engine.lock_purchase(pu)
@@ -2874,7 +2808,7 @@ class AllocationTests(EngineTestBase):
         self.assertEqual(budget()['spent'], D(269))           # поставка без заказа — по УПД
 
     def test_committed_cost_rides_the_need_rows(self):
-        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        pu = self._order([self.scr.id])
         engine.update_purchase_line(pu.lines.get(item=self.scr), price=D('99.90'))
         rows = lambda: {c['component_code']: c for c in
                         engine.project_deficit(self.prj, with_tree=False)['components']}
@@ -3198,8 +3132,6 @@ class AllocationHttpTests(TestCase):
         self.c.force_login(get_user_model().objects.get(is_superuser=True))
         self.pid = self.c.post('/api/procurements/', {'project_id': self.prj.id},
             content_type='application/json').json()['id']
-        self.c.patch(f'/api/procurements/{self.pid}/', {'contractor_id': self.sup.id},
-            content_type='application/json')
         for item, qty in ((self.scr, 60), (self.nut, 5)):
             self.c.post(f'/api/procurements/{self.pid}/lines/',
                 {'item_id': item.id, 'qty': qty}, content_type='application/json')
@@ -3211,7 +3143,7 @@ class AllocationHttpTests(TestCase):
         f = r.json()
         self.assertEqual(f['procurement_id'], self.pid)
         self.assertEqual(f['project_code'], 'P1')
-        self.assertEqual(f['contractor_id'], self.sup.id)
+        self.assertIsNone(f['contractor_id'])      # контрагента выбирают в заказе
         self.assertEqual([(ln['item_code'], float(ln['qty'])) for ln in f['rows']],
                          [('SCR', 60.0)])
         bad = self.c.post(f'/api/procurements/{self.pid}/purchases/',
@@ -5196,17 +5128,15 @@ class CounterpartyFormTests(EngineTestBase):
         form = engine.counterparty_form(fresh)
         self.assertIsNone(form['supply'])
         self.assertIsNone(form['shipment'])
-        self.assertEqual(form['procurements'], [])
+        self.assertNotIn('procurements', form)     # волна 24: закупок у контрагента нет
         self.assertEqual(form['receipts'], [])
 
     def test_supply_integral_counts_contour_and_material(self):
-        proc = engine.create_procurement(self.prj, self.user)
-        engine.update_procurement(proc, contractor=self.supplier)
         self.make_purchase()                       # заказ на self.supplier (пустой)
         self._receipt(10, 100)                     # зафиксированная поставка
         self._receipt(3, 50, uom='м')              # другая единица — вектор, не скаляр
         supply = engine.counterparty_form(self.supplier)['supply']
-        self.assertEqual(supply['procurements'], 1)
+        self.assertNotIn('procurements', supply)  # волна 24: закупок у контрагента нет
         self.assertEqual(supply['purchases'], 1)
         self.assertEqual(supply['receipts'], 2)
         self.assertEqual(supply['lots'], 2)
@@ -5269,10 +5199,7 @@ class CounterpartyFormTests(EngineTestBase):
         self.assertIsNotNone(form['supply'])
         self.assertIsNotNone(form['shipment'])
 
-    def test_tabs_list_all_four_levels(self):
-        proc = engine.create_procurement(self.prj, self.user, code='ЗАК-1')
-        engine.update_procurement(proc, contractor=self.supplier)
-        engine.add_procurement_line(proc, self.comp, D(7))
+    def test_tabs_list_orders_receipts_transfers(self):
         p = self.make_purchase(code='ЗАКАЗ-1')
         _line(p, self.comp, D(7))
         self._receipt(7, 11)
@@ -5283,8 +5210,6 @@ class CounterpartyFormTests(EngineTestBase):
         engine.lock_transfer(t)
 
         form = engine.counterparty_form(self.supplier)
-        self.assertEqual([r['code'] for r in form['procurements']], ['ЗАК-1'])
-        self.assertEqual(form['procurements'][0]['qty'], D(7))
         self.assertEqual([r['code'] for r in form['purchases']], ['ЗАКАЗ-1'])
         self.assertEqual(form['purchases'][0]['coverage'], 'to_order')  # ждём поставки
         self.assertEqual(form['purchases'][0]['project_code'], self.prj.code)
@@ -5330,22 +5255,13 @@ class CounterpartyFormTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.delete_counterparty(with_order)
 
-    def test_delete_empties_plan_contractor(self):
-        """`Procurement.contractor` — SET_NULL (Ф17): план не держит справочник."""
-        cp = engine.create_counterparty(description='Только план')
-        proc = engine.create_procurement(self.prj, self.user)
-        engine.update_procurement(proc, contractor=cp)
-        engine.delete_counterparty(cp)
-        proc.refresh_from_db()
-        self.assertIsNone(proc.contractor_id)
-
     def test_sides_by_facts_replace_role_flags(self):
         """Ф3: сторона контрагента — ФАКТ документооборота, а не флаг справочника.
 
         `counterparty_sides` — ось СПИСКА (глиф `fold-*` и порядок в пикере), и она
         обязана давать ровно то же, что интегралы формы: «есть сторона» = «интеграл
-        не `None`». Любой из трёх закупочных документов зажигает закупочную сторону —
-        в том числе план и заказ, по которым ещё ничего не приехало.
+        не `None`». Заказ или поставка зажигают закупочную сторону — в том числе заказ,
+        по которому ещё ничего не приехало (волна 24: закупка к контрагенту не относится).
         """
         def sides(cp):
             row = engine.counterparty_sides(
@@ -5354,11 +5270,6 @@ class CounterpartyFormTests(EngineTestBase):
 
         naked = engine.create_counterparty(description='Ничей')
         self.assertEqual(sides(naked), (False, False))      # пустой — законное состояние
-
-        planned = engine.create_counterparty(description='Только план')
-        proc = engine.create_procurement(self.prj, self.user)
-        engine.update_procurement(proc, contractor=planned)
-        self.assertEqual(sides(planned), (True, False))     # заказа ещё нет — сторона есть
 
         ordered = engine.create_counterparty(description='Только заказ')
         self.make_purchase(contractor=ordered)
