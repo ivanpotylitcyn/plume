@@ -143,12 +143,44 @@ function SumCell({ value, glyph, tone, what }: {
   )
 }
 
+// Сумма над «Заказом» с раскладкой под курсором (волна 24, решение Ивана): сколько всего
+// в зафиксированных закупках и заказах проекта, сколько из этого уже оплачиваем
+// (зафиксированные заказы — по счёту) и на сколько обязательства ещё предстоят (план
+// зафиксированных закупок сверх заказов — по оценке). Всего = оплачено + не оплачено.
+// Цвет — тот же словарь, что у ящика «Заказ»: зелёное — обязательство, жёлтое — на нас.
+function OrderSumCell({ value, paid, unpaid, unpaidMissing }: {
+  value: number; paid: number; unpaid: number; unpaidMissing: number
+}) {
+  return (
+    <span className="pnum sumtip-host">
+      {kRub(value)}
+      <span className={`ci sg ci-package sg-${value ? 'wip' : 'none'}`} />
+      <span className="sumtip">
+        <span className="all">всего в закупках и заказах</span>
+        <span className="all">{money(paid + unpaid)}</span>
+        <span className="g-available">оплачиваем (заказы, по счёту)</span>
+        <span className="g-available">{money(paid)}</span>
+        <span className="g-on_order">предстоит (закупки сверх заказов, по оценке)</span>
+        <span className="g-on_order">{money(unpaid)}</span>
+        {unpaidMissing > 0 &&
+          <span className="miss">{unpaidMissing} поз. плана без оценки — «предстоит» неполно</span>}
+      </span>
+    </span>
+  )
+}
+
 export function NeedSums({ rows, acts }: { rows: DeficitComponent[]; acts?: boolean }) {
   let need = 0, kitted = 0, stock = 0, order = 0, short = 0
+  let paid = 0, unpaid = 0, unpaidMissing = 0
   const unestimated: string[] = []
   for (const r of rows) {
     kitted += r.kitted_cost
     stock += r.in_stock_cost
+    paid += r.committed_cost
+    if (r.planned) {
+      if (r.price == null) unpaidMissing += 1
+      else unpaid += r.planned * r.price
+    }
     if (r.price == null) { if (r.need || r.on_order) unestimated.push(r.component_code); continue }
     need += r.need * r.price
     order += r.on_order * r.price
@@ -166,7 +198,7 @@ export function NeedSums({ rows, acts }: { rows: DeficitComponent[]; acts?: bool
       <SumCell value={need} what="потребность по оценке" />
       <SumCell value={kitted} glyph="notebook" tone="ok" what="впаяно, по цене партий" />
       <SumCell value={stock} glyph="layers" tone="ok" what="на складе, по цене партий" />
-      <SumCell value={order} glyph="package" tone="wip" what="в заказе, по оценке" />
+      <OrderSumCell value={order} paid={paid} unpaid={unpaid} unpaidMissing={unpaidMissing} />
       <SumCell value={short} glyph="warning" tone="order"
         what="предстоит купить (только минусы баланса), по оценке" />
       <span className="puom">тыс ₽</span>

@@ -10,7 +10,7 @@
 // «нет данных» значит потерять единственное, что в пустом табе полезно.
 import type { AccountDocumentRow, FeedProcurementRow, FeedPurchaseRow,
   FeedReceiptRow } from './api'
-import { CounterpartyRef, money, num, StatusGlyph, statusTone } from './status'
+import { CounterpartyRef, money, num, StatusGlyph } from './status'
 import { viewDate } from './FormField'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
@@ -80,7 +80,8 @@ export function PurchaseFeed({ rows, empty, open, openCounterparty, side = 'coun
       <tbody>{rows.map(p => (
         <tr key={p.id} className="row">
           <td className="gl">
-            <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} /></td>
+            {/* Волна 24: чистый замок, как в списке «Заказы» — обязательство, не поставка. */}
+            <StatusGlyph locked={p.locked} /></td>
           <td className="c-key">
             <EntityLink kind="purchase" id={p.id} open={open}>
               {p.code || `Заказ #${p.id}`}</EntityLink></td>

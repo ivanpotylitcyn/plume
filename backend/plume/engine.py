@@ -731,6 +731,14 @@ class ProjectSupply:
             return total
         return self._get('planned', build).get(item.id, ZERO)
 
+    def committed_cost(self, item):
+        """Деньги обязательств по Item (волна 24): Σ цен строк ЗАФИКСИРОВАННЫХ заказов
+        проекта — «то, что уже оплачиваем», по счёту, включая уже приехавшее."""
+        return self._get('committed_cost', lambda: {
+            r['item']: r['s'] or ZERO for r in models.PurchaseLine.objects.filter(
+                purchase__procurement__project=self.project, purchase__locked=True,
+            ).values('item').annotate(s=Sum('price')).order_by()}).get(item.id, ZERO)
+
     def on_order(self, item):
         """Член «Заказ»: всё, за что взялись, — обещанное (`wip` у производимого,
         `purchased` у покупного) плюс запланированное (`planned`, волна 24)."""
@@ -1072,17 +1080,18 @@ def _leaf_row(item, need, supply):
         'uom': item.uom,
         'supply': _supply_status(row),         # ось «как дела» (цвет прибора/проекта)
         'anomaly': supply.has_negative_lot(item),
-        **_money_fields(item, supply.kitted_cost(item), supply.available_cost(item)),
+        **_money_fields(item, supply.kitted_cost(item), supply.available_cost(item),
+                        supply.committed_cost(item)),
     })
     return row
 
 
-def _money_fields(item, kitted_cost, in_stock_cost):
+def _money_fields(item, kitted_cost, in_stock_cost, committed_cost=ZERO):
     """Деньги строки потребности (волна 23, Ф2): цена-оценка для Потр./Заказа/Баланса
     (`price`, `None` — оценки нет) и факт партий для Компл./Склада. Суммы над колонками
     складывает вью по ОТФИЛЬТРОВАННЫМ строкам — фильтры живут там же."""
     return {'price': item.estimated_cost, 'kitted_cost': kitted_cost,
-            'in_stock_cost': in_stock_cost}
+            'in_stock_cost': in_stock_cost, 'committed_cost': committed_cost}
 
 
 def _demand_tree(item, qty, supply, bom, depth, visiting, out):
@@ -1295,7 +1304,16 @@ def _coverage_status(purchase_id, lines, received):
 #  Бюджет проекта: два числа денег + себестоимость/экономия (north-star окупаемости)
 # --------------------------------------------------------------------------- #
 def _project_spent(project):
-    """Потрачено (факт) = Σ(unit_cost×qty) приходных (`Receipt`) лотов проекта.
+    """Потрачено = **обязательства** + поставки без заказа (волна 24, решение Ивана).
+
+    Обязательства — Σ цен строк ЗАФИКСИРОВАННЫХ заказов проекта: заказ — обязательство,
+    нам его выполнять, и ждать УПД, чтобы потом узнать, что денег не хватает, — плохая
+    идея. Цена у зафиксированного заказа есть всегда (гейт `lock_purchase`; старые заказы
+    без цен расфиксировала миграция `0007`). Поставка, рождённая из заказа, второй раз не
+    считается: её деньги уже в заказе. Поставка БЕЗ заказа по-прежнему считается по своим
+    лотам (УПД) — ниже прежний канон для неё.
+
+    Прежний канон (до волны 24 — для всех поставок) — Σ(unit_cost×qty) приходных лотов:
 
     Точная застывшая цифра «кэша ФЛС». Заёмные/свои бесплатные лоты (origin
     requisition/inventory/kitting) сюда не входят → бесплатны в бюджете (платил
@@ -1308,9 +1326,11 @@ def _project_spent(project):
     всем пользователям. Черновая поставка не в «потрачено» и не на складе: её
     позиции остаются в «в пути / к заказу» — картина связная.
     """
-    total = ZERO
+    total = models.PurchaseLine.objects.filter(
+        purchase__procurement__project=project, purchase__locked=True,
+    ).aggregate(s=Sum('price'))['s'] or ZERO
     for lot in project.lots.filter(origin__kind=models.StockDocument.Kind.RECEIPT,
-                                   origin__locked=True):
+                                   origin__locked=True, origin__purchase__isnull=True):
         total += lot.qty * lot.unit_cost
     return total
 
@@ -1325,14 +1345,19 @@ def _project_estimate(project):
     то, что ещё потребует денег; ✓ уже покрыто (склад приходной = в «потрачено», заём =
     бесплатно). Возвращает `(estimate, unestimated_codes)` — сумма оценки и коды
     покупных листьев без `estimated_cost` (план по ним неполон, не молчим 0).
+
+    Волна 24: заказанное по зафиксированным заказам уже в «потрачено» (по счёту), поэтому
+    по оценке остаётся только то, что под обязательство ещё не встало: нужда − впаяно −
+    склад − заказано, не меньше нуля (в плане закупки и «к заказу» — оба ещё деньги
+    впереди). Впаянное вычитаем тоже: оно уже покрыто — баланс считает его с 2026-08-05.
     """
     leaves, _incomplete = project_leaf_demand(project)
     supply = ProjectSupply(project)
     estimate = ZERO
     unestimated = []
     for leaf, need in leaves.items():
-        cov = _coverage(need, supply.available(leaf), supply.on_order(leaf))
-        remaining = cov['on_order'] + cov['to_order']
+        remaining = max(ZERO, need - supply.kitted(leaf) - max(ZERO, supply.available(leaf))
+                        - supply.purchased(leaf))
         if remaining <= 0:
             continue
         if leaf.estimated_cost is None:
@@ -3619,13 +3644,15 @@ def scope_demand(projects, active_only=True):
                 'item': item,
                 'need': ZERO, 'kitted': ZERO, 'in_stock': ZERO, 'on_order': ZERO,
                 'planned': ZERO, 'wip': ZERO,
-                'kitted_cost': ZERO, 'in_stock_cost': ZERO, 'anomaly': False,
+                'kitted_cost': ZERO, 'in_stock_cost': ZERO, 'committed_cost': ZERO,
+                'anomaly': False,
             })
             bal = supply.balance(item, need)
             for key in ('need', 'kitted', 'in_stock', 'on_order', 'planned', 'wip'):
                 row[key] += bal[key]
             row['kitted_cost'] += supply.kitted_cost(item)
             row['in_stock_cost'] += supply.available_cost(item)
+            row['committed_cost'] += supply.committed_cost(item)
             # Аномалия — свойство лота, а не суммы: хватает одного минусового лота в
             # одном проекте охвата, чтобы строка просила разбирательства.
             row['anomaly'] = row['anomaly'] or supply.has_negative_lot(item)
@@ -3645,7 +3672,8 @@ def scope_demand(projects, active_only=True):
             'uom': item.uom,
             'supply': _supply_status(row),
             'anomaly': agg['anomaly'],
-            **_money_fields(item, agg['kitted_cost'], agg['in_stock_cost']),
+            **_money_fields(item, agg['kitted_cost'], agg['in_stock_cost'],
+                            agg['committed_cost']),
         })
         rows.append(row)
     # Тот же порядок, что в «Потребности» проекта: горит вперёд, внутри — по коду.
@@ -4531,7 +4559,8 @@ def _purchase_rows(queryset):
     coverage = purchases_coverage(qs)
     for p in qs:
         lines = list(p.lines.all())
-        estimate, unestimated = lines_estimate(lines)
+        money = purchase_money(lines)        # волна 24: сумма заказа — по счёту
+        estimate, unestimated = money['estimate'], money['unestimated']
         rows.append({
             'id': p.id, 'code': p.code, 'description': p.description,
             'date': p.date, 'locked': p.locked,
@@ -4542,9 +4571,9 @@ def _purchase_rows(queryset):
             # решает вью ([[engine-view-seam]]).
             **_contractor_view(p.contractor),
             'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
-            # Деньги намерения: `Σ qty × estimated_cost` (факт рождается только в
-            # поставке). Позиции без оценки — кодами в `unestimated`, чтобы неполная
-            # сумма не выдавала себя за полную (тот же приём, что в `intent_money`).
+            # Деньги заказа — по счёту (волна 24, `purchase_money`): Σ цен строк. Строки
+            # без цены — кодами в `unestimated`, чтобы неполная сумма не выдавала себя
+            # за полную.
             'estimate': estimate, 'unestimated': unestimated,
             'coverage': coverage[p.id],
         })

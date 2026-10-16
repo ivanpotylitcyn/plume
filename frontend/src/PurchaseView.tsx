@@ -14,7 +14,7 @@
 // а не в заказе (решение Ивана — «отучить планировать в Заказе»).
 import { useEffect, useMemo, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type PurchaseCandidate, type PurchaseForm,
-  type PurchaseFormLine, type Status } from './api'
+  type PurchaseFormLine } from './api'
 import { CommitInput } from './CommitInput'
 import { OrderFields, useFormLock } from './FormHeader'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
@@ -95,9 +95,10 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   // Замок формы гейтит и поля шапки (Ф12d): раньше они правились в просмотре, то есть
   // «просмотр» у заказа и закупки значил не то же, что у остальных форм.
   const locked = !editable || !unlocked
-  // Ф1b: цвет строки/меты = покрытие лотами — как в списке Заказов.
-  const coverage: Status = c.total_received === 0 ? 'to_order'
-    : c.rows.every(r => r.remaining <= 0) ? 'available' : 'on_order'
+  // Цвет «поступило» в мете — тот же, что у колонки «Поступило» (волна 24): ничего не
+  // пришло — серое, частично — оранжевое, полностью — зелёное. Красного нет.
+  const coverage = c.total_received === 0 ? 'sub'
+    : c.rows.every(r => r.remaining <= 0) ? 'g-available' : 'g-on_order'
   // Ф17: расхождение с контрагентом указанной закупки — предупреждение, не гейт.
   // Флаг считает движок ([[engine-view-seam]]), форма только выбирает знак.
   const mismatch = c.contractor_mismatch
@@ -215,7 +216,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         {' · '}{count(c.receipts.length, 'поставка', 'поставки', 'поставок')}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
         {' · заказано '}{num(c.total_ordered)}
-        {' · поступило '}<span className={'g-' + coverage}>{num(c.total_received)}</span>
+        {' · поступило '}<span className={coverage}>{num(c.total_received)}</span>
       </>}
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}

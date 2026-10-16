@@ -748,6 +748,19 @@ table.grid td.num .ci.sg { margin-left: 6px; }
    ширину панели пробовали и отказались — своя разметка ради одной линии не стоит того. */
 .prow--sums .tree-cell { color: var(--fg-dim); }
 .prow--sums .unest { color: var(--st-order); }
+/* Раскладка суммы над «Заказом» под курсором (волна 24): всего / оплачиваем /
+   предстоит. Своя карточка, а не `title`: числа в цвете обязательства (зелёное) и плана
+   (жёлтое), как ящик «Заказ» в строках. */
+.sumtip-host { position: relative; cursor: default; }
+.sumtip { display: none; position: absolute; top: 100%; right: 0; z-index: 20;
+  grid-template-columns: auto auto; gap: 2px 16px; padding: 8px 12px; margin-top: 4px;
+  background: var(--bg-widget); border: 1px solid var(--border-strong); border-radius: 6px;
+  box-shadow: 0 8px 24px var(--shadow-modal); white-space: nowrap; text-align: left;
+  font-size: 12px; }
+.sumtip-host:hover .sumtip { display: grid; }
+.sumtip > :nth-child(even) { text-align: right; font-family: var(--font-mono); }
+.sumtip .all { color: var(--fg-dim); }
+.sumtip .miss { grid-column: 1 / -1; color: var(--st-order); }
 .prow--head.head--tree .tree-cell { padding-left: 36px; }
 /* Фильтр внутри ВЕДУЩЕЙ ячейки: зазор ей уже даёт `gap` флекса, свой отступ фильтра
    сложился бы с ним в двойной. В `th` таблиц флекса нет — там отступ несёт сам фильтр. */

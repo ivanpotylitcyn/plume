@@ -1549,19 +1549,19 @@ class ProjectSupplyTests(EngineTestBase):
         self.assertEqual(supply['purchases'], [])
         self.assertEqual(supply['receipts'], [])
 
-    def test_purchase_money_is_estimate_receipt_money_is_fact(self):
-        """Заказ показывает ОЦЕНКУ (намерение), поставка — ФАКТ из УПД."""
+    def test_purchase_money_is_invoice_receipt_money_is_fact(self):
+        """Волна 24: заказ показывает сумму ПО СЧЁТУ (цены строк), поставка — ФАКТ из УПД."""
         p = self.make_purchase()
-        _line(p, self.item, D(4))
-        blind = self.make_item('NOPRICE')            # без `estimated_cost`
-        _line(p, blind, D(2))
+        _line(p, self.item, D(4))                    # цена строки 4 × 12,50 (фикстура)
+        blind = self.make_item('NOPRICE')
+        engine.update_purchase_line(_line(p, blind, D(2)), price=None)   # цены ещё нет
         lot = self.receipt_lot(self.item, self.prj, 3)
         lot.unit_cost = D('10.00')
         lot.save(update_fields=['unit_cost'])
         supply = engine.project_supply(self.prj)
         row = supply['purchases'][0]
         self.assertEqual(row['estimate'], D(4) * D('12.50'))
-        # Позиция без оценки в сумму не вошла и молчанием не прикрыта.
+        # Строка без цены в сумму не вошла и молчанием не прикрыта.
         self.assertEqual(row['unestimated'], ['NOPRICE'])
         self.assertEqual(supply['receipts'][0]['total'], D(3) * D('10.00'))
 
@@ -2853,6 +2853,34 @@ class AllocationTests(EngineTestBase):
         engine.lock_purchase(pu)
         row, _ = self._cells()
         self.assertEqual((row['planned'], row['on_order']), (D(0), D(55)))
+
+    def test_spent_is_obligations_plus_receipts_without_order(self):
+        """Волна 24: «потрачено» = цены зафиксированных заказов + поставки без заказа;
+        поставка из заказа второй раз не считается, а «план» не оценивает заказанное."""
+        self.scr.estimated_cost = D(10)
+        self.scr.save(update_fields=['estimated_cost'])
+        budget = lambda: engine.project_budget(self.prj)
+        self.assertEqual((budget()['spent'], budget()['plan']), (D(0), D(400)))  # 40 × 10
+        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        engine.update_purchase_line(pu.lines.get(item=self.scr), D(30), price=D('255.00'))
+        self.assertEqual(budget()['spent'], D(0))             # черновик — не обязательство
+        engine.lock_purchase(pu)
+        # обязательство по счёту 255 ₽ + по оценке только незаказанное: (40 − 30) × 10
+        self.assertEqual((budget()['spent'], budget()['plan']), (D(255), D(355)))
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        engine.lock_receipt(r)
+        self.assertEqual(budget()['spent'], D(255))           # поставка из заказа — не дубль
+        self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(unit_cost=D(7))
+        self.assertEqual(budget()['spent'], D(269))           # поставка без заказа — по УПД
+
+    def test_committed_cost_rides_the_need_rows(self):
+        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        engine.update_purchase_line(pu.lines.get(item=self.scr), price=D('99.90'))
+        rows = lambda: {c['component_code']: c for c in
+                        engine.project_deficit(self.prj, with_tree=False)['components']}
+        self.assertEqual(rows()['SCR']['committed_cost'], D(0))      # черновик
+        engine.lock_purchase(pu)
+        self.assertEqual(rows()['SCR']['committed_cost'], D('99.90'))
 
     def test_project_of_procurement_changes_only_without_purchases(self):
         prj2 = models.Project.objects.create(code='P2', description='Проект 2')

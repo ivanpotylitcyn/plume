@@ -328,8 +328,12 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
   return (
     <StatPanel>
       <StatGroup>
-        <Stat label="потрачено (факт)" value={money(b.spent)} />
-        <Stat label="план (прогноз)" value={money(b.plan)} />
+        {/* Волна 24 (решение Ивана): потрачено — это обязательства, а не приход по УПД:
+            зафиксированный заказ нам выполнять, и денег на него уже нет. */}
+        <Stat label="потрачено (факт)" value={money(b.spent)}
+          title="Зафиксированные заказы по счёту + поставки без заказа по УПД" />
+        <Stat label="план (прогноз)" value={money(b.plan)}
+          title="Потрачено + ещё не заказанное по оценке изделий" />
         {b.budget !== null
           ? <Stat label="бюджет на материалы" value={money(b.budget)} />
           : <Stat label="бюджет на материалы" value="— не задан" dim />}

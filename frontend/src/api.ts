@@ -81,6 +81,9 @@ export interface DeficitComponent {
   // Деньги строки (волна 23, Ф2): оценка Item — для Потр./Заказа/Баланса (`null` — без
   // оценки); факт партий — для Компл./Склада. Суммы над колонками считает `NeedSums`.
   price: number | null; kitted_cost: number; in_stock_cost: number
+  // Волна 24: деньги обязательств по позиции — Σ цен строк зафиксированных заказов
+  // проекта (по счёту). Раскладка суммы над «Заказом».
+  committed_cost: number
 }
 export interface Deficit {
   project_id: number; project_code: string; project_name: string

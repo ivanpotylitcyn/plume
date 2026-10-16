@@ -436,8 +436,11 @@ export default function App() {
             onSelect={id => setSel({ kind: 'purchase', id })}
             rows={[...purchases].reverse().map(p => ({
               id: p.id, code: p.code || `Заказ #${p.id}`, name: p.project_code, projectCode: p.project_code,
-              // Ф1b: глиф=замок (фиксация), цвет=покрытие лотами (`_purchase_coverage`).
-              glyph: <StatusGlyph locked={p.locked} tone={statusTone(p.coverage)} />,
+              // Волна 24 (решение Ивана): глиф заказа — чистый замок по канону. Открытый
+              // жёлтый — не зафиксирован, денег не потратили; закрытый зелёный —
+              // обязательство возникло, трата учтена, ждём компоненты. Покрытие лотами
+              // (бывший цвет, красный при «ничего не пришло») смущало — оно живёт в форме.
+              glyph: <StatusGlyph locked={p.locked} />,
             }))} />}
 
         {mode === 'procurements' &&
