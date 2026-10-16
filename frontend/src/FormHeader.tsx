@@ -206,7 +206,7 @@ export type OrderHeadPatch = Partial<{
 }>
 
 export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, anchors,
-  children }: {
+  projectLocked, children }: {
   c: OrderHead
   locked: boolean
   busy: boolean
@@ -214,6 +214,7 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
   numberLabel?: string          // «№ поставки» / «№ акта» / «№» — у комплектации номера нет
   openProject?: (id: number) => void
   anchors?: ReactNode           // якори вида — сразу за проектом (§13.4a)
+  projectLocked?: boolean       // проект выводится, а не правится (заказ — волна 24)
   children?: ReactNode          // атрибуты вида — хвостом, после автора
 }) {
   return (
@@ -226,7 +227,7 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
       {/* Проект — ВЕРХНИЙ якорь всего закупочного контура (§13.4a): связи сущности
           важнее её атрибутов, и порядок один на все три уровня. */}
       <ProjectField projectId={c.project_id} projectLabel={c.project_code}
-        locked={locked} busy={busy} onOpen={openProject}
+        locked={locked || !!projectLocked} busy={busy} onOpen={openProject}
         onChange={id => patch({ project_id: id })} />
       {anchors}
       {numberLabel &&

@@ -429,8 +429,9 @@ export default function App() {
               glyph: <span className="ci ci-database" /> }))} />}
 
         {mode === 'purchases' &&
-          <ModeList heading="Заказы" newLabel="＋ Новый заказ" projectFilter
-            onNew={() => born('purchases', 'purchase', reloadPurchases, openPurchase)}
+          <ModeList heading="Заказы" newLabel="＋ Новый заказ — из закупки" projectFilter
+            // Волна 24: заказ рождается только из закупки — «＋» ведёт в «Закупки».
+            onNew={() => { setMode('procurements'); setSel(null) }}
             selId={sel?.kind === 'purchase' ? sel.id : null}
             onSelect={id => setSel({ kind: 'purchase', id })}
             rows={[...purchases].reverse().map(p => ({
@@ -440,12 +441,13 @@ export default function App() {
             }))} />}
 
         {mode === 'procurements' &&
-          <ModeList heading="Закупки" newLabel="＋ Новая закупка"
+          <ModeList heading="Закупки" newLabel="＋ Новая закупка" projectFilter
             onNew={() => born('procurements', 'procurement', reloadProcurements, openProcurement)}
             selId={sel?.kind === 'procurement' ? sel.id : null}
             onSelect={id => setSel({ kind: 'procurement', id })}
             rows={[...procurements].reverse().map(p => ({
               id: p.id, code: p.code || `Закупка #${p.id}`, name: p.description,
+              projectCode: p.project_code,      // волна 24: закупка проектная
               // Ф1b: закупка-план — ось только фиксация, цвет=фиксация (зелёный заперт).
               glyph: <StatusGlyph locked={p.locked} />,
             }))} />}
@@ -459,7 +461,7 @@ export default function App() {
             isNew={isFresh('project', sel.id)}
             openItem={openItem}
             openOrder={openOrder} openPurchase={openPurchase}
-            openCounterparty={openCounterparty}
+            openProcurement={openProcurement} openCounterparty={openCounterparty}
             onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }}
             onDeleted={() => { reloadProjects(); setSel(null) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
@@ -492,6 +494,10 @@ export default function App() {
             openCounterparty={openCounterparty}
             isNew={isFresh('procurement', sel.id)}
             openPurchase={id => { reloadPurchases(); openPurchase(id) }}
+            // «Новый заказ» (волна 24): родился — пометить свежим (откроется в правке),
+            // как рождение по «＋ Новый».
+            onPurchaseBorn={id => { reloadPurchases(); setJustCreated({ kind: 'purchase', id })
+              openPurchase(id) }}
             onChanged={reloadProcurements}
             onDeleted={() => { reloadProcurements(); setSel(null) }} />}
         {sel?.kind === 'location' &&
@@ -534,7 +540,7 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'products',     icon: 'rocket',        title: 'Изделия — производимые (приборы/сборки), состав, остатки' },
   { mode: 'items',        icon: 'chip',          title: 'Компоненты — весь справочник, категории, синк с библиотекой' },
   { mode: 'counterparties', icon: 'call-outgoing', title: 'Контрагенты — поставщики и заказчики, что привезли и что им передали' },
-  { mode: 'procurements', icon: 'law',           title: 'Закупки — командный свод, xlsx-бланк' },
+  { mode: 'procurements', icon: 'law',           title: 'Закупки — что покупаем для проекта; отсюда рождаются заказы' },
   { mode: 'purchases',    icon: 'package',       title: 'Заказы — обязательства поставщику' },
   { mode: 'orders',       icon: 'notebook',      title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
   { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },

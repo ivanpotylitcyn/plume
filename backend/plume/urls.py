@@ -80,7 +80,8 @@ urlpatterns = [
     path('purchases/<int:pk>/lines/', views.purchase_lines, name='purchase-lines'),
     # витрина «Потребность» заказа (2026-08-19): та же, что у проекта и закупки, но по
     # проекту заказа — телескоп рядом с микроскопом «Строк».
-    path('purchases/<int:pk>/demand/', views.purchase_demand, name='purchase-demand'),
+    path('purchases/<int:pk>/candidates/', views.purchase_candidates,
+         name='purchase-candidates'),
     path('purchases/<int:pk>/lock/', views.purchase_lock, name='purchase-lock'),
     path('purchases/<int:pk>/unlock/', views.purchase_unlock, name='purchase-unlock'),
     path('purchases/<int:pk>/receipt/', views.purchase_receipt, name='purchase-receipt'),
@@ -141,8 +142,8 @@ urlpatterns = [
     # привязка (волна 8): раскладка плана по заказам закупки
     path('procurements/<int:pk>/allocation/', views.procurement_allocation,
          name='procurement-allocation'),
-    path('procurements/<int:pk>/allocate/', views.procurement_allocate,
-         name='procurement-allocate'),
+    path('procurements/<int:pk>/purchases/', views.procurement_purchases,
+         name='procurement-purchases'),
     # вложения (волна 11): PDF/сканы к документам и изделиям. download/detail (int)
     # идут раньше owner-маршрута (str) — коллизии нет, но порядок нагляднее.
     path('attachments/<int:pk>/download/', views.attachment_download, name='attachment-download'),

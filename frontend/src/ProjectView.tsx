@@ -19,7 +19,7 @@ import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { PurchaseFeed, ReceiptFeed } from './FeedTables'
+import { ProcurementFeed, PurchaseFeed, ReceiptFeed } from './FeedTables'
 import { BalanceCells, Member, NeedHead, NeedRow, NeedSums, needPass,
   useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
@@ -29,11 +29,12 @@ import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
 
 export function ProjectView({ projectId, items, isNew, openItem, openOrder, openPurchase,
-  openCounterparty, onChanged, onDeleted }:
+  openProcurement, openCounterparty, onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean
     openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // Ф15: черновики закрытия кликабельны
     openPurchase: (id: number) => void                 // лента «Заказы» — свой режим
+    openProcurement: (id: number) => void              // лента «Закупки» (волна 24)
     openCounterparty: (id: number) => void             // поставщик в лентах — ссылка
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
@@ -141,13 +142,17 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
                   openItem={openItem} />)}
           </div> },
   )
-  // Закупочный контур проекта — двумя лентами того же вида, что в форме контрагента
+  // Закупочный контур проекта — тремя лентами того же вида, что в форме контрагента
   // (`FeedTables`): разрез другой, строка та же. Стоят между «Потребностью» и «Складом»
-  // по потоку жизни: что надо → что заказали → что приехало → что лежит. Табы есть у
+  // по потоку жизни: что надо → что решили купить (закупки, волна 24: закупка стала
+  // проектной) → что заказали → что приехало → что лежит. Табы есть у
   // ЛЮБОГО проекта, включая внутренние склады (решение Ивана 2026-08-28): набор табов
   // предсказуем, у склада они просто пусты. Ленты только читают — заказ и поставку
   // заводят в своих режимах.
   tabs.push(
+    { key: 'procurements', label: 'Закупки', icon: 'law',
+      content: <ProcurementFeed rows={supply?.procurements ?? []} open={openProcurement}
+        empty="Закупок по этому проекту нет." /> },
     { key: 'purchases', label: 'Заказы', icon: 'package',
       content: <PurchaseFeed rows={supply?.purchases ?? []} side="project"
         open={openPurchase} openCounterparty={openCounterparty}
@@ -210,7 +215,8 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
             {count(data.components.length, 'компонент', 'компонента', 'компонентов')}
             {' · '}
           </>}
-          {count(supply?.purchases.length ?? 0, 'заказ', 'заказа', 'заказов')}
+          {count(supply?.procurements.length ?? 0, 'закупка', 'закупки', 'закупок')}
+          {' · '}{count(supply?.purchases.length ?? 0, 'заказ', 'заказа', 'заказов')}
           {' · '}{count(supply?.receipts.length ?? 0, 'поставка', 'поставки', 'поставок')}
           {' · '}{count(residuals.length, 'партия', 'партии', 'партий')}
           {(closure?.anomaly_count ?? 0) > 0 &&
@@ -458,7 +464,8 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
       <span className="pnum">{num(n.need)}</span>
       {n.is_leaf
         ? <BalanceCells code={n.component_code} need={n.need} kitted={n.kitted ?? 0}
-            inStock={n.in_stock ?? 0} onOrder={n.on_order ?? 0} balance={n.balance ?? 0}
+            inStock={n.in_stock ?? 0} onOrder={n.on_order ?? 0} planned={n.planned ?? 0}
+            balance={n.balance ?? 0}
             status={n.status ?? 'available'} anomaly={n.anomaly} />
         : <>
             <span className="lbl">подсборка</span>

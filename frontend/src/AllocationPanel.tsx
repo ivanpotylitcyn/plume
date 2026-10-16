@@ -1,47 +1,38 @@
-// Табы закупки «Строки» и «Заказы» — план и его раскладка на проектные заказы.
+// Табы закупки «Строки» и «Заказы» — план и его распределение по заказам.
 //
-// 2026-08-11 таб переименован «Привязка» → «Строки»: прежние плоские «Строки» сняты
-// (тот же план, показанный беднее), и остался ОДИН экран содержимого документа — как
-// «Строки» у заказа. Заодно сюда переехала корзина строки, а добавление ушло в новую
-// «Потребность»: этот таб — МИКРОСКОП (один компонент, его баланс и раскладка), выбор
-// позиции — дело телескопа.
+// Волна 24 (решение Ивана 2026-10-16): закупка — источник правды, и в ней ОДНО поле
+// ввода — «сколько хотим». Аккордеон строки показывает, какие заказы и сколько взяли, —
+// только для чтения: количество в заказе правится в форме заказа, а заказ рождается
+// кнопкой «Новый заказ» (остатком). Матрица с полями в ячейках (2026-08-05, присвоение
+// `set_allocation`) снята: форму пилили под нарезку, и она вышла сложной.
 //
-// Переделано 2026-08-05. Раньше строка плана раскрывалась в ПРОЕКТЫ, а заказ выбирался
-// дропдауном в каждой строке. Проект, однако, — свойство заказа, а не уровень
-// закупочного контура (Закупка = ЧТО, Заказ = У КОГО, Поставка = КТО привёз), поэтому
-// раскладка «из ЧТО в У КОГО» идёт по заказам напрямую: строка раскрывается в ЗАКАЗЫ
-// этой закупки, ячейка = строка заказа. Матрица прямоугольная и без скрытого состояния
-// (дропдаун прятал вторую строку того же проекта — «Разложено 150» могло означать
-// 100+50 без следа на экране).
-//
-// Вместе с проектной осью ушли: дропдаун выбора заказа, «＋ новый заказ» с ленивым
-// рождением, autopeg («Разрезать»), обратное разузлование внутрь проекта, а также
-// тройка контролов ✓/＋кол-во/корзина. Их заменило ОДНО поле на строку: ввод —
-// присвоение (0 снимает строку заказа), заказы заводятся руками в своей форме.
+// Закупка однопроектная, поэтому у строки плана наконец есть честный баланс проекта —
+// то же число, что в его «Потребности» (раньше балансы разных проектов охвата сложить
+// было нельзя, и колонка у строки плана пустовала).
 import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
 import { useCategoryFilter } from './ColumnFilter'
-import { Balance, Chevron, Cost, StatusGlyph, balanceTitle, num } from './status'
+import { Balance, Chevron, Cost, CounterpartyRef, StatusGlyph, balanceTitle, num } from './status'
 import { EntityLink } from './EntityLink'
 
-// Состояние привязки: загрузка по id, обновление на `rev` (мутации формы плана) и
-// обёртка мутации. Живёт у формы — оба таба смотрят в одни данные.
+// Состояние распределения: загрузка по id и обновление на `rev` (мутации формы
+// закупки). Живёт у формы — табы «Строки», «Заказы» и окно «Новый заказ» смотрят в одни
+// данные. Мутаций своих нет: распределение только читается (волна 24).
 export function useAllocation(procurementId: number, rev: number) {
   const [p, setP] = useState<Allocation | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
+  // Сменилась закупка — прежние данные и ошибка ей не принадлежат (форма переиспользуется
+  // между закупками, и без сброса ошибка чужого id висела над чужими строками).
+  useEffect(() => { setP(null); setErr(null) }, [procurementId])
   useEffect(() => {
-    api.allocation(procurementId).then(setP).catch(e => setErr(String(e)))
+    api.allocation(procurementId)
+      .then(next => { setP(next); setErr(null) })
+      .catch(e => setErr(String(e)))
   }, [procurementId, rev])
 
-  const run = (pr: Promise<Allocation>) => {
-    setBusy(true); setErr(null)
-    pr.then(setP).catch(e => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
-  return { p, err, busy, run }
+  return { p, err }
 }
 
 export type AllocationState = ReturnType<typeof useAllocation>
@@ -49,30 +40,22 @@ export type AllocationState = ReturnType<typeof useAllocation>
 // Таб «Строки»: строки плана с раскрытием по заказам закупки.
 //
 // Вёрстка — ТА ЖЕ сетка строк, что у «Приборов» проекта (`.prow`, правка Ивана
-// 2026-08-05): раскрыватель·глиф·код единым блоком слева, числа справа с глифом за
-// числом, единица последней колонкой. Таблица `.grid` здесь давала другую геометрию, и
-// два аккордеона одного продукта выглядели чужими друг другу.
-//
-// Колонки числовой части — `Баланс · Кол-во · Остаток`, и «Кол-во» честно означает одно
-// и то же на обоих уровнях: сколько этого изделия В ЭТОМ документе. У строки плана это
-// количество в закупке, у строки заказа — количество в заказе, и оба — поля ввода
-// (правка Ивана 2026-08-06). «Разложено» снято: оно выводится из пары «Кол-во − Остаток»,
-// а колонка ушла под то число, которое здесь и правят.
-//
-// Так таб стал самодостаточным: количество правится и раскладывается на одном экране.
+// 2026-08-05): раскрыватель·глиф·код единым блоком слева, числа справа, единица
+// последней колонкой. Колонки числовой части — `Баланс · Кол-во · Остаток`: «Кол-во» на
+// обоих уровнях значит «сколько в ЭТОМ документе», но поле ввода — только у строки
+// плана («хочу»), у строки заказа это число для чтения.
 export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
-  openItem, openProject, openPurchase }: {
+  openItem, openPurchase, openCounterparty }: {
   st: AllocationState; procurementId: number
   editable: boolean                            // закупка расфиксирована — план правится
   onQty: (lineId: number, qty: number) => void // правка строки ПЛАНА (мимо st: ответ
-                                               // сервера — форма закупки, не привязка)
+                                               // сервера — форма закупки, не распределение)
   onDelete: (lineId: number) => void           // убрать строку плана (корзина строки)
-  openItem: (id: number) => void; openProject: (id: number) => void
-  openPurchase: (id: number) => void
+  openItem: (id: number) => void
+  openPurchase: (id: number) => void; openCounterparty: (id: number) => void
 }) {
-  const { p, err, busy, run } = st
-  // Фильтр по классу изделия — общий движок (2026-08-10), тот же, что в табе «Строки»
-  // этой же закупки и в остальном контуре.
+  const { p, err } = st
+  // Фильтр по классу изделия — общий движок (2026-08-10), тот же, что в остальном контуре.
   const byCat = useCategoryFilter(p?.rows, r => r.item_category, procurementId)
   if (!p) return <div className="tab-empty">Загрузка…</div>
   if (p.rows.length === 0)
@@ -84,53 +67,49 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
       {err && <div className="anomaly">{err}</div>}
       <div className={'pgrid pgrid--alloc' + (editable ? ' pgrid--acts' : '')}>
         {/* Заголовок ведущей колонки отступает на раскрыватель и глиф (`head--tree`,
-            §7a): подпись начинается ровно над первым символом кода, а не над знаками
-            строки. «Компонент», а не «Код»: колонка называет СУЩНОСТЬ, а код — лишь то,
-            чем она в ней записана (правка Ивана 2026-08-10). */}
+            §7a): подпись начинается ровно над первым символом кода. */}
         <div className="prow prow--head head--tree">
           <span className="tree-cell">Компонент{byCat.head}</span>
           <span>Описание</span>
-          <span className="pnum" title="баланс проекта заказа по этому изделию">
+          <span className="pnum" title="баланс проекта закупки по этому изделию">
             Баланс</span>
-          {/* Одна подпись на два уровня — количество в ТОМ документе, чья это строка. */}
           <span className="pnum"
-            title="у строки плана — кол-во в закупке, у заказа — кол-во в заказе">
+            title="у строки плана — сколько хотим, у заказа — сколько он взял">
             Кол-во</span>
-          <span className="pnum" title="остаток строки плана: сколько ещё не разложено">
+          <span className="pnum" title="остаток строки плана: сколько ещё не взяли заказы">
             Остаток</span>
           <span className="puom" title="единица измерения строки">Ед.</span>
-          {/* Деньги — за границей единицы: она квалифицирует количества слева, а
-              стоимость другой размерности. Одна подпись на два уровня, как «Кол-во». */}
+          {/* Деньги — за границей единицы: она квалифицирует количества слева. */}
           <span className="pnum" title="стоимость строки: кол-во × оценка изделия">
             Стоимость</span>
           {editable && <span />}
         </div>
         {byCat.shown.map(r => (
-          <LineRow key={r.line_id} r={r} busy={busy} procurementId={procurementId}
-            editable={editable} onQty={onQty} onDelete={onDelete}
-            run={run} openItem={openItem} openProject={openProject}
-            openPurchase={openPurchase} />
+          <LineRow key={r.line_id} r={r} editable={editable} onQty={onQty}
+            onDelete={onDelete} openItem={openItem} openPurchase={openPurchase}
+            openCounterparty={openCounterparty} />
         ))}
       </div>
     </>
   )
 }
 
-// Таб «Заказы»: веер проектных заказов, заведённых под эту закупку.
-export function PurchaseFan({ st, openPurchase }: {
+// Таб «Заказы»: веер заказов, рождённых из этой закупки.
+export function PurchaseFan({ st, openPurchase, openCounterparty }: {
   st: AllocationState; openPurchase: (id: number) => void
+  openCounterparty: (id: number) => void
 }) {
   const { p } = st
   if (!p) return <div className="tab-empty">Загрузка…</div>
   if (p.fan.length === 0)
     return <div className="tab-empty">
-      Под этой закупкой нет заказов — заведите заказ и укажите в нём эту закупку.
+      Заказов ещё нет — заведите заказ кнопкой «Новый заказ».
     </div>
   return (
     <table className="grid">
       <thead><tr>
         <th className="gl" /><th className="c-key">Заказ</th>
-        <th className="c-fit">Проект</th><th className="c-desc">Описание проекта</th>
+        <th className="c-desc">Контрагент</th>
         <th className="num">Строк</th>
         <th className="num">Всего</th>
       </tr></thead>
@@ -141,9 +120,9 @@ export function PurchaseFan({ st, openPurchase }: {
             <td className="c-key">
               <EntityLink kind="purchase" id={f.purchase_id} open={openPurchase}>
                 {f.purchase_code}</EntityLink></td>
-            <td className="c-fit"><span className="code">{f.project_code}</span></td>
             <td className="c-desc">
-              <span className="cell-ellip" title={f.project_name}>{f.project_name}</span></td>
+              <CounterpartyRef code={f.contractor_code} name={f.contractor_name}
+                id={f.contractor_id} open={openCounterparty} /></td>
             <td className="num">{f.lines}</td>
             <td className="num">{num(f.total)}</td>
           </tr>
@@ -153,19 +132,16 @@ export function PurchaseFan({ st, openPurchase }: {
   )
 }
 
-// Строка плана: сколько разложено и сколько осталось + раскрытие в заказы.
-// Глиф (правило Ивана 2026-08-05): разложено в ноль — зелёный check; не тронута или
-// перепег — красный warning; между — оранжевый warning. Колонка «Баланс» у строки
-// плана пустая ПРИНЦИПИАЛЬНО: сложить балансы разных проектов нельзя — профицит одного
-// не гасит нужду другого. Баланс проявляется только в раскрытых строках заказов.
-function LineRow({ r, busy, procurementId, editable, onQty, onDelete, run,
-  openItem, openProject, openPurchase }: {
-  r: AllocationRow; busy: boolean; procurementId: number
+// Строка плана: сколько взяли заказы и сколько осталось + раскрытие в заказы.
+// Глиф (правило Ивана 2026-08-05): взята в ноль — зелёный check; не тронута или
+// перебор — красный warning; между — оранжевый warning.
+function LineRow({ r, editable, onQty, onDelete, openItem, openPurchase,
+  openCounterparty }: {
+  r: AllocationRow
   editable: boolean; onQty: (lineId: number, qty: number) => void
   onDelete: (lineId: number) => void
-  run: (p: Promise<Allocation>) => void
-  openItem: (id: number) => void; openProject: (id: number) => void
-  openPurchase: (id: number) => void
+  openItem: (id: number) => void
+  openPurchase: (id: number) => void; openCounterparty: (id: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const done = r.status === 'available'
@@ -174,33 +150,34 @@ function LineRow({ r, busy, procurementId, editable, onQty, onDelete, run,
     <>
       <div className="prow prow--device">
         <span className="tree-cell">
-          <button className="chev" title={open ? 'свернуть' : 'раскладка по заказам'}
+          <button className="chev" title={open ? 'свернуть' : 'распределение по заказам'}
             onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
           <span className={`ci sg ci-${done ? 'check' : 'warning'} sg-${tone}`}
-            title={done ? 'разложена полностью'
-              : r.allocated === 0 ? 'ещё не разложена'
-              : r.remaining < 0 ? 'разложено больше, чем в плане'
-              : 'разложена частично'} />
-          {/* Код — ссылка в форму изделия и в ОДНУ строку с многоточием, как везде
-              (правило строк §7a): длинный код иначе разрывал строку на две. */}
+            title={done ? 'взята заказами полностью'
+              : r.allocated === 0 ? 'ещё не взята заказами'
+              : r.remaining < 0 ? 'заказы взяли больше, чем в плане'
+              : 'взята заказами частично'} />
+          {/* Код — ссылка в форму изделия и в ОДНУ строку с многоточием (§7a). */}
           <EntityLink kind="item" id={r.item_id} open={openItem}>{r.item_code}</EntityLink>
         </span>
         <span className="name">{r.item_description}</span>
-        <span className="pnum" />
-        {/* Кол-во в ПЛАНЕ — то же поле, что в табе «Строки», и тот же гейт: под замком
-            закупки план read-only. Ответ приходит формой закупки, поэтому правку ведёт
-            вьюха-хозяйка (`onQty`), а привязка освежается следом, по `rev`. */}
+        <span className="pnum">
+          <Balance value={r.balance} status={r.balance_status}
+            title={balanceTitle(r.item_code, r.need, r.kitted, r.in_stock, r.on_order,
+              r.planned)} />
+        </span>
+        {/* «Хочу» — единственное поле ввода закупки; под замком план read-only. Ответ
+            приходит формой закупки, поэтому правку ведёт вьюха-хозяйка (`onQty`). */}
         <span className="pnum">
           {editable
             /* Ноль допустим (2026-08-11): строку рождает «Потребность» именно нулём
-               — «позицию беру, количество думаю», — и вернуться в это состояние так же
-               законно, как из него выйти. Убрать позицию совсем — корзиной. */
-            ? <CommitInput value={String(r.qty)} disabled={busy}
+               — «позицию беру, количество думаю». Убрать позицию совсем — корзиной. */
+            ? <CommitInput value={String(r.qty)}
                 onCommit={v => onQty(r.line_id, Number(v))}
                 validate={v => Number(v) >= 0} />
             : num(r.qty)}
         </span>
-        {/* Перепег (остаток ушёл в минус) — «нужна работа», знак выбирает тема. */}
+        {/* Перебор (остаток ушёл в минус) — «нужна работа», знак выбирает тема. */}
         <span className="pnum">
           <span className={r.remaining < 0 ? 'g-to_order' : undefined}>
             {num(r.remaining)}</span>
@@ -208,40 +185,31 @@ function LineRow({ r, busy, procurementId, editable, onQty, onDelete, run,
         <span className="puom">{r.uom}</span>
         <span className="pnum"><Cost cost={r.cost} status={r.cost_status}
           overpayAt={r.overpay_at} uom={r.uom} /></span>
-        {/* Корзина строки — там же, где во всех формах (§9): крайняя колонка, только в
-            правке. Приехала сюда 2026-08-11 из снятого таба «Строки» — вместе с самой
-            ролью «единственный экран содержимого документа». */}
+        {/* Корзина строки — крайняя колонка, только в правке (§9). */}
         {editable && <span className="act">
           <button className="fh-ctl icon fh-del" title="Убрать строку плана"
-            disabled={busy} onClick={() => onDelete(r.line_id)}>
+            onClick={() => onDelete(r.line_id)}>
             <span className="ci ci-trash" /></button>
         </span>}
       </div>
       {open && (r.orders.length === 0
         ? <div className="prow prow--comp prow--empty">
-            <span>Под этой закупкой нет заказов — заведите заказ и укажите
-              в нём эту закупку.</span>
+            <span>Позицию ещё не взял ни один заказ.</span>
           </div>
         : r.orders.map(c => (
-            <OrderCell key={c.purchase_id} c={c} itemId={r.item_id} busy={busy}
-              procurementId={procurementId} editable={editable} run={run}
-              openProject={openProject} openPurchase={openPurchase} />
+            <OrderCell key={c.purchase_id} c={c} uom={r.uom} editable={editable}
+              openPurchase={openPurchase} openCounterparty={openCounterparty} />
           )))}
     </>
   )
 }
 
-// Ячейка раскладки: заказ (глиф замка + кликабельный код + проект), баланс его проекта
-// и поле количества — оно стоит в колонке «Разложено», потому что это она и есть, только
-// в разрезе одного заказа. Ввод — присвоение: что вписал, то и стоит в строке заказа;
-// `0` снимает строку. Зафиксированный заказ остаётся видимым («сюда уже заказано» —
-// нужный контекст), но правится только в своей форме.
-function OrderCell({ c, itemId, busy, procurementId, editable, run,
-  openProject, openPurchase }: {
-  c: AllocationCell; itemId: number; busy: boolean; procurementId: number
+// Строка заказа под строкой плана: глиф замка + код заказа, контрагент, сколько взял.
+// Только чтение — правится в форме заказа (волна 24).
+function OrderCell({ c, uom, editable, openPurchase, openCounterparty }: {
+  c: AllocationCell; uom: string
   editable: boolean                              // держит колонку команд строки плана
-  run: (p: Promise<Allocation>) => void
-  openProject: (id: number) => void; openPurchase: (id: number) => void
+  openPurchase: (id: number) => void; openCounterparty: (id: number) => void
 }) {
   return (
     <div className="prow prow--comp">
@@ -251,29 +219,16 @@ function OrderCell({ c, itemId, busy, procurementId, editable, run,
         <EntityLink kind="purchase" id={c.purchase_id} open={openPurchase}>
           {c.purchase_code}</EntityLink>
       </span>
-      {/* Проект — КОДОМ и ссылкой в его форму: код первичен, описание живёт в title
-          (то же правило, что у контрагента). */}
+      {/* Контрагент — КОДОМ и ссылкой в его форму (код первичен, имя — в title). */}
       <span className="name">
-        <EntityLink kind="project" id={c.project_id} open={openProject}
-          title={c.project_name}>{c.project_code}</EntityLink></span>
-      <span className="pnum">
-        <Balance value={c.balance} status={c.balance_status}
-          title={balanceTitle(c.project_code, c.need, c.kitted, c.in_stock, c.on_order)} />
-      </span>
-      <span className="pnum">
-        {c.locked
-          ? <span className="sub" title="заказ зафиксирован — расфиксируйте в его форме">
-              {num(c.qty)}</span>
-          : <CommitInput value={String(c.qty)} disabled={busy}
-              onCommit={v => run(api.allocate(procurementId,
-                { purchase_id: c.purchase_id, item_id: itemId, qty: Number(v || 0) }))}
-              validate={v => v === '' || Number(v) >= 0} />}
-      </span>
+        <CounterpartyRef code={c.contractor_code} name={c.contractor_name}
+          id={c.contractor_id} open={openCounterparty} /></span>
       <span className="pnum" />
-      <span className="puom" />
-      <span className="pnum"><Cost cost={c.cost} status={c.cost_status} overpayAt={c.overpay_at} /></span>
-      {/* Команд у строки заказа нет: снимают её нулём в поле (см. шапку файла). Ячейка
-          всё равно нужна — колонка есть у строки плана, и без неё сетка съедет. */}
+      <span className="pnum">{num(c.qty)}</span>
+      <span className="pnum" />
+      <span className="puom">{uom}</span>
+      <span className="pnum"><Cost cost={c.cost} status={null} /></span>
+      {/* Колонка команд есть у строки плана — без пустой ячейки сетка съедет. */}
       {editable && <span className="act" />}
     </div>
   )

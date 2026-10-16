@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom'
 import { bindDialogHost, dialogLines, type DialogLine, type Pending } from './dialog'
 
 export function DialogBox({ title, lines, refusal, wait, verb, icon, danger, onConfirm, onClose,
-  closeLabel }: {
+  closeLabel, wide, children }: {
   title?: string
   lines?: DialogLine[]
   refusal?: string | null
@@ -20,6 +20,8 @@ export function DialogBox({ title, lines, refusal, wait, verb, icon, danger, onC
   onConfirm?: () => void     // нет — окно-сообщение (одна команда)
   onClose: () => void
   closeLabel: string
+  wide?: boolean             // окно с таблицей выбора (волна 24, «Новый заказ»)
+  children?: ReactNode       // содержимое окна — между последствиями и командами
 }) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -31,13 +33,15 @@ export function DialogBox({ title, lines, refusal, wait, verb, icon, danger, onC
   })
   return createPortal(
     <div className="scrim" onMouseDown={onClose}>
-      <div className="dialog" onMouseDown={e => e.stopPropagation()}>
+      <div className={'dialog' + (wide ? ' dialog--wide' : '')}
+        onMouseDown={e => e.stopPropagation()}>
         {title && <h3>{title}</h3>}
         {wait && <div className="wait">{wait}</div>}
         {refusal && <div className="refusal">Нельзя: {refusal}</div>}
         {!!lines?.length &&
           <ul>{lines.map((l, i) =>
             <li key={i} className={l.warn ? 'warn' : undefined}>{l.text}</li>)}</ul>}
+        {children}
         <div className="dialog-cmds">
           <button className="fh-ctl" onClick={onClose}>
             <span className="lbl">{closeLabel}</span>

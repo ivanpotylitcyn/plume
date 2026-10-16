@@ -47,28 +47,23 @@
   готовность; `lock_project`/`unlock_project` — мягкий замок-веха «проект отработан».
 - Мосты панели: `writeoff_lot` (списать остаток) / `requisition_lot` (на баланс → белый).
 
-Волна 7 (планирование закупок — записываемый Procurement; охват — волна 19, Ф13):
+Волна 7 (планирование закупок — записываемый Procurement; с волны 24 — источник правды):
 - `scope_demand(projects)` — свод покупных листьев через **заданный набор** проектов,
   колонками «Потребности» (Потр. · Компл. · Склад · Заказ · Баланс). Витрина.
-- `procurement_scope(proc)` — охват закупки (проекты её заказов, вычисляемый);
-  `procurement_demand(proc)` = свод по охвату + отметка `in_lines` (таб «Потребность»;
-  2026-08-11 заменил свод «К закупке», а тот — экран «Командный свод»).
-  `purchase_demand(pu)` = тот же свод, но по ОДНОМУ проекту заказа (2026-08-19): одна
-  витрина потребности на продукт, разница только в области счёта.
-- `procurement_form` / `create_procurement` / `add|update|remove_procurement_line`
-  / `send|unsend|cancel|restore_procurement` — записываемый план закупки под охват
-  проектов (мягкий замок `locked`); количество строки ≥ 0, ноль — «беру, думаю».
-  Нарезка на `Purchase` — волна 8.
+- `procurement_demand(proc)` = свод по проекту закупки + отметка `in_lines` (таб
+  «Потребность»). Волна 24: закупка однопроектная, охват снят; у заказа витрины нет.
+- `procurement_form` / `create_procurement` / `add|update|remove_procurement_line` /
+  `lock|unlock_procurement` — записываемый план закупки проекта (мягкий замок
+  `locked`; зафиксированный = позиции «в плане»); количество строки ≥ 0.
 - `procurement_xlsx(...)` / `purchase_xlsx(...)` — xlsx-бланк поставщику (одна форма;
   нулевые строки наружу не идут).
 
-Волна 8 (нарезка плана на проектные заказы; переделана 2026-08-05):
-- `procurement_allocation(proc)` — проекция «Привязка»: строка плана × ЗАКАЗЫ закупки
-  (не проекты), в ячейке — разложенное количество и баланс проекта по этому Item
-  (`_balance`, то же число, что в «Потребности»); плюс веер заказов.
-- `set_allocation(proc, purchase, item, qty)` — присвоение количества в ячейку
-  (`0` снимает строку). Заказы заводятся руками в своей форме и привязываются к
-  закупке; движок их больше не рождает.
+Волна 24 (заказ рождается из закупки):
+- `create_purchase(proc, user, item_ids)` — черновой заказ, строки = выбранные позиции
+  плана с количеством остатка; `procurement_remainders(proc)` — остатки строк плана;
+  `purchase_candidates(pu)` — позиции плана, которые заказ ещё может взять.
+- `procurement_allocation(proc)` — таб «Строки» закупки: строка плана с балансом
+  проекта → её распределение по заказам (только чтение); плюс веер заказов.
 
 Волна 10 (бюджет/экономия — north-star окупаемости линзы):
 - `project_budget(project)` — проекция денег проекта: **потрачено** (факт по
@@ -79,8 +74,8 @@
 - `intent_money(lines, need)` (2026-08-07) — те же деньги, но у документа-намерения:
   **потребность** (нужда проекта × цена — сколько надо по-настоящему), **сумма
   документа** (`lines_estimate`) и **переплата** = их разница со знаком. Знаменатель
-  даёт `demand_map(projects)` (нужда по листьям через набор проектов): у заказа это его
-  проект, у закупки — её охват (`counts_in_scope`, тот же набор, что у свода).
+  даёт `demand_map(projects)` (нужда по листьям через набор проектов): у заказа и у
+  закупки — их проект.
 - `line_cost(item, qty)` + `mark_costs(rows)` (2026-08-07) — деньги ОТДЕЛЬНОЙ строки в
   «Строках» заказа и «Привязке» закупки: стоимость (без оценки — `None`, не ноль) и
   `cost_status` = `overpaid` (взято сверх порога `overpay_threshold` = полторы нормы,
@@ -140,6 +135,7 @@ from django.utils import timezone
 from . import models
 
 ZERO = Decimal('0')
+_UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
 
 
 def _num(value):
@@ -698,7 +694,7 @@ class ProjectSupply:
         не гасит недопоставку по другому."""
         def build():
             lines = list(models.PurchaseLine.objects.filter(
-                purchase__project=self.project, purchase__locked=True,
+                purchase__procurement__project=self.project, purchase__locked=True,
             ).values_list('purchase_id', 'item_id', 'qty'))
             received = _received_by(models.Lot.objects.filter(
                 origin__purchase__in={pu for pu, _i, _q in lines}))
@@ -709,13 +705,49 @@ class ProjectSupply:
             return total
         return self._get('purchased', build).get(item.id, ZERO)
 
+    def planned(self, item):
+        """В плане (волна 24): Σ по ЗАФИКСИРОВАННЫМ закупкам проекта
+        `max(0, строка плана − Σ строк её ЗАФИКСИРОВАННЫХ заказов)` по Item.
+
+        Решили купить, но обязательства ещё нет — зона риска. Позиция, взятая
+        зафиксированным заказом, переезжает отсюда в `purchased`, поэтому одно и то же
+        количество не считается дважды: хотим 100, заказ на 60 зафиксирован → заказано
+        60, в плане 40. Клампим по закупке: перебор заказа по одному плану не гасит
+        недобор по другому. Черновая закупка — ещё обдумывание, она не считается.
+        """
+        def build():
+            covered = {}
+            for proc_id, item_id, qty in models.PurchaseLine.objects.filter(
+                    purchase__procurement__project=self.project,
+                    purchase__procurement__locked=True, purchase__locked=True,
+            ).values_list('purchase__procurement_id', 'item_id', 'qty'):
+                covered[(proc_id, item_id)] = covered.get((proc_id, item_id), ZERO) + qty
+            total = {}
+            for proc_id, item_id, qty in models.ProcurementLine.objects.filter(
+                    procurement__project=self.project, procurement__locked=True,
+            ).values_list('procurement_id', 'item_id', 'qty'):
+                rest = max(ZERO, qty - covered.get((proc_id, item_id), ZERO))
+                total[item_id] = total.get(item_id, ZERO) + rest
+            return total
+        return self._get('planned', build).get(item.id, ZERO)
+
     def on_order(self, item):
-        """Оранжевый член, обобщённый по типу Item (покупной/производимый)."""
-        return self.wip(item) if item.native else self.purchased(item)
+        """Член «Заказ»: всё, за что взялись, — обещанное (`wip` у производимого,
+        `purchased` у покупного) плюс запланированное (`planned`, волна 24)."""
+        base = self.wip(item) if item.native else self.purchased(item)
+        return base + self.planned(item)
 
     def balance(self, item, need):
-        """Строка баланса `_balance` по Item — четыре члена из снимка."""
-        return _balance(need, self.kitted(item), self.available(item), self.on_order(item))
+        """Строка баланса `_balance` по Item — четыре члена из снимка.
+
+        Волна 24: строка несёт ещё и долю плана в «Заказе» (`planned`) и незакрытую
+        комплектацию (`wip`, только у производимого) — то, что держится на НАС. Из них
+        вью выбирает тон ящика «Заказ», а `_supply_status` — цвет «как дела».
+        """
+        row = _balance(need, self.kitted(item), self.available(item), self.on_order(item))
+        row['planned'] = self.planned(item)
+        row['wip'] = self.wip(item) if item.native else ZERO
+        return row
 
 
 def item_available(item, project, location=None):
@@ -857,12 +889,17 @@ def _supply_status(row):
 
     Два разных вопроса не смешиваем. Колонка отвечает «сходится ли» (ноль — оранжевый:
     впритык, запаса нет), а цвет прибора и проекта — «нужна ли работа»: ровно сошлось —
-    это хорошо, зелёное. Отсюда: не хватает → красный; хватает, но часть ещё едет →
-    оранжевый; всё на месте → зелёный.
+    это хорошо, зелёное. Отсюда: не хватает → красный; хватает, но часть держится на
+    том, что зависит ОТ НАС (позиция только в плане или незакрытая комплектация) →
+    оранжевый; иначе → зелёный.
+
+    Волна 24 (решение Ивана): зафиксированный заказ — обязательство возникло, «от нас
+    всё сделано, остаётся ждать», поэтому едущее по нему уже зеленит. До волны
+    оранжевым было любое «едет».
     """
     if row['balance'] < 0:
         return 'to_order'
-    return 'on_order' if row['on_order'] > 0 else 'available'
+    return 'on_order' if row.get('planned') or row.get('wip') else 'available'
 
 
 _WORST_RANK = {'to_order': 3, 'on_order': 2, 'available': 1}
@@ -1831,10 +1868,14 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
     знал вовсе. Заказ проставляется сразу (`purchase`), поэтому руками связывать в форме
     УПД больше не нужно.
 
-    **Цена ставится в 0, а не в `item.estimated_cost`** (решение Ивана 2026-07-29):
-    `Lot` по канону хранит цену ИЗ УПД, а `_project_spent` считает факт трат по
-    `unit_cost` зафиксированных приходных лотов. Правдоподобная оценка, забытая при
-    фиксации, молча стала бы фактом бюджета; ноль виден глазом (итог поставки 0 ₽).
+    **Цена — из строки заказа, по счёту** (волна 24, решение Ивана 2026-10-16): цена
+    штуки = цена строки / количество, округлённая до копейки (лот хранит цену штуки). Заказ —
+    объективный источник правды о цене, и в 99,9% случаев УПД её повторяет, так что
+    вбивать её заново незачем. Копия при рождении, жёстко не связываем — расхождение по
+    УПД правится в поставке («ручка для крайних случаев»). Оценку изделия в лот
+    по-прежнему не кладём никогда (решение 2026-07-29: оценка, забытая при фиксации, молча
+    стала бы фактом бюджета); строка без цены (заказ зафиксирован до волны 24) едет нулём —
+    ноль виден глазом.
     Имя лота преднабиваем описанием изделия — его пользователь и правит по УПД.
 
     Всё рождённое — черновик: до фиксации на складе ничего не лежит (Ф15).
@@ -1861,7 +1902,12 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
         models.Receipt, purchase.project, user, number, date,
         contractor=purchase.contractor, purchase=purchase)
     for line, rest in remaining:
-        add_receipt_lot(receipt, line.item, rest, unit_cost=ZERO,
+        unit = purchase_unit_price(line)
+        add_receipt_lot(receipt, line.item, rest,
+                        # цена штуки = цена строки / кол-во, до копейки (`Lot.unit_cost` —
+                        # деньги с двумя знаками); остаток доли копейки — «ручка» поставки
+                        unit_cost=(unit.quantize(KOPECK, rounding=ROUND_HALF_UP)
+                                   if unit is not None else ZERO),
                         lot_name=line.item.description)
     return receipt
 
@@ -1869,21 +1915,66 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
 # --------------------------------------------------------------------------- #
 #  Форма заказа / Purchase (волна 4): строки-обязательства + гашение приходом
 # --------------------------------------------------------------------------- #
-def create_purchase(project, user, date=None, code=None, description=''):
-    """Создать заказ проекта (черновик) — **без закупки-плана**. Пустой код — фолбэком
-    «Заказ 12» (Ф12e).
+def create_purchase(procurement, user, item_ids=(), date=None, code=None, description=''):
+    """Родить черновой заказ из закупки (волна 24) — единственный путь рождения заказа.
 
-    Волна 19, Ф17: `procurement` стал nullable, и заказ рождается с `None`. Прежний
-    `_solo_procurement` плодил закупку-пустышку на каждый одиночный заказ только чтобы
-    удовлетворить NOT NULL, а список закупок прятал эти пустышки эвристикой
-    (`_plan_procurements`) — обе конструкции удалены вместе. План выбирают в форме, если
-    он есть; контрагента — тоже (он обязателен к фиксации, `lock_purchase`).
+    Заказ — следствие работы с закупкой, поэтому рождается только из неё: проект он
+    выводит через закупку, контрагента копирует из неё (наследование копией, Ф17), а
+    строки — выбранные позиции плана с количеством **остатка** (хотим − уже в заказах
+    этой закупки, не меньше нуля). Отсюда «разъезд» на несколько счетов без особого
+    режима: урезал первый заказ — у строки плана появился остаток — второй «Новый
+    заказ» берёт ровно его. Пустой выбор законен: заказ набирают руками в его форме.
+    Работает и на черновой закупке — фиксация плана не блок для заказа (решение Ивана).
+    Пустой код — фолбэком «Заказ 12» (Ф12e).
     """
     require_unique_code(models.Purchase, code)
+    plan = {ln.item_id: ln for ln in procurement.lines.order_by('id')}
+    chosen = [iid for iid in plan if iid in set(item_ids)]
+    if len(chosen) != len(set(item_ids)):
+        raise ValidationError('Позиция не в плане закупки — заказ берёт только строки плана.')
+    rest = procurement_remainders(procurement)
     p = models.Purchase.objects.create(
-        project=project, user=user,
+        procurement=procurement, user=user, contractor=procurement.contractor,
         locked=False, date=date, code=code, description=description or '')
+    models.PurchaseLine.objects.bulk_create([
+        models.PurchaseLine(purchase=p, item_id=iid, qty=max(ZERO, rest[iid]))
+        for iid in chosen])
     return p if code else fallback_code(p, 'Заказ')
+
+
+def procurement_remainders(procurement):
+    """`{item_id: остаток}` строк плана: хотим − Σ строк ВСЕХ заказов закупки (волна 24).
+
+    Черновые заказы тоже вычитаем: остаток отвечает «что ещё никуда не взято», а не
+    «что не под обязательством» (это — `planned`). Знаковый: перебор заказов по строке
+    даёт минус, и форма его покажет.
+    """
+    taken = {}
+    for item_id, qty in models.PurchaseLine.objects.filter(
+            purchase__procurement=procurement).values_list('item_id', 'qty'):
+        taken[item_id] = taken.get(item_id, ZERO) + qty
+    return {item_id: qty - taken.get(item_id, ZERO)
+            for item_id, qty in procurement.lines.values_list('item_id', 'qty')}
+
+
+def purchase_candidates(purchase):
+    """Позиции плана, которые заказ может взять строкой-призраком (волна 24).
+
+    Только строки его закупки с остатком > 0 и которых в заказе ещё нет: выпадашка
+    убывает по мере того, как заказы закрывают план. Количество по умолчанию — остаток,
+    то же правило, что у окна «Новый заказ».
+    """
+    rest = procurement_remainders(purchase.procurement)
+    have = set(purchase.lines.values_list('item_id', flat=True))
+    out = []
+    for ln in (purchase.procurement.lines.select_related('item', 'item__category')
+               .order_by('item__code')):
+        if ln.item_id in have or rest[ln.item_id] <= 0:
+            continue
+        out.append({'item_id': ln.item_id, 'item_code': ln.item.code,
+                    'item_description': ln.item.description, 'uom': ln.item.uom,
+                    'remaining': rest[ln.item_id]})
+    return out
 
 
 def _purchase_closure(purchase):
@@ -1983,9 +2074,9 @@ def intent_money(lines, need_by_item):
       (взяли меньше нужды). Знак считает движок, подпись и цвет выбирает вью
       ([[engine-view-seam]]).
 
-    Цена у обоих чисел одна — `estimated_cost` изделия (в строках заказа/закупки цены
-    нет вовсе, факт рождается только в поставке). Поэтому позиция без оценки выпадает
-    из **обеих** сумм разом и знак разницы не врёт; её код — в `unestimated`.
+    Цена у обоих чисел одна — `estimated_cost` изделия. Поэтому позиция без оценки
+    выпадает из **обеих** сумм разом и знак разницы не врёт; её код — в `unestimated`.
+    Деньги ЗАКАЗА считает `purchase_money` — там цена по счёту, а не оценка (волна 24).
 
     Числа — витрина, а не снимок: замок морозит строки, но не цену и не BOM, поэтому у
     зафиксированного документа они законно едут вслед за справочником.
@@ -2028,6 +2119,32 @@ def line_cost(item, qty):
     показывать нулём — вью рисует прочерк, и строка не участвует в ранжировании.
     """
     return None if item.estimated_cost is None else qty * item.estimated_cost
+
+
+def purchase_unit_price(line):
+    """Цена штуки строки заказа — ВЫВОДИТСЯ делением цены строки по счёту на количество
+    (волна 24: источник правды — рубли и копейки за строку целиком). Нет цены или
+    количество ноль — `None`."""
+    if line.price is None or not line.qty:
+        return None
+    return line.price / line.qty
+
+
+def purchase_money(lines):
+    """Деньги заказа (волна 24): сухой факт по счёту — `estimate` («Заказ») = Σ цен строк,
+    сходится со счётом до копейки; строки без цены не входят, их коды — в `unestimated`.
+
+    Потребности и переплаты здесь нет (решение Ивана): заказ — онлайн-зеркало оффлайн-
+    счёта, а сравнение с нуждой — язык оценки, он живёт в закупке (`intent_money`).
+    """
+    estimate = ZERO
+    unpriced = []
+    for line in lines:
+        if line.price is None:
+            unpriced.append(line.item.code)
+        else:
+            estimate += line.price
+    return {'estimate': estimate, 'unestimated': unpriced}
 
 
 def overpay_threshold(need):
@@ -2096,19 +2213,14 @@ def purchase_form(purchase):
     Ф6: строка несёт ещё и **чем** она закрыта (`receipts`) — обратная связь потока
     «Заказ → УПД». Список приходов заказа целиком остаётся отдельным табом.
 
-    2026-08-07: строка несёт **баланс проекта** по своему изделию (`_balance`, четвёрка
-    слагаемых + невязка) — третий экран, показывающий одно и то же число: в проекте для
-    общей оценки, в «Привязке» для раскладки, здесь для решения «сколько заказывать».
-    Две закрытости не путать: `status` — приехало ли по ЭТОЙ строке, `balance_status` —
-    как дела у проекта с этим изделием вообще.
+    Волна 24 (приёмка Ивана): строка несёт **цену всей строки по счёту** (`price`) —
+    рубли и копейки, отданные за строку; сумма заказа считается по ним, оценки изделия в
+    заказе нет. Баланс проекта и стоимость-по-оценке из строк заказа сняты: «Заказано ·
+    Поступило · Остаток» отвечает на вопрос заказа, «сколько надо» — дело закупки.
     """
     editable = not purchase.locked
     closure = _purchase_closure(purchase)
     lines = list(purchase.lines.select_related('item', 'item__category').order_by('id'))
-    # Нужда своего проекта — знаменатель и панели бюджета, и цвета строк (одно
-    # разузлование на форму).
-    need_by_item = demand_map([purchase.project])
-    supply = ProjectSupply(purchase.project)
     rows = []
     statuses = []
     total_ordered = ZERO
@@ -2126,9 +2238,6 @@ def purchase_form(purchase):
         else:
             st = 'to_order'       # ▲ ждём поставки
         statuses.append(st)
-        # Баланс считаем ЗДЕСЬ, а не в вью: три обращения к складу на строку — та же
-        # цена, что платит ячейка «Привязки», и та же арифметика (`_balance`).
-        bal = supply.balance(line.item, need_by_item.get(line.item_id, ZERO))
         rows.append({
             'id': line.id, 'item_id': line.item_id, 'item_code': line.item.code,
             'item_description': line.item.description, 'uom': line.item.uom,
@@ -2139,19 +2248,10 @@ def purchase_form(purchase):
             'item_locked': line.item.locked,
             'qty': line.qty, 'received': received, 'remaining': remaining,
             'status': st,
-            # Баланс проекта по этому изделию (2026-08-07) — то же число и та же
-            # четвёрка слагаемых, что в «Потребности» проекта и в ячейке «Привязки»:
-            # заказ без него не отвечает на вопрос «а сколько вообще надо». Считает
-            # только зафиксированное, поэтому свой же черновик его не двигает — гаснет
-            # на фиксации заказа, в осмысленный момент.
-            **{k: v for k, v in bal.items() if k != 'status'},
-            'balance_status': bal['status'],
-            # Деньги строки (2026-08-07): сколько она стоит и оправдана ли нуждой.
-            # `need` приезжает выше вместе с балансом — он и есть его первый член.
-            'cost': line_cost(line.item, line.qty),
+            # Цена всей строки по счёту (волна 24) и выведенная из неё цена штуки.
+            'price': line.price, 'unit_price': purchase_unit_price(line),
             'receipts': closed_by,     # Ф6: какими накладными строка закрыта
         })
-    mark_costs(rows)                   # `cost_status`: overpaid (красный) > costly (оранж.)
     receipts = [
         # Ф6: `code` — первичная идентичность накладной (у рождённой из заказа
         # `number` пуст до заполнения по бумаге, и ссылка на него рисовала пустоту).
@@ -2161,16 +2261,14 @@ def purchase_form(purchase):
          'lines': r.lots.count()}
         for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
-    # Деньги намерения (2026-08-07): потребность / заказ / переплата. Знаменатель —
-    # нужда СВОЕГО проекта: он у заказа один и назван явно, отсева тут нет (замок или
-    # вид проекта потребность не отменяют — заказ уже заведён именно под него).
-    money = intent_money(lines, need_by_item)
+    money = purchase_money(lines)        # волна 24: сумма по счёту — без нужды и оценки
     return {
         'id': purchase.id, **_author(purchase), 'locked': purchase.locked,
         'project_id': purchase.project_id, 'project_code': purchase.project.code,
         'project_name': purchase.project.description,
-        # Ф17: закупка-план опциональна (`None` = заказ без плана — законное состояние).
-        'procurement_id': purchase.procurement_id,   # якорь #A: закупка-план (Ф2k)
+        # Волна 24: закупка обязательна — заказ рождается из неё; её код — подпись ссылки.
+        'procurement_id': purchase.procurement_id,   # якорь #A (Ф2k)
+        'procurement_code': purchase.procurement.code,
         **_contractor_view(purchase.contractor),      # Ф17: у кого купили
         # Расхождение с намерением плана считает ДВИЖОК, вью только выбирает знак
         # ([[engine-view-seam]]): отдаём готовый флаг, а не два id на сравнение во фронте.
@@ -2192,7 +2290,7 @@ PURCHASE_LOCKED = 'Строки правятся только в чернови�
 PURCHASE_QTY_NEGATIVE = 'Количество заказа не может быть отрицательным.'
 
 
-def add_purchase_line(purchase, item, qty):
+def add_purchase_line(purchase, item, qty, price=None):
     """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна.
 
     **Ноль разрешён** (2026-08-19, решение Ивана) — на тех же основаниях, что и в
@@ -2205,24 +2303,48 @@ def add_purchase_line(purchase, item, qty):
     _require_unlocked(purchase, PURCHASE_LOCKED)
     if qty is None or qty < 0:
         raise ValidationError(PURCHASE_QTY_NEGATIVE)
+    # Волна 24: строка заказа ⊆ план — иначе распределение закупки её не увидит, и
+    # «закупка — источник правды» тихо перестанет быть правдой.
+    if not purchase.procurement.lines.filter(item=item).exists():
+        raise ValidationError(
+            f'Изделия {item.code} нет в закупке — сперва добавьте его в закупку.')
     if purchase.lines.filter(item=item).exists():
         raise ValidationError(
             f'Изделие {item.code} уже в заказе — правьте существующую строку.')
-    return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
+    _check_price(price)
+    return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty,
+                                              price=price)
 
 
-def update_purchase_line(line, qty):
-    """Автосейв количества строки заказа (только в черновике).
+PURCHASE_PRICE_NEGATIVE = 'Цена не может быть отрицательной.'
 
-    Ноль допустим на тех же основаниях, что при рождении строки: вернуть позицию в
-    состояние «беру, но сколько — ещё думаю» так же законно, как в него прийти. Убрать
-    позицию совсем — корзиной строки, а не нулём.
+
+def _check_price(price):
+    if price is not None and price < 0:
+        raise ValidationError(PURCHASE_PRICE_NEGATIVE)
+
+
+def update_purchase_line(line, qty=_UNSET, price=_UNSET):
+    """Автосейв строки заказа — количества и/или цены строки по счёту (только в черновике).
+
+    Ноль количества допустим на тех же основаниях, что при рождении строки: вернуть
+    позицию в состояние «беру, но сколько — ещё думаю» так же законно, как в него прийти.
+    Убрать позицию совсем — корзиной строки, а не нулём. Цена — часовой (волна 24):
+    `None` стирает её обратно в «ещё не знаем» (заказ тогда не зафиксировать).
     """
     _require_unlocked(line.purchase, PURCHASE_LOCKED)
-    if qty is None or qty < 0:
-        raise ValidationError(PURCHASE_QTY_NEGATIVE)
-    line.qty = qty
-    line.save(update_fields=['qty'])
+    fields = []
+    if qty is not _UNSET:
+        if qty is None or qty < 0:
+            raise ValidationError(PURCHASE_QTY_NEGATIVE)
+        line.qty = qty
+        fields.append('qty')
+    if price is not _UNSET:
+        _check_price(price)
+        line.price = price
+        fields.append('price')
+    if fields:
+        line.save(update_fields=fields)
     return line
 
 
@@ -2248,6 +2370,14 @@ def lock_purchase(purchase):
     if purchase.contractor_id is None:
         raise ValidationError(
             'Перед фиксацией выберите контрагента — у кого заказано.')
+    # Волна 24: обязательство без цены не бывает — счёт её называет (0 законен).
+    unpriced = list(purchase.lines.filter(price__isnull=True)
+                    .order_by('item__code').values_list('item__code', flat=True))
+    if unpriced:
+        more = f' и ещё {len(unpriced) - 3}' if len(unpriced) > 3 else ''
+        raise ValidationError(
+            'Перед фиксацией укажите цену по счёту у всех строк — нет у '
+            + ', '.join(unpriced[:3]) + more + '.')
     purchase.locked = True
     purchase.save(update_fields=['locked'])
     return purchase
@@ -2902,7 +3032,9 @@ def project_supply(project):
     него обычно нет, но запрет на поставку прямо в склад из модели не следует.
     """
     return {
-        'purchases': _purchase_rows(project.purchases),
+        'procurements': _procurement_rows(project.procurements),     # волна 24
+        'purchases': _purchase_rows(
+            models.Purchase.objects.filter(procurement__project=project)),
         'receipts': _receipt_rows(models.Receipt.objects.filter(project=project)),
     }
 
@@ -3121,7 +3253,6 @@ def _apply(instance, updates):
 # (`StockDocument.REQUIRED_HEADER_BY_KIND`/`clean`, волна 13, Ф2d) и гейтится на
 # ФИКСАЦИИ (`_require_header`) — там ошибиться документом уже поздно, а в черновике
 # «стереть чужой номер» — обычный ход.
-_UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
 
 
 # --------------------------------------------------------------------------- #
@@ -3356,36 +3487,21 @@ def update_receipt(receipt, **kw):
 
 
 def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UNSET,
-                    project=_UNSET, procurement=_UNSET, contractor=_UNSET):
-    """Правка шапки заказа (дата / код / описание / автор / проект / закупка /
-    контрагент). Только в черновике.
+                    contractor=_UNSET):
+    """Правка шапки заказа (дата / код / описание / автор / контрагент). Только в
+    черновике.
 
     Дата заказа nullable — пустая строка очищает её в NULL (в отличие от
     документов с обязательной датой). `code` — часовой `_UNSET` (пустой → NULL, чтобы
     несколько заказов без кода не конфликтовали по unique).
 
-    Якоря #A (Ф2k): `project` обязателен — заказ проектный по определению, `None`
-    отклоняем. `procurement` и `contractor` — часовые (Ф17): не переданы → не трогаем,
-    сущность → выставить, `None` → снять. Закупка-план опциональна (заказ бывает и без
-    плана), контрагент обязателен к ФИКСАЦИИ, а не к правке черновика. Смена проекта у
-    заказа со связанными приходами ломает инвариант «УПД ↔ проект заказа» → дружелюбный
-    отказ (сперва отвязать приходы).
+    Волна 24: ни проекта, ни закупки здесь нет — закупка задаётся при рождении и не
+    меняется, проект выводится через неё. `contractor` — часовой (Ф17): не передан → не
+    трогаем, сущность → выставить, `None` → снять; обязателен к ФИКСАЦИИ, а не к правке.
     """
     _require_unlocked(purchase, PURCHASE_LOCKED)
     _set_author(purchase, user)
     fields = []
-    if project is not _UNSET:
-        if project is None:
-            raise ValidationError('Проект заказа обязателен.')
-        if project.pk != purchase.project_id and purchase.receipts.exists():
-            raise ValidationError(
-                'К заказу привязаны приходы (УПД ↔ проект) — сначала отвяжите их, '
-                'затем меняйте проект.')
-        purchase.project = project
-        fields.append('project')
-    if procurement is not _UNSET:
-        purchase.procurement = procurement
-        fields.append('procurement')
     if contractor is not _UNSET:
         purchase.contractor = contractor
         fields.append('contractor')
@@ -3476,19 +3592,12 @@ def scope_demand(projects, active_only=True):
     Пришла 2026-08-11 на смену `scope_deficit` (витрина «К закупке») вместе с пересборкой
     формы закупки. Считает то же самое разузлование, но говорит на языке **баланса**, а не
     клампленного «Закупить»: колонки те же, что в «Потребности» проекта (`_leaf_row`), —
-    Потр. · Компл. · Склад · Заказ · Баланс. Одна витрина потребности на продукт, разница
-    только в области: там один проект, здесь — все проекты закупки.
+    Потр. · Компл. · Склад · Заказ · Баланс. Одна витрина потребности на продукт.
 
-    Область та же, что у денег закупки, — **активные внешние** проекты охвата
-    (`counts_in_scope`): внутренние склады это источник покрытия, а не потребитель, а
-    закрытый проект не закупают.
-
-    `active_only=False` снимает этот отсев — им пользуется витрина ЗАКАЗА
-    (`purchase_demand`, 2026-08-19). У заказа проект один и назван явно в шапке: заказ
-    уже заведён именно под него, и ни замок проекта, ни его вид потребность не отменяют.
-    Отсев — правило ВЫБОРА набора (какие из многих проектов охвата считать), а там, где
-    набор задан документом, выбирать нечего. Ровно так же устроены и деньги заказа
-    (`intent_money` по `demand_map([purchase.project])`, без отсева).
+    Волна 24: закупка однопроектная, и единственный вызывающий (`procurement_demand`)
+    передаёт ровно её проект с `active_only=False` — проект назван в шапке документа,
+    выбирать не из чего. Отсев `counts_in_scope` (только активные внешние) остался
+    правилом выбора набора на случай многопроектного свода.
 
     **Члены складываются через проекты, и баланс — их сумма** (решение Ивана 2026-08-11,
     сознательная смена семантики). Прежний свод не перенеттивал: `to_order` каждого
@@ -3509,14 +3618,14 @@ def scope_demand(projects, active_only=True):
             row = acc.setdefault(item.id, {
                 'item': item,
                 'need': ZERO, 'kitted': ZERO, 'in_stock': ZERO, 'on_order': ZERO,
+                'planned': ZERO, 'wip': ZERO,
                 'kitted_cost': ZERO, 'in_stock_cost': ZERO, 'anomaly': False,
             })
-            row['need'] += need
-            row['kitted'] += supply.kitted(item)
-            row['in_stock'] += supply.available(item)
+            bal = supply.balance(item, need)
+            for key in ('need', 'kitted', 'in_stock', 'on_order', 'planned', 'wip'):
+                row[key] += bal[key]
             row['kitted_cost'] += supply.kitted_cost(item)
             row['in_stock_cost'] += supply.available_cost(item)
-            row['on_order'] += supply.on_order(item)
             # Аномалия — свойство лота, а не суммы: хватает одного минусового лота в
             # одном проекте охвата, чтобы строка просила разбирательства.
             row['anomaly'] = row['anomaly'] or supply.has_negative_lot(item)
@@ -3525,6 +3634,7 @@ def scope_demand(projects, active_only=True):
         item = agg['item']
         row = _balance(agg['need'], agg['kitted'], agg['in_stock'], agg['on_order'])
         row.update({
+            'planned': agg['planned'], 'wip': agg['wip'],   # доля «от нас» (волна 24)
             'component_id': item.id,
             'component_code': item.code,
             'component_description': item.description,
@@ -3543,22 +3653,6 @@ def scope_demand(projects, active_only=True):
     return {'rows': rows}
 
 
-def procurement_scope(procurement):
-    """Охват закупки — проекты её заказов, по коду. **Вычисляемый** (2026-08-05).
-
-    Раньше охват был M2M-галочками (Ф13) и жил параллельно с тем же фактом, записанным
-    через `Purchase.project`. Две дороги к одному отношению — верный способ разойтись, и
-    они расходились молча. Теперь дорога одна: завёл заказ под проект, привязал его к
-    закупке — проект в охвате. Хранить нечего, и «пусто = пусто» осталось само собой:
-    нет заказов → нет охвата → закупка честно ничего не считает.
-
-    Единственный вход в охват для всего движка (витрина «Потребность»), поэтому «что
-    считаем» по-прежнему задано в одном месте.
-    """
-    return models.Project.objects.filter(
-        purchases__procurement=procurement).distinct().order_by('code')
-
-
 def _mark_taken(data, lines):
     """Отметить в своде позиции, уже взятые в строки документа (`in_lines`).
 
@@ -3574,37 +3668,24 @@ def _mark_taken(data, lines):
 
 
 def procurement_demand(procurement):
-    """Витрина «Потребность» формы закупки: свод по её охвату + отметка «уже в строках».
+    """Витрина «Потребность» формы закупки: свод по её проекту + отметка «уже в строках».
 
-    Телескоп закупки (2026-08-11): показывает состояние складов и заказов по ВСЕМ
-    проектам закупки и помогает выбрать позицию — больше ничего. Количество выбирают в
-    «Строках», глядя на один компонент в микроскоп; поэтому здесь у строки ровно одна
-    команда — взять позицию в план, и та исчезает, как только позиция взята.
+    Телескоп закупки (2026-08-11): состояние складов и заказов проекта, помогает выбрать
+    позицию — больше ничего; количество набирают в «Строках». Волна 24: закупка
+    однопроектная и витрина живёт только здесь — у заказа её сняли, чтобы планировали в
+    закупке, а не в заказе. Отсев `counts_in_scope` не применяется (`active_only=False`):
+    проект назван в шапке, выбирать не из чего.
     """
-    return _mark_taken(scope_demand(procurement_scope(procurement)), procurement.lines)
-
-
-def purchase_demand(purchase):
-    """Витрина «Потребность» формы ЗАКАЗА: свод по его проекту + отметка «уже в строках».
-
-    Тот же телескоп, что у закупки (2026-08-19), в области своего проекта: одна витрина
-    потребности на продукт — у проекта она без команд, у закупки по охвату, у заказа по
-    одному проекту. Колонки, порядок и тон совпадают: человек читает их одним навыком.
-
-    Отсев `counts_in_scope` здесь НЕ применяется (`active_only=False`): проект у заказа
-    один и назван в шапке — он и есть область счёта, выбирать не из чего. Так же считают
-    и деньги заказа.
-    """
-    return _mark_taken(scope_demand([purchase.project], active_only=False),
-                       purchase.lines)
+    return _mark_taken(scope_demand([procurement.project], active_only=False),
+                       procurement.lines)
 
 
 def procurement_form(procurement):
-    """Проекция формы закупки-плана: шапка + охват проектов + строки (`item`, `qty`) + итог.
+    """Проекция формы закупки: шапка + проект + строки (`item`, `qty`) + итог.
 
-    `Procurement` — план **под охват проектов** (волна 19, Ф13; до неё — «без проекта,
-    командная высота»); нарезка на проектные `Purchase` (pegging) — волна 8. Мягкий замок
-    `status` зеркалит заказ: строки правятся только пока не зафиксировано. Чистая проекция.
+    Волна 24: закупка однопроектная и источник правды контура; заказы рождаются из неё
+    (`create_purchase`). Мягкий замок: строки правятся только пока не зафиксировано.
+    Чистая проекция.
     """
     editable = not procurement.locked
     lines = list(procurement.lines.select_related('item', 'item__category').order_by('id'))
@@ -3619,21 +3700,20 @@ def procurement_form(procurement):
             'item_native': line.item.native, 'item_synced': line.item.synced,
             'item_locked': line.item.locked,   # глиф строки по режиму (Ф3a)
         })
-    scope = list(procurement_scope(procurement))
     # Деньги намерения (2026-08-07): потребность / закупка / переплата. Знаменатель —
-    # нужда ОХВАТА (у закупки своего проекта нет), по тому же набору, что свод «К
-    # закупке». Охват пуст (заказов ещё нет) → нужда 0, и вся сумма плана читается
-    # переплатой: спросить «сколько надо» закупке пока не у кого, и она это показывает.
-    money = intent_money(lines, demand_map(p for p in scope if counts_in_scope(p)))
+    # нужда её проекта (волна 24: проект один и назван в шапке — отсева нет).
+    project = procurement.project
+    money = intent_money(lines, demand_map([project]))
     return {
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
         'code': procurement.code, 'description': procurement.description,
         'date': procurement.date,
         **_contractor_view(procurement.contractor),          # Ф4: поставщик (Р3)
-        # Охват — область расчёта витрины «Потребность». Вычисляемый (проекты заказов),
-        # правке не подлежит: поле шапки показывает его ссылками и только.
-        'projects': [{'id': p.id, 'code': p.code, 'description': p.description}
-                     for p in scope],
+        'project_id': project.id, 'project_code': project.code,
+        'project_name': project.description,
+        # Проект меняется, только пока заказов нет: у заказов он выводится отсюда, и
+        # смена увела бы их (и их поставки) в чужой проект.
+        'project_editable': not procurement.purchases.exists(),
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'total_qty': total_qty,
         **money,          # demand / estimate / overpay / unestimated — панель бюджета
@@ -3641,12 +3721,12 @@ def procurement_form(procurement):
     }
 
 
-def create_procurement(user, date=None, code=None, description=''):
-    """Создать закупку-план (черновик) без проекта.
-    Пустой код — фолбэком «Закупка 12» (Ф12e)."""
+def create_procurement(project, user, date=None, code=None, description=''):
+    """Создать закупку (черновик) под проект. Пустой код — фолбэком «Закупка 12» (Ф12e).
+    Рождение по «＋ Новый» несёт проект-фолбэк (`default_document_project`), как ордера."""
     require_unique_code(models.Procurement, code)
     p = models.Procurement.objects.create(
-        user=user, locked=False,
+        project=project, user=user, locked=False,
         date=date, code=code, description=(description or '').strip())
     return p if code else fallback_code(p, 'Закупка')
 
@@ -3693,8 +3773,16 @@ def update_procurement_line(line, qty):
 
 
 def remove_procurement_line(line):
-    """Удалить строку закупки-плана (только в черновике)."""
+    """Удалить строку закупки-плана (только в черновике).
+
+    Волна 24: строку, которую разбирают заказы, не удаляем — иначе их строки повисли
+    бы вне плана (инвариант «строка заказа ⊆ план»).
+    """
     _require_unlocked(line.procurement, PROCUREMENT_LOCKED)
+    if models.PurchaseLine.objects.filter(purchase__procurement=line.procurement,
+                                          item=line.item_id).exists():
+        raise ValidationError(
+            f'Позицию {line.item.code} уже взяли заказы — сперва уберите её из заказов.')
     line.delete()
 
 
@@ -3718,18 +3806,29 @@ def unlock_procurement(procurement):
 
 
 def update_procurement(procurement, date=None, code=_UNSET, description=None, user=_UNSET,
-                       contractor=_UNSET):
+                       contractor=_UNSET, project=_UNSET):
     """Правка шапки закупки-плана (дата / код / описание / автор / контрагент). Только в черновике.
 
     Дата закупки nullable — пустая строка очищает её в NULL (как заказ). `code` —
     часовой `_UNSET` (пустой → NULL, чтобы несколько закупок без кода не конфликтовали
     по unique). `contractor` — часовой (волна 19, Ф4): не передан → не трогаем;
-    `Counterparty` → выставить; `None` → снять (nullable). Охвата тут нет вовсе — он
-    вычисляемый (проекты заказов закупки), править нечего.
+    `Counterparty` → выставить; `None` → снять (nullable).
+
+    `project` (волна 24) — обязателен; меняется, только пока у закупки нет заказов:
+    их проект выводится отсюда, и смена молча увела бы их вместе с поставками.
     """
     _require_unlocked(procurement, PROCUREMENT_LOCKED)
     _set_author(procurement, user)
     fields = []
+    if project is not _UNSET:
+        if project is None:
+            raise ValidationError('Проект закупки обязателен.')
+        if project.pk != procurement.project_id and procurement.purchases.exists():
+            raise ValidationError(
+                'У закупки есть заказы — их проект выводится из закупки; '
+                'сменить проект можно, пока заказов нет.')
+        procurement.project = project
+        fields.append('project')
     if date is not None:
         procurement.date = date or None
         fields.append('date')
@@ -4183,15 +4282,16 @@ def _movement_lot_label(m):
 #  Волна 8 — pegging: нарезка плана (Procurement) на проектные заказы (Purchase)
 # --------------------------------------------------------------------------- #
 def _plan_allocations(procurement):
-    """Разложенное под этой закупкой: `{(purchase_id, item_id): qty}` — одним запросом.
+    """Разложенное под этой закупкой: `{(purchase_id, item_id): (qty, цена строки)}` —
+    одним запросом.
 
-    Ячейка раскладки = строка проектного заказа (`PurchaseLine`), пара
-    `(purchase, item)` уникальна по схеме, поэтому ячейка ровно одна.
+    Ячейка распределения = строка заказа (`PurchaseLine`), пара `(purchase, item)`
+    уникальна по схеме, поэтому ячейка ровно одна.
     """
-    return {(pid, iid): qty for pid, iid, qty in (
+    return {(pid, iid): (qty, price) for pid, iid, qty, price in (
         models.PurchaseLine.objects
         .filter(purchase__procurement=procurement)
-        .values_list('purchase_id', 'item_id', 'qty'))}
+        .values_list('purchase_id', 'item_id', 'qty', 'price'))}
 
 
 def _allocation_status(planned, allocated):
@@ -4211,82 +4311,46 @@ def _allocation_status(planned, allocated):
 
 
 def procurement_allocation(procurement):
-    """Проекция «Привязка»: строка плана × заказы закупки + баланс проекта в ячейке.
+    """Проекция таба «Строки» закупки: строка плана → её распределение по заказам.
 
-    Раскрытие строки даёт **заказы** (2026-08-05), а не проекты. Проект — свойство
-    заказа, а не уровень закупочного контура (Закупка = ЧТО, Заказ = У КОГО, Поставка =
-    КТО привёз), поэтому раскладка «из ЧТО в У КОГО» идёт по заказам напрямую. Матрица
-    получается прямоугольной и без скрытого состояния: ячейка ↔ `PurchaseLine`, пустая
-    ячейка — тоже факт («в этот заказ не кладём»).
+    **Волна 24 — только чтение.** В закупке одно поле ввода — «сколько хотим»; сколько
+    взял каждый заказ, правится в форме заказа, а заказ рождается из закупки кнопкой
+    «Новый заказ» (остатком). Матрица с полями в ячейках (`set_allocation`, 2026-08-05)
+    снята: форма, пиленная под нарезку, вышла сложной. Ячейка = `PurchaseLine`, пара
+    `(purchase, item)` уникальна.
 
-    Что ушло вместе с проектной осью: выбор заказа дропдауном, ленивое рождение заказа
-    под пег, «найти-или-создать черновик», autopeg и обратное разузлование внутрь
-    проекта (шумело, не пригодилось). Заказы заводятся руками в своей форме и
-    привязываются к закупке — намерение сопровождается действием и следом в БД.
+    Проект у закупки один, поэтому строка плана наконец несёт **честный баланс проекта**
+    (до волны его нельзя было сложить через проекты охвата). Это тот же `_balance`, что в
+    «Потребности» проекта: считает только зафиксированное и план зафиксированных закупок.
 
-    `balance` ячейки — тот же баланс, что в «Потребности» проекта (`_balance`): считает
-    только зафиксированное, поэтому черновая раскладка его НЕ двигает и он не гаснет,
-    пока набиваешь. Гаснет на фиксации заказа — в осмысленный момент. Два экрана
-    показывают одно число: в проекте для общей оценки, здесь для конкретного решения.
-
-    `cost` (2026-08-07) есть на ОБОИХ уровнях — `qty × estimated_cost` того документа,
-    чья это строка (у плана — в закупке, у ячейки — в заказе; та же двухуровневость, что
-    у «Кол-ва»). Знаменатель для цвета у каждого уровня свой и честный: строка плана
-    меряется нуждой ОХВАТА, ячейка — нуждой своего проекта.
+    `cost` есть на обоих уровнях — `qty × estimated_cost` того документа, чья строка.
     """
     allocations = _plan_allocations(procurement)
-    orders = list(procurement.purchases.select_related('project')
-                  .order_by('project__code', 'id'))
-    # Потребность проекта по листьям — по одному разузлованию на проект, не на ячейку.
-    # Снимок склада/заказов — тоже по одному на проект: ячеек много, проектов мало.
-    demand_by_project, supply_by_project, bom = {}, {}, BomIndex()
-    for pu in orders:
-        if pu.project_id not in demand_by_project:
-            leaves, _incomplete = project_leaf_demand(pu.project, bom)
-            demand_by_project[pu.project_id] = {leaf.id: qty for leaf, qty in leaves.items()}
-            supply_by_project[pu.project_id] = ProjectSupply(pu.project)
-
-    # Нужда ОХВАТА для строк плана: у строки плана своего проекта нет, и её деньги
-    # меряются тем же знаменателем, что панель бюджета закупки (отсев `counts_in_scope`,
-    # иначе панель и таб разошлись бы). Складываем уже посчитанные разузлования — второй
-    # раз по BOM не ходим.
-    scope_need = {}
-    counted = set()
-    for pu in orders:
-        if pu.project_id in counted or not counts_in_scope(pu.project):
-            continue
-        counted.add(pu.project_id)
-        for item_id, need in demand_by_project[pu.project_id].items():
-            scope_need[item_id] = scope_need.get(item_id, ZERO) + need
+    orders = list(procurement.purchases.select_related('contractor').order_by('id'))
+    project = procurement.project
+    need_by_item, _incomplete = project_leaf_demand(project, BomIndex())
+    need_by_item = {leaf.id: qty for leaf, qty in need_by_item.items()}
+    supply = ProjectSupply(project)
 
     rows = []
     for line in procurement.lines.select_related('item', 'item__category').order_by('id'):
         cells = []
         allocated = ZERO
         for pu in orders:
-            qty = allocations.get((pu.id, line.item_id), ZERO)
+            cell = allocations.get((pu.id, line.item_id))
+            if cell is None:
+                continue                       # в этот заказ позиция не входит
+            qty, price = cell
             allocated += qty
-            need = demand_by_project[pu.project_id].get(line.item_id, ZERO)
-            bal = supply_by_project[pu.project_id].balance(line.item, need)
             cells.append({
                 'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-                'locked': pu.locked,
-                'project_id': pu.project_id, 'project_code': pu.project.code,
-                'project_name': pu.project.description,
-                'qty': qty,
-                # баланс проекта по этому Item + слагаемые (расшифровка под курсором)
-                'need': bal['need'], 'kitted': bal['kitted'], 'in_stock': bal['in_stock'],
-                'on_order': bal['on_order'], 'balance': bal['balance'],
-                'balance_status': bal['status'],
-                # Деньги ячейки (2026-08-07): её стоимость и перебор относительно нужды
-                # ЭТОГО проекта. Оранжевого «дорогая» тут нет — верхнюю четверть ищем
-                # среди строк плана, где строки сопоставимы (решение Ивана).
-                'cost': line_cost(line.item, qty),
-                'overpay_at': overpay_threshold(bal['need']),
-                'cost_status': ('overpaid'
-                                if line.item.estimated_cost is not None
-                                and is_overpaid(qty, bal['need']) else None),
+                'locked': pu.locked, **_contractor_view(pu.contractor),
+                'qty': qty, 'price': price,
+                # стоимость в заказе — его цена строки по счёту, пока её нет — оценка
+                'cost': price if price is not None else line_cost(line.item, qty),
             })
+        need = need_by_item.get(line.item_id, ZERO)
+        bal = supply.balance(line.item, need)
         rows.append({
             'line_id': line.id, 'item_id': line.item_id,
             'item_code': line.item.code, 'item_description': line.item.description,
@@ -4294,60 +4358,26 @@ def procurement_allocation(procurement):
             'uom': line.item.uom, 'qty': line.qty,
             'allocated': allocated, 'remaining': line.qty - allocated,
             'status': _allocation_status(line.qty, allocated),
-            # Деньги строки плана: знаменатель — нужда ОХВАТА (см. `scope_need` выше).
+            # Баланс проекта по изделию + слагаемые (расшифровка под курсором).
+            **{k: v for k, v in bal.items() if k != 'status'},
+            'balance_status': bal['status'],
             'cost': line_cost(line.item, line.qty),
-            'need': scope_need.get(line.item_id, ZERO),
+            'overpay_at': overpay_threshold(need),
+            'cost_status': ('overpaid' if line.item.estimated_cost is not None
+                            and is_overpaid(line.qty, need) else None),
             'orders': cells,
         })
     mark_costs(rows)                   # `cost_status` строк плана: overpaid > costly
-    fan = []
-    for pu in orders:
-        fan.append({
-            'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-            'locked': pu.locked,
-            'project_id': pu.project_id, 'project_code': pu.project.code,
-            'project_name': pu.project.description, 'lines': pu.lines.count(),
-            'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,
-        })
+    fan = [{
+        'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
+        'locked': pu.locked, **_contractor_view(pu.contractor),
+        'lines': pu.lines.count(),
+        'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,
+    } for pu in orders]
     return {
         'id': procurement.id, 'locked': procurement.locked,
         'rows': rows, 'fan': fan,
     }
-
-
-def set_allocation(procurement, purchase, item, qty):
-    """Положить в ячейку раскладки ровно `qty` — присвоение, не добавление.
-
-    Ввод в поле = состояние строки заказа, а не дельта к ней: `0` (или пусто) снимает
-    строку, число — ставит его. Так «разложить план по заказам» становится правкой
-    матрицы, а не серией жестов ✓/＋/корзина, каждый из которых надо было подтверждать.
-
-    Замок заказа гейтит правку: зафиксированный заказ — обязательство, его строки
-    меняют в его собственной форме, расфиксировав. Количество не клампим по остатку
-    плана (перепег законен и информативен — в духе мутабельной ДНК), но строка плана
-    покажет его красным.
-    """
-    if qty is None or qty < 0:
-        raise ValidationError('Количество не может быть отрицательным.')
-    if purchase.procurement_id != procurement.id:
-        raise ValidationError('Заказ заведён под другой закупкой.')
-    if purchase.locked:
-        raise ValidationError(
-            'Заказ зафиксирован — расфиксируйте его в форме заказа, потом правьте.')
-    if not procurement.lines.filter(item=item).exists():
-        raise ValidationError(
-            f'Изделие {item.code} не в плане закупки — сначала добавьте строку плана.')
-    line = purchase.lines.filter(item=item).first()
-    if qty == 0:
-        if line:
-            line.delete()
-        return procurement
-    if line:
-        line.qty = qty
-        line.save(update_fields=['qty'])
-    else:
-        models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty)
-    return procurement
 
 
 # --------------------------------------------------------------------------- #
@@ -4478,11 +4508,12 @@ def _procurement_rows(queryset):
     одна и та же, и второго словаря под тот же смысл заводить незачем.
     """
     rows = []
-    for p in queryset.prefetch_related('lines').order_by('-id'):
+    for p in queryset.select_related('project').prefetch_related('lines').order_by('-id'):
         lines = list(p.lines.all())
         rows.append({
             'id': p.id, 'code': p.code, 'description': p.description,
             'date': p.date, 'locked': p.locked,
+            'project_code': p.project.code,              # волна 24: закупка проектная
             'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
         })
     return rows
@@ -4495,7 +4526,7 @@ def _purchase_rows(queryset):
     (`purchase_coverage`) — знак выбирает вью.
     """
     rows = []
-    qs = list(queryset.select_related('project', 'contractor')
+    qs = list(queryset.select_related('procurement__project', 'contractor')
               .prefetch_related('lines__item').order_by('-id'))
     coverage = purchases_coverage(qs)
     for p in qs:
@@ -5356,8 +5387,8 @@ def delete_project(project):
     if project.lots.exists():
         raise ValidationError(
             'В проекте есть партии — удаление заблокировано; закройте проект закрывающими документами.')
-    if project.purchases.exists():
-        raise ValidationError('К проекту привязаны заказы — удаление заблокировано.')
+    if project.procurements.exists():
+        raise ValidationError('К проекту привязаны закупки — удаление заблокировано.')
     if project.demands.exists():
         raise ValidationError('В проекте есть потребности (приборы) — сперва уберите их.')
     for att in project.attachments.all():          # физические файлы (каскад их сиротит)
@@ -5840,11 +5871,12 @@ def _estimate(lines):
     return total, missing
 
 
-def _estimate_lines(n, total, missing, verb_phrase):
+def _estimate_lines(n, total, missing, verb_phrase, basis='оценка'):
     """«41 позиция на 359 364 ₽ (оценка) …» + предупреждение о позициях без оценки.
-    `verb_phrase` — `(при одной, при многих)`: глагол согласуется с числом позиций."""
+    `verb_phrase` — `(при одной, при многих)`: глагол согласуется с числом позиций.
+    `basis` — откуда сумма: «оценка» или «по счёту» (заказ с ценами строк, волна 24)."""
     head = _count(n, 'позиция', 'позиции', 'позиций') + (
-        f' на {_rub(total)} (оценка)' if total else ' без оценки')
+        f' на {_rub(total)} ({basis})' if total or basis == 'по счёту' else ' без оценки')
     verb_phrase = _agree(n, *verb_phrase)
     out = [{'text': f'{head} {verb_phrase}'}]
     if missing and total:
@@ -5870,15 +5902,23 @@ def _doc_lines_lots(doc):
 def _consequences(entity, obj, lock):
     """Строки последствий по виду. `lock` — фиксация (True) / расфиксация (False)."""
     if entity == 'purchases':
-        lines = [(pl.item, pl.qty) for pl in obj.lines.select_related('item')]
-        total, missing = _estimate(lines)
+        plines = list(obj.lines.select_related('item'))
+        lines = [(pl.item, pl.qty) for pl in plines]
+        # Волна 24: заказ с ценами строк называет сумму ПО СЧЁТУ; без них — оценку.
+        priced = bool(plines) and all(pl.price is not None for pl in plines)
+        if priced:
+            total, missing = sum((pl.price for pl in plines), ZERO), 0
+        else:
+            total, missing = _estimate(lines)
         p = obj.project.code
         out = _estimate_lines(
-            len(lines), total, missing,
-            (f'начнёт считаться в «Заказано» проекта {p}',
-             f'начнут считаться в «Заказано» проекта {p}') if lock else
-            (f'выйдет из «Заказано» проекта {p} — дефицит вырастет',
-             f'выйдут из «Заказано» проекта {p} — дефицит вырастет'))
+            len(lines), total, missing, basis='по счёту' if priced else 'оценка',
+            verb_phrase=
+            (f'станет обязательством проекта {p} — в «Потребности» позиция зеленеет',
+             f'станут обязательством проекта {p} — в «Потребности» позиции зеленеют')
+            if lock else
+            (f'перестанет быть обязательством проекта {p}',
+             f'перестанут быть обязательством проекта {p}'))
         receipts = models.StockDocument.objects.filter(purchase=obj).count()
         if not lock and receipts:
             out.append({'text': f'привязанные поставки ({receipts}) останутся привязанными'})
@@ -5886,13 +5926,15 @@ def _consequences(entity, obj, lock):
     if entity == 'procurements':
         lines = [(pl.item, pl.qty) for pl in obj.lines.select_related('item')]
         total, missing = _estimate(lines)
-        out = _estimate_lines(len(lines), total, missing,
-                              ('станет утверждённым планом', 'станут утверждённым планом')
-                              if lock else ('вернётся в черновик плана',
-                                            'вернутся в черновик плана'))
-        out.append({'text': 'на баланс проектов закупка не влияет — в «Заказано» '
-                            'считаются только заказы'})
-        return out
+        p = obj.project.code
+        # Волна 24: фиксация закупки ставит позиции «в план» проекта — они входят в
+        # «Заказ» его «Потребности» оранжевыми, пока заказы не возьмут их обязательством.
+        return _estimate_lines(len(lines), total, missing,
+                               (f'встанет в план проекта {p} — оранжевой в «Заказе»',
+                                f'встанут в план проекта {p} — оранжевыми в «Заказе»')
+                               if lock else
+                               (f'выйдет из плана проекта {p}',
+                                f'выйдут из плана проекта {p}'))
     if entity == 'items':
         # На склад и балансы фиксация изделия не влияет — последствие у неё одно, и
         # оно же последняя строка (`_editability`), поэтому здесь пусто.

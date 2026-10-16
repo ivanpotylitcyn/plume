@@ -16,7 +16,7 @@
 // «Скомплектовано» распирало колонку под слово, которое ни одно число не заполняет.
 import { useState, type ReactNode } from 'react'
 import type { DeficitComponent, Status } from './api'
-import { Balance, balanceTitle, money, num, ItemGlyph } from './status'
+import { Balance, balanceTitle, money, num, orderTitle, ItemGlyph } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
 
@@ -181,8 +181,11 @@ export function NeedSums({ rows, acts }: { rows: DeficitComponent[]; acts?: bool
 // вертикальный строй ровный, а числа по-прежнему выключены вправо.
 //
 // Форма глифа — вид члена (что это), цвет — его роль в покрытии: впаяно и склад
-// зелёные (нужда закрыта), заказ оранжевый (закрыта обещанием). НОЛЬ гасим до
-// нейтрального: глиф светит, когда за ним что-то есть, иначе колонка нулей шумит.
+// зелёные (нужда закрыта). Ящик «Заказ» (волна 24, решение Ивана) — зелёный, когда всё
+// в нём под обязательством (зафиксированные заказы: от нас всё сделано, ждём), и
+// оранжевый, пока хоть часть держится на нас — только в плане зафиксированной закупки
+// или в незакрытой комплектации. НОЛЬ гасим до нейтрального: глиф светит, когда за ним
+// что-то есть, иначе колонка нулей шумит.
 export function Member({ glyph, tone, value, title }: {
   glyph: string; tone: string; value: number; title: string
 }) {
@@ -195,9 +198,10 @@ export function Member({ glyph, tone, value, title }: {
 
 // Числовой хвост строки-листа: четыре члена + баланс. Один и тот же в дереве прибора и
 // в сводной «Потребности» — колонки обязаны совпадать, поэтому и разметка одна.
-export function BalanceCells({ code, need, kitted, inStock, onOrder, balance, status,
-  anomaly }: {
+export function BalanceCells({ code, need, kitted, inStock, onOrder, planned = 0, wip = 0,
+  balance, status, anomaly }: {
   code: string; need: number; kitted: number; inStock: number; onOrder: number
+  planned?: number; wip?: number
   balance: number; status: Status; anomaly?: boolean
 }) {
   return (
@@ -209,11 +213,12 @@ export function BalanceCells({ code, need, kitted, inStock, onOrder, balance, st
         {anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
         <span className={`ci sg ci-layers sg-${inStock ? 'ok' : 'none'}`} />
       </span>
-      <Member glyph="package" tone="wip" value={onOrder}
-        title="ещё не приехало по зафиксированным заказам проекта" />
+      <Member glyph="package" tone={planned > 0 || wip > 0 ? 'wip' : 'ok'} value={onOrder}
+        title={orderTitle(onOrder, planned)
+          + ' — заказано не приехавшее по зафиксированным заказам + план зафиксированных закупок'} />
       <span className="pnum">
         <Balance value={balance} status={status}
-          title={balanceTitle(code, need, kitted, inStock, onOrder)} />
+          title={balanceTitle(code, need, kitted, inStock, onOrder, planned)} />
       </span>
     </>
   )
@@ -240,7 +245,8 @@ export function NeedRow({ ln, openItem, action }: {
       <span className="name">{ln.component_description}</span>
       <span className="pnum">{num(ln.need)}</span>
       <BalanceCells code={ln.component_code} need={ln.need} kitted={ln.kitted}
-        inStock={ln.in_stock} onOrder={ln.on_order} balance={ln.balance}
+        inStock={ln.in_stock} onOrder={ln.on_order} planned={ln.planned} wip={ln.wip}
+        balance={ln.balance}
         status={ln.status} anomaly={ln.anomaly} />
       <span className="puom">{ln.uom}</span>
       {action !== undefined && <span className="act">{action}</span>}

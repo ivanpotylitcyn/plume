@@ -74,18 +74,6 @@ def _resolve_item(d, key='target_id'):
     return models.Item.objects.get(pk=d[key])
 
 
-def _resolve_procurement(d):
-    """Закупка-план якорь из PATCH-тела (Ф2k #A, заказ): `procurement_id` прислан →
-    `Procurement`; нет → `_UNSET`. `DoesNotExist` ловит вызывающий (→ 400).
-
-    Ф17: `procurement_id: null` — законное значение («закупка не выбрана»), поле стало
-    nullable. Отличаем «не прислали» (часовой) от «прислали пусто» (снять)."""
-    if 'procurement_id' not in d:
-        return engine._UNSET
-    pid = d['procurement_id']
-    return models.Procurement.objects.get(pk=pid) if pid else None
-
-
 def _code_kw(d):
     """kwargs `code`/`description` для правки шапки документа (волна 19, Ф10).
     `code` — часовой `_UNSET` (ключа нет → не трогаем; пустой → NULL в движке);
@@ -1040,22 +1028,11 @@ def _purchase_row(p, coverage):
     }
 
 
-@api_view(['GET', 'POST'])
+@api_view(['GET'])
 def purchases(request):
-    """Список заказов (дерево) / рождение нового по клику «＋ Новый» (Ф12e)."""
-    if request.method == 'POST':
-        d = request.data
-        try:
-            p = engine.create_purchase(
-                _anchor_project(d), _actor(request),
-                date=d.get('date') or None,
-                code=(d.get('code') or '').strip() or None,
-                description=(d.get('description') or '').strip())
-        except ValidationError as e:
-            return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.purchase_form(p), status=http.HTTP_201_CREATED)
-
-    purchases_ = list(models.Purchase.objects.select_related('project')
+    """Список заказов (дерево). Рождения здесь нет (волна 24): заказ рождается только
+    из закупки — `POST /procurements/<pk>/purchases/`."""
+    purchases_ = list(models.Purchase.objects.select_related('procurement__project')
                       .annotate(line_count=Count('lines')).order_by('-id'))
     coverage = engine.purchases_coverage(purchases_)
     return Response([_purchase_row(p, coverage) for p in purchases_])
@@ -1077,12 +1054,7 @@ def purchase_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                project=_resolve_project(d), procurement=_resolve_procurement(d),
                 contractor=_resolve_contractor(d))    # Ф17: у кого заказано
-        except models.Project.DoesNotExist:
-            return _bad('Проект не найден.')
-        except models.Procurement.DoesNotExist:
-            return _bad('Закупка-план не найдена.')
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
         except User.DoesNotExist:
@@ -1099,7 +1071,7 @@ def purchase_lines(request, pk):
     d = request.data
     try:
         item = models.Item.objects.get(pk=d['item_id'])
-        engine.add_purchase_line(p, item, _dec(d.get('qty')))
+        engine.add_purchase_line(p, item, _dec(d.get('qty')), price=_dec(d.get('price')))
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
@@ -1108,15 +1080,17 @@ def purchase_lines(request, pk):
 
 
 @api_view(['GET'])
-def purchase_demand(request, pk):
-    """Витрина «Потребность» заказа: свод покупных листьев его проекта + `in_lines`."""
-    p = get_object_or_404(models.Purchase.objects.select_related('project'), pk=pk)
-    return Response(engine.purchase_demand(p))
+def purchase_candidates(request, pk):
+    """Позиции закупки, которые заказ может взять строкой-призраком (волна 24):
+    строки плана с остатком > 0, которых в заказе ещё нет."""
+    p = get_object_or_404(models.Purchase, pk=pk)
+    return Response(engine.purchase_candidates(p))
 
 
 @api_view(['PATCH', 'DELETE'])
 def purchase_line_detail(request, pk):
-    """Автосейв количества строки заказа (PATCH) / удаление строки (DELETE)."""
+    """Автосейв строки заказа (PATCH: `qty` и/или `price` — цена всей строки по счёту,
+    волна 24; `price: null` стирает цену) / удаление строки (DELETE)."""
     line = get_object_or_404(
         models.PurchaseLine.objects.select_related('purchase'), pk=pk)
     purchase = line.purchase
@@ -1124,7 +1098,11 @@ def purchase_line_detail(request, pk):
         if request.method == 'DELETE':
             engine.remove_purchase_line(line)
         else:
-            engine.update_purchase_line(line, _dec(request.data.get('qty')))
+            d = request.data
+            engine.update_purchase_line(
+                line,
+                qty=_dec(d.get('qty')) if 'qty' in d else engine._UNSET,
+                price=_dec(d.get('price')) if 'price' in d else engine._UNSET)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.purchase_form(purchase))
@@ -1186,7 +1164,7 @@ def project_purchases(request, pk):
     rows = [
         {'id': p.id, 'locked': p.locked, 'date': p.date,
          'code': p.code, 'description': p.description, 'lines': p.lines.count()}
-        for p in project.purchases.order_by('-id')
+        for p in models.Purchase.objects.filter(procurement__project=project).order_by('-id')
     ]
     return Response(rows)
 
@@ -1853,6 +1831,7 @@ def _procurement_row(p):
     """Строка списка закупок-планов для дерева навигации."""
     return {
         'id': p.id, 'code': p.code, 'description': p.description,
+        'project_code': p.project.code,                  # волна 24: закупка проектная
         'locked': p.locked, 'date': p.date, 'lines': p.lines.count(),
     }
 
@@ -1864,7 +1843,7 @@ def procurements(request):
         d = request.data
         try:
             p = engine.create_procurement(
-                _actor(request),
+                _anchor_project(d), _actor(request),
                 date=d.get('date') or None,
                 code=(d.get('code') or '').strip() or None,
                 description=(d.get('description') or '').strip())
@@ -1874,7 +1853,7 @@ def procurements(request):
 
     # Ф17: ВСЕ закупки — прятать нечего (закупок-пустышек больше не бывает, см. engine)
     rows = [_procurement_row(p)
-            for p in models.Procurement.objects.order_by('-id')]
+            for p in models.Procurement.objects.select_related('project').order_by('-id')]
     return Response(rows)
 
 
@@ -1894,7 +1873,10 @@ def procurement_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                contractor=_resolve_contractor(d))
+                contractor=_resolve_contractor(d),
+                project=_resolve_project(d))          # волна 24: закупка проектная
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
         except User.DoesNotExist:
@@ -2000,23 +1982,19 @@ def procurement_allocation(request, pk):
 
 
 @api_view(['POST'])
-def procurement_allocate(request, pk):
-    """Положить в ячейку раскладки ровно `qty` (`0` — снять строку заказа).
-
-    Присвоение, а не добавление: поле в строке показывает состояние строки заказа, и
-    ввод его задаёт. Ячейка адресуется парой `purchase_id` + `item_id`.
-    """
+def procurement_purchases(request, pk):
+    """«Новый заказ» из закупки (волна 24): черновой заказ из выбранных позиций плана,
+    количество — остаток. `item_ids` пуст — заказ набирают руками в его форме."""
     p = get_object_or_404(models.Procurement, pk=pk)
     d = request.data
     try:
-        item = models.Item.objects.get(pk=d['item_id'])
-        purchase = models.Purchase.objects.get(pk=d['purchase_id'])
-        engine.set_allocation(p, purchase, item, _dec(d.get('qty')))
-    except (KeyError, models.Item.DoesNotExist, models.Purchase.DoesNotExist) as e:
-        return _bad(f'Нужны purchase_id, item_id, qty ({e}).')
+        item_ids = [int(i) for i in (d.get('item_ids') or [])]
+        pu = engine.create_purchase(p, _actor(request), item_ids=item_ids)
+    except (TypeError, ValueError):
+        return _bad('item_ids — список id изделий.')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.procurement_allocation(p))
+    return Response(engine.purchase_form(pu), status=http.HTTP_201_CREATED)
 
 
 # --------------------------------------------------------------------------- #

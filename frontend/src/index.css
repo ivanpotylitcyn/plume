@@ -848,6 +848,8 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
 .stats-caption .ci.sg { margin-right: 6px; }
 .sgroup { display: flex; gap: 24px; }
 .sgroup.aside { margin-left: auto; padding-left: 28px; border-left: 1px solid var(--border); }
+/* Одинокая группа справа (сумма заказа, волна 24): отделять её не от чего — линии нет. */
+.sgroup.aside:first-child { padding-left: 0; border-left: none; }
 .stat { display: flex; flex-direction: column; gap: 2px; }
 .stat-label { color: var(--fg-dim); font-size: 11px; }
 .stat-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
@@ -879,7 +881,8 @@ a.link:hover { text-decoration: underline; }
    Б2б-3 аудита-1 ЗАКРЫТ 2026-07-31: экран переодет в `FormShell` (канон §13), своей
    вёрстки у него больше нет — остались три роли, которых у форм-сущностей не бывает.
    Кастомным скелетом он был последним (§13.10). */
-.lib-diff :is(th, td).pick { width: 24px; text-align: center; }
+/* Колонка галочек выбора строк — общая роль (синхронизация, окно «Новый заказ»). */
+.grid :is(th, td).pick { width: 24px; text-align: center; }
 .lib-diff b:not([class]) { color: var(--fg); }        /* новое значение — полным цветом */
 /* Инструкция ВМЕСТО полей шапки: у мастера степеней свободы нет, менять нечего — есть
    что запустить, и запуск живёт в командах справа. Тянется на обе колонки `.props`,
@@ -1038,6 +1041,10 @@ tr.row.ghost .glyph { opacity: 1; }
 .dialog .refusal { margin: 0 0 12px; color: var(--st-order); }
 .dialog .wait { margin: 0 0 12px; color: var(--fg-dim); }
 .dialog .dialog-cmds { display: flex; justify-content: flex-end; gap: 6px; }
+/* Окно с выбором строк (волна 24, «Новый заказ»): шире, а таблица выбора прокручивается
+   внутри окна — команды остаются на виду при любом размере плана. */
+.dialog--wide { width: 760px; }
+.dialog .dialog-body { max-height: 52vh; overflow-y: auto; margin: 0 0 12px; }
 .palette input { width: 100%; background: none; border: none; color: var(--fg-bright);
   font-family: var(--font-mono); font-size: 15px; padding: 14px 16px; outline: none;
   border-bottom: 1px solid var(--border); }

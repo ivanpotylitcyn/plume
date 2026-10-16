@@ -8,27 +8,27 @@
 // «Закупка» — специфика вида. Заодно снят антипринцип §7a: код и описание изделия
 // разъехались по своим колонкам (эта форма была его последним живым примером).
 //
-// Табы: Строки · Потребность · Поставки · Файлы. «Потребность» пришла 2026-08-19 —
-// тот же телескоп, что у закупки (`DemandPanel`), только область счёта у заказа одна и
-// названа в шапке: его проект.
+// Табы: Строки · Поставки · Файлы. Волна 24 (2026-10-16): заказ — следствие работы с
+// закупкой. Рождается только из неё («Новый заказ»), проект выводит через неё, строки
+// берёт только из её позиций. Таб «Потребность» (2026-08-19) снят: планируют в закупке,
+// а не в заказе (решение Ивана — «отучить планировать в Заказе»).
 import { useEffect, useMemo, useState } from 'react'
-import { api, type CounterpartyRow, type ItemRow, type ProcurementRow, type PurchaseForm,
+import { api, type CounterpartyRow, type ItemRow, type PurchaseCandidate, type PurchaseForm,
   type PurchaseFormLine, type Status } from './api'
 import { CommitInput } from './CommitInput'
-import { AnchorSelect, OrderFields, useFormLock } from './FormHeader'
-import { IntentBudget } from './IntentBudget'
+import { OrderFields, useFormLock } from './FormHeader'
+import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { DemandRows, useDemand } from './DemandPanel'
-import { Balance, Cost, CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
-  balanceTitle, count, num } from './status'
+import { CounterpartyRef, ItemGlyph, MismatchGlyph, StatusGlyph,
+  count, money, num } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
 
-// Фильтр остатка: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
+// Фильтр поступления: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
 // духу, что у фильтров «Потребности»: первый вариант нейтральный, дальше — состояния
 // строки на языке заказа.
 type RestFilter = 'any' | 'open' | 'closed'
@@ -48,9 +48,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   const [c, setC] = useState<PurchaseForm | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [procs, setProcs] = useState<ProcurementRow[]>([])   // якорь «закупка-план» (Ф2k)
-  const [rev, setRev] = useState(0)     // растёт на мутациях — освежает витрину «Потребность»
-  const [rest, setRest] = useState<RestFilter>('any')        // фильтр колонки «Остаток»
+  const [rev, setRev] = useState(0)     // растёт на мутациях — освежает кандидатов строки
+  const [rest, setRest] = useState<RestFilter>('any')        // фильтр колонки «Поступило»
   // Ф17: контрагент заказа («у кого купили») — своё поле, обязательное к фиксации.
   const [suppliers, setSuppliers] = useState<CounterpartyRow[]>([])
   const reloadSuppliers = () => api.counterparties().then(setSuppliers)
@@ -60,10 +59,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
     setC(null); setErr(null)
     api.purchase(purchaseId).then(setC).catch(e => setErr(String(e)))
   }, [purchaseId])
-  useEffect(() => { api.procurements().then(setProcs) }, [])
   useEffect(() => { reloadSuppliers() }, [])
   const att = useAttachments('purchase', purchaseId)   // владелец заведён Ф12b (§13.8)
-  const need = useDemand('purchase', purchaseId, rev)  // таб «Потребность» (2026-08-19)
   // Два фильтра на одной таблице и порядок между ними: сперва остаток («что ещё не
   // приехало»), потом класс. Категории собираются уже по отобранному — меню не обещает
   // строк, которых первый фильтр не покажет.
@@ -101,9 +98,6 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
   // Ф1b: цвет строки/меты = покрытие лотами — как в списке Заказов.
   const coverage: Status = c.total_received === 0 ? 'to_order'
     : c.rows.every(r => r.remaining <= 0) ? 'available' : 'on_order'
-  // Идентичность закупки-якоря берём из списка планов (он же кормит меню выбора).
-  const procurementLabel = procs.find(p => p.id === c.procurement_id)?.code
-    || `Закупка #${c.procurement_id}`
   // Ф17: расхождение с контрагентом указанной закупки — предупреждение, не гейт.
   // Флаг считает движок ([[engine-view-seam]]), форма только выбирает знак.
   const mismatch = c.contractor_mismatch
@@ -136,16 +130,14 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
             <tr>
               <th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc">Описание</th>
-              {/* Баланс проекта по изделию — ПЕРВЫМ числом, как в «Привязке» закупки
-                  (Баланс · Кол-во · …): сперва «сколько надо вообще», потом «сколько
-                  беру здесь». Два экрана одного контура читаются одинаково. */}
-              <th className="num" title="баланс проекта по этому изделию">Баланс</th>
+              {/* Баланса проекта здесь нет (волна 24, решение Ивана): «сколько надо» —
+                  вопрос закупки. «Остаток» тоже снят: он повторял соседние числа и шумел;
+                  закрытость строки говорит цветом само «Поступило». */}
               <th className="num">Заказано</th>
-              <th className="num">Поступило</th>
               {/* Фильтр — тот же приём, что в «Потребности» проекта: раскрыватель сразу
                   за подписью, внутри её ячейки. Главный вопрос к заказу — «что ещё не
-                  приехало», поэтому фильтр висит именно на остатке. */}
-              <th className="num">Остаток
+                  приехало», поэтому фильтр висит на поступлении. */}
+              <th className="num">Поступило
                 <ColumnFilter opts={REST_OPTS} value={rest}
                   onPick={v => setRest(v as RestFilter)} /></th>
               {/* Колонка «Поставки» снята 2026-08-05 (решение Ивана: «забудем о них,
@@ -153,8 +145,11 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                   и в самой накладной; в строке это распирало таблицу ссылками. */}
               <th className="uom">Ед.</th>
               {/* Деньги — за границей единицы измерения: «Ед.» квалифицирует количества
-                  слева от себя, а стоимость другой размерности и к ней не относится. */}
-              <th className="num c-money">Стоимость</th>
+                  слева от себя, а цена другой размерности. Волна 24 (решения Ивана):
+                  ОДНА денежная колонка — цена всей строки, как в счёте: рубли и копейки
+                  за строку сходятся со счётом до копейки, цена штуки выводится делением
+                  (в подсказке). Стоимость-по-оценке снята: в заказе оценки нет. */}
+              <th className="num c-money" title="цена всей строки по счёту / КП">Цена</th>
               {!locked && <th className="act" />}
             </tr>
           </thead>
@@ -171,24 +166,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                 выглядит как содержимое заказа, но им не является (боль Ивана
                 2026-08-11). Уход из правки теперь СНИМАЕТ призрака вместе с набранным:
                 состояние живёт в нём самом и умирает с ним. */}
-            {!locked && <GhostRow purchaseId={c.id} items={items} busy={busy} run={run} />}
+            {!locked && <GhostRow purchaseId={c.id} items={items} rev={rev} busy={busy}
+              run={run} />}
           </tbody>
         </table>
         {c.rows.length === 0 && locked && <div className="tab-empty">Заказ пуст.</div>}
       </> },
-    /* Второй таб — ТЕЛЕСКОП заказа (2026-08-19), та же витрина, что у проекта и у
-       закупки, но в области ЕГО проекта. Разделение масштабов то же, что в форме
-       закупки: здесь выбирают ПОЗИЦИЮ (весь закупочный состав проекта, состояние
-       складов и заказов), а количество набирают в «Строках», где компонент виден в
-       микроскоп — со своим балансом, поступлением и остатком. */
-    { key: 'need', label: 'Потребность', icon: 'chip',
-      content: <DemandRows st={need} editable={!locked} openItem={openItem}
-        /* Пусто у заказа значит «проекту нечего покупать»: свод считается по его
-           приборам, как «Потребность» самого проекта. */
-        empty="Нет потребностей по проекту — задайте приборы и их составы."
-        /* «Взять» = обычная строка заказа с НУЛЁМ, как в закупке: витрина выбирает
-           позицию, количество набирают в «Строках». Путь назад — корзина той строки. */
-        take={itemId => run(api.addPurchaseLine(c.id, { item_id: itemId, qty: 0 }))} /> },
     { key: 'receipts', label: 'Поставки', icon: 'inbox',
       content: c.receipts.length === 0
         ? <div className="tab-empty">Заказ ещё не закрыт ни одной поставкой.</div>
@@ -256,25 +239,19 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
           disabled: att.busy }]}
       fields={
         <OrderFields c={c} locked={locked} busy={busy} openProject={openProject}
+          // Волна 24: проект заказа — проект его закупки, правится там (пока у неё
+          // нет заказов), а здесь только ссылка.
+          projectLocked
           patch={b => run(api.updatePurchase(c.id, b))}
           // Якори вида — сразу за Проектом (§13.4a): Проект → Закупка → Контрагент,
           // затем внешние атрибуты и автор. Порядок один на все три уровня контура.
           anchors={<>
-            {/* Подпись якоря — КОД закупки, а не её id ([[code-identity-principle]]):
-                «#1» ничего не говорит, а в просмотре это единственное, что видно.
-                Ф17: план опционален — пустой пункт меню снимает якорь. Под замком поле
-                = САМА ССЫЛКА на закупку (§8: кликабельно то, что названо), как якорь
-                «Проект» здесь же и якорь «Заказ» в форме поставки. */}
-            <AnchorSelect label="Закупка" id={c.procurement_id}
-              currentLabel={procurementLabel}
-              options={procs.map(p => ({ id: p.id, label: p.code || `Закупка #${p.id}` }))}
-              locked={locked} busy={busy} placeholder="— не выбрана —"
-              view={c.procurement_id
-                ? <EntityLink kind="procurement" id={c.procurement_id}
-                    open={openProcurement}>{procurementLabel}</EntityLink>
-                : ''}
-              onChange={id => run(api.updatePurchase(c.id, { procurement_id: id }))}
-              onClear={() => run(api.updatePurchase(c.id, { procurement_id: null }))} />
+            {/* Закупка — источник заказа (волна 24): задана при рождении и не
+                меняется, поэтому поле — всегда ссылка (§8: кликабельно то, что названо). */}
+            <Field label="Закупка" locked
+              view={<EntityLink kind="procurement" id={c.procurement_id}
+                open={openProcurement}>{c.procurement_code || `Закупка #${c.procurement_id}`}
+              </EntityLink>} />
             {/* Ф17: «у кого купили» — своё поле заказа, а не чтение сквозь план.
                 Обязательно к ФИКСАЦИИ (движок откажет внятно), не к рождению. */}
             <Field label="Контрагент" locked={locked}
@@ -293,10 +270,19 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               {mismatch}
             </Field>
           </>} />}
-      // Деньги заказа — панелью над метой (2026-08-07), как бюджет у проекта. Поле
-      // «Оценка» отсюда снято: это ровно стат «Заказ», и держать его дважды незачем.
-      extra={<IntentBudget demand={c.demand} total={c.estimate} totalLabel="Заказ"
-        overpay={c.overpay} unestimated={c.unestimated} />}
+      // Деньги заказа (волна 24, решение Ивана): заказ — онлайн-зеркало оффлайн-счёта,
+      // поэтому в панели ОДНА сумма — сухой факт по счёту, прижатая вправо, над ценами
+      // строк. «Потребность» и «Переплата» сняты: это язык оценки, он живёт в закупке.
+      extra={<StatPanel>
+        <StatGroup aside>
+          <Stat label="Заказ" value={money(c.estimate)}
+            title="Сумма цен строк по счёту — сходится со счётом до копейки" />
+        </StatGroup>
+        {c.unestimated.length > 0 &&
+          <StatWarn title={'без цены: ' + c.unestimated.join(', ')}>
+            ▲ {c.unestimated.length} поз. без цены — сумма неполна
+          </StatWarn>}
+      </StatPanel>}
       tabs={tabs}
     />
   )
@@ -312,7 +298,7 @@ function LineRow({ ln, editable, busy, openItem, run }: {
     <tr className="row">
       {/* Глиф строки — ИЗДЕЛИЕ, как в списке «Компоненты» и в форме закупки (правка
           Ивана 2026-08-08, разворот решения 2026-08-05). Циферблат «ждём поставку» снят:
-          приехало ли — и так видно колонками «Поступило»/«Остаток» с фильтром на них,
+          приехало ли — и так видно цветом «Поступило» и фильтром на нём,
           а вот статус компонента (библиотечный / ручной / наш под замком) в строке
           заказа больше взять негде. */}
       <td className="gl">
@@ -323,24 +309,35 @@ function LineRow({ ln, editable, busy, openItem, run }: {
       <td className="c-desc">
         <span className="cell-ellip" title={ln.item_description}>{ln.item_description}</span></td>
       <td className="num">
-        <Balance value={ln.balance} status={ln.balance_status}
-          title={balanceTitle(ln.item_code, ln.need, ln.kitted, ln.in_stock, ln.on_order)} />
-      </td>
-      <td className="num">
         {editable
           /* Ноль допустим (2026-08-19): строку рождает витрина «Потребность» именно
              нулём («позицию беру, количество думаю»), и вернуться в это состояние так
              же законно, как в него прийти. Убрать позицию совсем — корзиной строки. */
           ? <CommitInput value={String(ln.qty)} disabled={busy}
-              onCommit={v => run(api.updatePurchaseLine(ln.id, Number(v)))}
+              onCommit={v => run(api.updatePurchaseLine(ln.id, { qty: Number(v) }))}
               validate={v => Number(v) >= 0} />
           : num(ln.qty)}
       </td>
-      <td className="num">{num(ln.received)}</td>
-      <td className="num">{num(ln.remaining)}</td>
+      {/* Поступило — цветом закрытости строки (решение Ивана, волна 24): ничего не
+          пришло — серое (`.sub`), частично — оранжевое, полностью — зелёное. */}
+      <td className="num">
+        <span className={ln.status === 'available' ? 'g-available'
+          : ln.status === 'on_order' ? 'g-on_order' : 'sub'}>{num(ln.received)}</span>
+      </td>
       <td className="uom">{ln.uom}</td>
-      <td className="num c-money"><Cost cost={ln.cost} status={ln.cost_status}
-        overpayAt={ln.overpay_at} uom={ln.uom} /></td>
+      {/* Цена всей строки по счёту: пусто — ещё не известна; пустой ввод стирает цену.
+          Запятая — как десятичный разделитель счёта. Цена штуки — в подсказке. */}
+      <td className="num c-money"
+        title={ln.unit_price === null ? undefined
+          : `за штуку ${money(Math.round(ln.unit_price * 100) / 100)}`}>
+        {editable
+          ? <CommitInput value={ln.price === null ? '' : String(ln.price)}
+              disabled={busy}
+              onCommit={v => run(api.updatePurchaseLine(ln.id,
+                { price: v.trim() === '' ? null : Number(v.replace(',', '.')) }))}
+              validate={v => v.trim() === '' || Number(v.replace(',', '.')) >= 0} />
+          : ln.price === null ? <span className="sub">—</span> : money(ln.price)}
+      </td>
       {editable && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку заказа"
           disabled={busy} onClick={() => run(api.deletePurchaseLine(ln.id))}>
@@ -351,17 +348,32 @@ function LineRow({ ln, editable, busy, openItem, run }: {
 }
 
 // Призрачная строка: добавить позицию в заказ (только пока расфиксировано).
-function GhostRow({ purchaseId, items, busy, run }: {
-  purchaseId: number; items: ItemRow[]; busy: boolean
+// Волна 24: выбор — только из позиций закупки, у которых есть остаток и которых в заказе
+// ещё нет (`purchase_candidates`); список убывает по мере того, как заказы закрывают
+// план. Количество преднабивается остатком — то же правило, что у окна «Новый заказ».
+function GhostRow({ purchaseId, items, rev, busy, run }: {
+  purchaseId: number; items: ItemRow[]; rev: number; busy: boolean
   run: (p: Promise<PurchaseForm>) => void
 }) {
+  const [cands, setCands] = useState<PurchaseCandidate[]>([])
   const [itemId, setItemId] = useState<number | ''>('')
   const [qty, setQty] = useState('')
-  // Выбранное изделие целиком — из него строка берёт всё, что уже известно ДО
-  // добавления (единица измерения). Показывать это — не украшение: единица
-  // квалифицирует количество, которое человек как раз набирает.
-  const picked = items.find(i => i.id === itemId)
+  useEffect(() => {
+    api.purchaseCandidates(purchaseId).then(setCands)
+  }, [purchaseId, rev])
+  // Пикер работает по справочнику изделий — сужаем его до кандидатов закупки.
+  const offer = useMemo(() => {
+    const ids = new Set(cands.map(c => c.item_id))
+    return items.filter(i => ids.has(i.id))
+  }, [cands, items])
+  // Выбранная позиция целиком: единица измерения и остаток известны ДО добавления.
+  const picked = cands.find(c => c.item_id === itemId)
 
+  const pick = (id: number) => {
+    setItemId(id)
+    const c = cands.find(x => x.item_id === id)
+    setQty(c ? String(c.remaining) : '')
+  }
   const add = () => {
     const q = Number(qty)
     if (!itemId || !(q > 0)) return
@@ -373,11 +385,12 @@ function GhostRow({ purchaseId, items, busy, run }: {
     <tr className="row ghost">
       <td className="gl" />
       {/* Заголовок поля — подпись его колонки («Компонент»), без «＋»: строка-призрак
-          и так читается пустой строкой таблицы, а знак прибавления теперь несёт кнопка
-          в конце строки (правка Ивана 2026-08-11). */}
+          и так читается пустой строкой таблицы, а знак прибавления несёт кнопка в конце
+          строки (правка Ивана 2026-08-11). */}
       <td className="c-key" colSpan={2}>
-        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
-          placeholder="Компонент…" onEnter={add} onClear={() => setItemId('')} />
+        <ItemPicker items={offer} value={itemId} onPick={pick} disabled={busy}
+          placeholder={cands.length ? 'Позиция закупки…' : 'Все позиции закупки взяты'}
+          onEnter={add} onClear={() => { setItemId(''); setQty('') }} />
       </td>
       <td className="num" />
       <td className="num">
@@ -385,13 +398,10 @@ function GhostRow({ purchaseId, items, busy, run }: {
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
-      {/* «Поступило» и «Остаток» у ненабитой строки пусты — считать ещё нечего. Ячейки
-          обязаны БЫТЬ и стоять на своих местах: лишний безымянный `<td>` здесь заводил
-          таблице девятый столбец против восьми в шапке, и весь правый блок колонок
-          отлипал от края панели на его ширину (правка Ивана 2026-08-06). */}
-      <td className="num" /><td className="num" />
-      {/* Ед. — единственное, что известно сразу по выбору изделия (правка Ивана
-          2026-08-11). Остальные числа строки родятся вместе с ней. */}
+      {/* «Поступило» у ненабитой строки пусто — считать ещё нечего. Ячейка обязана
+          БЫТЬ на своём месте, иначе правый блок колонок отлипает от края (правка Ивана
+          2026-08-06). */}
+      <td className="num" />
       <td className="uom">{picked?.uom ?? ''}</td>
       <td className="num c-money" />
       <td className="act">

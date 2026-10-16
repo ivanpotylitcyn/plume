@@ -257,7 +257,15 @@ export function Balance({ value, status, title }: {
 // особенно впаянное, которого на складе уже нет (решение Ивана: подпись должна не
 // подписывать, а объяснять).
 export function balanceTitle(code: string, need: number, kitted: number,
-                             inStock: number, onOrder: number): string {
+                             inStock: number, onOrder: number, planned = 0): string {
   return `${code} · надо ${num(need)}, скомплектовано ${num(kitted)}, `
-    + `склад ${num(inStock)}, в заказах ${num(onOrder)}`
+    + `склад ${num(inStock)}, ${orderTitle(onOrder, planned)}`
+}
+
+// «Заказ» с волны 24 = заказано + в плане. Расклад — в подсказке, когда план есть:
+// число одно, а держится оно на разном (обязательство или только намерение).
+export function orderTitle(onOrder: number, planned = 0): string {
+  return planned > 0
+    ? `в заказе ${num(onOrder)}: ${num(onOrder - planned)} в заказах · ${num(planned)} в плане`
+    : `в заказах ${num(onOrder)}`
 }

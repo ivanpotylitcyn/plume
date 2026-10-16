@@ -28,10 +28,10 @@ export interface ProjectRow {
 export interface ProjectDetail extends ProjectRow {
   budget: number | null; started: string | null
 }
-// Закупочный контур проекта (табы «Заказы»/«Поставки»): соседние уровни одного
-// контура едут одним ответом — форма спрашивает их всегда вместе.
+// Закупочный контур проекта (табы «Закупки»/«Заказы»/«Поставки»): соседние уровни
+// одного контура едут одним ответом — форма спрашивает их всегда вместе.
 export interface ProjectSupply {
-  purchases: FeedPurchaseRow[]; receipts: FeedReceiptRow[]
+  procurements: FeedProcurementRow[]; purchases: FeedPurchaseRow[]; receipts: FeedReceiptRow[]
 }
 // Категория изделия (волна 15): FK-справочник. Волна 19 Ф10: единый интерфейс
 // идентичности `code` + `description` (`label`→`description`, `icon` удалён).
@@ -56,6 +56,7 @@ export interface DeficitTreeNode {
   // Баланс несёт только ЛИСТ: узел-подсборка — структурная строка (`is_leaf: false`),
   // у неё нет ни чисел покрытия, ни статуса.
   kitted?: number; in_stock?: number; on_order?: number; balance?: number
+  planned?: number          // доля плана в «Заказе» (волна 24) — тон ящика
   status?: Status; anomaly?: boolean
 }
 export interface DeficitDemand {
@@ -73,6 +74,9 @@ export interface DeficitComponent {
   component_native: boolean; component_synced: boolean; component_locked: boolean
   component_category: string | null      // класс изделия — фильтр колонки «Компонент»
   need: number; kitted: number; in_stock: number; on_order: number; balance: number
+  // Волна 24: «Заказ» = заказано + в плане; `planned` — его доля, держащаяся только на
+  // зафиксированной закупке (ящик оранжевый), `wip` — незакрытая комплектация.
+  planned: number; wip: number
   status: Status; supply: Status; anomaly: boolean
   // Деньги строки (волна 23, Ф2): оценка Item — для Потр./Заказа/Баланса (`null` — без
   // оценки); факт партий — для Компл./Склада. Суммы над колонками считает `NeedSums`.
@@ -229,6 +233,7 @@ export interface CounterpartyShipment {
 export interface FeedProcurementRow {
   id: number; code: string | null; description: string
   date: string | null; locked: boolean; lines: number; qty: number
+  project_code: string                   // волна 24: закупка проектная
 }
 // Обе стороны — в строке: лента контрагента показывает проект, лента проекта —
 // поставщика. Деньги заказа — ОЦЕНКА (`Σ qty × estimated_cost`), позиции без неё
@@ -293,16 +298,9 @@ export interface PurchaseFormLine {
   item_category: string | null           // класс изделия — фильтр колонки
   item_native: boolean; item_synced: boolean; item_locked: boolean
   qty: number; received: number; remaining: number; status: Status
-  // Баланс проекта по этому изделию (2026-08-07) — то же число, что в «Потребности»
-  // проекта и в ячейке «Привязки». `status` выше — про ЭТУ строку (приехало ли),
-  // `balance_status` — про дела проекта с этим изделием вообще.
-  need: number; kitted: number; in_stock: number; on_order: number
-  balance: number; balance_status: Status
-  // Деньги строки (2026-08-07): стоимость (null = у изделия нет оценки, рисуем прочерк),
-  // нужда проекта по этому изделию и готовый цвет-смысл от движка.
-  // `overpay_at` — порог красного (полторы нормы, округлённые вверх до круглого):
-  // им подсказка называет цифру, до которой брать было не перебором.
-  cost: number | null; overpay_at: number; cost_status: CostStatus
+  // Цена ВСЕЙ строки по счёту (волна 24) — рубли и копейки за строку целиком; `null` —
+  // ещё не известна. Обязательна к фиксации. Цена штуки выводится делением (`unit_price`).
+  price: number | null; unit_price: number | null
   receipts: LineReceiptRow[]   // Ф6: чем строка закрыта (обычно одна накладная)
 }
 export interface LineReceiptRow {
@@ -314,17 +312,17 @@ export interface PurchaseReceiptRow {
 }
 export interface PurchaseForm extends Authored {
   id: number; locked: boolean; project_id: number; project_code: string
-  // Ф17: закупка-план опциональна; контрагент — своё поле заказа («у кого купили»).
-  project_name: string; procurement_id: number | null
+  // Волна 24: заказ рождается из закупки (она обязательна), проект — через неё.
+  // Контрагент — своё поле заказа («у кого купили»), копией из закупки при рождении.
+  project_name: string; procurement_id: number; procurement_code: string | null
   contractor_id: number | null; contractor_code: string; contractor_name: string
   contractor_mismatch: boolean   // расхождение с контрагентом закупки — знак, не гейт
   code: string | null; description: string; date: string | null
   editable: boolean; worst_status: Status
   total_ordered: number; total_received: number
-  // Панель бюджета (2026-08-07): потребность проекта в деньгах / сумма документа /
-  // их разница со знаком (+ переплата, − недозаказ) + коды позиций без оценки
-  // (обе суммы по ним неполны — вью показывает счётчик).
-  demand: number; estimate: number; overpay: number; unestimated: string[]
+  // Деньги заказа (волна 24): сумма цен строк по счёту + коды строк без цены (сумма по
+  // ним неполна — вью показывает счётчик). Потребности и переплаты у заказа нет.
+  estimate: number; unestimated: string[]
   rows: PurchaseFormLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
@@ -480,11 +478,11 @@ export interface ProjectClosure {
   can_close: boolean; blocker: string
 }
 
-// ── Потребность ДОКУМЕНТА закупочного контура (2026-08-11; до неё — таб «К закупке», а
-//    до него экран-фантом «Командный свод») ──
+// ── Потребность закупки (2026-08-11; до неё — таб «К закупке», а до него экран-фантом
+//    «Командный свод») ──
 // Строка — ТА ЖЕ, что в «Потребности» проекта (`DeficitComponent`): одна витрина на
-// продукт, разница лишь в области счёта — у закупки это все проекты её охвата, у заказа
-// (2026-08-19) его единственный проект. Своё здесь одно поле — `in_lines`: взята ли
+// продукт. Волна 24: витрина живёт только в закупке (у заказа снята) и считает по её
+// проекту. Своё здесь одно поле — `in_lines`: взята ли
 // позиция в строки документа. Булево намеренно: количество живёт в табе «Строки», и
 // дублировать его тут значило бы завести второе место правды.
 export interface DemandRow extends DeficitComponent {
@@ -492,11 +490,11 @@ export interface DemandRow extends DeficitComponent {
 }
 export interface Demand { rows: DemandRow[] }
 
-// ── Планирование закупок (волна 7): Procurement под охват проектов ──
+// ── Закупка (волна 7; с волны 24 — источник правды, однопроектная) ──
 
 export interface ProcurementRow {
   id: number; locked: boolean; date: string | null
-  code: string | null; description: string; lines: number
+  code: string | null; description: string; lines: number; project_code: string
 }
 export interface ProcurementFormLine {
   id: number; item_id: number; item_code: string; item_description: string
@@ -504,46 +502,47 @@ export interface ProcurementFormLine {
   item_native: boolean; item_synced: boolean; item_locked: boolean
   uom: string; qty: number
 }
-export interface ProcurementScopeProject {
-  id: number; code: string; description: string
-}
 export interface ProcurementForm extends Authored {
   id: number; locked: boolean; date: string | null
   code: string | null; description: string; editable: boolean
   contractor_id: number | null; contractor_code: string; contractor_name: string
-  projects: ProcurementScopeProject[]        // охват (Ф13): под какие проекты закупка
+  // Волна 24: проект — верхний якорь; меняется, пока у закупки нет заказов.
+  project_id: number; project_code: string; project_name: string
+  project_editable: boolean
   total_qty: number
-  // Панель бюджета — см. `PurchaseForm`. Нужда считается по ОХВАТУ: пустой охват
-  // (заказов ещё нет) → потребность 0, вся сумма плана читается переплатой.
+  // Панель бюджета — см. `PurchaseForm`. Нужда — по проекту закупки.
   demand: number; estimate: number; overpay: number; unestimated: string[]
   lines: ProcurementFormLine[]
 }
 
-// ── Привязка (волна 8, переделана 2026-08-05): раскладка плана по ЗАКАЗАМ ──
-// Ячейка матрицы: строка плана × заказ закупки. `qty` — сколько этого Item в этом
-// заказе (правится прямо здесь); `balance` — баланс ПРОЕКТА заказа по этому Item, то
-// же число, что в «Потребности» проекта: считает только зафиксированное, поэтому
-// черновая раскладка его не двигает.
+// ── Распределение строки плана по заказам (волна 24 — только чтение) ──
+// Ячейка: заказ, взявший эту позицию, и сколько он взял. Правится в форме заказа.
 export interface AllocationCell {
   purchase_id: number; purchase_code: string; locked: boolean
-  project_id: number; project_code: string; project_name: string
-  qty: number
-  need: number; kitted: number; in_stock: number; on_order: number
-  balance: number; balance_status: Status
-  // Стоимость ячейки = кол-во в ЭТОМ заказе × цена. `costly` тут не бывает: верхнюю
-  // четверть движок ищет среди строк плана, где строки сопоставимы.
-  cost: number | null; overpay_at: number; cost_status: CostStatus
+  contractor_id: number | null; contractor_code: string; contractor_name: string
+  qty: number; price: number | null; cost: number | null
 }
+// Строка плана несёт баланс ПРОЕКТА закупки по изделию — то же число, что в его
+// «Потребности» (проект один, поэтому баланс наконец честный и у строки плана).
 export interface AllocationRow {
   line_id: number; item_id: number; item_code: string; item_description: string
   item_category: string | null           // класс изделия — фильтр колонки
   uom: string; qty: number; allocated: number; remaining: number; status: Status
-  cost: number | null; need: number; overpay_at: number; cost_status: CostStatus  // нужда — по ОХВАТУ
+  need: number; kitted: number; in_stock: number; on_order: number; planned: number
+  balance: number; balance_status: Status
+  cost: number | null; overpay_at: number; cost_status: CostStatus
   orders: AllocationCell[]
 }
 export interface AllocationFanRow {
-  purchase_id: number; purchase_code: string; locked: boolean; project_id: number
-  project_code: string; project_name: string; lines: number; total: number
+  purchase_id: number; purchase_code: string; locked: boolean
+  contractor_id: number | null; contractor_code: string; contractor_name: string
+  lines: number; total: number
+}
+// Позиция, которую заказ может взять строкой-призраком (волна 24): строка его закупки
+// с остатком > 0, которой в заказе ещё нет. `remaining` — количество по умолчанию.
+export interface PurchaseCandidate {
+  item_id: number; item_code: string; item_description: string; uom: string
+  remaining: number
 }
 export interface Allocation {
   id: number; locked: boolean
@@ -805,17 +804,19 @@ export const api = {
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseForm>(`/api/purchases/${id}/`),
   updatePurchase: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number
-      project_id: number; procurement_id: number | null; contractor_id: number | null }>) =>
+      contractor_id: number | null }>) =>
     send<PurchaseForm>('PATCH', `/api/purchases/${id}/`, b),
   deletePurchase: (id: number) => send<void>('DELETE', `/api/purchases/${id}/`),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
     send<PurchaseForm>('POST', `/api/purchases/${id}/lines/`, b),
-  updatePurchaseLine: (id: number, qty: number) =>
-    send<PurchaseForm>('PATCH', `/api/purchase-lines/${id}/`, { qty }),
+  // Автосейв строки заказа: количество и/или цена по счёту (`null` стирает цену).
+  updatePurchaseLine: (id: number, b: { qty?: number; price?: number | null }) =>
+    send<PurchaseForm>('PATCH', `/api/purchase-lines/${id}/`, b),
   deletePurchaseLine: (id: number) =>
     send<PurchaseForm>('DELETE', `/api/purchase-lines/${id}/`),
-  // Витрина «Потребность» заказа (2026-08-19) — та же, что у закупки, но по его проекту.
-  purchaseDemand: (id: number) => get<Demand>(`/api/purchases/${id}/demand/`),
+  // Позиции закупки, которые заказ ещё может взять (волна 24) — выпадашка строки-призрака.
+  purchaseCandidates: (id: number) =>
+    get<PurchaseCandidate[]>(`/api/purchases/${id}/candidates/`),
   lockPurchase: (id: number) => send<PurchaseForm>('POST', `/api/purchases/${id}/lock/`),
   unlockPurchase: (id: number) => send<PurchaseForm>('POST', `/api/purchases/${id}/unlock/`),
   // Ф6: заказ → УПД. Отдаёт форму РОЖДЁННОЙ поставки — в неё и переходим.
@@ -913,15 +914,14 @@ export const api = {
   relocationSourceLots: (id: number) =>
     get<RelocationSourceLot[]>(`/api/relocations/${id}/source-lots/`),
 
-  // ── Планирование закупок (волна 7; охват — волна 19, Ф13) ──
-  // `/api/command-deficit/` больше нет: витрина — «Потребность» конкретной закупки,
-  // по её охвату. Моста «＋ в план» (топ-ап до наводки) тоже нет с 2026-08-11: позицию
-  // кладёт обычное добавление строки нулём, количество набирают в «Строках».
+  // ── Закупка (волна 7; с волны 24 — однопроектная, источник правды) ──
+  // Витрина — «Потребность» закупки, по её проекту. Позицию кладёт обычное добавление
+  // строки нулём, количество набирают в «Строках».
   procurementDemand: (id: number) => get<Demand>(`/api/procurements/${id}/demand/`),
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementForm>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
-  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; contractor_id: number | null; project_ids: number[] }>) =>
+  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; contractor_id: number | null; project_id: number }>) =>
     send<ProcurementForm>('PATCH', `/api/procurements/${id}/`, b),
   addProcurementLine: (id: number, b: { item_id: number; qty: number }) =>
     send<ProcurementForm>('POST', `/api/procurements/${id}/lines/`, b),
@@ -935,11 +935,11 @@ export const api = {
   // Бланк ЗАКАЗА (2026-08-10) — тот же документ, что у закупки; имя файла и гейт
   // «только у зафиксированного» держит бэкенд.
   purchaseXlsxUrl: (id: number) => `/api/purchases/${id}/xlsx/`,
-  // привязка (волна 8): матрица «строка плана × заказы»
+  // Распределение плана по заказам (только чтение, волна 24)
   allocation: (id: number) => get<Allocation>(`/api/procurements/${id}/allocation/`),
-  // `purchase_id`: число — в этот заказ, 'new' — в новый, нет ключа — фолбэк (Р2)
-  allocate: (id: number, b: { purchase_id: number; item_id: number; qty: number }) =>
-    send<Allocation>('POST', `/api/procurements/${id}/allocate/`, b),
+  // «Новый заказ» из закупки (волна 24): выбранные позиции плана, количество — остаток.
+  newPurchase: (id: number, item_ids: number[]) =>
+    send<PurchaseForm>('POST', `/api/procurements/${id}/purchases/`, { item_ids }),
 
   // ── Вложения (волна 11) ──
   attachments: (ownerType: string, ownerId: number) =>

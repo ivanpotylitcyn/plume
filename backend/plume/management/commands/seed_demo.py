@@ -87,11 +87,12 @@ class Command(BaseCommand):
         # --- ВИНТ-М3: открытый заказ 25 (●), склада нет ---------------- #
         # Волна 19, Ф1c: строковый `status{draft/sent/…}` у закупки и заказа снят —
         # ось стала единым булевым `locked` (сид отставал и падал `AttributeError`).
+        # Волна 24: закупка проектная, заказ рождается из неё (проект — через закупку).
         proc = models.Procurement.objects.create(
-            user=user, locked=True, date=D(2026, 5, 10))
+            project=prj, user=user, locked=True, date=D(2026, 5, 10))
         models.ProcurementLine.objects.create(procurement=proc, item=screw, qty=25)
         purchase = models.Purchase.objects.create(
-            procurement=proc, project=prj, user=user,
+            procurement=proc, user=user, contractor=supplier,
             locked=True, date=D(2026, 5, 12))
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=25)
 
