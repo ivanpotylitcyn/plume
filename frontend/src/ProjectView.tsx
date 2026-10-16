@@ -28,6 +28,9 @@ import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
 
+// Категории масштаба, которые мета показывает (коды канона): приборы и узлы печатные.
+const META_SCALE = ['ПРБ', 'УП']
+
 export function ProjectView({ projectId, items, isNew, openItem, openOrder, openPurchase,
   openProcurement, openCounterparty, onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean
@@ -202,27 +205,16 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       // Мета (§13.6): счёт по табам в их порядке + приборы штуками. Описание и бюджет
       // не повторяем — они в полях; аномалии остатков всплывают отдельным сегментом.
       meta={<>
-        {/* Масштаб работы (волна 23, Ф4, вариант Ивана): ШТУКИ наших изделий по всему
-            дереву, по категориям — «21 система · 137 приборов · 116 узлов печатных».
-            Сменил «8 образцов 4 приборов» (2026-08-28), который видел только верхний
-            уровень потребности. Слова и порядок — из движка (`scale`), склонение здесь.
-            Отдельной ПЕРВОЙ строкой (правка Ивана): масштаб — свой разговор, счёт по
-            табам — второй строкой, оглавлением, как у остальных форм. */}
-        {external && data.scale.length > 0 &&
-          <div>{data.scale.map(x => count(x.count, ...x.forms)).join(' · ')}</div>}
-        <div>
-          {external && <>
-            {count(data.components.length, 'компонент', 'компонента', 'компонентов')}
-            {' · '}
-          </>}
-          {count(supply?.procurements.length ?? 0, 'закупка', 'закупки', 'закупок')}
-          {' · '}{count(supply?.purchases.length ?? 0, 'заказ', 'заказа', 'заказов')}
-          {' · '}{count(supply?.receipts.length ?? 0, 'поставка', 'поставки', 'поставок')}
-          {' · '}{count(residuals.length, 'партия', 'партии', 'партий')}
-          {(closure?.anomaly_count ?? 0) > 0 &&
-            <span className="anomaly"> · {closure!.anomaly_count} в минусе</span>}
-          {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
-        </div>
+        {/* Мета расчищена (решение Ивана 2026-10-16): приборы · узлы печатные ·
+            компоненты — масштаб работы, ради которого в мету и смотрят. Остальное
+            (системы, кабельные сети, закупки, заказы, поставки, партии, файлы) снято —
+            добавим, когда понадобится. Штуки по всему дереву — из движка (`scale`,
+            волна 23 Ф4), склонение здесь. */}
+        {external && [
+          ...data.scale.filter(x => META_SCALE.includes(x.category ?? ''))
+            .map(x => count(x.count, ...x.forms)),
+          count(data.components.length, 'компонент', 'компонента', 'компонентов'),
+        ].join(' · ')}
       </>}
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
