@@ -11,6 +11,11 @@
 // нижнего края окна меню раскрывается ВВЕРХ, а если тесно с обеих сторон — жмётся по
 // доступной высоте и скроллится внутри себя.
 //
+// Подложка «клик мимо» (`onVeil`) живёт в том же портале, что и меню (волна 25, Ф2):
+// пока она рисовалась по месту, `position: fixed` держался за окно лишь до первого
+// предка с containment — а `.work` стал контейнером `@container`, и подложка накрыла
+// бы одну рабочую область, без списка режима.
+//
 // Геометрия — знак темы, а не смысл (шов Ф7): `core/useTypeahead` про неё не знает и
 // не меняется. Файл экспортирует только компонент — правило `only-export-components`.
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
@@ -28,10 +33,11 @@ const same = (a: Box | null, b: Box) =>
   !!a && a.top === b.top && a.left === b.left
   && a.minWidth === b.minWidth && a.maxHeight === b.maxHeight
 
-export function AnchoredMenu({ anchor, className, boxRef, children }: {
+export function AnchoredMenu({ anchor, className, boxRef, onVeil, children }: {
   anchor: RefObject<HTMLElement | null>
   className: string
   boxRef?: RefObject<HTMLDivElement | null>   // наружу — для клавиатурной прокрутки
+  onVeil?: () => void                          // подложка на всё окно: клик мимо меню
   children: ReactNode
 }) {
   const own = useRef<HTMLDivElement>(null)
@@ -75,13 +81,14 @@ export function AnchoredMenu({ anchor, className, boxRef, children }: {
     }
   }, [place])
 
-  return createPortal(
+  return createPortal(<>
+    {onVeil && <div className="menu-veil" onClick={onVeil} />}
     <div ref={box} className={className}
       // До первого замера меню невидимо: иначе кадр в левом верхнем углу экрана.
       style={pos
         ? { top: pos.top, left: pos.left, minWidth: pos.minWidth, maxHeight: pos.maxHeight }
         : { top: 0, left: 0, visibility: 'hidden' }}>
       {children}
-    </div>,
-    document.body)
+    </div>
+  </>, document.body)
 }

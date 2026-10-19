@@ -235,12 +235,16 @@ function GhostRow({ receiptId, items, busy, run }: {
     <tr className="row ghost">
       <td className="rn" />
       <td className="gl" />
-      {/* Пикер занимает пару «код + описание»: ищет по обоим, и ширину берёт по ним
-          (inline-`width` контрола не задаём — §7a). */}
-      <td className="c-key" colSpan={2}>
+      {/* Призрак — такая же строка, как данные (волна 25, Ф3): пикер в колонке кода,
+          описание выбранного — в своей. Под `colSpan` спрятанная колонка описания
+          сдвигала бы всю строку. */}
+      <td className="c-key">
         <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
           placeholder="Компонент…" onEnter={add} onClear={() => setItemId('')} />
       </td>
+      <td className="c-desc">
+        <span className="cell-ellip" title={picked?.description}>
+          {picked?.description ?? ''}</span></td>
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}

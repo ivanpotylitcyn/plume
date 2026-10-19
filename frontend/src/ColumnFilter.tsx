@@ -29,8 +29,8 @@ export function ColumnFilter({ opts, value, onPick }: {
         onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
       {open && <>
         {/* Подложка на всё окно: клик мимо меню закрывает его, как у пикеров. */}
-        <div className="col-filter-veil" onClick={() => setOpen(false)} />
-        <AnchoredMenu anchor={anchor} className="typeahead-menu col-filter-menu">
+        <AnchoredMenu anchor={anchor} className="typeahead-menu col-filter-menu"
+          onVeil={() => setOpen(false)}>
           {opts.map(([v, text]) => (
             <div key={v} className={'typeahead-item' + (v === value ? ' active' : '')}
               onClick={() => { onPick(v); setOpen(false) }}>

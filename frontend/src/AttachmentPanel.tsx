@@ -80,7 +80,7 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
           <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-key">Файл</th>
             <th className="c-desc">Описание</th>
             <th className="c-fit num">Размер</th>
-            <th className="c-fit">Загружено</th><th className="c-fit">Загрузил</th>
+            <th className="c-date">Загружено</th><th className="c-fit">Загрузил</th>
             <th className="act" /></tr></thead>
           <tbody>{rows.map((a, i) => (
             <tr key={a.id} className="row">
@@ -91,7 +91,7 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
               <td className="c-desc"><CommitInput value={a.description} disabled={locked || busy}
                 onCommit={v => run(api.updateAttachment(a.id, v))} /></td>
               <td className="num c-fit">{humanSize(a.size)}</td>
-              <td className="c-fit">{shortDate(a.uploaded_at)}</td>
+              <td className="c-date">{shortDate(a.uploaded_at)}</td>
               <td className="c-fit">{a.user || '—'}</td>
               {/* Команды строки — одними глифами (подписи есть в `title`): в списке
                   их много, и текст на каждой строке шумел бы (§7a). Удаление — только

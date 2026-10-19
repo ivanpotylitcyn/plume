@@ -91,7 +91,7 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
     <div className={'prow prow--head' + (tree ? ' head--tree' : '')}>
       <span className="rn" title="номер строки — постоянный, фильтр его не меняет">№</span>
       <span className="tree-cell">{lead}{catHead}</span>
-      <span>Описание</span>
+      <span className="name">Описание</span>
       <span className="pnum" title="потребность: разузлование BOM на все приборы">
         Потр.</span>
       <span className="pnum" title="скомплектовано: впаяно в изделия проекта">

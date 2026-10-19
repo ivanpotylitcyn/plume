@@ -11,7 +11,8 @@
 //
 // Режимы:
 //   matrix  — переполнения: рабочая область, шапка, наезд полей шапки на команды, вылет
-//             таблицы таба вбок, обрезанные строки списка режима, ряды табов (по умолчанию)
+//             таблицы таба вбок, ступень лестницы ролей (`fit`, волна 25 Ф3), обрезанные
+//             строки списка режима, ряды табов (по умолчанию)
 //   cols    — опись колонок каждого таба: подпись[класс]ширина
 //   ghost   — число колонок заголовка против строки-призрака (`tr.ghost`) в правке
 //   hover   — навести курсор на элемент (по умолчанию сумма над колонкой «Потребности»)
@@ -27,13 +28,17 @@
 // Опции:
 //   --forms a,b      формы по адресу `вид/id` (`/purchase/13`); обязательна
 //   --vw 1440,...    ширины окна (по умолчанию 1440); высота 900
-//   --side 240,...   ширины списка режима, подменой колонки сетки `.app` (по умолчанию —
-//                    как есть в приложении)
+//   --side 240,...   желаемая ширина списка режима — та же `--side-w`, что пишет sash (её
+//                    ужимает clamp шелла, фактическая — в колонке `список`); 0 = список
+//                    скрыт. По умолчанию — как есть в приложении
 //   --edit           нажать «Редактировать» перед замером (замок формы клиентский)
 //   --tab N          только таб N (с нуля); по умолчанию — все табы
 //   --hover SEL      селектор для режима hover (по умолчанию `.prow--sums .sumtip-host`)
 //   --shots DIR      сохранять снимки экрана в DIR
 //   --strict         код выхода 1, если хоть где-то переполнение / наезд / вылет вбок
+//   --min-grid 692   критерий приёмки волны 25 (Ф4): прокрутка таблицы таба — нарушение
+//   --min-prow 832   только при рабочей области не уже порога своей семьи списков
+//                    (`table.grid` / сетка `.prow`); уже — законная страховка, «·» в выводе
 //   --user NAME      пользователь сессии (по умолчанию — первый активный суперпользователь)
 //   --base URL       адрес фронта (по умолчанию http://localhost:5173)
 //   CHROME=путь      бинарь Chrome (по умолчанию — macOS-путь Google Chrome)
@@ -66,6 +71,7 @@ const SIDES = opt.side ? opt.side.split(',').map(Number) : [null]
 const BASE = opt.base || 'http://localhost:5173'
 const EDIT = MODE === 'ghost' || !!opt.edit          // призрак живёт только в правке
 const HOVER = opt.hover || '.prow--sums .sumtip-host'
+const MIN = { grid: Number(opt['min-grid'] || 692), prow: Number(opt['min-prow'] || 832) }
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 if (opt.shots) mkdirSync(opt.shots, { recursive: true })
 
@@ -133,7 +139,8 @@ const MEASURE = `(() => {
       .map(e => '.' + String(e.className).split(' ')[0] + '@+' + Math.round(r(e).right - cmdL)).slice(0, 4)
   }
   const list = document.querySelector('.fs-list')
-  if (list) out.listX = list.scrollWidth - list.clientWidth
+  if (list) { out.listX = list.scrollWidth - list.clientWidth; out.fit = list.dataset.fit ?? 0
+    out.family = list.querySelector('.pgrid') ? 'prow' : 'grid' }
   // торчит за правый край .work и НЕ внутри собственной прокрутки — вылет рамки
   const edge = W.right - (work.offsetWidth - work.clientWidth) + 0.5
   const stick = new Set()
@@ -145,7 +152,10 @@ const MEASURE = `(() => {
   }
   out.stickOut = [...stick].slice(0, 6)
   const rows = [...document.querySelectorAll('.sidebar .tree-item:not(.new)')]
-  out.sideClipped = rows.filter(i => i.scrollWidth > i.clientWidth + 0.5).length
+  // обрезана строка — вылезла сама или её код ушёл в многоточие (в25 Ф0)
+  const over = e => e && e.scrollWidth > e.clientWidth + 0.5
+  out.sideClipped = rows.filter(i => over(i) || over(i.querySelector('.code'))).length
+  out.sideW = document.querySelector('.sidebar')?.offsetWidth ?? 0
   out.sideRows = rows.length
   const tabs = document.querySelector('.fs-tabs')
   out.tabsH = tabs ? Math.round(r(tabs).height) : 0
@@ -188,8 +198,9 @@ try {
         await send('Page.navigate', { url: `${BASE}/${form}` })
         await sleep(2500)
         if (side != null)
-          await ev(`(() => { const s = document.createElement('style'); s.textContent =
-            '.app{grid-template-columns:48px ${side}px minmax(0,1fr) !important}'; document.head.appendChild(s) })()`)
+          await ev(`(() => { const a = document.querySelector('.app')
+            if (${side}) a.style.setProperty('--side-w', '${side}px')
+            a.classList.toggle('side-hidden', ${side} === 0) })()`)
         if (EDIT) {
           await ev(`[...document.querySelectorAll('.fh-ctl')].find(b => b.textContent.includes('Редактировать'))?.click()`)
           await sleep(800)
@@ -203,11 +214,14 @@ try {
           const name = tag.join('_').replace(/[/ ]/g, '-')
           if (MODE === 'matrix') {
             const m = await ev(MEASURE)
-            const fail = m.workX > 0 || m.headX > 0 || m.listX > 0 || m.overlap?.length || m.stickOut?.length
+            // прокрутка списка уже порога своей семьи — законная страховка (критерий Ф4)
+            const scroll = m.listX > 0, allowed = scroll && m.workW < MIN[m.family]
+            const fail = m.workX > 0 || m.headX > 0 || (scroll && !allowed) ||
+              m.overlap?.length || m.stickOut?.length
             if (fail) bad++
-            console.log([...tag.slice(0, 4), String(tag[4]).padEnd(12), fail ? '✗' : '✓',
+            console.log([...tag.slice(0, 4), String(tag[4]).padEnd(12), fail ? '✗' : allowed ? '·' : '✓',
               `work ${m.workW}`, `workX ${m.workX}`, `поля ${m.fieldsW}/команды ${m.cmdW}`,
-              `headX ${m.headX}`, `listX ${m.listX ?? '-'}`, `список✂ ${m.sideClipped}/${m.sideRows}`,
+              `headX ${m.headX}`, `listX ${m.listX ?? '-'}`, `fit ${m.fit ?? '-'}`, `список ${m.sideW}px ✂ ${m.sideClipped}/${m.sideRows}`,
               `табы ${m.tabsH}px`, m.overlap?.length ? 'наезд ' + m.overlap.join(' ') : '',
               m.stickOut?.length ? 'вылет ' + m.stickOut.join(' ') : ''].join('  '))
           } else if (MODE === 'cols') {

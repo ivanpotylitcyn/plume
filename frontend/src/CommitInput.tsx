@@ -77,8 +77,7 @@ export function CommitInput({ value, onCommit, disabled, validate, type, code, n
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
       {offer !== null && <>
         {/* Подложка на всё окно: клик мимо = «Перепишу сам» (как у меню фильтров). */}
-        <div className="col-filter-veil" onClick={rewrite} />
-        <AnchoredMenu anchor={input} className="typeahead-menu hygiene-pop">
+        <AnchoredMenu anchor={input} className="typeahead-menu hygiene-pop" onVeil={rewrite}>
           <div className="hy-note">Лишние символы. Сохранить так?</div>
           <div className={'hy-text' + (code ? ' code' : '')}>{offer || '—'}</div>
           <div className="typeahead-item" onClick={accept}>

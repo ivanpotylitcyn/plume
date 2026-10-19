@@ -104,8 +104,8 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
         : <table className="grid">
             <thead><tr>
               <th className="rn">№</th><th className="gl" /><th className="c-key">Передача</th>
-              <th className="c-fit">№ накладной</th><th className="c-fit">Проект</th>
-              <th className="c-fit">Дата</th>
+              <th className="c-no">№ накладной</th><th className="c-fit">Проект</th>
+              <th className="c-date">Дата</th>
               <th className="num">Строк</th>
               <th className="num">Кол-во</th>
               <th className="num">Сумма</th>
@@ -219,9 +219,9 @@ function TransRow({ t, no, open }: {
       <td className="c-key">
         <EntityLink kind="transfer" id={t.id} open={open}>
           {t.code || `Передача #${t.id}`}</EntityLink></td>
-      <td className="c-fit code">{t.number || <span className="hint">не задан</span>}</td>
+      <td className="c-no code">{t.number || <span className="hint">не задан</span>}</td>
       <td className="c-fit code">{t.project_code}</td>
-      <td className="c-fit">
+      <td className="c-date">
         {t.date ? viewDate(t.date) : ''}</td>
       <td className="num">{t.lines}</td>
       <td className="num">{num(t.qty)}</td>

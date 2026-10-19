@@ -24,7 +24,7 @@ export function ProcurementFeed({ rows, empty, open }: {
     <table className="grid">
       <thead><tr>
         <th className="rn">№</th><th className="gl" /><th className="c-key">Закупка</th>
-        <th className="c-desc">Описание</th><th className="c-fit">Дата</th>
+        <th className="c-desc">Описание</th><th className="c-date">Дата</th>
         <th className="num">Строк</th>
         <th className="num">Кол-во</th>
       </tr></thead>
@@ -37,7 +37,7 @@ export function ProcurementFeed({ rows, empty, open }: {
               {p.code || `Закупка #${p.id}`}</EntityLink></td>
           <td className="c-desc">
             <span className="cell-ellip" title={p.description}>{p.description}</span></td>
-          <td className="c-fit">
+          <td className="c-date">
             {p.date ? viewDate(p.date) : ''}</td>
           <td className="num">{p.lines}</td>
           <td className="num">{num(p.qty)}</td>
@@ -164,7 +164,7 @@ export function DocumentFeed({ rows, empty, open }: {
       <thead><tr>
         <th className="rn">№</th><th className="gl" /><th className="c-key">Ордер</th>
         <th className="c-fit">Тип</th><th className="c-desc">Описание</th>
-        <th className="c-fit">Проект</th><th className="c-fit">Дата</th>
+        <th className="c-fit">Проект</th><th className="c-date">Дата</th>
       </tr></thead>
       <tbody>{rows.map((d, i) => (
         <tr key={d.id} className="row">
@@ -179,7 +179,7 @@ export function DocumentFeed({ rows, empty, open }: {
           <td className="c-desc">
             <span className="cell-ellip" title={d.description}>{d.description}</span></td>
           <td className="c-fit code">{d.project_code}</td>
-          <td className="c-fit">
+          <td className="c-date">
             {d.date ? viewDate(d.date) : ''}</td>
         </tr>
       ))}</tbody>

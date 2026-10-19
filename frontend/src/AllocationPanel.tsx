@@ -73,7 +73,7 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
         <div className="prow prow--head head--tree">
           <span className="rn" title="номер строки — постоянный, фильтр его не меняет">№</span>
           <span className="tree-cell">Компонент{byCat.head}</span>
-          <span>Описание</span>
+          <span className="name">Описание</span>
           <span className="pnum" title="баланс проекта закупки по этому изделию">
             Баланс</span>
           <span className="pnum"

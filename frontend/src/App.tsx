@@ -1,7 +1,7 @@
 // Каркас витрин (VS Code-подобный): панель режимов (Codicons) + список режима +
 // рабочее поле (одно, без вкладок). Навигация по сущностям, проект — ось.
 // Строки состояния нет (UI_GUIDE §11). Список режима — единый шаблон (§7).
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type KittingRow, type ReceiptRow, type PurchaseRow,
   type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
@@ -25,6 +25,7 @@ import { applyTheme } from './core/theme'
 import { parsePath, pathOf, type Mode, type Sel } from './core/route'
 import { ItemGlyph, StatusGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
+import { Sash, loadSide, saveSide, type Side } from './Sash'
 
 // Волна 13, Ф1b (флагман): 6 складских документов свёрнуты в один режим «Ордера».
 // Их detail-вьюхи остаются раздельными (диспетчер по kind), но список/иконка/форма
@@ -82,6 +83,11 @@ export default function App() {
   // Помечается в onCreated-потоках, гаснет как только выбор ушёл с него (эффект ниже).
   const [justCreated, setJustCreated] = useState<{ kind: string; id: number } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // Волна 25, Ф1: желаемая ширина списка режима и признак «скрыт» — на устройство.
+  const appRef = useRef<HTMLDivElement>(null)
+  const [side, setSide] = useState<Side>(loadSide)
+  useEffect(() => saveSide(side), [side])
+  const toggleSide = () => setSide(s => ({ ...s, hidden: !s.hidden }))
 
   // История навигации ведётся АДРЕСОМ (2026-08-07). Раньше рядом с браузерной жил свой
   // стек состояний `{mode, sel}`, и он был вторым источником правды о том, где мы были;
@@ -200,6 +206,11 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault(); setPaletteOpen(o => !o)
+      }
+      // ⌘B / Ctrl+B — список режима, как в VS Code. По физической клавише: в русской
+      // раскладке `e.key` здесь «и».
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === 'KeyB') {
+        e.preventDefault(); setSide(s => ({ ...s, hidden: !s.hidden }))
       }
     }
     window.addEventListener('keydown', onKey)
@@ -337,11 +348,18 @@ export default function App() {
     return <Login onSuccess={setUser} />
 
   return (
-    <div className="app">
+    <div ref={appRef} className={'app' + (side.hidden ? ' side-hidden' : '')}
+      style={side.w == null ? undefined : { '--side-w': side.w + 'px' } as CSSProperties}>
       <div className="activity">
+        {/* Клик по АКТИВНОМУ режиму сворачивает/разворачивает список (как в VS Code);
+            по другому — переключает режим и показывает спрятанный список. */}
         {MODES.map(m => (
           <button key={m.mode} className={mode === m.mode ? 'active' : ''}
-            title={m.title} onClick={() => setMode(m.mode)}>
+            title={m.title} onClick={() => {
+              if (mode === m.mode) { toggleSide(); return }
+              setMode(m.mode)
+              if (side.hidden) setSide(s => ({ ...s, hidden: false }))
+            }}>
             <span className={`ci ci-${m.icon}`} />
           </button>
         ))}
@@ -455,6 +473,8 @@ export default function App() {
               glyph: <StatusGlyph locked={p.locked} />,
             }))} />}
       </div>
+
+      <Sash app={appRef} side={side} onCommit={setSide} />
 
       <div className="work">
         {/* Одна форма на ВСЕ проекты, включая внутренние склады (Ф12c): кастомный
@@ -638,7 +658,7 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
           <div key={r.id} className={'tree-item' + (selId === r.id ? ' sel' : '')}
             onClick={() => onSelect(r.id)}>
             {r.glyph}
-            <span className="code">{r.code}</span>
+            <span className="code" title={r.code}>{r.code}</span>
           </div>
         ))}
         {shown.length === 0 && <div className="list-empty">ничего не найдено</div>}
@@ -735,7 +755,7 @@ function OrderList({ entries, selKey, onSelect, onNew }: {
             <div key={key} className={'tree-item' + (selKey === key ? ' sel' : '')}
               onClick={() => onSelect(e)} title={ORDER_LABEL[e.kind]}>
               <StatusGlyph locked={e.locked} />
-              <span className="code">{e.code}</span>
+              <span className="code" title={e.code}>{e.code}</span>
               <span className="row-tag">{ORDER_LABEL[e.kind]}</span>
             </div>
           )

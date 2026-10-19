@@ -175,7 +175,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         : <table className="grid">
             <thead><tr>
               <th className="rn">№</th><th className="gl" /><th className="c-key">Поставка</th>
-              <th className="c-fit">№ поставки</th><th className="c-fit">Дата</th>
+              <th className="c-no">№ поставки</th><th className="c-date">Дата</th>
               <th className="c-desc">Поставщик</th>
               <th className="num">Строк</th>
             </tr></thead>
@@ -191,8 +191,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                   <td className="c-key">
                     <EntityLink kind="receipt" id={r.id} open={openReceipt}>
                       {r.code || `Поставка #${r.id}`}</EntityLink></td>
-                  <td className="c-fit code">{r.number || <span className="hint">не задан</span>}</td>
-                  <td className="c-fit">{r.date}</td>
+                  <td className="c-no code">{r.number || <span className="hint">не задан</span>}</td>
+                  <td className="c-date">{r.date}</td>
                   <td className="c-desc">
                     <CounterpartyRef code={r.contractor_code} name={r.contractor_name} /></td>
                   <td className="num">{r.lines}</td>
@@ -384,6 +384,7 @@ function GhostRow({ purchaseId, items, rev, busy, run }: {
   }, [cands, items])
   // Выбранная позиция целиком: единица измерения и остаток известны ДО добавления.
   const picked = cands.find(c => c.item_id === itemId)
+  const pickedItem = offer.find(i => i.id === itemId)
 
   const pick = (id: number) => {
     setItemId(id)
@@ -404,11 +405,17 @@ function GhostRow({ purchaseId, items, rev, busy, run }: {
       {/* Заголовок поля — подпись его колонки («Компонент»), без «＋»: строка-призрак
           и так читается пустой строкой таблицы, а знак прибавления несёт кнопка в конце
           строки (правка Ивана 2026-08-11). */}
-      <td className="c-key" colSpan={2}>
+      {/* Призрак — такая же строка, как данные (волна 25, Ф3): пикер в колонке кода,
+          описание выбранного — в своей. Под `colSpan` спрятанная колонка описания
+          сдвигала бы всю строку. */}
+      <td className="c-key">
         <ItemPicker items={offer} value={itemId} onPick={pick} disabled={busy}
           placeholder={cands.length ? 'Позиция закупки…' : 'Все позиции закупки взяты'}
           onEnter={add} onClear={() => { setItemId(''); setQty('') }} />
       </td>
+      <td className="c-desc">
+        <span className="cell-ellip" title={pickedItem?.description}>
+          {pickedItem?.description ?? ''}</span></td>
       {/* Ячейка «Баланса» отсюда снята (2026-10-18): колонку убрали из заголовка в
           волне 24, а пустышка в призраке осталась — поле количества встало под
           «Поступило», «＋» уехал в лишнюю колонку за корзинами. */}

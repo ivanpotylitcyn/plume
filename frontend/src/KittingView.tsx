@@ -231,12 +231,13 @@ function GhostRow({ row, ghost, form, busy, run }: {
     <tr className={`row ghost s-${ghost.status}`}>
       <td className="rn" />
       <td className="gl"><Glyph status={ghost.status} /></td>
-      {/* Пикер занимает колонки идентичности и описания — канон призрачной строки
-          (`.c-key colSpan={2}`, тот же в девяти формах). */}
-      <td className="c-key ind" colSpan={2}>
+      {/* Выбор лота — в колонке кода, описание пустое (волна 25, Ф3): под `colSpan`
+          спрятанная колонка описания сдвигала бы строку. Интерфейс комплектации ждёт
+          переосмысления — здесь минимум, без своей геометрии. */}
+      <td className="c-key ind">
         {empty
           ? <>
-              нет своих лотов —{' '}
+              нет лотов —{' '}
               <Segment status="on_order" value={ghost.on_order} />
               <Segment status="to_order" value={ghost.to_order} />
             </>
@@ -245,6 +246,7 @@ function GhostRow({ row, ghost, form, busy, run }: {
                 label: `#${l.lot_id} · остаток ${num(l.live_qty)}`
                   + (l.lot_name ? ` · ${l.lot_name}` : '') }))} />}
       </td>
+      <td className="c-desc" />
       <td className="num" />
       <td className="uom">{empty ? '' : row.uom}</td>
       <td className="num">

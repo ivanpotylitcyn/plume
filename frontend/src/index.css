@@ -68,6 +68,13 @@
      длинное (Описание). В вьюхах ширину не задаём, только выбираем ступень. */
   --field-w: 320px;
   --field-w-wide: 640px;
+  /* Ширина списка режима (волна 25, Ф1): желаемую (`--side-w`) пишет sash, действующую
+     считает clamp в `.app`. Пол списка, умолчание и пол рабочей области (пол шапки
+     формы) — здесь одним местом; `Sash.tsx` их только читает. */
+  --side-min: 180px;
+  --side-def: 240px;
+  --work-min: 560px;
+  --sash-w: 4px;
   /* ЕДИНИЦА СТРОКИ ШАПКИ (§13.3, волна 19 Ф12d). До неё высоту строки задавал сам
      контент: текст 16px, инпут 20, дата и селект 22, команда 26 — и «в одну строку»
      сходилась только первая пара, дальше расхождение копилось. Теперь высоту задаёт
@@ -85,6 +92,14 @@
      200px ≈ 25 моно-знаков (Ф3, волна 21: было 160 — хватало part number'ам вроде
      `MT9V024IA7XTM-DP`, но в `.c-key` лежат и коды закупок/заказов, а они прозаичнее). */
   --col-key: 200px;
+  /* Пол описания — одна норма на обе семьи списков (волна 25, Ф3): `table.grid` мял
+     описание до огрызка (`max-width: 0`), `.prow` держал 140px треком. Ниже пола
+     описание не мнётся, а уходит целиком — первая ступень лестницы `data-fit`. */
+  --col-desc-min: 140px;
+  /* Пятая ступень лестницы (решение Ивана 2026-10-19): колонка кода сужается до пола,
+     длинный код уходит в многоточие — код не прячется никогда. */
+  --col-key-min: 120px;
+  --prow-desc: minmax(var(--col-desc-min), 1fr);
   /* Ширина поля ввода В СТРОКЕ списка и ширина колонки свободного текста (Б2а аудита-1,
      2026-07-30). До них ширины стояли инлайном (`width={56..240}`, `style={{width}}`) —
      а инлайн сильнее класса и выбивает поле из сетки колонок (§13.3/§7a): одно и то же
@@ -205,7 +220,28 @@ body { overflow: hidden; }
 .ci-file-text::before       { content: '\ec5e'; }  /* строка таба «Файлы»: загруженный CSV */
 
 /* ---- каркас (строки состояния больше нет — §11) ---- */
-.app { display: grid; grid-template-columns: 48px 240px 1fr; height: 100vh; }
+/* Колонка списка — «предпочтение с потолком» (VS Code `LayoutPriority.Low`): список
+   держит желаемую ширину, пока рабочей области хватает её пола; окно сузилось —
+   уступает список, выросло — ширина вернулась. Без JS на ресайз окна. */
+.app { display: grid; height: 100vh; position: relative;
+  --side-act: clamp(var(--side-min), var(--side-w, var(--side-def)),
+                    calc(100vw - 48px - var(--work-min)));
+  grid-template-columns: 48px var(--side-act) minmax(0, 1fr); }
+/* Скрытый список (клик по активному режиму, ⌘B / Ctrl+B, snap) остаётся смонтированным —
+   фильтры переживают скрытие. */
+.app.side-hidden { --side-act: 0px; }
+.app.side-hidden .sidebar { display: none; }
+/* Sash — на границе списка и рабочей области. Подсветка — после 300мс наведения (как
+   в VS Code: проходящий курсор не мигает), во время драга — сразу. Зона захвата шире на
+   тач-устройствах: это про устройство ввода, а не про ширину окна. */
+.sash { position: absolute; top: 0; bottom: 0; z-index: 5; width: var(--sash-w);
+  left: calc(48px + var(--side-act) - var(--sash-w) / 2);
+  cursor: col-resize; touch-action: none; outline: none;
+  transition: background-color .1s ease-out; }
+.sash:hover, .sash:focus-visible { background: var(--sash-hover); transition-delay: .3s; }
+html.sash-drag .sash { background: var(--sash-hover); transition-delay: 0s; }
+html.sash-drag, html.sash-drag * { cursor: col-resize !important; user-select: none !important; }
+@media (pointer: coarse) { :root { --sash-w: 16px; } }
 .activity { background: var(--bg-side); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center; padding-top: 8px; gap: 2px; }
 .activity button { width: 40px; height: 40px; background: none; border: none;
@@ -269,6 +305,10 @@ body { overflow: hidden; }
 .tree-item:hover { background: var(--bg-hover); }
 .tree-item.sel { background: var(--bg-sel); color: var(--fg-bright); }
 .tree-item .code { color: var(--fg); font-variant-numeric: tabular-nums; }
+/* Многоточие — на КОДЕ, а не на строке (волна 25, Ф0): у флекс-строки `text-overflow`
+   до детей не доходит, а несжимаемый код выдавливал подпись типа ордера за край.
+   Код сжимается и режется многоточием, глиф и подпись остаются; полный код — в `title`. */
+.tree-item .code { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tree-item.sel .code { color: var(--fg-bright); }
 .tree-item .glyph, .tree-item .ci { flex: 0 0 auto; }
 .tree-item .ci { font-size: 13px; position: relative; top: 1px; color: var(--fg-dim); }
@@ -282,7 +322,8 @@ body { overflow: hidden; }
 .tree-item .row-tag { margin-left: auto; padding-left: 10px; flex: 0 0 auto;
   color: var(--fg-dim); font-family: var(--font-base); font-size: 10px; }
 /* селектор типа над единой формой создания ордера */
-.work { overflow-y: auto; padding: 16px 22px; grid-column: 3; }
+.work { overflow-y: auto; padding: 16px 22px; grid-column: 3;
+  container: work / inline-size; }   /* формы подстраиваются под НЕЁ, не под окно (в25) */
 
 /* ---- команды шапки формы (§5) ----
    Дозаголовочная семья (`.form-head`, `.fh-main`, `.fh-name`, `.fh-meta`, зона `.fhz`)
@@ -392,6 +433,16 @@ body { overflow: hidden; }
    на весь продукт — своего вида у таба нет. */
 .fs-tab.on { background: var(--bg-hover); color: var(--fg); }
 
+/* Теснота рабочей области (волна 25, Ф2): подписи команд шапки и табов уходят в
+   `title`, остаётся глиф — тот же язык, что у команд в строке списка. Порог — по
+   шапке-канону, он один на все формы: 7 табов проекта с подписями ≈ 690px, колонка
+   команд 97…170 → 30px. Порог — ширина КОНТЕНТА `.work`, не окна. */
+@container work (width < 720px) {
+  :is(.fs-head .fh-ctl, .fs-tab) .lbl { display: none; }
+  :is(.fs-head .fh-ctl, .fs-tab) { gap: 0; }
+  .fs-tab { padding: 3px 8px; }
+}
+
 /* Тело активного таба. Сверху тесно: заголовок списка — такая же строка, как данные,
    и большой отступ делал её «первой высокой строкой» (§7a). */
 /* Тело таба прокручивается ВБОК, когда таблица шире окна (волна 23, Ф3): на телефоне в
@@ -399,6 +450,25 @@ body { overflow: hidden; }
    обрезает переполнение (скругление панели), а прокрутки не было. Прокручивается только
    тело: полоса табов остаётся на месте. Липких заголовков нет — прокрутке не мешает. */
 .fs-list { padding: 4px 16px 12px; overflow-x: auto; }
+/* ЛЕСТНИЦА РОЛЕЙ (волна 25, Ф3; решение Ивана 2026-10-19). В тесноте прячутся менее
+   важные колонки, а не включается прокрутка. Ступень ставит измеритель `useFit`
+   (`FormShell`): поднимает `data-fit`, пока список шире своей панели. Приоритет — свойство
+   РОЛИ: новая таблица на ролях получает поведение даром.
+     1 — описание: код — ключ и для человека, описание полезно, но уходит первым;
+     2 — служебный счёт и номер документа; 3 — контекст ленты (дата, контрагент);
+     4 — свободный текст документа;
+     5 — колонка кода сужается до `--col-key-min`, длинный код — в многоточие.
+   Не прячутся никогда: № строки, глиф, код, числа и поля ввода, «Ед.», деньги, команды.
+   `overflow-x: auto` выше — страховка последней ступени (телефон). У `.prow` описание
+   уходит, а его трек остаётся пустым и гибким: числа по-прежнему у правого края. */
+.fs-list[data-fit] { --prow-desc: minmax(0, 1fr); }
+.fs-list[data-fit] :is(table.grid :is(th, td).c-desc, .prow .name) { display: none; }
+.fs-list:is([data-fit="2"], [data-fit="3"], [data-fit="4"], [data-fit="5"])
+  table.grid :is(th, td):is(.c-count, .c-no) { display: none; }
+.fs-list:is([data-fit="3"], [data-fit="4"], [data-fit="5"])
+  table.grid :is(th, td):is(.c-date, .c-cp) { display: none; }
+.fs-list:is([data-fit="4"], [data-fit="5"]) table.grid :is(th, td).c-txt { display: none; }
+.fs-list[data-fit="5"] { --col-key: var(--col-key-min); }
 .fs-list > :first-child { margin-top: 0; }
 /* Замещающий текст пустого таба: дышит одинаково сверху и снизу — иначе липнет к
    полосе табов (принято 2026-07-26). 8px + 4px паддинга тела = 12px, как снизу. */
@@ -429,7 +499,8 @@ body { overflow: hidden; }
 .props dd.wide :is(input, select) { width: var(--field-w-wide); }
 /* Пикер — обёртка вокруг инпута и кнопки «×»: без явной ширины он был на кнопку шире
    поля (336.8 против 320), то есть единственный элемент шапки, не слушавший токен. */
-.props dd .picker { display: inline-flex; align-items: center; width: var(--field-w); }
+.props dd .picker { display: inline-flex; align-items: center; width: var(--field-w);
+  max-width: 100%; }   /* потолок контейнера, как у инпутов (волна 25, Ф0) */
 .props dd.wide .picker { width: var(--field-w-wide); }
 .props dd .picker input { width: 100%; min-width: 0; }
 /* Охват закупки (Ф13): отмеченные проекты — ссылки в строке своего поля. Шрифт и
@@ -588,8 +659,11 @@ table.grid :is(td.c-desc, td.c-key, td.c-txt) :is(input, .picker) { width: 100%;
    шапке формы и в узких колонках, но здесь он обрезал поле втрое, оставляя справа
    мёртвую полосу. Флекс вместо inline-block — чтобы «×» стояла ВНУТРИ этой ширины
    (иначе кнопка выпирала за колонку и распирала обе). */
-table.grid td.c-key[colspan] .picker { display: flex; align-items: center; }
-table.grid td.c-key[colspan] .picker input { flex: 1; min-width: 0; max-width: none; }
+/* Волна 25, Ф3: призраки с пикером изделия больше не накрывают описание — пикер живёт
+   в одной колонке кода (`colSpan` остался у дропдаунов партий: «партия + изделие»).
+   Правило то же для обоих случаев: поле во всю свою ячейку, «×» внутри неё. */
+table.grid td.c-key .picker { display: flex; align-items: center; }
+table.grid td.c-key .picker input { flex: 1; min-width: 0; max-width: none; }
 /* Единица измерения — ВСЕГДА своя колонка, крайняя правая (§7a). Раньше «шт» ездила
    внутри ячейки кол-ва и плясала от разрядности числа. Колонка узкая (по содержимому),
    значение выключено влево — примыкает к числу своей строки.
@@ -646,6 +720,10 @@ table.grid td.num { font-family: var(--font-mono); font-variant-numeric: tabular
    вылезала, а в широком колонка не добирала. Ширина = 100% (остаток после
    служебных колонок `c-fit`/`num`/`act`, каждая по содержимому). */
 table.grid td.c-desc { max-width: 0; width: 100%; }
+/* …но не ниже пола (волна 25, Ф3): `min-width` сильнее `max-width`, и таблица, которой
+   не хватает места на описание в 140px, вылезает за край — это сигнал измерителю
+   (`useFit`) поднять ступень и убрать описание целиком. */
+table.grid :is(th, td).c-desc { min-width: var(--col-desc-min); }
 .cell-ellip { display: block; max-width: 100%; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .seg { font-family: var(--font-mono); }
@@ -685,7 +763,9 @@ tr.row { border-left: 2px solid transparent; }
      «Потребность» синхронны. Длинные коды переносятся внутри своей колонки (см.
      .prow .link overflow-wrap), а не наезжают на «Назв.». */
   /* Ф3a-добор: глиф уехал в ведущую ячейку (`.tree-cell`) — треугольник·глиф·код едут
-     единым блоком, отступая по глубине (UI_GUIDE §7a). Первая колонка = 18+190 = 208.
+     единым блоком, отступая по глубине (UI_GUIDE §7a). Первая колонка = 18+190 = 208;
+     с волны 25 — `--col-key` + 8px (у «Строк» закупки + 28px): одна ширина кода на обе
+     семьи списков, и пятая ступень `data-fit` сужает их одним токеном.
      Ф12c: у «Надо» появилась своя колонка единиц (28px) — «шт» больше не приклеена
      к числу внутри ячейки количества (§7a, сквозное правило).
      2026-08-05: разбор-сегменты заменены на ПЯТЬ числовых колонок (Потр. · Компл. ·
@@ -706,23 +786,27 @@ tr.row { border-left: 2px solid transparent; }
      у прибора живёт корзина. Поля 10px с обеих сторон (слева 8px + 2px кромка
      статуса), поэтому от глифа до края слева ровно столько же, сколько от «шт»
      справа. */
-  grid-template-columns: var(--col-rn) 208px minmax(140px, 1fr) repeat(5, 74px) 55px;
+  grid-template-columns: var(--col-rn) calc(var(--col-key) + 8px) var(--prow-desc)
+    repeat(5, 74px) 55px;
   border-left: 2px solid transparent; padding: 3px 10px 3px 8px; }
 .pgrid--acts .prow {
-  grid-template-columns: var(--col-rn) 208px minmax(140px, 1fr) repeat(5, 74px) 55px 44px; }
+  grid-template-columns: var(--col-rn) calc(var(--col-key) + 8px) var(--prow-desc)
+    repeat(5, 74px) 55px 44px; }
 /* «Привязка» закупки живёт на той же сетке строк (2026-08-05), но со своим числовым
    хвостом: `Баланс · Разложено · Остаток` + единица. Треки те же 74/55px, поэтому два
    аккордеона продукта читаются как один приём. Колонка кода шире: в ней код ЗАКАЗА
    («Нева-1/03»), а не артикул. Хвостовой трек — «Стоимость» (2026-08-07): шире числовых
    (в нём «12 500,00 ₽») и стоит за единицей измерения, как в таблицах-`grid`. */
 .pgrid--alloc .prow {
-  grid-template-columns: var(--col-rn) 228px minmax(140px, 1fr) repeat(3, 74px) 55px 104px; }
+  grid-template-columns: var(--col-rn) calc(var(--col-key) + 28px) var(--prow-desc)
+    repeat(3, 74px) 55px 104px; }
 /* Колонка команд у «Строк» закупки (2026-08-11, корзина приехала из снятого таба).
    Отдельным правилом на ПАРУ классов, а не `pgrid--acts` в одиночку: тот несёт свой
    шаблон колонок, и в паре побеждал бы последний по файлу — то есть случайность.
    Здесь обе роли названы явно, и ширина команды та же 44px, что у «Приборов». */
 .pgrid--alloc.pgrid--acts .prow {
-  grid-template-columns: var(--col-rn) 228px minmax(140px, 1fr) repeat(3, 74px) 55px 104px 44px; }
+  grid-template-columns: var(--col-rn) calc(var(--col-key) + 28px) var(--prow-desc)
+    repeat(3, 74px) 55px 104px 44px; }
 /* Ведущая ячейка строки-заказа: spacer вместо раскрывателя — коды заказов встают в
    одну вертикаль под кодом изделия, как листья под узлом в дереве «Приборов». */
 .pgrid--alloc .alloc-sub { padding-left: 18px; }
@@ -798,7 +882,8 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
   font-size: 12px; line-height: 1; color: var(--fg-dim); }
 .col-filter .chev:hover { color: var(--fg-bright); }
 .col-filter .chev.on { color: var(--accent); }
-.col-filter-veil { position: fixed; inset: 0; z-index: 15; }   /* ниже меню (20) */
+/* Подложка «клик мимо» под меню — в портале `AnchoredMenu` (`onVeil`), не по месту. */
+.menu-veil { position: fixed; inset: 0; z-index: 15; }   /* ниже меню (20) */
 /* Меню фильтра — тот же слой, что у пикеров, но узкое: в нём три-четыре слова, а
    `min-width: 320px` пикера рассчитан на «код + описание» в строке. */
 .col-filter-menu { min-width: 132px; }
@@ -883,14 +968,17 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
 .stats-caption { flex-basis: 100%; color: var(--fg-dim); font-size: 11px;
   text-transform: uppercase; letter-spacing: .04em; }
 .stats-caption .ci.sg { margin-right: 6px; }
-.sgroup { display: flex; gap: 24px; }
+/* Группа переносит статы сама (волна 25): `.stats` переносит группы целиком, а группа
+   шире панели (четыре суммы бюджета при тесной рабочей области) вылезала за край. */
+.sgroup { display: flex; flex-wrap: wrap; gap: 10px 24px; }
 .sgroup.aside { margin-left: auto; padding-left: 28px; border-left: 1px solid var(--border); }
 /* Одинокая группа справа (сумма заказа, волна 24): отделять её не от чего — линии нет. */
 .sgroup.aside:first-child { padding-left: 0; border-left: none; }
 .stat { display: flex; flex-direction: column; gap: 2px; }
 .stat-label { color: var(--fg-dim); font-size: 11px; }
 .stat-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-  font-size: 15px; font-weight: 500; color: var(--fg-bright); }
+  font-size: 15px; font-weight: 500; color: var(--fg-bright);
+  white-space: nowrap; }   /* число — одна лексема: деньги не переносятся по ₽ (в25 Ф0) */
 .stat-val.dim { color: var(--fg-dim); font-weight: 400; }
 .stat-val.t-ok { color: var(--st-ok); }
 .stat-val.t-wip { color: var(--st-wip); }

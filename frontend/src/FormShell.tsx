@@ -26,6 +26,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { FormCommands, FormCornerCommand, type FormCommandProps } from './FormHeader'
 import { tell } from './dialog'
+import { useFit } from './useFit'
 
 // Таб = один список формы. Счётчиков в табах НЕТ (решение 2026-07-26): числа рядом с
 // подписью шумели — счёт переехал в мету, которая без него была скудной (§13.6).
@@ -74,6 +75,11 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
 
   const onDelete = cmd.onDelete && (() => { gone.current = true; cmd.onDelete!() })
 
+  // Теснота списка (волна 25, Ф3): ступень лестницы ролей — по замеру, на смену таба,
+  // сущности и замка (в правке у строк появляются поля и команды).
+  const list = useRef<HTMLDivElement>(null)
+  useFit(list, `${active?.key}:${id}:${locked}`)
+
   return (
     <div className={locked ? 'form-locked' : ''}>
       <div className="fs-title">{code}</div>
@@ -106,13 +112,13 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
           <div className="fs-tabs">
             {tabs.map((t, i) => (
               <button key={t.key} className={'fh-ctl fs-tab' + (t === active ? ' on' : '')}
-                onClick={() => setTab(i)}>
+                title={t.label} onClick={() => setTab(i)}>
                 <span className={'ci ci-' + t.icon} />
                 <span className="lbl">{t.label}</span>
               </button>
             ))}
           </div>
-          <div className="fs-list">{active?.content}</div>
+          <div className="fs-list" ref={list}>{active?.content}</div>
         </div>}
     </div>
   )
