@@ -2807,14 +2807,85 @@ class AllocationTests(EngineTestBase):
         self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(unit_cost=D(7))
         self.assertEqual(budget()['spent'], D(269))           # поставка без заказа — по УПД
 
-    def test_committed_cost_rides_the_need_rows(self):
+    def test_ordered_cost_is_money_of_what_is_still_coming(self):
+        """2026-10-19 («сумма не сходится»): деньги обещанной доли «Заказа» — ровно те
+        количества, что в нём лежат: не приехавшее по зафиксированным заказам, по счёту.
+        Приехавшее уходит в «Склад» по цене партии и отсюда пропадает."""
         pu = self._order([self.scr.id])
-        engine.update_purchase_line(pu.lines.get(item=self.scr), price=D('99.90'))
+        engine.update_purchase_line(pu.lines.get(item=self.scr), D(30), price=D('255.00'))
         rows = lambda: {c['component_code']: c for c in
                         engine.project_deficit(self.prj, with_tree=False)['components']}
-        self.assertEqual(rows()['SCR']['committed_cost'], D(0))      # черновик
+        self.assertEqual(rows()['SCR']['ordered_cost'], D(0))        # черновик
         engine.lock_purchase(pu)
-        self.assertEqual(rows()['SCR']['committed_cost'], D('99.90'))
+        self.assertEqual(rows()['SCR']['ordered_cost'], D(255))      # едет: 30 × 255/30
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        engine.lock_receipt(r)
+        self.assertEqual(rows()['SCR']['ordered_cost'], D(0))        # приехало → «Склад»
+
+    def test_need_plan_sums_to_budget_plan(self):
+        """2026-10-19 (решение Ивана: одинаковые числа обязаны совпадать): план позиции =
+        потрачено по ней + непокрытое по оценке; Σ по строкам + траты вне потребности =
+        «план» бюджета до копейки — в проекте и в витрине закупки."""
+        self.scr.estimated_cost = D(10)
+        self.scr.save(update_fields=['estimated_cost'])
+        self.nut.estimated_cost = D(3)
+        self.nut.save(update_fields=['estimated_cost'])
+        pu = self._order([self.scr.id])
+        engine.update_purchase_line(pu.lines.get(item=self.scr), D(30), price=D('255.00'))
+        engine.lock_purchase(pu)                         # счёт 255 ₽ за 30 из 40
+        self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(unit_cost=D(7))
+        extra = self.make_item('EXTRA', kind='material')     # не по BOM
+        self.receipt_lot(extra, self.prj, 1).origin.lots.update(unit_cost=D(50))
+
+        d = engine.project_deficit(self.prj, with_tree=False)
+        rows = {c['component_code']: c for c in d['components']}
+        self.assertEqual(rows['SCR']['plan_cost'], D(355))   # 255 по счёту + 10 × 10
+        self.assertEqual(rows['NUT']['plan_cost'], D(38))    # 2 × 7 по УПД + 8 × 3
+        self.assertEqual(d['outside_spent'], D(50))
+        plan = engine.project_budget(self.prj)['plan']
+        self.assertEqual(plan, D(443))
+        self.assertEqual(sum(r['plan_cost'] for r in rows.values()) + d['outside_spent'], plan)
+        shop = engine.procurement_demand(self.plan)
+        self.assertEqual(sum(r['plan_cost'] for r in shop['rows']) + shop['outside_spent'], plan)
+        self.assertFalse(any(r['unestimated'] for r in rows.values()))
+        self.nut.estimated_cost = None                   # непокрытое есть, оценки нет
+        self.nut.save(update_fields=['estimated_cost'])
+        rows = {c['component_code']: c for c in
+                engine.project_deficit(self.prj, with_tree=False)['components']}
+        self.assertTrue(rows['NUT']['unestimated'])
+        self.assertEqual(engine.project_budget(self.prj)['unestimated'], ['NUT'])
+
+    def test_locked_plan_surplus_enters_plan_at_once(self):
+        """2026-10-19 (решение Ивана): зафиксированная закупка сразу двигает план на свою
+        сумму с запасом — это инструмент оценки, какие запасы проект может себе позволить.
+        По каждой строке Компл. + Склад + Заказ + нехватка = план позиции, до заказа и
+        после, а Σ строк = план бюджета."""
+        self.scr.estimated_cost = D(10)
+        self.scr.save(update_fields=['estimated_cost'])
+        self.nut.estimated_cost = D(3)
+        self.nut.save(update_fields=['estimated_cost'])
+        engine.update_procurement_line(self.plan.lines.get(item=self.nut), D(25))  # нужда 10
+
+        def check(plan):
+            d = engine.project_deficit(self.prj, with_tree=False)
+            rows = {c['component_code']: c for c in d['components']}
+            for r in rows.values():
+                members = (r['kitted_cost'] + r['in_stock_cost'] + r['ordered_cost']
+                           + (r['planned'] + r['wip'] + max(D(0), -r['balance'])) * r['price'])
+                self.assertEqual(members, r['plan_cost'], r['component_code'])
+            self.assertEqual(sum(r['plan_cost'] for r in rows.values()) + d['outside_spent'],
+                             plan)
+            self.assertEqual(engine.project_budget(self.prj)['plan'], plan)
+            return rows
+
+        check(D(430))                          # черновая закупка — по нужде: 40×10 + 10×3
+        engine.lock_procurement(self.plan)
+        rows = check(D(475))                   # запас гайки сразу в плане: 40×10 + 25×3
+        self.assertEqual(rows['NUT']['plan_cost'], D(75))
+        pu = self._order([self.scr.id])
+        engine.update_purchase_line(pu.lines.get(item=self.scr), D(40), price=D('380.00'))
+        engine.lock_purchase(pu)
+        check(D(455))                          # винт ушёл в счёт: 380 + 25×3, без скачка
 
     def test_project_of_procurement_changes_only_without_purchases(self):
         prj2 = models.Project.objects.create(code='P2', description='Проект 2')

@@ -61,7 +61,8 @@ export function DemandRows({ st, editable, empty, openItem, take }: {
   const no = rowNumbers(d.rows)          // постоянный номер строки — по полному своду
   return (
     <div className="pgrid pgrid--acts">
-      <NeedSums rows={shown} acts />
+      <NeedSums rows={shown} acts outside={d.outside_spent}
+        filtered={shown.length !== d.rows.length} />
       <NeedHead f={f} catHead={byCat.head} acts />
       {shown.length === 0
         ? <div className="prow prow--comp prow--empty">

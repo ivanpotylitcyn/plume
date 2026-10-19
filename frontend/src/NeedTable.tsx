@@ -117,8 +117,12 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
 // «Сколько стоит то, что показано»: строка над шапкой, по ОТФИЛЬТРОВАННЫМ строкам —
 // фильтр по категории даёт деньги на детали, электронику, крепёж по отдельности. Это и
 // было нужно для планирования закупок (решения Ивана 2026-10-15):
-//   · Потр., Заказ, Баланс — по оценке Item (факта тут нет и быть не может);
+//   · Потр. — ПЛАН позиции: потрачено по ней + впереди (план закупки с запасом, сборка,
+//     нехватка) по оценке (2026-10-19, см. `PlanSumCell`); без фильтров сходится с
+//     «планом» шапки проекта до копейки, и Компл. + Склад + Заказ + нехватка = Потр.;
+//   · Баланс — по оценке Item (факта у недостающего нет и быть не может);
 //   · Компл., Склад — по факту партий (цена УПД / себестоимость);
+//   · Заказ — обещанное по счёту, план и сборка по оценке (2026-10-19, см. `OrderSumCell`);
 //   · над Балансом — ТОЛЬКО минусы, «предстоит купить»: излишек одной позиции не
 //     покупает другую, а плюсы и нули уже учтены в Компл./Складе/Заказе.
 // В тысячах, единица — в колонке «Ед.» («тыс ₽», правка Ивана: единица квалифицирует
@@ -144,24 +148,37 @@ function SumCell({ value, glyph, tone, what }: {
   )
 }
 
-// Сумма над «Заказом» с раскладкой под курсором (волна 24, решение Ивана): сколько всего
-// в зафиксированных закупках и заказах проекта, сколько из этого уже оплачиваем
-// (зафиксированные заказы — по счёту) и на сколько обязательства ещё предстоят (план
-// зафиксированных закупок сверх заказов — по оценке). Всего = оплачено + не оплачено.
+// Сумма над «Заказом» с раскладкой под курсором (волна 24, решение Ивана): обещанное
+// (зафиксированные заказы, ещё не приехало — по счёту) и то, что ещё предстоит (план
+// зафиксированных закупок сверх заказов, у производимого — незакрытая сборка; по оценке).
 // Цвет — тот же словарь, что у ящика «Заказ»: зелёное — обязательство, жёлтое — на нас.
-function OrderSumCell({ value, paid, unpaid, unpaidMissing }: {
-  value: number; paid: number; unpaid: number; unpaidMissing: number
+//
+// ЯЧЕЙКА = СУММА РАСКЛАДКИ, без остатка (багрепорт 2026-10-19: «сумма не сходится»). До
+// этого ячейка считала все количества «Заказа» по оценке, а «оплачиваем» — все
+// обязательства по счёту, ВКЛЮЧАЯ приехавшее: приехавшее уже стоит в «Складе»/«Компл.»
+// по цене партии, и сумма над «Заказом» не сходилась с собственной раскладкой. Теперь
+// обе стороны — одни и те же количества колонки; все обязательства целиком — это
+// «потрачено» в панели бюджета проекта.
+//
+// Тон ящика — ТО ЖЕ правило, что у строк (`BalanceCells`), сложенное по показанным строкам
+// (багрепорт 2026-10-19: фильтр по крепежу — все ящики зелёные, а у суммы жёлтый): жёлтый,
+// если хоть у одной строки есть доля «на нас» (план / сборка), иначе зелёный. Признак —
+// по КОЛИЧЕСТВАМ (`ours`), а не по деньгам: позиция плана без оценки тоже «на нас».
+function OrderSumCell({ paid, unpaid, unpaidMissing, ours }: {
+  paid: number; unpaid: number; unpaidMissing: number; ours: boolean
 }) {
+  const value = paid + unpaid
+  const tone = !value && !ours ? 'none' : ours ? 'wip' : 'ok'
   return (
     <span className="pnum sumtip-host">
       {kRub(value)}
-      <span className={`ci sg ci-package sg-${value ? 'wip' : 'none'}`} />
+      <span className={`ci sg ci-package sg-${tone}`} />
       <span className="sumtip">
-        <span className="all">всего в закупках и заказах</span>
-        <span className="all">{money(paid + unpaid)}</span>
-        <span className="g-available">оплачиваем (заказы, по счёту)</span>
+        <span className="all">всего в «Заказе»</span>
+        <span className="all">{money(value)}</span>
+        <span className="g-available">едет (заказы, по счёту)</span>
         <span className="g-available">{money(paid)}</span>
-        <span className="g-on_order">предстоит (закупки сверх заказов, по оценке)</span>
+        <span className="g-on_order">предстоит (план сверх заказов, по оценке)</span>
         <span className="g-on_order">{money(unpaid)}</span>
         {unpaidMissing > 0 &&
           <span className="miss">{unpaidMissing} поз. плана без оценки — «предстоит» неполно</span>}
@@ -170,37 +187,97 @@ function OrderSumCell({ value, paid, unpaid, unpaidMissing }: {
   )
 }
 
-export function NeedSums({ rows, acts }: { rows: DeficitComponent[]; acts?: boolean }) {
-  let need = 0, kitted = 0, stock = 0, order = 0, short = 0
-  let paid = 0, unpaid = 0, unpaidMissing = 0
+// Сумма над «Потр.» — ПЛАН (2026-10-19, решение Ивана: «одинаковые числа в разных местах
+// обязаны совпадать; явное лучше неявного»). Раньше здесь стояла потребность по оценке, а
+// в шапке проекта — «план (прогноз)» с фактами; как только заказы зафиксировали по счетам,
+// два «плана» разошлись на разницу счёт/оценка, и пользователь не знал, какому верить.
+// Теперь одно правило (движок `plan_cost`), и раскладка показывает сверку явно: без
+// фильтров последней строкой стоит тот же «план (прогноз)», что в шапке, — до копейки.
+// С фильтром сверки нет (показана часть плана) — так и сказано.
+//
+// Запас зафиксированной закупки входит в план СРАЗУ (2026-10-19, решение Ивана): «какие
+// запасы мы можем себе позволить» — поэтому он назван отдельной строкой («в т.ч.»), а не
+// растворён во «впереди». Отсюда же тождество над колонками: Компл. + Склад + Заказ +
+// нехватка = план по позициям.
+function PlanSumCell({ spent, ahead, reserve, outside, filtered }: {
+  spent: number; ahead: number; reserve: number; outside: number; filtered: boolean
+}) {
+  const value = spent + ahead
+  return (
+    <span className="pnum sumtip-host">
+      {kRub(value)}
+      <span className="sumtip">
+        <span className="all">план по позициям</span>
+        <span className="all">{money(value)}</span>
+        <span className="g-available">потрачено (заказы по счёту, УПД без заказа)</span>
+        <span className="g-available">{money(spent)}</span>
+        <span className="g-on_order">впереди (план закупок, нехватка — по оценке)</span>
+        <span className="g-on_order">{money(ahead)}</span>
+        {reserve > 0 && <>
+          <span className="all">в т.ч. запас сверх потребности по плану закупки</span>
+          <span className="all">{money(reserve)}</span>
+        </>}
+        {filtered
+          ? <span className="note">фильтр: показана часть плана проекта</span>
+          : <>
+              {outside !== 0 && <>
+                <span className="all">вне потребности (куплено не по BOM)</span>
+                <span className="all">{money(outside)}</span>
+              </>}
+              <span>= план (прогноз) проекта</span>
+              <span>{money(value + outside)}</span>
+            </>}
+      </span>
+    </span>
+  )
+}
+
+export function NeedSums({ rows, acts, outside, filtered }: {
+  rows: DeficitComponent[]; acts?: boolean
+  outside: number          // траты вне потребности — замыкают сверку с планом шапки
+  filtered: boolean        // показана часть строк: сверки с планом нет
+}) {
+  let spent = 0, ahead = 0, reserve = 0, kitted = 0, stock = 0, short = 0
+  let paid = 0, unpaid = 0, unpaidMissing = 0, oursAny = false
   const unestimated: string[] = []
   for (const r of rows) {
+    spent += r.spent_cost
+    ahead += r.plan_cost - r.spent_cost
+    // Запас по плану — та часть плана закупки, что сверх нужды (плюс баланса, но не больше
+    // самого плана: плюс от склада запасом закупки не является).
+    if (r.price != null && r.planned > 0 && r.balance > 0)
+      reserve += Math.min(r.planned, r.balance) * r.price
+    if (r.unestimated) unestimated.push(r.component_code)
     kitted += r.kitted_cost
     stock += r.in_stock_cost
-    paid += r.committed_cost
-    if (r.planned) {
+    paid += r.ordered_cost
+    // Доля «на нас» в «Заказе»: план закупок и незакрытая сборка — только по оценке.
+    const ours = r.planned + r.wip
+    if (ours > 0) oursAny = true
+    if (ours) {
       if (r.price == null) unpaidMissing += 1
-      else unpaid += r.planned * r.price
+      else unpaid += ours * r.price
     }
-    if (r.price == null) { if (r.need || r.on_order) unestimated.push(r.component_code); continue }
-    need += r.need * r.price
-    order += r.on_order * r.price
-    if (r.balance < 0) short += r.balance * r.price
+    if (r.price != null && r.balance < 0) short += r.balance * r.price
   }
   return (
     <div className="prow prow--sums">
       <span className="rn" />
-      <span className="tree-cell">Оценка</span>
-      {/* Без ▲ (правка Ивана): треугольник занят статусами — здесь просто красный текст. */}
+      {/* «Деньги», а не «Оценка» (2026-10-19): в строке и факты партий, и счета, и оценка. */}
+      <span className="tree-cell">Деньги</span>
+      {/* Без ▲ (правка Ивана): треугольник занят статусами — здесь просто красный текст.
+          Признак и слова — те же, что в шапке проекта: без фильтров счётчики совпадают. */}
       <span className="name">
         {unestimated.length > 0 &&
           <span className="unest" title={'без оценки: ' + unestimated.join(', ')}>
-            {unestimated.length} поз. без оценки — суммы неполны</span>}
+            {unestimated.length} поз. без оценки — план неполон</span>}
       </span>
-      <SumCell value={need} what="потребность по оценке" />
+      <PlanSumCell spent={spent} ahead={ahead} reserve={reserve} outside={outside}
+        filtered={filtered} />
       <SumCell value={kitted} glyph="notebook" tone="ok" what="впаяно, по цене партий" />
       <SumCell value={stock} glyph="layers" tone="ok" what="на складе, по цене партий" />
-      <OrderSumCell value={order} paid={paid} unpaid={unpaid} unpaidMissing={unpaidMissing} />
+      <OrderSumCell paid={paid} unpaid={unpaid} unpaidMissing={unpaidMissing}
+        ours={oursAny} />
       <SumCell value={short} glyph="warning" tone="order"
         what="предстоит купить (только минусы баланса), по оценке" />
       <span className="puom">тыс ₽</span>

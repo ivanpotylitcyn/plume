@@ -426,7 +426,7 @@ export default function App() {
             selId={sel?.kind === 'location' ? sel.id : null}
             onSelect={id => setSel({ kind: 'location', id })}
             rows={[...locationRows].map(l => ({ id: l.id, code: l.code, name: l.description,
-              glyph: <span className="ci ci-database" /> }))} />}
+              glyph: <span className="ci ci-location" /> }))} />}
 
         {mode === 'purchases' &&
           <ModeList heading="Заказы" newLabel="＋ Новый заказ — из закупки" projectFilter

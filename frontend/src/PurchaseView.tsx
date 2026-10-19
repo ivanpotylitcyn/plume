@@ -409,7 +409,9 @@ function GhostRow({ purchaseId, items, rev, busy, run }: {
           placeholder={cands.length ? 'Позиция закупки…' : 'Все позиции закупки взяты'}
           onEnter={add} onClear={() => { setItemId(''); setQty('') }} />
       </td>
-      <td className="num" />
+      {/* Ячейка «Баланса» отсюда снята (2026-10-18): колонку убрали из заголовка в
+          волне 24, а пустышка в призраке осталась — поле количества встало под
+          «Поступило», «＋» уехал в лишнюю колонку за корзинами. */}
       <td className="num">
         <input className="qty-in" value={qty} disabled={busy} placeholder="0"
           onChange={e => setQty(e.target.value)}

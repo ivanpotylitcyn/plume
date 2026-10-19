@@ -136,7 +136,8 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
       content: data.components.length === 0
         ? <div className="tab-empty">Нет компонентов — задайте приборы и их составы.</div>
         : <div className="pgrid">
-            <NeedSums rows={shown} />
+            <NeedSums rows={shown} outside={data.outside_spent}
+              filtered={shown.length !== data.components.length} />
             <NeedHead f={filters} catHead={byCat.head} />
             {shown.length === 0
               ? <div className="prow prow--comp prow--empty">
@@ -328,7 +329,7 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
         <Stat label="потрачено (факт)" value={money(b.spent)}
           title="Зафиксированные заказы по счёту + поставки без заказа по УПД" />
         <Stat label="план (прогноз)" value={money(b.plan)}
-          title="Потрачено + ещё не заказанное по оценке изделий" />
+          title="Потрачено + план зафиксированных закупок (с запасом) и нехватка — по оценке изделий" />
         {b.budget !== null
           ? <Stat label="бюджет на материалы" value={money(b.budget)} />
           : <Stat label="бюджет на материалы" value="— не задан" dim />}

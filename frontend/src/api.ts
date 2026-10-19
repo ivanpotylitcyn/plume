@@ -81,14 +81,21 @@ export interface DeficitComponent {
   // Деньги строки (волна 23, Ф2): оценка Item — для Потр./Заказа/Баланса (`null` — без
   // оценки); факт партий — для Компл./Склада. Суммы над колонками считает `NeedSums`.
   price: number | null; kitted_cost: number; in_stock_cost: number
-  // Волна 24: деньги обязательств по позиции — Σ цен строк зафиксированных заказов
-  // проекта (по счёту). Раскладка суммы над «Заказом».
-  committed_cost: number
+  // Деньги ОБЕЩАННОЙ доли «Заказа» (2026-10-19): ещё не приехавшее по зафиксированным
+  // заказам, по счёту. Та же доля количеств, что в `on_order`, поэтому сумма над
+  // «Заказом» раскладывается без остатка: обещанное + план (по оценке).
+  ordered_cost: number
+  // План позиции (2026-10-19): потрачено по ней (по счёту / УПД без заказа) + ещё не
+  // покрытое по оценке — то же правило, что «план» бюджета. `unestimated` — непокрытое
+  // есть, а оценки нет (тот же признак, что «без оценки» в шапке проекта).
+  spent_cost: number; plan_cost: number; unestimated: boolean
 }
 export interface Deficit {
   project_id: number; project_code: string; project_name: string
   demands: DeficitDemand[]
   components: DeficitComponent[]
+  // Траты вне потребности (куплено не по BOM): Σ `plan_cost` строк + это = план бюджета.
+  outside_spent: number
   // Масштаб работы (волна 23, Ф4): штуки наших изделий по дереву, по категориям канона;
   // `forms` — формы числа (один / два / пять) для склонения в мете.
   scale: { category: string | null; count: number; forms: [string, string, string] }[]
@@ -490,7 +497,7 @@ export interface ProjectClosure {
 export interface DemandRow extends DeficitComponent {
   in_lines: boolean
 }
-export interface Demand { rows: DemandRow[] }
+export interface Demand { rows: DemandRow[]; outside_spent: number }
 
 // ── Закупка (волна 7; с волны 24 — источник правды, однопроектная) ──
 
