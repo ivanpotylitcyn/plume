@@ -23,7 +23,7 @@ import { CounterpartyView } from './CounterpartyView'
 import { AccountView } from './AccountView'
 import { applyTheme } from './core/theme'
 import { parsePath, pathOf, type Mode, type Sel } from './core/route'
-import { ItemGlyph, newestFirst, PurchaseGlyph, StatusGlyph, statusTone } from './status'
+import { ItemGlyph, newestFirst, ProcurementGlyph, PurchaseGlyph, StatusGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 import { Sash, loadSide, saveSide, type Side } from './Sash'
 
@@ -470,8 +470,8 @@ export default function App() {
             rows={[...procurements].sort(newestFirst).map(p => ({
               id: p.id, code: p.code || `Закупка #${p.id}`, name: p.description,
               projectCode: p.project_code,      // волна 24: закупка проектная
-              // Ф1b: закупка-план — ось только фиксация, цвет=фиксация (зелёный заперт).
-              glyph: <StatusGlyph locked={p.locked} />,
+              // Замок — фиксация; зелёный — только закрытая заказами целиком (2026-10-20).
+              glyph: <ProcurementGlyph locked={p.locked} closed={p.closed} />,
             }))} />}
       </div>
 

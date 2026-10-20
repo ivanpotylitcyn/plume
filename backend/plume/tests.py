@@ -13,6 +13,7 @@ from urllib.parse import quote
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.test import Client, TestCase, override_settings
 
@@ -2229,6 +2230,12 @@ class ProcurementFormTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.lock_procurement(p)                 # пустую нельзя
         line = engine.add_procurement_line(p, self.make_item('A'), D(10))
+        # 2026-10-20: без даты не фиксируют — гейт движка и CHECK в БД
+        with self.assertRaisesMessage(ValidationError, 'укажите дату закупки'):
+            engine.lock_procurement(p)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            models.Procurement.objects.filter(pk=p.pk).update(locked=True)
+        engine.update_procurement(p, date=DAY)
         engine.lock_procurement(p)
         self.assertTrue(p.locked)
         with self.assertRaises(ValidationError):
@@ -2238,7 +2245,7 @@ class ProcurementFormTests(EngineTestBase):
 
     def test_unpost_reopens_and_delete_replaces_cancel(self):
         """Замок снимается и возвращается; отмены нет — только удаление (Р1)."""
-        p = engine.create_procurement(self.prj, self.user)
+        p = engine.create_procurement(self.prj, self.user, date=DAY)
         line = engine.add_procurement_line(p, self.make_item('A'), D(10))
         engine.lock_procurement(p)
         engine.unlock_procurement(p)
@@ -2684,7 +2691,8 @@ class AllocationTests(EngineTestBase):
         models.BomLine.objects.create(parent=dev, component=self.scr, qty=D(4))
         models.BomLine.objects.create(parent=dev, component=self.nut, qty=D(1))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
-        self.plan = engine.create_procurement(self.prj, self.user, description='свод')
+        self.plan = engine.create_procurement(self.prj, self.user, description='свод',
+                                              date=DAY)
         engine.add_procurement_line(self.plan, self.scr, D(40))
         engine.add_procurement_line(self.plan, self.nut, D(10))
 
@@ -3096,7 +3104,7 @@ class ProcurementHttpTests(TestCase):
         self.assertEqual(svod.json()['rows'], [])
 
     def test_procurement_crud_lock_and_xlsx(self):
-        r = self.c.post('/api/procurements/', {'description': 'весна'},
+        r = self.c.post('/api/procurements/', {'description': 'весна', 'date': '2026-05-01'},
             content_type='application/json')
         self.assertEqual(r.status_code, 201)
         pid = r.json()['id']
@@ -7706,6 +7714,30 @@ class MoneyBlockTests(CostFixtures, EngineTestBase):
         self.assertEqual(m['total'], D('730.00'))
         self.assertFalse(m['is_fact'])
         self.assertAlmostEqual(float(m['invoice_gap']), 0.10)   # 330 против 3×100
+
+    def test_procurement_closed_is_money_is_fact(self):
+        """Зелёный замок закупки (2026-10-20) — то же правило, что «факт: всё заказано»:
+        каждая строка плана взята ЗАФИКСИРОВАННЫМИ заказами. Черновой заказ не закрывает."""
+        a, b = self.make_item('A'), self.make_item('B')
+        proc = engine.create_procurement(self.prj, self.user)
+        models.ProcurementLine.objects.create(procurement=proc, item=a, qty=D(5))
+        models.ProcurementLine.objects.create(procurement=proc, item=b, qty=D(2))
+        closed = lambda: (engine.procurements_closed([proc])[proc.id],
+                          engine.procurement_money(proc)['is_fact'],
+                          engine._procurement_rows(
+                              models.Procurement.objects.filter(pk=proc.pk))[0]['closed'])
+        pu = engine.create_purchase(proc, self.user, item_ids=[a.id, b.id], date=DAY)
+        engine.update_purchase(pu, contractor=self.supplier)
+        la, lb = pu.lines.get(item=a), pu.lines.get(item=b)
+        engine.update_purchase_line(la, D(5), price=D('50.00'))
+        engine.update_purchase_line(lb, D(1), price=D('10.00'))
+        self.assertEqual(closed(), (False, False, False))      # черновик не обязательство
+        engine.lock_purchase(pu)
+        self.assertEqual(closed(), (False, False, False))      # B взят не весь
+        engine.unlock_purchase(pu)
+        engine.update_purchase_line(lb, D(2), price=D('20.00'))
+        engine.lock_purchase(pu)
+        self.assertEqual(closed(), (True, True, True))
 
     def test_project_spent_shares_and_over_need(self):
         dev = self.make_item('DEV', manufactured=True)

@@ -10,7 +10,7 @@
 // «нет данных» значит потерять единственное, что в пустом табе полезно.
 import type { AccountDocumentRow, FeedProcurementRow, FeedPurchaseRow,
   FeedReceiptRow } from './api'
-import { CounterpartyRef, moneyCol, num, PurchaseGlyph, StatusGlyph } from './status'
+import { CounterpartyRef, moneyCol, num, ProcurementGlyph, PurchaseGlyph, StatusGlyph } from './status'
 import { viewDate } from './FormField'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
@@ -31,7 +31,7 @@ export function ProcurementFeed({ rows, empty, open }: {
       <tbody>{rows.map((p, i) => (
         <tr key={p.id} className="row">
           <td className="rn">{i + 1}</td>
-          <td className="gl"><StatusGlyph locked={p.locked} /></td>
+          <td className="gl"><ProcurementGlyph locked={p.locked} closed={p.closed} /></td>
           <td className="c-key">
             <EntityLink kind="procurement" id={p.id} open={open}>
               {p.code || `Закупка #${p.id}`}</EntityLink></td>

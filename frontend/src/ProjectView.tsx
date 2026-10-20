@@ -344,10 +344,9 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
           : <Stat label="бюджет на материалы" value="— не задан" dim />}
         {b.compass !== null &&
           <Stat label={over ? 'перерасход' : 'запас бюджета'}
-            value={money(Math.abs(b.compass))} tone={over ? 'bad' : 'ok'} />}
+            value={money(Math.abs(b.compass))} />}
         <Stat label="сверх потребности" value={signedPct(b.over_need)}
-          dim={b.over_need === null} title={overNeedTitle}
-          tone={b.over_need !== null && b.over_need > 0 ? 'wip' : undefined} />
+          dim={b.over_need === null} title={overNeedTitle} />
       </StatGroup>
       {b.unestimated.length > 0 &&
         <StatWarn title={`нет estimated_cost: ${b.unestimated.join(', ')}`}>

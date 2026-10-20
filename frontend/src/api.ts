@@ -281,11 +281,12 @@ export interface FeedProcurementRow {
   id: number; code: string | null; description: string
   date: string | null; locked: boolean; lines: number; qty: number
   project_code: string                   // волна 24: закупка проектная
+  closed: boolean                        // закрыта обязательствами (цвет замка)
 }
 // Обе стороны — в строке: лента контрагента показывает проект, лента проекта —
 // поставщика. Деньги заказа — ОЦЕНКА (`Σ qty × estimated_cost`), позиции без неё
 // перечислены кодами: неполная сумма не выдаёт себя за полную.
-export interface FeedPurchaseRow extends FeedProcurementRow {
+export interface FeedPurchaseRow extends Omit<FeedProcurementRow, 'closed'> {
   project_code: string; coverage: Status; files: number
   contractor_id: number | null; contractor_code: string; contractor_name: string
   estimate: number; unestimated: string[]
@@ -552,6 +553,7 @@ export interface Demand { rows: DemandRow[]; outside_spent: number }
 
 export interface ProcurementRow {
   id: number; locked: boolean; date: string | null
+  closed: boolean    // 2026-10-20: план целиком взят зафиксированными заказами (цвет замка)
   code: string | null; description: string; lines: number; project_code: string
 }
 export interface ProcurementFormLine {

@@ -1839,12 +1839,14 @@ def project_unlock(request, pk):
 # и мост `add-to-procurement/`) сняты. Свод стал табом «К закупке» конкретной закупки
 # (`/procurements/<pk>/deficit/`), а мост кладёт позицию **в эту** закупку, без магии
 # «найти-или-создать последний черновик».
-def _procurement_row(p):
-    """Строка списка закупок-планов для дерева навигации."""
+def _procurement_row(p, closed):
+    """Строка списка закупок-планов для дерева навигации (`closed` —
+    `engine.procurements_closed`: план целиком взят зафиксированными заказами)."""
     return {
         'id': p.id, 'code': p.code, 'description': p.description,
         'project_code': p.project.code,                  # волна 24: закупка проектная
-        'locked': p.locked, 'date': p.date, 'lines': p.lines.count(),
+        'locked': p.locked, 'closed': closed[p.id],
+        'date': p.date, 'lines': p.lines.count(),
     }
 
 
@@ -1864,8 +1866,9 @@ def procurements(request):
         return Response(engine.procurement_form(p), status=http.HTTP_201_CREATED)
 
     # Ф17: ВСЕ закупки — прятать нечего (закупок-пустышек больше не бывает, см. engine)
-    rows = [_procurement_row(p)
-            for p in models.Procurement.objects.select_related('project').order_by('-id')]
+    procs = list(models.Procurement.objects.select_related('project').order_by('-id'))
+    closed = engine.procurements_closed(procs)
+    rows = [_procurement_row(p, closed) for p in procs]
     return Response(rows)
 
 

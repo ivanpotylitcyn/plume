@@ -585,6 +585,15 @@ class Procurement(models.Model):
     class Meta:
         verbose_name = 'закупка (план)'
         verbose_name_plural = 'закупки (план)'
+        constraints = [
+            # 2026-10-20 (решение Ивана): дата закупки — когда начали это планирование.
+            # Числа закупки входят в потребность проекта и в то, как команда видит ход
+            # закупки, поэтому без даты план не фиксируют — как и заказ
+            # (`purchase_locked_has_date`). Черновик вправе быть без даты.
+            models.CheckConstraint(
+                condition=Q(locked=False) | Q(date__isnull=False),
+                name='procurement_locked_has_date'),
+        ]
 
     def __str__(self):
         return f'Закупка #{self.pk}' + (' 🔒' if self.locked else '')

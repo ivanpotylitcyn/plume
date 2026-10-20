@@ -2391,6 +2391,32 @@ def _ratio(part, whole):
     return part / whole - 1
 
 
+def _plan_left(planned, ordered):
+    """Остаток строки плана сверх заказанного ЗАФИКСИРОВАННЫМИ заказами (не меньше нуля).
+    Одно правило на деньги закупки (`procurement_money`) и её закрытость в списках
+    (`procurements_closed`) — чтобы «факт: всё заказано» и зелёный замок не разошлись."""
+    return max(ZERO, planned - ordered)
+
+
+def procurements_closed(procurements):
+    """`{procurement_id: bool}` — закрыта ли закупка обязательствами целиком: каждая строка
+    плана взята зафиксированными заказами (2026-10-20, решение Ивана: зелёный замок списка
+    отличает составленный план от завершённой работы по закупке). Ровно `is_fact` из
+    `procurement_money`, но на весь список двумя запросами, а не форма на строку."""
+    ids = [p.id for p in procurements]
+    ordered = {(pid, iid): q for pid, iid, q in (
+        models.PurchaseLine.objects
+        .filter(purchase__procurement__in=ids, purchase__locked=True)
+        .values('purchase__procurement_id', 'item_id').annotate(q=Sum('qty'))
+        .values_list('purchase__procurement_id', 'item_id', 'q'))}
+    closed = dict.fromkeys(ids, True)
+    for pid, iid, qty in (models.ProcurementLine.objects.filter(procurement__in=ids)
+                          .values_list('procurement_id', 'item_id', 'qty')):
+        if _plan_left(qty, ordered.get((pid, iid), ZERO)):
+            closed[pid] = False
+    return closed
+
+
 def procurement_money(procurement, lines=None):
     """Деньги закупки (волна 26) — главное число и его поддержка.
 
@@ -2422,7 +2448,7 @@ def procurement_money(procurement, lines=None):
             invoice_est += pl.qty * pl.item.estimated_cost
     rest, rest_unestimated, open_left = ZERO, [], False
     for line in lines:
-        left = max(ZERO, line.qty - ordered_qty.get(line.item_id, ZERO))
+        left = _plan_left(line.qty, ordered_qty.get(line.item_id, ZERO))
         if not left:
             continue
         open_left = True
@@ -4195,9 +4221,15 @@ def lock_procurement(procurement):
     """Поставить замок закупки-плана — строки read-only.
 
     Волна 19 (Ф1): бывший `send_procurement`; отмена = удаление (Р1).
+
+    2026-10-20: дата обязательна к фиксации (CHECK `procurement_locked_has_date`) —
+    гейт дублирует инвариант, чтобы вместо `IntegrityError` был внятный отказ.
     """
     if not procurement.lines.exists():
         raise ValidationError('Нельзя утвердить пустую закупку — добавьте строку.')
+    if procurement.date is None:
+        raise ValidationError(
+            'Перед фиксацией укажите дату закупки — когда начали это планирование.')
     procurement.locked = True
     procurement.save(update_fields=['locked'])
     return procurement
@@ -4928,11 +4960,14 @@ def _procurement_rows(queryset):
     одна и та же, и второго словаря под тот же смысл заводить незачем.
     """
     rows = []
-    for p in queryset.select_related('project').prefetch_related('lines').order_by('-id'):
+    qs = list(queryset.select_related('project').prefetch_related('lines').order_by('-id'))
+    closed = procurements_closed(qs)
+    for p in qs:
         lines = list(p.lines.all())
         rows.append({
             'id': p.id, 'code': p.code, 'description': p.description,
             'date': p.date, 'locked': p.locked,
+            'closed': closed[p.id],          # закрыта обязательствами (`procurements_closed`)
             'project_code': p.project.code,              # волна 24: закупка проектная
             'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
         })

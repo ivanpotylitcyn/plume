@@ -32,22 +32,23 @@ export function StatGroup({ aside, children }: { aside?: boolean; children: Reac
 }
 
 // Один стат: подпись сверху, значение крупным моно (числа сканируют, а не читают).
-// `tone` — знак от смысла, который посчитал движок ([[engine-view-seam]]). Тона — тот же
-// словарь статусов, что у глифов (§0.4): `ok` зелёный, `wip` оранжевый (2026-08-07:
-// переплата — «взяли с запасом», это ожидание, а не дефицит), `bad` красный.
+// Цвета у числа НЕТ (2026-10-20, решение Ивана): блок «Деньги» — информация, а не сигнал.
+// Перерасход, запас сверх потребности, переплата бывают почти всегда — красили бы всегда,
+// и цвет обесценился бы. Сигналы живут глифами в таблицах табов; здесь — только `dim`
+// (пусто/ноль) и `StatWarn` (данных не хватает).
 //
 // Волна 26 — блок «Деньги»: `main` — ГЛАВНОЕ число формы (самое актуальное на сегодня;
 // правило — факт, где он есть). Стоит первым, крупнее, отделено линией от поддержки —
 // одна роль на все формы, а не размер по месту. Ставится прямо в `StatPanel`, без группы.
 // `note` — короткая расшифровка под значением («факт + оценка», дата и поставщик цены).
-export function Stat({ label, value, tone, dim, title, main, note }: {
-  label: string; value: string; tone?: 'ok' | 'wip' | 'bad'; dim?: boolean; title?: string
+export function Stat({ label, value, dim, title, main, note }: {
+  label: string; value: string; dim?: boolean; title?: string
   main?: boolean; note?: string
 }) {
   return (
     <div className={'stat' + (main ? ' main' : '')} title={title}>
       <div className="stat-label">{label}</div>
-      <div className={'stat-val' + (tone ? ` t-${tone}` : '') + (dim ? ' dim' : '')}>{value}</div>
+      <div className={'stat-val' + (dim ? ' dim' : '')}>{value}</div>
       {note && <div className="stat-note">{note}</div>}
     </div>
   )

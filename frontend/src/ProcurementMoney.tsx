@@ -17,7 +17,8 @@ import { StatGroup, StatPanel, StatWarn, Stat } from './StatPanel'
 import { count, money, signedPct } from './status'
 
 // Разница со знаком: `+` переплата (взяли с запасом), `−` недозаказ (взяли меньше
-// нужды), ноль — «Переплата 0» без знака и без цвета (решение Ивана 2026-08-07).
+// нужды), ноль — «Переплата 0» без знака (решение Ивана 2026-08-07). Цвета нет
+// (2026-10-20): блок «Деньги» — информация, см. `Stat`.
 // Минус — типографский U+2212: рядом с `+` дефис выглядит короче и ниже.
 function overpayStat(overpay: number) {
   if (overpay === 0) return { label: 'переплата', value: money(0) }
@@ -25,7 +26,6 @@ function overpayStat(overpay: number) {
   return {
     label: over ? 'переплата' : 'недозаказ',
     value: (over ? '+' : '−') + money(Math.abs(overpay)),
-    tone: over ? ('wip' as const) : ('bad' as const),
   }
 }
 
@@ -47,9 +47,9 @@ export function ProcurementMoney({ c }: { c: ProcurementForm }) {
           dim={c.invoice_gap === null}
           title={'Заказанные позиции: счёт против ТЕКУЩЕЙ оценки. В активном проекте — около'
             + ' нуля (цены свежие); перед новым контрактом — насколько подорожали компоненты'} />
-        <Stat label="потребность" value={money(c.demand)} tone="ok"
+        <Stat label="потребность" value={money(c.demand)}
           title="Сколько эти позиции стоят по потребности проекта — без запаса" />
-        <Stat label={op.label} value={op.value} tone={op.tone}
+        <Stat label={op.label} value={op.value}
           title="Разница между закупкой по оценке и реальной потребностью" />
       </StatGroup>
       {c.unestimated.length > 0 &&

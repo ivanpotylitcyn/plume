@@ -174,8 +174,7 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
           <StatGroup>
             <Stat label="заказов" value={num(supply.purchases)} />
             <Stat label="не закрыто" value={num(supply.open_purchases)}
-              title="заказы, которые поставки закрыли не полностью"
-              tone={supply.open_purchases > 0 ? undefined : 'ok'} />
+              title="заказы, которые поставки закрыли не полностью" />
             <Stat label="поставок (УПД)" value={num(supply.receipts)} />
           </StatGroup>
           {/* Материальный итог — только по ЗАФИКСИРОВАННЫМ поставкам (гейт Ф15), как

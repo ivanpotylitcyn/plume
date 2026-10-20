@@ -158,7 +158,6 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
           <Stat label="по заказу" value={money(c.by_order)}
             title="Что эти позиции стоят по счёту заказа (доля цены строки)" />
           <Stat label="расхождение" value={gapMoney(c.order_gap ?? 0)}
-            tone={(c.order_gap ?? 0) !== 0 ? 'bad' : 'ok'}
             title="УПД против счёта по тем же позициям; не ноль — проверьте документы" />
         </StatGroup>}
       </MoneyBlock>}

@@ -331,7 +331,7 @@ erDiagram
     string description "развёрнутое имя (Ф10; note удалён)"
     bool locked "единый мягкий замок; зафиксирована = позиции «в плане» (оранжевые в Потребности)"
     int project_id FK "проект — верхний якорь контура (PROTECT, NOT NULL; волна 24: закупка однопроектная)"
-    date date "начало переговоров"
+    date date "начало планирования; обязательна к фиксации (CHECK procurement_locked_has_date)"
     int user_id FK "автор"
   }
   PROCUREMENTLINE {
