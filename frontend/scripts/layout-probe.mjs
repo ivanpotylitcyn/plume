@@ -33,11 +33,14 @@
 //                    скрыт. По умолчанию — как есть в приложении
 //   --edit           нажать «Редактировать» перед замером (замок формы клиентский)
 //   --tab N          только таб N (с нуля); по умолчанию — все табы
+//   --click A|B      после открытия таба нажать элементы по порядку: CSS-селектор,
+//                    `селектор@N` — N-й из найденных (с нуля); например раскрыть прибор и
+//                    его подсборку: `--click ".prow--device .chev|.prow--comp .chev@3"`
 //   --hover SEL      селектор для режима hover (по умолчанию `.prow--sums .sumtip-host`)
 //   --shots DIR      сохранять снимки экрана в DIR
 //   --strict         код выхода 1, если хоть где-то переполнение / наезд / вылет вбок
 //   --min-grid 692   критерий приёмки волны 25 (Ф4): прокрутка таблицы таба — нарушение
-//   --min-prow 832   только при рабочей области не уже порога своей семьи списков
+//   --min-prow 968   только при рабочей области не уже порога своей семьи списков
 //                    (`table.grid` / сетка `.prow`); уже — законная страховка, «·» в выводе
 //   --user NAME      пользователь сессии (по умолчанию — первый активный суперпользователь)
 //   --base URL       адрес фронта (по умолчанию http://localhost:5173)
@@ -71,7 +74,7 @@ const SIDES = opt.side ? opt.side.split(',').map(Number) : [null]
 const BASE = opt.base || 'http://localhost:5173'
 const EDIT = MODE === 'ghost' || !!opt.edit          // призрак живёт только в правке
 const HOVER = opt.hover || '.prow--sums .sumtip-host'
-const MIN = { grid: Number(opt['min-grid'] || 692), prow: Number(opt['min-prow'] || 832) }
+const MIN = { grid: Number(opt['min-grid'] || 692), prow: Number(opt['min-prow'] || 968) }
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 if (opt.shots) mkdirSync(opt.shots, { recursive: true })
 
@@ -210,6 +213,11 @@ try {
         for (const t of idx) {
           await ev(`document.querySelectorAll('.fs-tab')[${t}]?.click()`)
           await sleep(900)
+          for (const c of (opt.click ? String(opt.click).split('|') : [])) {
+            const [sel, nth] = c.split('@')
+            await ev(`document.querySelectorAll(${JSON.stringify(sel)})[${Number(nth || 0)}]?.click()`)
+            await sleep(600)
+          }
           const tag = [form, vw, side ?? 'app', EDIT ? 'правка' : 'просмотр', labels[t] ?? '-']
           const name = tag.join('_').replace(/[/ ]/g, '-')
           if (MODE === 'matrix') {

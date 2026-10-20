@@ -23,7 +23,7 @@ import { CounterpartyView } from './CounterpartyView'
 import { AccountView } from './AccountView'
 import { applyTheme } from './core/theme'
 import { parsePath, pathOf, type Mode, type Sel } from './core/route'
-import { ItemGlyph, StatusGlyph, statusTone } from './status'
+import { ItemGlyph, PurchaseGlyph, StatusGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 import { Sash, loadSide, saveSide, type Side } from './Sash'
 
@@ -454,11 +454,11 @@ export default function App() {
             onSelect={id => setSel({ kind: 'purchase', id })}
             rows={[...purchases].reverse().map(p => ({
               id: p.id, code: p.code || `Заказ #${p.id}`, name: p.project_code, projectCode: p.project_code,
-              // Волна 24 (решение Ивана): глиф заказа — чистый замок по канону. Открытый
-              // жёлтый — не зафиксирован, денег не потратили; закрытый зелёный —
-              // обязательство возникло, трата учтена, ждём компоненты. Покрытие лотами
-              // (бывший цвет, красный при «ничего не пришло») смущало — оно живёт в форме.
-              glyph: <StatusGlyph locked={p.locked} />,
+              // Волна 24 → 2026-10-20 (решения Ивана): глиф заказа — ось фиксации, знак —
+              // печать: оранжевый `unverified` — черновик, денег не потратили; зелёный
+              // `verified` — обязательство возникло, трата учтена, ждём компоненты. Покрытие
+              // лотами (бывший цвет) смущало — оно живёт в форме.
+              glyph: <PurchaseGlyph locked={p.locked} />,
             }))} />}
 
         {mode === 'procurements' &&

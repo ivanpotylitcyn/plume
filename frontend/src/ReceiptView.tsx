@@ -7,7 +7,7 @@ import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
 import { num, money, count, sumByUom, CounterpartyRef, LotGlyph,
-  MismatchGlyph, gapMoney, moneyField, parseMoney, perUnitTitle, rowNumbers } from './status'
+  MismatchGlyph, gapMoney, moneyCol, moneyField, parseMoney, perUnitTitle, rowNumbers } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -67,7 +67,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
-              <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость</th>
+              <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость, ₽</th>
               <th className="c-txt">Part number</th>
               <th className="c-txt">Название из УПД</th><th className="act" />
             </tr>
@@ -199,7 +199,7 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
           Пустой ввод — ноль: у партии стоимость есть всегда. В просмотре — деньгами, как
           цена строки заказа (поле с «20054,26» читается хуже «20 054,26 ₽»). */}
       <td className="num c-money" title={perUnitTitle(lot.cost, lot.qty)}>
-        {locked ? money(lot.cost)
+        {locked ? moneyCol(lot.cost)
           : <CommitInput value={moneyField(lot.cost)} disabled={busy} numeric
               onCommit={v => run(api.updateReceiptLot(lot.id, { cost: parseMoney(v) ?? 0 }))}
               validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}

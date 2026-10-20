@@ -212,6 +212,8 @@ body { overflow: hidden; }
 .ci-file-zip::before        { content: '\eaef'; }
 .ci-add::before             { content: '\ea60'; }
 .ci-close::before           { content: '\ea76'; }  /* очистить пикер */
+.ci-verified::before        { content: '\eb77'; }  /* заказ зафиксирован — обязательство (в26) */
+.ci-unverified::before      { content: '\eb76'; }  /* заказ-черновик — обязательства нет */
 .ci-arrow-left::before      { content: '\ea9b'; }  /* предшественник лота (инвентаризация) */
 .ci-arrow-right::before     { content: '\ea9c'; }  /* было → стало (импорт библиотеки) */  /* «Завести "X"» из пикера (Ф12e) */
 .ci-check::before           { content: '\eab2'; }  /* отметка в мультивыборе (Ф13) */
@@ -467,7 +469,13 @@ html.sash-drag, html.sash-drag * { cursor: col-resize !important; user-select: n
    `overflow-x: auto` выше — страховка последней ступени (телефон). У `.prow` описание
    уходит, а его трек остаётся пустым и гибким: числа по-прежнему у правого края. */
 .fs-list[data-fit] { --prow-desc: minmax(0, 1fr); }
-.fs-list[data-fit] :is(table.grid :is(th, td).c-desc, .prow .name) { display: none; }
+.fs-list[data-fit] table.grid :is(th, td).c-desc { display: none; }
+/* В сетке `.prow` описание прячется, НЕ выпадая из неё (2026-10-20): `display: none`
+   вынимал ячейку из автоматической раскладки, все следующие съезжали на трек влево, и
+   последний трек («Оценка», 112px) оставался пустой дырой справа от ряда. Невидимая
+   ячейка держит свой трек, а тот гибкий (`--prow-desc` = minmax(0, 1fr)) и сжимается в
+   ноль, когда места нет: правый край снова совпадает с левым. */
+.fs-list[data-fit] .prow .name { visibility: hidden; }
 .fs-list:is([data-fit="2"], [data-fit="3"], [data-fit="4"], [data-fit="5"])
   table.grid :is(th, td):is(.c-count, .c-no) { display: none; }
 .fs-list:is([data-fit="3"], [data-fit="4"], [data-fit="5"])
@@ -787,16 +795,21 @@ tr.row { border-left: 2px solid transparent; }
      поправки единица вставала правее ряда чисел — теперь их правые кромки совпадают.
      Колонка команд — НЕ в базовом шаблоне (2026-08-05): в «Потребности» команд нет
      ни у одной строки, и пустой трек 44px отбрасывал строку от правого края, ломая
-     симметрию с левым отступом. Её добавляет `.pgrid--acts` — вкладка «Приборы», где
+     симметрию с левым отступом. Её добавляет `.pgrid--acts` — вкладка «Приборы» в правке (2026-10-20), где
      у прибора живёт корзина. Поля 10px с обеих сторон (слева 8px + 2px кромка
      статуса), поэтому от глифа до края слева ровно столько же, сколько от «шт»
-     справа. */
+     справа.
+     2026-10-20: «Оценка» хвостовым треком (128px: «10 650 600,24» с копейками, рубль в
+     заголовке, и воздух слева — длинное число не липнет к глифу «Баланса»): деньги
+     строки, Парето-тон. «Ед.» переехала сразу за описание (правка
+     Ивана): дальше идут числа в единицах строки, а над ними в строке «Деньги» — тысячи
+     рублей сплошным рядом, без разрыва над единицей. */
   grid-template-columns: var(--col-rn) calc(var(--col-key) + 8px) var(--prow-desc)
-    repeat(5, 74px) 55px;
+    55px repeat(5, 74px) 128px;
   border-left: 2px solid transparent; padding: 3px 10px 3px 8px; }
 .pgrid--acts .prow {
   grid-template-columns: var(--col-rn) calc(var(--col-key) + 8px) var(--prow-desc)
-    repeat(5, 74px) 55px 44px; }
+    55px repeat(5, 74px) 128px 44px; }
 /* «Привязка» закупки живёт на той же сетке строк (2026-08-05), но со своим числовым
    хвостом: `Баланс · Разложено · Остаток` + единица. Треки те же 74/55px, поэтому два
    аккордеона продукта читаются как один приём. Колонка кода шире: в ней код ЗАКАЗА
@@ -826,6 +839,10 @@ table.grid td.num .ci.sg { margin-left: 6px; }
 /* Единица измерения — последняя колонка строки; трек и выключка те же, что у пяти
    числовых колонок слева, поэтому правый край у всего ряда общий. */
 .prow .puom { color: var(--fg-dim); font-family: var(--font-mono); text-align: right; }
+/* В «Приборах»/«Потребности» единица стоит за описанием, ПЕРЕД числами (2026-10-20) —
+   там она подпись строки, а не хвост ряда чисел: прижата влево, к описанию. «Строки»
+   закупки (`pgrid--alloc`) держат единицу хвостом за числами, как таблицы. */
+.pgrid:not(.pgrid--alloc) .prow .puom { text-align: left; }
 /* Код-ссылка — ВСЕГДА одной строкой, длинный обрезается многоточием (не переносится).
    Так строки одной высоты, а глифы идут ровной вертикальной колонкой — сильно помогает
    при сканировании (правило строк, UI_GUIDE §7). min-width:0 — чтобы ужималась внутри
@@ -896,12 +913,14 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
    UI_GUIDE §7a). Раньше её несли только `--comp`; device-строки «Приборов» шли без неё
    и без общего margin-top (снят) разъезжались с «Потребностью». */
 .prow--comp, .prow--device, .prow--sums { border-bottom: 1px solid var(--border); }
-.prow .chev { background: none; border: none; color: var(--fg-dim); cursor: pointer;
+:is(.prow, table.grid) .chev { background: none; border: none; color: var(--fg-dim); cursor: pointer;
   padding: 0; font-size: 12px; line-height: 1; justify-self: start; }
-.prow .chev:hover { color: var(--fg-bright); }
+:is(.prow, table.grid) .chev:hover { color: var(--fg-bright); }
 /* Ф5b: ячейка кода в дереве аккордеона — шеврон подсборки + код, отступ по глубине.
    Лист получает spacer вместо шеврона, чтобы коды выравнивались. */
-.prow .tree-cell { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+/* 2026-10-20: та же ведущая ячейка дерева — и в таблице («Состав» изделия раскрывается
+   аккордеоном): раскрыватель·код одним блоком, отступ по глубине. */
+:is(.prow, table.grid) .tree-cell { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 /* Ведущая ячейка строки КОМПОНЕНТА — та же геометрия, что в таблицах (правка Ивана
    2026-08-11). В `table.grid` глиф и код лежат в РАЗНЫХ ячейках, и их разводит паддинг
    колонки (10px); в гриде они в одной ячейке, и по умолчанию их разводит зазор дерева
@@ -911,9 +930,9 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
    где тройки нет, зазор обязан быть табличным. Строки со своим глифом (план закупки:
    check/warning раскладки) не трогаем — у них другая ведущая ячейка по смыслу. */
 .prow .tree-cell.lead--item { gap: 10px; }
-.prow .tree-cell .chev { flex: 0 0 auto; }
+:is(.prow, table.grid) .tree-cell .chev { flex: 0 0 auto; }
 .prow .tree-cell .ci { flex: 0 0 auto; }   /* глиф не сжимается рядом с ellipsis-кодом */
-.prow .tree-lead { flex: 0 0 auto; width: 12px; }
+:is(.prow, table.grid) .tree-lead { flex: 0 0 auto; width: 12px; }
 /* Колонка команд грида: флекс, а не выключка текста (2026-08-11). Строка-грид
    выравнивает ячейки ПО БАЗОВОЙ ЛИНИИ, и глиф-состояние вставал по своей, а кнопка —
    по своей: два знака одной колонки не совпадали по вертикали. Флекс с `center` снимает

@@ -14,7 +14,7 @@
 // Все числа считает движок (`procurement_money`, `intent_money`), вью выбирает знак.
 import type { ProcurementForm } from './api'
 import { StatGroup, StatPanel, StatWarn, Stat } from './StatPanel'
-import { money, signedPct } from './status'
+import { count, money, signedPct } from './status'
 
 // Разница со знаком: `+` переплата (взяли с запасом), `−` недозаказ (взяли меньше
 // нужды), ноль — «Переплата 0» без знака и без цвета (решение Ивана 2026-08-07).
@@ -54,7 +54,7 @@ export function ProcurementMoney({ c }: { c: ProcurementForm }) {
       </StatGroup>
       {c.unestimated.length > 0 &&
         <StatWarn title={'без оценки: ' + c.unestimated.join(', ')}>
-          {c.unestimated.length} поз. без оценки — суммы по оценке неполны
+          {count(c.unestimated.length, 'позиция', 'позиции', 'позиций')} без оценки — суммы по оценке неполны
         </StatWarn>}
     </StatPanel>
   )

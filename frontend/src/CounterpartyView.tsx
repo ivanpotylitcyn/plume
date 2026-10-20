@@ -18,7 +18,7 @@
 import { useEffect, useState } from 'react'
 import { api, type CounterpartyForm, type CpTransferRow,
   type UomQty } from './api'
-import { count, money, num, StatusGlyph } from './status'
+import { count, money, moneyCol, num, StatusGlyph } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField, viewDate } from './FormField'
@@ -108,7 +108,7 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
               <th className="c-date">Дата</th>
               <th className="num">Строк</th>
               <th className="num">Кол-во</th>
-              <th className="num">Сумма</th>
+              <th className="num">Сумма, ₽</th>
             </tr></thead>
             <tbody>{c.transfers.map((t, i) => (
               <TransRow key={t.id} t={t} no={i + 1}
@@ -231,7 +231,7 @@ function TransRow({ t, no, open }: {
         {t.date ? viewDate(t.date) : ''}</td>
       <td className="num">{t.lines}</td>
       <td className="num">{num(t.qty)}</td>
-      <td className="num">{money(t.total)}</td>
+      <td className="num">{moneyCol(t.total)}</td>
     </tr>
   )
 }

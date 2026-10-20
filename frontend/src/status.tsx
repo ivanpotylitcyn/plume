@@ -17,6 +17,16 @@ export function StatusGlyph({ locked, tone = 'fix', title }: {
     title={title ?? (locked ? 'зафиксировано' : 'расфиксировано')} />
 }
 
+// Глиф ЗАКАЗА (2026-10-20, решение Ивана): `verified` зелёный — зафиксирован, обязательство
+// возникло (оплачен или подписан договор); `unverified` оранжевый — черновик. Та же ось
+// `locked`, что у всех, — модель не трогали; меняется только знак: у заказа фиксация значит
+// «обязательство подтверждено», и печать читается точнее замка. Ставится везде, где на
+// экране стоит заказ (список режима, ленты, веер и ячейки закупки, пикер).
+export function PurchaseGlyph({ locked, title }: { locked: boolean; title?: string }) {
+  return <span className={`ci sg ci-${locked ? 'verified' : 'unverified'} sg-${locked ? 'ok' : 'wip'}`}
+    title={title ?? (locked ? 'зафиксирован — обязательство' : 'черновик — обязательства нет')} />
+}
+
 // Глиф расхождения контрагентов (волна 19, Ф17). Контрагент есть у всех трёх уровней
 // закупочного контура и наследуется копией при рождении; расхождение — законная
 // ситуация («одна закупка может пойти от разных поставщиков»), поэтому это
@@ -150,10 +160,48 @@ export function Segment({ status, value }: { status: Status; value: number }) {
 // со своим глифом-членом (`Member` в `ProjectView`), и тройка сегментов больше не
 // собиралась ни на одном экране.
 
-// Стоимость строки (2026-08-07) — одинаково в «Строках» заказа и в «Привязке» закупки,
-// на обоих её уровнях. Знак берём у движка (`cost_status`), сами ничего не решаем:
-// красный — взято больше чем в полтора раза от нужды, оранжевый — верхняя четверть
-// набора по стоимости. Цены нет — прочерк, а не ноль (неизвестное ≠ бесплатное).
+// Парето на вью (2026-10-20) — то же правило, что `engine.mark_pareto`: по убыванию
+// стоимости, пока накопленное ДО строки меньше 80% суммы набора. Живёт здесь только там,
+// где набор зависит от состояния вью (фронт аккордеона «Приборов»); всё остальное красит
+// движок. Строки без цены и нулевые в ранжировании не участвуют.
+export const PARETO_SHARE = 0.8
+export function paretoKeys(rows: { key: string; cost: number | null }[]): Set<string> {
+  const ranked = rows.filter(r => r.cost != null && r.cost > 0)
+    .sort((a, b) => (b.cost as number) - (a.cost as number))
+  const bar = PARETO_SHARE * ranked.reduce((s, r) => s + (r.cost as number), 0)
+  const out = new Set<string>()
+  let acc = 0
+  for (const r of ranked) {
+    if (acc < bar) out.add(r.key)
+    acc += r.cost as number
+  }
+  return out
+}
+
+// Видимые строки аккордеона-дерева (Ф5b → общая 2026-10-20: «Приборы» проекта и
+// «Состав» изделия). Плоский pre-order + `depth` от бэка: узел скрыт, если он глубже
+// ближайшего свёрнутого предка. `isExp` — узел раскрыт; фронт динамического Парето —
+// видимые строки, которые сами не раскрыты (`!(hasChildren && isExp)`).
+export interface VisibleNode<T> { n: T; i: number; hasChildren: boolean; isExp: boolean }
+export function visibleTree<T extends { depth: number; is_leaf: boolean }>(
+  tree: T[], expanded: Set<number>): VisibleNode<T>[] {
+  const visible: VisibleNode<T>[] = []
+  let hideDepth = Infinity
+  tree.forEach((n, i) => {
+    if (n.depth > hideDepth) return       // под свёрнутым узлом — прячем
+    hideDepth = Infinity                  // вернулись на уровень предка — снимаем сокрытие
+    const hasChildren = !n.is_leaf
+    const isExp = expanded.has(i)
+    if (hasChildren && !isExp) hideDepth = n.depth   // свёрнут → прячем его поддерево
+    visible.push({ n, i, hasChildren, isExp })
+  })
+  return visible
+}
+
+// Стоимость строки — всегда в колонке таблицы, поэтому без рубля (`moneyCol`). (2026-08-07) — одинаково в «Строках» закупки (на обоих её уровнях) и
+// в составе изделия (2026-10-20). Знак берём у движка (`cost_status`), сами ничего не
+// решаем: красный — взято больше чем в полтора раза от нужды, оранжевый — по Парето:
+// строка из тех, что вместе дают 80% стоимости набора. Цены нет — прочерк, а не ноль (неизвестное ≠ бесплатное).
 // Подсказка красного называет ПОРОГ числом, а не правилом: «можно было до 20» отвечает
 // на вопрос закупщика сразу, тогда как «полторы нормы, округлённые вверх» он должен был
 // бы ещё посчитать. Порог считает движок (`overpay_at`) — вью его только произносит.
@@ -167,9 +215,9 @@ export function Cost({ cost, status, overpayAt, uom }: {
     ? (overpayAt !== undefined
         ? `перебор: без красного можно было до ${num(overpayAt)}${uom ? ' ' + uom : ''}`
         : 'взято сверх потребности с запасом')
-    : status === 'costly' ? 'одна из самых дорогих строк (верхняя четверть)'
+    : status === 'costly' ? 'дорогая: вместе с более дорогими даёт 80% стоимости'
     : undefined
-  return <span className={tone} title={title}>{money(cost)}</span>
+  return <span className={tone} title={title}>{moneyCol(cost)}</span>
 }
 
 // Номера строк документа (2026-10-16): постоянный адрес строки — позиция в ПОЛНОМ
@@ -195,6 +243,13 @@ export function money(x: number): string {
 // за 3 519,78 ₽ → 0,352 ₽) — до четырёх знаков, не меньше двух.
 export function unitMoney(x: number): string {
   return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ' ₽'
+}
+
+// Деньги в КОЛОНКЕ таблицы (2026-10-20, правка Ивана): копейки есть, знака рубля нет —
+// он повторялся в каждой строке и съедал место; рубль один раз в заголовке («Оценка, ₽»).
+// Отдельные числа (статы, подсказки) остаются с рублём — `money`.
+export function moneyCol(x: number): string {
+  return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 // Деньги в поле ввода: ровно два знака после запятой, без разрядов («35197,80») — так

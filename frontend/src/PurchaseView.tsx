@@ -21,7 +21,7 @@ import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { CounterpartyRef, ItemGlyph, StatusGlyph,
+import { Cost, CounterpartyRef, ItemGlyph, StatusGlyph,
   count, money, moneyField, num, parseMoney, rowNumbers } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
@@ -146,7 +146,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                   ОДНА денежная колонка — цена всей строки, как в счёте: рубли и копейки
                   за строку сходятся со счётом до копейки, цена штуки выводится делением
                   (в подсказке). Стоимость-по-оценке снята: в заказе оценки нет. */}
-              <th className="num c-money" title="цена всей строки по счёту / КП">Цена</th>
+              <th className="num c-money" title="цена всей строки по счёту / КП">Цена, ₽</th>
               {!locked && <th className="act" />}
             </tr>
           </thead>
@@ -282,7 +282,7 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
         </StatGroup>
         {c.unestimated.length > 0 &&
           <StatWarn title={'без цены: ' + c.unestimated.join(', ')}>
-            {c.unestimated.length} поз. без цены — сумма неполна
+            {count(c.unestimated.length, 'позиция', 'позиции', 'позиций')} без цены — сумма неполна
           </StatWarn>}
       </StatPanel>}
       tabs={tabs}
@@ -342,7 +342,9 @@ function LineRow({ no, ln, editable, busy, openItem, run }: {
               disabled={busy} numeric
               onCommit={v => run(api.updatePurchaseLine(ln.id, { price: parseMoney(v) }))}
               validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />
-          : ln.price === null ? <span className="sub">—</span> : money(ln.price)}
+          // 2026-10-20: Парето — оранжевые строки дают 80% суммы заказа («тяжёлое»).
+          : ln.price === null ? <span className="sub">—</span>
+            : <Cost cost={ln.price} status={ln.cost_status} />}
       </td>
       {editable && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку заказа"

@@ -554,6 +554,8 @@ def _item_detail_payload(item):
          'parent_locked': bl.parent.locked}
         for bl in item.used_in.select_related('parent')
     ]
+    # Оценка строк состава (2026-10-20) — та же функция, что топ-3 блока «Деньги».
+    costs = {r['id']: r for r in engine.bom_line_costs(item)}
     bom = [
         {'id': bl.id, 'component_id': bl.component_id,
          'component_code': bl.component.code,
@@ -566,7 +568,9 @@ def _item_detail_payload(item):
          'component_category': engine.category_code(bl.component),
          'component_native': bl.component.native, 'component_synced': bl.component.synced,
          'component_locked': bl.component.locked,   # глиф строки по режиму (Ф3a)
-         'qty': bl.qty}
+         'qty': bl.qty,
+         'cost': costs[bl.id]['cost'], 'cost_status': costs[bl.id]['cost_status'],
+         'tree': costs[bl.id]['tree']}     # поддерево своего компонента (аккордеон)
         for bl in item.bom_lines.select_related('component', 'component__category')
     ]
     # Ф15: партия черновика в этом табе ОСТАЁТСЯ (видно входящий поток: «10 едет, 0

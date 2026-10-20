@@ -1224,12 +1224,12 @@ def _leaf_row(item, need, supply):
         'anomaly': supply.has_negative_lot(item),
         **_money_fields(item, supply.kitted_cost(item), supply.available_cost(item),
                         supply.ordered_cost(item), supply.spent(item),
-                        supply.plan_ahead(item, need)),
+                        supply.plan_ahead(item, need), need),
     })
     return row
 
 
-def _money_fields(item, kitted_cost, in_stock_cost, ordered_cost, spent_cost, ahead):
+def _money_fields(item, kitted_cost, in_stock_cost, ordered_cost, spent_cost, ahead, need):
     """Деньги строки потребности (волна 23, Ф2): цена-оценка (`price`, `None` — оценки
     нет), факт партий для Компл./Склада, обещанное по счёту для «Заказа». Суммы над
     колонками складывает вью по ОТФИЛЬТРОВАННЫМ строкам — фильтры живут там же.
@@ -1244,13 +1244,29 @@ def _money_fields(item, kitted_cost, in_stock_cost, ordered_cost, spent_cost, ah
     price = item.estimated_cost
     unestimated = ahead > 0 and price is None
     return {'price': price, 'kitted_cost': kitted_cost,
+            # 2026-10-20: чистая потребность позиции (нужда × оценка, без запаса) — сумма
+            # над «Потр.»; рядом с планом (над «Оценкой») она и есть «сверх потребности».
+            'need_cost': None if price is None else need * price,
             'in_stock_cost': in_stock_cost, 'ordered_cost': ordered_cost,
             'spent_cost': spent_cost,
             'plan_cost': spent_cost + (ZERO if unestimated else ahead * (price or ZERO)),
             'unestimated': unestimated}
 
 
-def _demand_tree(item, qty, supply, bom, depth, visiting, out):
+def _bom_unit_cost(item, bom, cache):
+    """Оценка штуки изделия по составу через `BomIndex` — живой роллап без запроса на
+    узел (тот же итог, что `_rollup_cost(write=False)`: лист без оценки идёт нулём)."""
+    if item.id not in cache:
+        if not item.native:
+            cache[item.id] = item.estimated_cost or ZERO
+        else:
+            cache[item.id] = ZERO          # страховка от цикла (его гасит `add_bom_line`)
+            cache[item.id] = sum((_bom_unit_cost(bl.component, bom, cache) * bl.qty
+                                  for bl in bom.children(item)), ZERO)
+    return cache[item.id]
+
+
+def _demand_tree(item, qty, supply, bom, depth, visiting, out, unit_costs=None):
     """Плоский pre-order список узлов BOM с `depth` — древовидный аккордеон прибора
     (Ф5b, В16): видно вложенность (прибор → подсборка → лист), а не только листья.
 
@@ -1261,11 +1277,15 @@ def _demand_tree(item, qty, supply, bom, depth, visiting, out):
     Статуса у узла-подсборки больше НЕТ (2026-08-05): он существовал ровно ради цветной
     полосы слева («где горит под свёрнутым узлом»), а полосы сняты во всём Plume. Считать
     worst-of поддерева, чтобы никто не смотрел, — мёртвая работа."""
+    unit_costs = {} if unit_costs is None else unit_costs
+    # 2026-10-20: оценка узла в приборе — кол-во × оценка штуки (у узла — по составу).
+    est_cost = qty * _bom_unit_cost(item, bom, unit_costs)
     if not item.native:
         row = _leaf_row(item, qty, supply)
         row['need'] = qty
         row['depth'] = depth
         row['is_leaf'] = True
+        row['est_cost'] = est_cost
         out.append(row)
         return
     if item.id in visiting:
@@ -1282,10 +1302,12 @@ def _demand_tree(item, qty, supply, bom, depth, visiting, out):
         'need': qty,
         'depth': depth,
         'is_leaf': False,
+        'est_cost': est_cost,
     }
     out.append(row)          # pre-order: узел раньше детей
     for bl in bom.children(item):
-        _demand_tree(bl.component, qty * bl.qty, supply, bom, depth + 1, visiting, out)
+        _demand_tree(bl.component, qty * bl.qty, supply, bom, depth + 1, visiting, out,
+                     unit_costs)
     visiting.discard(item.id)
 
 
@@ -1312,6 +1334,7 @@ def project_deficit(project, with_tree=True, bom=None):
     need_by_leaf = {}          # leaf Item → суммарная потребность (Decimal)
     demand_rows = list(project.demands.select_related('target_item', 'target_item__category'))
     bom.preload(d.target_item for d in demand_rows)
+    unit_costs = {}           # оценка штуки по составу (живой роллап по индексу BOM)
     for demand in demand_rows:
         target = demand.target_item
         # Свод листьев этой потребности — для секции «Потребность» и цвета прибора.
@@ -1328,7 +1351,7 @@ def project_deficit(project, with_tree=True, bom=None):
             visiting = {target.id}
             for bl in bom.children(target):
                 _demand_tree(bl.component, demand.qty * bl.qty, supply, bom, 0, visiting,
-                             tree)
+                             tree, unit_costs)
 
         # триплет прибора: готово (зафиксированные лоты) / делается (в работе) / не начато
         done = supply.done(target)
@@ -1344,6 +1367,9 @@ def project_deficit(project, with_tree=True, bom=None):
             'target_synced': target.synced,
             'target_locked': target.locked,
             'qty': demand.qty,
+            # 2026-10-20: во сколько обойдётся строка — кол-во × оценка прибора по составу.
+            # По оценке, а не по факту: счета между приборами не делятся (общие компоненты).
+            'cost': demand.qty * _bom_unit_cost(target, bom, unit_costs),
             'device': {'done': done, 'wip': wip, 'not_started': not_started},
             # цвет прибора: worst-of листьев (внимание) + бейдж лучшего прогресса
             'status': _worst_of(statuses),
@@ -1353,6 +1379,10 @@ def project_deficit(project, with_tree=True, bom=None):
 
     # Сводная таблица по листьям (полная покупная картина проекта, всегда видна).
     components = [_leaf_row(leaf, need, supply) for leaf, need in need_by_leaf.items()]
+    # 2026-10-20: колонка «Оценка» — план позиции (факт по счёту, остальное по оценке);
+    # оранжевые — Парето: позиции, дающие 80% стоимости проекта.
+    mark_pareto(components, key='plan_cost')
+    mark_pareto(demands)                    # приборы — по оценке своего состава
     # «Горит вперёд» по тону баланса: сначала недобор, затем сошедшиеся в ноль, затем
     # строки с запасом; внутри — по коду.
     components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_code']))
@@ -2420,9 +2450,11 @@ OVERPAY_LIMIT = Decimal('1.5')
 ROUND_STEPS = ((Decimal(50), Decimal(5)), (Decimal(100), Decimal(10)),
                (Decimal(500), Decimal(50)))
 ROUND_STEP_MAX = Decimal(100)
-# Доля строк, помеченных «дорогая»: верхняя четверть по стоимости, округление ВВЕРХ
-# (в списке из двух строк дорогая — одна; решение Ивана 2026-08-07).
-COSTLY_SHARE = 4
+# «Дорогая» строка — по Парето (решение Ивана 2026-10-20, вместо «верхней четверти»
+# 2026-08-07): самые дорогие строки, которые ВМЕСТЕ дают первые 80% стоимости набора.
+# Строка, на которой накопленная сумма переходит порог, — тоже дорогая (иначе в наборе из
+# одной большой строки и мелочи дорогих не было бы вовсе).
+PARETO_SHARE = Decimal('0.8')
 
 
 def line_cost(item, qty):
@@ -2499,28 +2531,41 @@ def is_overpaid(qty, need):
     return qty > overpay_threshold(need) and qty > ZERO
 
 
+def mark_pareto(rows, key='cost'):
+    """Проставить `cost_status = 'costly'` строкам набора по Парето (2026-10-20): по
+    убыванию стоимости, пока накопленное ДО строки меньше `PARETO_SHARE` суммы набора.
+    Одно правило «дорогая строка» на весь продукт — строки закупки и состав изделия.
+    Строки без цены и нулевые в ранжировании не участвуют («самый дорогой ноль» не
+    бывает). Ждёт в строках деньги под ключом `key` (может быть `None`; у заказа — цена
+    строки по счёту, у «Потребности» — план позиции), правит строки на месте."""
+    ranked = sorted((r for r in rows if r[key] is not None and r[key] > ZERO),
+                    key=lambda r: r[key], reverse=True)
+    bar = PARETO_SHARE * sum((r[key] for r in ranked), ZERO)
+    acc = ZERO
+    for row in ranked:
+        row['cost_status'] = 'costly' if acc < bar else None
+        acc += row[key]
+    for row in rows:
+        row.setdefault('cost_status', None)
+    return rows
+
+
 def mark_costs(rows):
     """Проставить `cost_status` строкам: `overpaid` (красный) > `costly` (оранжевый).
 
     Смысл считает движок, знак выбирает вью ([[engine-view-seam]]): здесь — «эта строка
     дорогая» и «эта взята с перебором», а не «оранжевая»/«красная».
 
-    «Дорогая» — верхняя четверть НАБОРА (ранжирование внутри одного списка, поэтому
-    считается тут, а не построчно): в разных документах дорого разное. Строки без цены и
-    нулевые в ранжировании не участвуют — «самый дорогой ноль» не бывает.
+    «Дорогая» — по Парето внутри НАБОРА (`mark_pareto`; ранжирование внутри одного
+    списка, поэтому считается тут, а не построчно): в разных документах дорого разное.
 
     Красное сильнее оранжевого (worst-of, как везде в продукте): перебор — повод
     вмешаться, дороговизна — повод посмотреть.
 
     Ждёт в строках `cost` (может быть `None`), `qty` и `need`; правит их на месте.
     """
-    ranked = sorted((r for r in rows if r['cost'] is not None and r['cost'] > ZERO),
-                    key=lambda r: r['cost'], reverse=True)
-    costly = -(-len(ranked) // COSTLY_SHARE)          # ceil: 4→1, 6→2, 10→3
-    for i, row in enumerate(ranked):
-        row['cost_status'] = 'costly' if i < costly else None
+    mark_pareto(rows)
     for row in rows:
-        row.setdefault('cost_status', None)
         # Порог едет в строку: им вью объясняет цвет («без перебора можно до 20»).
         # Правило, которое видно, закупщик держит в голове — а держа, не спорит с ним.
         row['overpay_at'] = overpay_threshold(row['need'])
@@ -2593,6 +2638,8 @@ def purchase_form(purchase):
          'lines': r.lots.count()}
         for r in purchase.receipts.select_related('contractor').order_by('id')
     ]
+    # 2026-10-20: Парето по цене строки — что в заказе «тяжёлое», а что важные мелочи.
+    mark_pareto(rows, key='price')
     money = purchase_money(lines)        # волна 24: сумма по счёту — без нужды и оценки
     return {
         'id': purchase.id, **_author(purchase), 'locked': purchase.locked,
@@ -4001,9 +4048,11 @@ def scope_demand(projects, active_only=True):
             'supply': _supply_status(row),
             'anomaly': agg['anomaly'],
             **_money_fields(item, agg['kitted_cost'], agg['in_stock_cost'],
-                            agg['ordered_cost'], agg['spent_cost'], agg['ahead']),
+                            agg['ordered_cost'], agg['spent_cost'], agg['ahead'],
+                            agg['need']),
         })
         rows.append(row)
+    mark_pareto(rows, key='plan_cost')      # 2026-10-20: что определяет стоимость
     # Тот же порядок, что в «Потребности» проекта: горит вперёд, внутри — по коду.
     rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['component_code']))
     return {'rows': rows, 'outside_spent': outside}
@@ -5768,14 +5817,8 @@ def item_money(item):
     if item.native:
         incomplete, stale = [], []
         cost = _rollup_cost(item, {}, set(), stale, incomplete, write=False)
-        cache = {}
-        top = []
-        for bl in item.bom_lines.select_related('component'):
-            c = _rollup_cost(bl.component, cache, set(), [], [], write=False)
-            if c:
-                top.append({'id': bl.component_id, 'code': bl.component.code,
-                            'qty': bl.qty, 'cost': c * bl.qty})
-        top.sort(key=lambda t: -t['cost'])
+        top = sorted((r for r in bom_line_costs(item) if r['cost']),
+                     key=lambda r: -r['cost'])
         out.update({
             'rollup': cost, 'incomplete': incomplete, 'top': top[:3],
             'estimate_stale': item.estimated_cost != cost,
@@ -5802,6 +5845,54 @@ def item_money(item):
         'estimate_off': item.estimated_cost is None or abs(drift) > ESTIMATE_DRIFT,
     })
     return out
+
+
+def _node_cost(component, qty, bom, cache):
+    """Оценка `qty` штук компонента в составе: покупной без оценки — `None` (неизвестное ≠
+    бесплатное), свой — живой роллап по индексу BOM (`_bom_unit_cost`)."""
+    if not component.native and component.estimated_cost is None:
+        return None
+    return qty * _bom_unit_cost(component, bom, cache)
+
+
+def _bom_subtree(component, qty, bom, cache, depth, visiting, out):
+    """Поддерево своего компонента для аккордеона «Состава» (2026-10-20): pre-order с
+    `depth`, кол-во — НАКОПЛЕННОЕ (штук на одно изделие формы), поэтому оценки детей в
+    сумме дают оценку узла. Цикл — страховка `visiting` (его гасит `add_bom_line`)."""
+    if component.id in visiting:
+        return
+    visiting.add(component.id)
+    for bl in bom.children(component):
+        c, n = bl.component, qty * bl.qty
+        out.append({'component_id': c.id, 'component_code': c.code,
+                    'component_description': c.description, 'uom': c.uom,
+                    'component_native': c.native, 'component_synced': c.synced,
+                    'component_locked': c.locked,
+                    'qty': n, 'depth': depth, 'is_leaf': not c.native,
+                    'cost': _node_cost(c, n, bom, cache)})
+        if c.native:
+            _bom_subtree(c, n, bom, cache, depth + 1, visiting, out)
+    visiting.discard(component.id)
+
+
+def bom_line_costs(item):
+    """Оценка строк состава (2026-10-20, колонка «Оценка» таба «Состав»): `кол-во ×
+    оценка компонента`, у своего компонента — живой роллап (то же число, что ★ блока
+    «Деньги» и топ-3: одна функция). Без цены — `None` (неизвестное ≠ бесплатное).
+    Подсветка — Парето (`mark_pareto`): строки, дающие первые 80% стоимости прибора.
+    У своего компонента — `tree`: его поддерево для аккордеона (динамический Парето по
+    фронту раскрытия считает вью). Индекс BOM — один на проекцию, без запроса на узел."""
+    bom, cache, rows = BomIndex(), {}, []
+    lines = list(item.bom_lines.select_related('component'))
+    bom.preload(bl.component for bl in lines)
+    for bl in lines:
+        c = bl.component
+        tree = []
+        if c.native:
+            _bom_subtree(c, bl.qty, bom, cache, 0, {item.id}, tree)
+        rows.append({'id': bl.id, 'component_id': c.id, 'code': c.code, 'qty': bl.qty,
+                     'cost': _node_cost(c, bl.qty, bom, cache), 'tree': tree})
+    return mark_pareto(rows)
 
 
 def adopt_last_price(item):

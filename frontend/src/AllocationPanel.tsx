@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
 import { useCategoryFilter } from './ColumnFilter'
-import { Balance, Chevron, Cost, CounterpartyRef, StatusGlyph, balanceTitle, num,
+import { Balance, Chevron, Cost, CounterpartyRef, PurchaseGlyph, balanceTitle, num,
   rowNumbers } from './status'
 import { EntityLink } from './EntityLink'
 
@@ -84,7 +84,7 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
           <span className="puom" title="единица измерения строки">Ед.</span>
           {/* Деньги — за границей единицы: она квалифицирует количества слева. */}
           <span className="pnum" title="стоимость строки: кол-во × оценка изделия">
-            Стоимость</span>
+            Стоимость, ₽</span>
           {editable && <span />}
         </div>
         {byCat.shown.map(r => (
@@ -120,7 +120,7 @@ export function PurchaseFan({ st, openPurchase, openCounterparty }: {
         {p.fan.map((f, i) => (
           <tr key={f.purchase_id} className="row">
             <td className="rn">{i + 1}</td>
-            <td className="gl"><StatusGlyph locked={f.locked} /></td>
+            <td className="gl"><PurchaseGlyph locked={f.locked} /></td>
             <td className="c-key">
               <EntityLink kind="purchase" id={f.purchase_id} open={openPurchase}>
                 {f.purchase_code}</EntityLink></td>
@@ -221,7 +221,7 @@ function OrderCell({ c, uom, editable, openPurchase, openCounterparty }: {
       <span className="rn" />
       <span className="tree-cell alloc-sub">
         <span className="tree-lead" />
-        <StatusGlyph locked={c.locked} />
+        <PurchaseGlyph locked={c.locked} />
         <EntityLink kind="purchase" id={c.purchase_id} open={openPurchase}>
           {c.purchase_code}</EntityLink>
       </span>

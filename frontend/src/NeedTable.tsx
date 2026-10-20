@@ -16,7 +16,7 @@
 // «Скомплектовано» распирало колонку под слово, которое ни одно число не заполняет.
 import { useState, type ReactNode } from 'react'
 import type { DeficitComponent, Status } from './api'
-import { Anomaly, Balance, balanceTitle, money, num, orderTitle, ItemGlyph } from './status'
+import { Anomaly, Balance, Cost, balanceTitle, count, money, num, orderTitle, ItemGlyph } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
 
@@ -92,6 +92,9 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
       <span className="rn" title="номер строки — постоянный, фильтр его не меняет">№</span>
       <span className="tree-cell">{lead}{catHead}</span>
       <span className="name">Описание</span>
+      {/* 2026-10-20 (правка Ивана): «Ед.» — сразу за описанием. Дальше идут числа в
+          единицах строки, а над ними в строке «Деньги» — тысячи рублей без разрыва. */}
+      <span className="puom" title="единица измерения строки">Ед.</span>
       <span className="pnum" title="потребность: разузлование BOM на все приборы">
         Потр.</span>
       <span className="pnum" title="скомплектовано: впаяно в изделия проекта">
@@ -106,7 +109,9 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
       <span className="pnum" title="баланс: (компл. + склад + заказ) − потребность">
         Баланс{f && <ColumnFilter opts={BALANCE_OPTS} value={f.balance}
           onPick={v => f.set('balance', v)} />}</span>
-      <span className="puom" title="единица измерения строки">Ед.</span>
+      <span className="pnum" title={'во сколько обходится строка: по счёту, где позиция уже под'
+        + ' обязательством, остальное по оценке; оранжевые — строки, дающие 80% стоимости'}>
+        Оценка, ₽</span>
       {acts && <span />}
     </div>
   )
@@ -117,9 +122,11 @@ export function NeedHead({ f, lead = 'Компонент', catHead, tree, acts }
 // «Сколько стоит то, что показано»: строка над шапкой, по ОТФИЛЬТРОВАННЫМ строкам —
 // фильтр по категории даёт деньги на детали, электронику, крепёж по отдельности. Это и
 // было нужно для планирования закупок (решения Ивана 2026-10-15):
-//   · Потр. — ПЛАН позиции: потрачено по ней + впереди (план закупки с запасом, сборка,
-//     нехватка) по оценке (2026-10-19, см. `PlanSumCell`); без фильтров сходится с
-//     «планом» шапки проекта до копейки, и Компл. + Склад + Заказ + нехватка = Потр.;
+//   · Потр. — ЧИСТАЯ ПОТРЕБНОСТЬ (2026-10-20): нужда × оценка, без запаса;
+//   · Оценка (хвостовая колонка, 2026-10-20; до того план стоял над «Потр.») — ПЛАН
+//     позиций: потрачено + впереди (план закупки с запасом, сборка, нехватка) по оценке
+//     (`PlanSumCell`); без фильтров сходится с «планом» шапки проекта до копейки, и
+//     Компл. + Склад + Заказ + нехватка = Оценка. Рядом с «Потр.» — «сверх потребности»;
 //   · Баланс — по оценке Item (факта у недостающего нет и быть не может);
 //   · Компл., Склад — по факту партий (цена УПД / себестоимость);
 //   · Заказ — обещанное по счёту, план и сборка по оценке (2026-10-19, см. `OrderSumCell`);
@@ -181,7 +188,7 @@ function OrderSumCell({ paid, unpaid, unpaidMissing, ours }: {
         <span className="g-on_order">предстоит (план сверх заказов, по оценке)</span>
         <span className="g-on_order">{money(unpaid)}</span>
         {unpaidMissing > 0 &&
-          <span className="miss">{unpaidMissing} поз. плана без оценки — «предстоит» неполно</span>}
+          <span className="miss">{count(unpaidMissing, 'позиция', 'позиции', 'позиций')} плана без оценки — «предстоит» неполно</span>}
       </span>
     </span>
   )
@@ -237,7 +244,7 @@ export function NeedSums({ rows, acts, outside, filtered }: {
   outside: number          // траты вне потребности — замыкают сверку с планом шапки
   filtered: boolean        // показана часть строк: сверки с планом нет
 }) {
-  let spent = 0, ahead = 0, reserve = 0, kitted = 0, stock = 0, short = 0
+  let spent = 0, ahead = 0, reserve = 0, kitted = 0, stock = 0, short = 0, need = 0
   let paid = 0, unpaid = 0, unpaidMissing = 0, oursAny = false
   const unestimated: string[] = []
   for (const r of rows) {
@@ -248,6 +255,7 @@ export function NeedSums({ rows, acts, outside, filtered }: {
     if (r.price != null && r.planned > 0 && r.balance > 0)
       reserve += Math.min(r.planned, r.balance) * r.price
     if (r.unestimated) unestimated.push(r.component_code)
+    need += r.need_cost ?? 0
     kitted += r.kitted_cost
     stock += r.in_stock_cost
     paid += r.ordered_cost
@@ -263,24 +271,31 @@ export function NeedSums({ rows, acts, outside, filtered }: {
   return (
     <div className="prow prow--sums">
       <span className="rn" />
-      {/* «Деньги», а не «Оценка» (2026-10-19): в строке и факты партий, и счета, и оценка. */}
-      <span className="tree-cell">Деньги</span>
+      {/* «Деньги», а не «Оценка» (2026-10-19): в строке и факты партий, и счета, и оценка.
+          Единица — в подписи строки (2026-10-20): над «Ед.» пусто, тысячи идут сплошным
+          рядом над числами. */}
+      <span className="tree-cell">Деньги, тыс. ₽</span>
       {/* Без ▲ (правка Ивана): треугольник занят статусами — здесь просто красный текст.
-          Признак и слова — те же, что в шапке проекта: без фильтров счётчики совпадают. */}
+          Признак — тот же, что в шапке проекта (без фильтров счётчики совпадают); слова
+          короче (2026-10-20): «— план неполон» уже сказано блоком «Деньги». */}
       <span className="name">
         {unestimated.length > 0 &&
           <span className="unest" title={'без оценки: ' + unestimated.join(', ')}>
-            {unestimated.length} поз. без оценки — план неполон</span>}
+            {count(unestimated.length, 'позиция', 'позиции', 'позиций')} без оценки</span>}
       </span>
-      <PlanSumCell spent={spent} ahead={ahead} reserve={reserve} outside={outside}
-        filtered={filtered} />
+      <span className="puom" />
+      {/* 2026-10-20: над «Потр.» — чистая потребность (нужда × оценка, без запаса), план
+          уехал над «Оценку». Рядом они и есть «сверх потребности» блока «Деньги» — но по
+          фильтру: электроника, крепёж, детали по отдельности. */}
+      <SumCell value={need} what="чистая потребность: нужда по BOM × оценка, без запаса" />
       <SumCell value={kitted} glyph="notebook" tone="ok" what="впаяно, по цене партий" />
       <SumCell value={stock} glyph="layers" tone="ok" what="на складе, по цене партий" />
       <OrderSumCell paid={paid} unpaid={unpaid} unpaidMissing={unpaidMissing}
         ours={oursAny} />
       <SumCell value={short} glyph="warning" tone="order"
         what="предстоит купить (только минусы баланса), по оценке" />
-      <span className="puom">тыс ₽</span>
+      <PlanSumCell spent={spent} ahead={ahead} reserve={reserve} outside={outside}
+        filtered={filtered} />
       {acts && <span />}
     </div>
   )
@@ -355,12 +370,17 @@ export function NeedRow({ ln, no, openItem, action }: {
           {ln.component_code}</EntityLink>
       </span>
       <span className="name">{ln.component_description}</span>
+      <span className="puom">{ln.uom}</span>
       <span className="pnum">{num(ln.need)}</span>
       <BalanceCells code={ln.component_code} need={ln.need} kitted={ln.kitted}
         inStock={ln.in_stock} onOrder={ln.on_order} planned={ln.planned} wip={ln.wip}
         balance={ln.balance}
         status={ln.status} anomaly={ln.anomaly} />
-      <span className="puom">{ln.uom}</span>
+      {/* 2026-10-20: план позиции — по счёту, где под обязательством, остальное по оценке.
+          Без оценки и без трат — прочерк: неизвестное ≠ бесплатное. */}
+      <span className="pnum">
+        <Cost cost={ln.unestimated && ln.spent_cost === 0 ? null : ln.plan_cost}
+          status={ln.cost_status} /></span>
       {action !== undefined && <span className="act">{action}</span>}
     </div>
   )

@@ -3,9 +3,10 @@
 // Волна 19 (Ф12a): форма по канону §13 — табы Состав · Применение · Склад ·
 // Движения · Файлы. «Движения» пришли на смену узкому «Отгружено»: вся лента
 // ордеров, коснувшихся изделия (рождение партий + расходы), `engine.item_movements`.
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemMoney, type ItemRow, type Category, type RollupResult } from './api'
-import { num, money, count, ItemGlyph, LotGlyph, StatusGlyph, rowNumbers, unitMoney } from './status'
+import { Chevron, Cost, num, money, count, ItemGlyph, LotGlyph, StatusGlyph, paretoKeys, rowNumbers,
+  unitMoney, visibleTree } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -112,30 +113,12 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             <th className="c-key">Компонент{bomFilter.head}</th>
             <th className="c-desc">Описание</th>
             <th className="num">Кол-во</th><th className="uom">Ед.</th>
+            {/* 2026-10-20: во сколько строка обойдётся (кол-во × оценка; у своего
+                компонента — живой роллап). Оранжевые — Парето: дают 80% стоимости. */}
+            <th className="num c-money" title="кол-во × оценка компонента; оранжевые — строки, дающие 80% стоимости прибора">Оценка, ₽</th>
             {!locked && <th className="act" />}</tr></thead>
-          <tbody>{bomFilter.shown.map(b => (
-            <tr key={b.id} className="row">
-              <td className="rn">{bomNo.get(b)}</td>
-              <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
-              <td className="c-key">
-                <EntityLink kind="item" id={b.component_id} open={openItem}>
-                  {b.component_code}</EntityLink></td>
-              <td className="c-desc">
-                <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
-              <td className="num">
-                {!locked
-                  ? <CommitInput value={String(b.qty)} disabled={busy}
-                      onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
-                      validate={v => Number(v) > 0} />
-                  : num(b.qty)}
-              </td>
-              <td className="uom">{b.component_uom}</td>
-              {!locked && <td className="act">
-                <button className="fh-ctl icon fh-del" title="Убрать компонент из состава"
-                  disabled={busy} onClick={() => run(api.deleteBomLine(b.id))}>
-                  <span className="ci ci-trash" /></button>
-              </td>}
-            </tr>))}</tbody>
+          <BomBody lines={bomFilter.shown} no={b => bomNo.get(b)} locked={locked}
+            busy={busy} openItem={openItem} run={run} />
         </table>}
       {/* Добавление компонента — только когда форма редактируема (мягкий замок открыт
           и не зафиксировано). Под замком/фиксацией состав = read-only список. */}
@@ -340,6 +323,95 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
   )
 }
 
+// Тело «Состава» — аккордеон с динамическим Парето (2026-10-20, как «Приборы» проекта).
+// Свой компонент раскрывается в своё поддерево (только чтение: правится собственный
+// состав, чужой — в форме компонента). Подсветка — по ФРОНТУ раскрытия: видимые строки,
+// которые сами не раскрыты; раскрытая строка гаснет, её место занимают дети. Кол-во во
+// вложенных строках — накопленное (штук на одно это изделие), поэтому сумма фронта всегда
+// равна оценке изделия по составу. Без раскрытий подсветка совпадает с движком.
+type BomLine = ItemDetail['bom'][number]
+function BomBody({ lines, no, locked, busy, openItem, run }: {
+  lines: BomLine[]; no: (b: BomLine) => number | undefined; locked: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<ItemDetail>) => void
+}) {
+  const [open, setOpen] = useState<Set<number>>(new Set())
+  const [expanded, setExpanded] = useState<Map<number, Set<number>>>(new Map())
+  const toggleLine = (id: number) => setOpen(s => {
+    const next = new Set(s)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleNode = (id: number, i: number) => setExpanded(m => {
+    const next = new Map(m)
+    const set = new Set(next.get(id) ?? [])
+    if (set.has(i)) set.delete(i); else set.add(i)
+    next.set(id, set)
+    return next
+  })
+  const visible = new Map(lines.map(b => [b.id, visibleTree(b.tree, expanded.get(b.id) ?? new Set())]))
+  const frontier: { key: string; cost: number | null }[] = []
+  for (const b of lines) {
+    if (!open.has(b.id)) { frontier.push({ key: `l${b.id}`, cost: b.cost }); continue }
+    for (const v of visible.get(b.id) ?? [])
+      if (!(v.hasChildren && v.isExp)) frontier.push({ key: `n${b.id}:${v.i}`, cost: v.n.cost })
+  }
+  const costly = paretoKeys(frontier)
+  return <tbody>{lines.map(b => {
+    const isOpen = open.has(b.id)
+    return <Fragment key={b.id}>
+      <tr className="row">
+        <td className="rn">{no(b)}</td>
+        <td className="gl"><ItemGlyph native={b.component_native} synced={b.component_synced} locked={b.component_locked} /></td>
+        <td className="c-key"><span className="tree-cell">
+          {b.tree.length > 0
+            ? <button className="chev" title={isOpen ? 'свернуть' : 'раскрыть состав'}
+                onClick={() => toggleLine(b.id)}><Chevron open={isOpen} /></button>
+            : <span className="tree-lead" />}
+          <EntityLink kind="item" id={b.component_id} open={openItem}>
+            {b.component_code}</EntityLink></span></td>
+        <td className="c-desc">
+          <span className="cell-ellip" title={b.component_description}>{b.component_description}</span></td>
+        <td className="num">
+          {!locked
+            ? <CommitInput value={String(b.qty)} disabled={busy}
+                onCommit={v => run(api.updateBomLine(b.id, { qty: Number(v) }))}
+                validate={v => Number(v) > 0} />
+            : num(b.qty)}
+        </td>
+        <td className="uom">{b.component_uom}</td>
+        <td className="num c-money">
+          <Cost cost={b.cost} status={!isOpen && costly.has(`l${b.id}`) ? 'costly' : null} /></td>
+        {!locked && <td className="act">
+          <button className="fh-ctl icon fh-del" title="Убрать компонент из состава"
+            disabled={busy} onClick={() => run(api.deleteBomLine(b.id))}>
+            <span className="ci ci-trash" /></button>
+        </td>}
+      </tr>
+      {isOpen && (visible.get(b.id) ?? []).map(({ n, i, hasChildren, isExp }) => (
+        <tr key={i} className="row">
+          <td className="rn" />
+          <td className="gl"><ItemGlyph native={n.component_native} synced={n.component_synced} locked={n.component_locked} /></td>
+          {/* Отступ — по глубине: вычисляемая инлайн-ширина, как в дереве «Приборов». */}
+          <td className="c-key"><span className="tree-cell" style={{ paddingLeft: (n.depth + 1) * 18 }}>
+            {hasChildren
+              ? <button className="chev" title={isExp ? 'свернуть подсборку' : 'раскрыть подсборку'}
+                  onClick={() => toggleNode(b.id, i)}><Chevron open={isExp} /></button>
+              : <span className="tree-lead" />}
+            <EntityLink kind="item" id={n.component_id} open={openItem}>
+              {n.component_code}</EntityLink></span></td>
+          <td className="c-desc">
+            <span className="cell-ellip" title={n.component_description}>{n.component_description}</span></td>
+          <td className="num" title="штук на одно это изделие">{num(n.qty)}</td>
+          <td className="uom">{n.uom}</td>
+          <td className="num c-money">
+            <Cost cost={n.cost}
+              status={!(hasChildren && isExp) && costly.has(`n${b.id}:${i}`) ? 'costly' : null} /></td>
+          {!locked && <td className="act" />}
+        </tr>))}
+    </Fragment>
+  })}</tbody>
+}
+
 // Блок «Деньги» изделия (волна 26). Главное — факт, где он есть: у покупного — последняя
 // цена по счёту; у производимого (своего ещё не паяем) — живой пересчёт оценки по составу.
 // Все числа и сигналы считает движок (`engine.item_money`), здесь только знак.
@@ -364,7 +436,7 @@ function ItemMoneyBlock({ m }: { m: ItemMoney }) {
           </StatWarn>}
         {incomplete.length > 0 &&
           <StatWarn title={'без цены: ' + incomplete.join(', ')}>
-            {incomplete.length} поз. без цены — оценка неполна
+            {count(incomplete.length, 'позиция', 'позиции', 'позиций')} без цены — оценка неполна
           </StatWarn>}
       </StatPanel>
     )

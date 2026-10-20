@@ -5,7 +5,8 @@ import type { OrderKind } from './orders'
 export type Status = 'available' | 'on_order' | 'to_order'
 
 // Цвет-смысл денег строки (2026-08-07): `overpaid` — взято больше чем в полтора раза от
-// нужды (красный), `costly` — верхняя четверть набора по стоимости (оранжевый), `null` —
+// нужды (красный), `costly` — по Парето: строки, вместе дающие 80% стоимости набора
+// (оранжевый; с 2026-10-20 вместо «верхней четверти»), `null` —
 // ничего примечательного. Считает движок, знак выбирает вью ([[engine-view-seam]]).
 export type CostStatus = 'overpaid' | 'costly' | null
 
@@ -58,12 +59,14 @@ export interface DeficitTreeNode {
   kitted?: number; in_stock?: number; on_order?: number; balance?: number
   planned?: number          // доля плана в «Заказе» (волна 24) — тон ящика
   status?: Status; anomaly?: boolean
+  est_cost: number          // 2026-10-20: оценка узла в приборе (кол-во × оценка по составу)
 }
 export interface DeficitDemand {
   demand_id: number; target_id: number; target_code: string; target_description: string
   target_native: boolean; target_synced: boolean; target_locked: boolean
   qty: number; device: { done: number; wip: number; not_started: number }
   status: Status; badge: Status; tree: DeficitTreeNode[]
+  cost: number; cost_status: CostStatus   // 2026-10-20: кол-во × оценка прибора + Парето
 }
 // Свод потребности по компонентам на весь проект (секция «Потребность»).
 // Четыре сырых члена + невязка: `(kitted + in_stock + on_order) − need = balance`.
@@ -89,6 +92,9 @@ export interface DeficitComponent {
   // покрытое по оценке — то же правило, что «план» бюджета. `unestimated` — непокрытое
   // есть, а оценки нет (тот же признак, что «без оценки» в шапке проекта).
   spent_cost: number; plan_cost: number; unestimated: boolean
+  // 2026-10-20: колонка «Оценка» = `plan_cost`, Парето-тон; над «Потр.» — Σ `need_cost`
+  // (чистая потребность: нужда × оценка, без запаса; `null` — без оценки).
+  need_cost: number | null; cost_status: CostStatus
 }
 export interface Deficit {
   project_id: number; project_code: string; project_name: string
@@ -141,6 +147,13 @@ export interface ItemMoney {
   rollup?: number; incomplete?: string[]; estimate_stale?: boolean
   top?: { id: number; code: string; qty: number; cost: number }[]
 }
+// Узел аккордеона «Состава» (2026-10-20): pre-order + `depth`; `qty` — НАКОПЛЕННОЕ, штук
+// на одно изделие формы, поэтому оценки детей в сумме дают оценку узла.
+export interface BomTreeNode {
+  component_id: number; component_code: string; component_description: string; uom: string
+  component_native: boolean; component_synced: boolean; component_locked: boolean
+  qty: number; depth: number; is_leaf: boolean; cost: number | null
+}
 export interface ItemDetail {
   id: number; code: string; description: string; category: Category | null
   uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
@@ -152,7 +165,10 @@ export interface ItemDetail {
          // колонки «Компонент» на вкладке «Состав».
          component_category: string | null;
          component_native: boolean; component_synced: boolean; component_locked: boolean;
-         qty: number }[]
+         qty: number
+         // 2026-10-20: оценка строки (кол-во × оценка/роллап компонента) + Парето-тон.
+         cost: number | null; cost_status: CostStatus
+         tree: BomTreeNode[] }[]   // поддерево своего компонента (аккордеон, 2026-10-20)
   where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number
                 parent_native: boolean; parent_synced: boolean; parent_locked: boolean }[]
   // `origin_locked` (Ф15): партия черновика лежит в этом списке, но НЕ на складе —
@@ -335,6 +351,7 @@ export interface PurchaseFormLine {
   // Цена ВСЕЙ строки по счёту (волна 24) — рубли и копейки за строку целиком; `null` —
   // ещё не известна. Обязательна к фиксации. Цена штуки выводится делением (`unit_price`).
   price: number | null; unit_price: number | null
+  cost_status: CostStatus   // 2026-10-20: Парето по цене строки — «тяжёлое» и мелочи
   receipts: LineReceiptRow[]   // Ф6: чем строка закрыта (обычно одна накладная)
 }
 export interface LineReceiptRow {

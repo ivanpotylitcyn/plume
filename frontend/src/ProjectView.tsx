@@ -8,11 +8,12 @@
 // 2026-07-26: «это обычные проекты, унифицируем») — у них просто нет приборов и
 // потребности, поэтому набор табов сужается, как у покупного изделия нет «Состава».
 // Фиксация проекта (бывш. «Закрыть проект») — обычная команда шапки (§5).
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { api, type Budget, type Deficit, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
   type ProjectSupply, type ResidualLot } from './api'
-import { Anomaly, Balance, Chevron, LotGlyph, count, money, num, ItemGlyph, pct, rowNumbers,
+import { Anomaly, Balance, Chevron, Cost, LotGlyph, count, money, num, ItemGlyph, paretoKeys, pct,
+  rowNumbers, visibleTree, type VisibleNode,
   signedPct } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
@@ -123,12 +124,8 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
         {data.demands.length === 0
           ? <div className="tab-empty">
               {locked ? 'Приборов нет.' : 'Пока ничего — добавьте прибор ниже.'}</div>
-          : <div className="pgrid pgrid--acts">
-              <NeedHead lead="Прибор" tree acts />
-              {data.demands.map((d, i) => <DeviceRow key={d.demand_id} d={d} no={i + 1}
-                editable={!locked}
-                busy={busy} openItem={openItem} run={run} />)}
-            </div>}
+          : <DevicesGrid demands={data.demands} editable={!locked} busy={busy}
+              openItem={openItem} run={run} />}
         {/* §5 (Ф9): контролы правки приборов только в режиме правки — просмотр чище. */}
         {!locked && <AddDevice items={items} demands={data.demands} busy={busy}
           add={(target_item_id, qty) => run(api.addDemand(projectId, { target_item_id, qty }))} />}
@@ -354,7 +351,7 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
       </StatGroup>
       {b.unestimated.length > 0 &&
         <StatWarn title={`нет estimated_cost: ${b.unestimated.join(', ')}`}>
-          {b.unestimated.length} поз. без оценки — план неполон
+          {count(b.unestimated.length, 'позиция', 'позиции', 'позиций')} без оценки — план неполон
         </StatWarn>}
     </StatPanel>
   )
@@ -363,11 +360,63 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
 // Прибор в потребности: строка в том же шаблоне колонок, что и его состав.
 // Статус — тонкой полосой слева (без ведущего глифа); название серым. Клик по
 // шеврону раскрывает аккордеон с дефицитом по этому прибору.
-function DeviceRow({ d, no, editable, busy, openItem, run }: {
-  d: DeficitDemand; no: number; editable: boolean; busy: boolean
+// Динамический Парето (2026-10-20, идея Ивана): подсветка идёт по ФРОНТУ аккордеона —
+// видимым строкам, которые сами не раскрыты. Ничего не раскрыто — по приборам; раскрыт
+// прибор — он выпадает, а в счёт идут его узлы (и остальные приборы); раскрыта подсборка —
+// её место занимают её дети. Сумма фронта всегда равна сумме приборов: оценка узла — это
+// сумма детей (роллап), поэтому 80% считаются от одного и того же целого. Фронт зависит
+// от раскрытости — состояния вью, — поэтому счёт здесь (`paretoKeys`, правило движка
+// `mark_pareto`); без раскрытий он совпадает с `cost_status` приборов от движка.
+function DevicesGrid({ demands, editable, busy, openItem, run }: {
+  demands: DeficitDemand[]; editable: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<Deficit>) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState<Set<number>>(new Set())
+  const [expanded, setExpanded] = useState<Map<number, Set<number>>>(new Map())
+  const toggleDevice = (id: number) => setOpen(s => {
+    const next = new Set(s)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleNode = (id: number, i: number) => setExpanded(m => {
+    const next = new Map(m)
+    const set = new Set(next.get(id) ?? [])
+    if (set.has(i)) set.delete(i); else set.add(i)
+    next.set(id, set)
+    return next
+  })
+  const visible = new Map(demands.map(d => [d.demand_id,
+    visibleTree(d.tree, expanded.get(d.demand_id) ?? new Set())]))
+  const frontier: { key: string; cost: number | null }[] = []
+  for (const d of demands) {
+    if (!open.has(d.demand_id)) { frontier.push({ key: `d${d.demand_id}`, cost: d.cost }); continue }
+    for (const v of visible.get(d.demand_id) ?? [])
+      if (!(v.hasChildren && v.isExp)) frontier.push({ key: `t${d.demand_id}:${v.i}`, cost: v.n.est_cost })
+  }
+  const costly = paretoKeys(frontier)
+  return (
+    // Колонка команд — только в правке (2026-10-20, как у «Строк» закупки): в просмотре
+    // корзины нет, а пустой трек 44px поджимал «Оценку» к «Балансу».
+    <div className={'pgrid' + (editable ? ' pgrid--acts' : '')}>
+      <NeedHead lead="Прибор" tree acts={editable} />
+      {demands.map((d, i) => <DeviceRow key={d.demand_id} d={d} no={i + 1}
+        open={open.has(d.demand_id)} onToggle={() => toggleDevice(d.demand_id)}
+        costly={costly.has(`d${d.demand_id}`)}
+        editable={editable} busy={busy} openItem={openItem} run={run}>
+        <DeviceTree rows={visible.get(d.demand_id) ?? []}
+          onToggle={i => toggleNode(d.demand_id, i)}
+          costly={i => costly.has(`t${d.demand_id}:${i}`)} acts={editable}
+          openItem={openItem} />
+      </DeviceRow>)}
+    </div>
+  )
+}
+
+function DeviceRow({ d, no, open, onToggle, costly, editable, busy, openItem, run, children }: {
+  d: DeficitDemand; no: number; open: boolean; onToggle: () => void; costly: boolean
+  editable: boolean; busy: boolean
+  openItem: (id: number) => void; run: (p: Promise<Deficit>) => void; children: ReactNode
+}) {
   const dev = d.device
   return (
     <>
@@ -375,11 +424,12 @@ function DeviceRow({ d, no, editable, busy, openItem, run }: {
         <span className="rn">{no}</span>
         <span className="tree-cell">
           <button className="chev" title={open ? 'свернуть' : 'раскрыть состав'}
-            onClick={() => setOpen(o => !o)}><Chevron open={open} /></button>
+            onClick={onToggle}><Chevron open={open} /></button>
           <ItemGlyph native={d.target_native} synced={d.target_synced} locked={d.target_locked} />
           <EntityLink kind="item" id={d.target_id} open={openItem}>{d.target_code}</EntityLink>
         </span>
         <span className="name">{d.target_description}</span>
+        <span className="puom">шт</span>
         <span className="pnum">
           {editable
             ? <CommitInput value={String(d.qty)} disabled={busy}
@@ -401,60 +451,45 @@ function DeviceRow({ d, no, editable, busy, openItem, run }: {
           <Balance value={-dev.not_started} status={dev.not_started > 0 ? 'to_order' : 'on_order'}
             title="сколько приборов ещё не начато" />
         </span>
-        <span className="puom">шт</span>
-        <span className="act">
-          {editable &&
-            <button className="fh-ctl icon fh-del" title="Убрать прибор из потребности"
-              disabled={busy}
-              onClick={async () => {
-                if (await ask({ title: `Убрать ${d.target_code} из потребности проекта?`,
-                  verb: 'Убрать', icon: 'ci-trash' })) run(api.deleteDemand(d.demand_id))
-              }}>
-              <span className="ci ci-trash" /></button>}
-        </span>
+        {/* 2026-10-20: кол-во × оценка прибора по составу (по оценке: счета между
+            приборами не делятся); оранжевые — Парето по проекту. */}
+        <span className="pnum"><Cost cost={d.cost} status={costly ? 'costly' : null} /></span>
+        {editable && <span className="act">
+          <button className="fh-ctl icon fh-del" title="Убрать прибор из потребности"
+            disabled={busy}
+            onClick={async () => {
+              if (await ask({ title: `Убрать ${d.target_code} из потребности проекта?`,
+                verb: 'Убрать', icon: 'ci-trash' })) run(api.deleteDemand(d.demand_id))
+            }}>
+            <span className="ci ci-trash" /></button>
+        </span>}
       </div>
       {open && (d.tree.length === 0
         ? <div className="prow prow--comp prow--empty">
             <span>Состав пуст — задайте BOM прибора.</span>
           </div>
-        : <DeviceTree tree={d.tree} openItem={openItem} />)}
+        : children)}
     </>
   )
 }
 
 // Дерево BOM в аккордеоне прибора (Ф5b) со сворачиванием подсборок. Узлы-подсборки
-// свёрнуты по умолчанию (expanded — пусто): при раскрытии прибора видно только прямые
-// компоненты, дальше — по шевронам. Плоский pre-order + `depth` от бэка: скрываем строки
-// глубже свёрнутого узла (пока не вернёмся на его уровень).
-function DeviceTree({ tree, openItem }: {
-  tree: DeficitTreeNode[]; openItem: (id: number) => void
+// свёрнуты по умолчанию: при раскрытии прибора видно только прямые компоненты, дальше —
+// по шевронам. Видимость — общая `visibleTree`; раскрытость живёт в `DevicesGrid`
+// (2026-10-20: по ней считается динамический Парето), здесь только видимые строки.
+function DeviceTree({ rows, onToggle, costly, acts, openItem }: {
+  rows: VisibleNode<DeficitTreeNode>[]; onToggle: (i: number) => void; costly: (i: number) => boolean
+  acts: boolean; openItem: (id: number) => void
 }) {
-  const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const toggle = (i: number) => setExpanded(s => {
-    const next = new Set(s)
-    if (next.has(i)) next.delete(i); else next.add(i)
-    return next
-  })
-  // Видимые строки: узел скрыт, если он глубже ближайшего свёрнутого предка.
-  const visible: { n: DeficitTreeNode; i: number; hasChildren: boolean; isExp: boolean }[] = []
-  let hideDepth = Infinity
-  tree.forEach((n, i) => {
-    if (n.depth > hideDepth) return       // под свёрнутым узлом — прячем
-    hideDepth = Infinity                  // вернулись на уровень предка — снимаем сокрытие
-    const hasChildren = !n.is_leaf
-    const isExp = expanded.has(i)
-    if (hasChildren && !isExp) hideDepth = n.depth   // свёрнут → прячем его поддерево
-    visible.push({ n, i, hasChildren, isExp })
-  })
-  return <>{visible.map(({ n, i, hasChildren, isExp }) =>
-    <TreeRow key={i} n={n} hasChildren={hasChildren} expanded={isExp}
-      onToggle={() => toggle(i)} openItem={openItem} />)}</>
+  return <>{rows.map(({ n, i, hasChildren, isExp }) =>
+    <TreeRow key={i} n={n} hasChildren={hasChildren} expanded={isExp} acts={acts}
+      costly={costly(i)} onToggle={() => onToggle(i)} openItem={openItem} />)}</>
 }
 
 // Строка дерева. Отступ = глубина. Узел-подсборка: кликабельный шеврон, чисел покрытия
 // нет (купить нельзя — деньги и заказ живут на листьях). Лист: баланс, read-only.
-function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
-  n: DeficitTreeNode; hasChildren: boolean; expanded: boolean
+function TreeRow({ n, hasChildren, expanded, costly, acts, onToggle, openItem }: {
+  n: DeficitTreeNode; hasChildren: boolean; expanded: boolean; costly: boolean; acts: boolean
   onToggle: () => void; openItem: (id: number) => void
 }) {
   // +1: дерево живёт под строкой прибора-цели (стаж-ступень). Единственная законная
@@ -473,6 +508,7 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
         <EntityLink kind="item" id={n.component_id} open={openItem}>{n.component_code}</EntityLink>
       </span>
       <span className="name">{n.component_description}</span>
+      <span className="puom">{n.uom}</span>
       <span className="pnum">{num(n.need)}</span>
       {n.is_leaf
         ? <BalanceCells code={n.component_code} need={n.need} kitted={n.kitted ?? 0}
@@ -483,8 +519,10 @@ function TreeRow({ n, hasChildren, expanded, onToggle, openItem }: {
             <span className="lbl">подсборка</span>
             <span /><span /><span />
           </>}
-      <span className="puom">{n.uom}</span>
-      <span className="act" />
+      {/* Доля узла в оценке прибора: кол-во в приборе × оценка штуки; тон — динамический
+          Парето по фронту аккордеона (раскрытый узел не в счёт). */}
+      <span className="pnum"><Cost cost={n.est_cost} status={costly ? 'costly' : null} /></span>
+      {acts && <span className="act" />}
     </div>
   )
 }

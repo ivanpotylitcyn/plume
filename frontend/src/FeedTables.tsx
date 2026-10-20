@@ -10,7 +10,7 @@
 // «нет данных» значит потерять единственное, что в пустом табе полезно.
 import type { AccountDocumentRow, FeedProcurementRow, FeedPurchaseRow,
   FeedReceiptRow } from './api'
-import { CounterpartyRef, money, num, StatusGlyph } from './status'
+import { CounterpartyRef, moneyCol, num, PurchaseGlyph, StatusGlyph } from './status'
 import { viewDate } from './FormField'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
@@ -76,14 +76,14 @@ export function PurchaseFeed({ rows, empty, open, openCounterparty, side = 'coun
         {/* Деньги заказа — ОЦЕНКА (`Σ qty × estimated_cost`), факт рождается только в
             поставке. Пометки «сумма неполна» здесь НЕТ (правка Ивана 2026-08-28): в
             ленте она шумит, а её место — форма заказа, где с ценами и работают. */}
-        <th className="num c-money">{byProject ? 'Цена' : 'Кол-во'}</th>
+        <th className="num c-money">{byProject ? 'Цена, ₽' : 'Кол-во'}</th>
       </tr></thead>
       <tbody>{rows.map((p, i) => (
         <tr key={p.id} className="row">
           <td className="rn">{i + 1}</td>
           <td className="gl">
-            {/* Волна 24: чистый замок, как в списке «Заказы» — обязательство, не поставка. */}
-            <StatusGlyph locked={p.locked} /></td>
+            {/* Глиф заказа — печать фиксации, как в списке «Заказы»: обязательство. */}
+            <PurchaseGlyph locked={p.locked} /></td>
           <td className="c-key">
             <EntityLink kind="purchase" id={p.id} open={open}>
               {p.code || `Заказ #${p.id}`}</EntityLink></td>
@@ -98,7 +98,7 @@ export function PurchaseFeed({ rows, empty, open, openCounterparty, side = 'coun
           <td className="c-date">
             {p.date ? viewDate(p.date) : ''}</td>
           <td className="num c-count">{p.lines}</td>
-          <td className="num c-money">{byProject ? money(p.estimate) : num(p.qty)}</td>
+          <td className="num c-money">{byProject ? moneyCol(p.estimate) : num(p.qty)}</td>
         </tr>
       ))}</tbody>
     </table>
@@ -125,7 +125,7 @@ export function ReceiptFeed({ rows, empty, open, openCounterparty, side = 'count
         <th className="c-date">Дата</th>
         <th className="num c-count">Партий</th>
         {/* Сумма поставки — ФАКТ по партиям (`Σ cost` из УПД, волна 26). */}
-        <th className="num c-money">Сумма</th>
+        <th className="num c-money">Сумма, ₽</th>
       </tr></thead>
       <tbody>{rows.map((r, i) => (
         <tr key={r.id} className="row">
@@ -145,7 +145,7 @@ export function ReceiptFeed({ rows, empty, open, openCounterparty, side = 'count
           <td className="c-date">
             {r.date ? viewDate(r.date) : ''}</td>
           <td className="num c-count">{r.lots}</td>
-          <td className="num c-money">{money(r.total)}</td>
+          <td className="num c-money">{moneyCol(r.total)}</td>
         </tr>
       ))}</tbody>
     </table>

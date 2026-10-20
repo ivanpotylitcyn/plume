@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type InventoryForm, type InventoryFormLot,
   type WrittenOffLot } from './api'
-import { LotGlyph, count, money, moneyField, num, parseMoney, perUnitTitle, sumByUom } from './status'
+import { LotGlyph, count, moneyCol, moneyField, num, parseMoney, perUnitTitle, sumByUom } from './status'
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -49,7 +49,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
               <th className="rn">№</th><th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
-              <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость</th>
+              <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость, ₽</th>
               <th className="c-txt">Part number</th><th className="c-txt">Название</th>
               <th className="c-fit">Провенанс</th><th className="act" />
             </tr>
@@ -133,7 +133,7 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
           Пустой ввод — ноль: у партии стоимость есть всегда. В просмотре — деньгами, как
           цена строки заказа (поле с «20054,26» читается хуже «20 054,26 ₽»). */}
       <td className="num c-money" title={perUnitTitle(lot.cost, lot.qty)}>
-        {locked ? money(lot.cost)
+        {locked ? moneyCol(lot.cost)
           : <CommitInput value={moneyField(lot.cost)} disabled={busy} numeric
               onCommit={v => run(api.updateInventoryLot(lot.id, { cost: parseMoney(v) ?? 0 }))}
               validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}

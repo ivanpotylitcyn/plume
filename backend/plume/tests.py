@@ -2047,11 +2047,11 @@ class ProcurementFormTests(EngineTestBase):
         self.prj.save(update_fields=['locked'])
         self.assertEqual(engine.procurement_form(p)['demand'], D(60))
 
-    def test_line_cost_and_costly_quartile(self):
-        """Стоимость строки + оранжевая верхняя четверть набора (2026-08-07).
+    def test_line_cost_and_costly_pareto(self):
+        """Стоимость строки + оранжевые «дорогие» по Парето (2026-08-07 → 2026-10-20).
 
-        Ранжирование — внутри одного списка (в разных документах дорого разное), доля
-        `ceil(N/4)`: из четырёх строк дорогая одна. Позиция без оценки в ранжировании не
+        Ранжирование — внутри одного списка (в разных документах дорого разное): дорогие —
+        строки, дающие первые 80% стоимости набора. Позиция без оценки в ранжировании не
         участвует и стоимости не имеет (`None`, а не ноль). Волна 24: живёт в строках
         ЗАКУПКИ (оценка — её язык); у заказа вместо стоимости — цена строки по счёту.
         """
@@ -2073,7 +2073,7 @@ class ProcurementFormTests(EngineTestBase):
         rows = {r['item_code']: r for r in engine.procurement_allocation(plan)['rows']}
         self.assertEqual(rows['A']['cost'], D(1000))
         self.assertIsNone(rows['D']['cost'])
-        # ранжируются трое оценённых → ceil(3/4) = 1 дорогая
+        # 1000 из 1110 уже больше 80% — дорогая одна A
         self.assertEqual(rows['A']['cost_status'], 'costly')
         self.assertIsNone(rows['B']['cost_status'])
         self.assertIsNone(rows['C']['cost_status'])
@@ -2098,7 +2098,8 @@ class ProcurementFormTests(EngineTestBase):
         engine.add_procurement_line(plan, priced[1], D(15))  # ровно 1.5× — ещё не перебор
         rows = {r['item_code']: r for r in engine.procurement_allocation(plan)['rows']}
         self.assertEqual(rows['A']['cost_status'], 'overpaid')   # красный, не 'costly'
-        self.assertIsNone(rows['B']['cost_status'])
+        # 1.5× — ещё не перебор; по Парето (150 из 310 после 160) строка дорогая
+        self.assertEqual(rows['B']['cost_status'], 'costly')
 
     def test_purchase_line_carries_invoice_price(self):
         """Волна 24: строка заказа несёт цену ВСЕЙ строки по счёту; цена штуки выводится
@@ -7529,6 +7530,13 @@ class CostFixtures:
     def live_cost(self, lot):
         return lot.movements.aggregate(s=Sum('cost'))['s']
 
+    def locked_order(self, lines, date=DAY, contractor=None):
+        pu = self.make_purchase(date=date, contractor=contractor)
+        for item, qty, price in lines:
+            _line(pu, item, D(qty), price=D(price))
+        engine.lock_purchase(pu)
+        return pu
+
 
 class LotCostCanonTests(CostFixtures, EngineTestBase):
     """Волна 26, Ф0 — учётный канон партии: «стоимость + количество, последний забирает
@@ -7634,13 +7642,6 @@ class LotCostCanonTests(CostFixtures, EngineTestBase):
 class MoneyBlockTests(CostFixtures, EngineTestBase):
     """Волна 26, Ф1 — числа блока «Деньги» по формам и их сверки до копейки."""
 
-    def locked_order(self, lines, date=DAY, contractor=None):
-        pu = self.make_purchase(date=date, contractor=contractor)
-        for item, qty, price in lines:
-            _line(pu, item, D(qty), price=D(price))
-        engine.lock_purchase(pu)
-        return pu
-
     def test_purchase_received_plus_awaiting_is_the_invoice(self):
         a, b = self.make_item('A'), self.make_item('B')
         pu = self.locked_order([(a, 3, '1000.00'), (b, 10, '55.55')])
@@ -7742,3 +7743,107 @@ class MoneyBlockTests(CostFixtures, EngineTestBase):
         self.assertEqual(m['rollup'], D(33))
         self.assertTrue(m['estimate_stale'])
         self.assertEqual(m['top'][0]['code'], 'RES')
+
+
+class ParetoAndBomCostTests(EngineTestBase):
+    """2026-10-20: «дорогая строка» по Парето + колонка «Оценка» в составе изделия."""
+
+    def test_pareto_marks_rows_giving_eighty_percent(self):
+        rows = [{'cost': D(c)} for c in (5, 50, 15, 30)] + [{'cost': None}, {'cost': D(0)}]
+        engine.mark_pareto(rows)
+        costly = sorted(r['cost'] for r in rows if r['cost_status'] == 'costly')
+        self.assertEqual(costly, [D(30), D(50)])          # 50 + 30 = 80% — порог взят
+        self.assertTrue(all(r['cost_status'] is None for r in rows[4:]))
+
+    def test_single_big_row_is_costly(self):
+        rows = engine.mark_pareto([{'cost': D(900)}, {'cost': D(60)}, {'cost': D(40)}])
+        self.assertEqual([r['cost_status'] for r in rows], ['costly', None, None])
+
+    def test_bom_line_costs_use_live_rollup_and_feed_top(self):
+        dev = self.make_item('DEV', manufactured=True)
+        board = self.make_item('BRD', manufactured=True)
+        res, case, blind = self.make_item('RES'), self.make_item('CASE'), self.make_item('X')
+        for item, price in ((res, 10), (case, 800)):
+            item.estimated_cost = D(price); item.save()
+        engine.add_bom_line(board, res, D(20))                # плата: 200 (роллап)
+        engine.add_bom_line(dev, board, D(2))                 # 400
+        engine.add_bom_line(dev, case, D(1))                  # 800
+        engine.add_bom_line(dev, blind, D(3))                 # цены нет
+        rows = {r['code']: r for r in engine.bom_line_costs(dev)}
+        self.assertEqual(rows['BRD']['cost'], D(400))         # живой роллап, не None
+        self.assertIsNone(rows['X']['cost'])
+        self.assertEqual(rows['CASE']['cost_status'], 'costly')
+        self.assertEqual(rows['BRD']['cost_status'], 'costly')  # до неё 800 < 960
+        top = engine.item_money(dev)['top']
+        self.assertEqual([t['cost'] for t in top], [D(800), D(400)])
+        detail = Client()
+        detail.force_login(self.user)
+        bom = detail.get(f'/api/items/{dev.id}/').json()['bom']
+        self.assertEqual({b['component_code']: b['cost_status'] for b in bom}['CASE'], 'costly')
+
+
+class EstimateColumnsTests(CostFixtures, EngineTestBase):
+    """2026-10-20: Парето в заказе, «Оценка» в «Потребности» и «Приборах» проекта."""
+
+    def setUp(self):
+        super().setUp()
+        self.dev = self.make_item('DEV', manufactured=True)
+        self.case, self.res = self.make_item('CASE'), self.make_item('RES')
+        for item, price in ((self.case, 800), (self.res, 10)):
+            item.estimated_cost = D(price); item.save()
+        engine.add_bom_line(self.dev, self.case, D(1))
+        engine.add_bom_line(self.dev, self.res, D(20))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=self.dev, qty=D(2))
+
+    def test_purchase_lines_marked_by_pareto_of_price(self):
+        pu = self.make_purchase()
+        _line(pu, self.case, D(2), price=D('1700.00'))
+        _line(pu, self.res, D(40), price=D('380.00'))
+        rows = {r['item_code']: r for r in engine.purchase_form(pu)['rows']}
+        self.assertEqual(rows['CASE']['cost_status'], 'costly')
+        self.assertIsNone(rows['RES']['cost_status'])
+
+    def test_need_rows_carry_plan_need_cost_and_pareto(self):
+        self.locked_order([(self.case, 2, '1700.00')])       # корпус по счёту дороже оценки
+        d = engine.project_deficit(self.prj)
+        rows = {c['component_code']: c for c in d['components']}
+        self.assertEqual(rows['CASE']['plan_cost'], D('1700.00'))   # факт после счёта
+        self.assertEqual(rows['CASE']['need_cost'], D(1600))         # нужда × оценка
+        self.assertEqual(rows['RES']['plan_cost'], D(400))           # оценка до обязательств
+        self.assertEqual(rows['CASE']['cost_status'], 'costly')
+        b = engine.project_budget(self.prj)
+        self.assertEqual(sum(c['need_cost'] for c in d['components']), b['need'])
+        self.assertEqual(sum(c['plan_cost'] for c in d['components']) + d['outside_spent'],
+                         b['plan'])
+
+    def test_device_cost_is_qty_times_rollup_and_sums_to_need(self):
+        d = engine.project_deficit(self.prj)
+        dev = d['demands'][0]
+        self.assertEqual(dev['cost'], D(2) * D(1000))                # 2 × (800 + 20×10)
+        self.assertEqual(dev['cost_status'], 'costly')
+        tree = {n['component_code']: n for n in dev['tree']}
+        self.assertEqual(tree['RES']['est_cost'], D(400))
+        self.assertEqual(sum(x['cost'] for x in d['demands']),
+                         engine.project_budget(self.prj)['need'])
+
+
+class BomAccordionTests(EngineTestBase):
+    """2026-10-20: «Состав» изделия — аккордеон: поддерево своего компонента с
+    НАКОПЛЕННЫМ кол-вом, оценки детей в сумме = оценка узла (фронт Парето сходится)."""
+
+    def test_subtree_carries_cumulative_qty_and_costs(self):
+        dev = self.make_item('DEV', manufactured=True)
+        board = self.make_item('BRD', manufactured=True)
+        res, blind = self.make_item('RES'), self.make_item('X')
+        res.estimated_cost = D(10); res.save()
+        engine.add_bom_line(board, res, D(20))
+        engine.add_bom_line(board, blind, D(1))              # без оценки — «—», не ноль
+        engine.add_bom_line(dev, board, D(3))
+        rows = {r['code']: r for r in engine.bom_line_costs(dev)}
+        tree = {n['component_code']: n for n in rows['BRD']['tree']}
+        self.assertEqual(tree['RES']['qty'], D(60))            # 3 платы × 20
+        self.assertEqual(tree['RES']['cost'], D(600))
+        self.assertIsNone(tree['X']['cost'])
+        self.assertEqual(rows['BRD']['cost'], D(600))          # узел = Σ детей
+        self.assertEqual(tree['RES']['depth'], 0)
+        self.assertTrue(tree['RES']['is_leaf'])
