@@ -162,10 +162,15 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
         {!c.code &&
           <StatPanel caption="Идентичность" icon="key">
             <StatWarn title="код показывается во всех документах вместо длинного названия">
-              ▲ код не задан — заполните поле «Код»
+              код не задан — заполните поле «Код»
             </StatWarn>
           </StatPanel>}
         {supply && <StatPanel caption="Поставки" icon="inbox">
+          {/* Волна 26: ★ блока «Деньги» контрагента — обязательства, ещё не закрытые
+              УПД (то же правило «ждём», что у формы заказа; Σ заказов = это число). */}
+          <Stat main label="ждём от него" value={money(supply.awaiting)}
+            dim={supply.awaiting === 0}
+            title="Зафиксированные заказы по счёту, ещё не закрытые поставками" />
           <StatGroup>
             <Stat label="заказов" value={num(supply.purchases)} />
             <Stat label="не закрыто" value={num(supply.open_purchases)}
@@ -178,12 +183,13 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
           <StatGroup aside>
             <Stat label="привёз партий" value={num(supply.lots)} />
             <Stat label="привезено" value={uoms(supply.qty_by_uom)} />
-            <Stat label="на сумму" value={money(supply.total)} />
+            <Stat label="на сумму" value={money(supply.total)}
+              title="Сумма по всем зафиксированным УПД от него — насколько активно работаем" />
           </StatGroup>
           {/* Иначе «поставок 4 · привёз 0 партий» читается как баг, а это Ф15. */}
           {supply.draft_receipts > 0 &&
             <StatWarn title="черновая поставка ещё не на складе — зафиксируйте её">
-              ▲ {count(supply.draft_receipts, 'поставка', 'поставки', 'поставок')}
+              {count(supply.draft_receipts, 'поставка', 'поставки', 'поставок')}
               {' в черновиках — в итог не входят'}
             </StatWarn>}
         </StatPanel>}
@@ -199,7 +205,7 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
           </StatGroup>
           {shipment.draft_transfers > 0 &&
             <StatWarn title="черновая накладная ещё ничего не отгрузила — зафиксируйте её">
-              ▲ {count(shipment.draft_transfers, 'передача', 'передачи', 'передач')}
+              {count(shipment.draft_transfers, 'передача', 'передачи', 'передач')}
               {' в черновиках — в итог не входят'}
             </StatWarn>}
         </StatPanel>}

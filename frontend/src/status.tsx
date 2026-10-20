@@ -23,7 +23,14 @@ export function StatusGlyph({ locked, tone = 'fix', title }: {
 // предупреждение, а НЕ гейт: форма кричит и подсказывает путь исправления, но не
 // останавливает. Флаг считает движок ([[engine-view-seam]]) — здесь только знак.
 export function MismatchGlyph({ title }: { title: string }) {
-  return <span className="ci sg sg-wip mism ci-warning" title={title} />
+  return <span className="ci sg sg-wip trail ci-warning" title={title} />
+}
+
+// Аномалия строки — красный `warning` после числа (2026-10-19, вместо текстового ▲):
+// отрицательный остаток, перетянутый источник. Тот же глиф, что у расхождения
+// контрагентов и баланса (§7a: форма одна, смысл — тоном), но тон всегда красный.
+export function Anomaly({ title }: { title: string }) {
+  return <span className="ci sg sg-order trail ci-warning" title={title} />
 }
 
 // Раскрыватель аккордеона — ЕДИНЫЙ везде (волна 19, полировка 2026-07-26): codicon
@@ -119,31 +126,22 @@ export function LotGlyph({ origin, liveQty, draft }: {
     title={`${LOT_ORIGIN[origin ?? ''] ?? 'партия'} · ${life}`} />
 }
 
-export const GLYPH: Record<Status, string> = {
-  to_order: '▲',     // красный — дефицит, нужна работа
-  on_order: '●',     // оранжевый — заказано/делается, ждём
-  available: '✓',    // зелёный — покрыто/готово
-}
-
 // Status → тон StatusGlyph (Ф1b): ось покрытия/worst-of в цвет замка (списки Заказов
 // и Проектов). Красный (to_order) / оранжевый (on_order) / зелёный (available).
 export function statusTone(s: Status): 'ok' | 'wip' | 'order' {
   return s === 'available' ? 'ok' : s === 'on_order' ? 'wip' : 'order'
 }
 
-export function Glyph({ status }: { status: Status }) {
-  return <span className={`glyph g-${status}`}>{GLYPH[status]}</span>
+// Глиф покрытия (2026-10-19, вместо текстовой тройки ▲/●/✓ «не из того набора»): ОДИН
+// codicon `warning`, смысл — тоном (§7a: форма ⟂ цвет). Тот же знак, что у баланса.
+export function CoverageGlyph({ status, title }: { status: Status; title?: string }) {
+  return <span className={`ci sg ci-warning sg-${statusTone(status)}`} title={title} />
 }
 
-// «4 ✓ · 3 ● · 3 ▲» — тройной разбор строки (только непустые сегменты).
+// Сегмент разбора строки «3 ⚠ · 2 ⚠» (на заказе / к заказу) — только непустой.
 export function Segment({ status, value }: { status: Status; value: number }) {
   if (!value) return null
-  return (
-    <span className="seg">
-      <span className={`glyph g-${status}`}>{GLYPH[status]}</span>
-      {num(value)}
-    </span>
-  )
+  return <span className="seg"><CoverageGlyph status={status} />{num(value)}</span>
 }
 
 // `LayerSeg` (разбор на codicon `layers`: форма одна, состояние — цветом) снят
@@ -191,6 +189,49 @@ export function num(x: number): string {
 // бюджет проекта, суммы документов, оценка изделия (принято 2026-07-26).
 export function money(x: number): string {
   return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽'
+}
+
+// Цена штуки (волна 26): производная величина, бывает в долях копейки (10 000 резисторов
+// за 3 519,78 ₽ → 0,352 ₽) — до четырёх знаков, не меньше двух.
+export function unitMoney(x: number): string {
+  return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ' ₽'
+}
+
+// Деньги в поле ввода: ровно два знака после запятой, без разрядов («35197,80») — так
+// поле читается тем же числом, что и просмотр, а ввод остаётся простым числом. Общее
+// для цены строки заказа и стоимости строки поставки/акта (волна 26: сумма первична).
+export function moneyField(x: number): string {
+  return Number(x).toFixed(2).replace('.', ',')
+}
+
+// Разбор ввода денег: запятая или точка; пробелы разрядов и знак рубля из скопированного
+// счёта допустимы; до копейки. Пусто — `null`; не число — `NaN`, его отобьёт `validate`.
+export function parseMoney(v: string): number | null {
+  const s = v.replace(/\s|₽|руб\.?/gi, '').replace(',', '.')
+  if (s === '') return null
+  return Math.round(Number(s) * 100) / 100
+}
+
+// Доли в блоке «Деньги» (волна 26): освоение — «43%» (целые, их сравнивают глазом);
+// отклонение — со знаком «+22%» / «−8%» (минус типографский, как у переплаты); `null` —
+// знаменателя нет, процент от нуля не бывает.
+export function pct(x: number | null): string {
+  return x === null ? '—' : `${Math.round(x * 100)}%`
+}
+export function signedPct(x: number | null): string {
+  if (x === null) return '—'
+  const v = Math.round(x * 100)
+  return v === 0 ? '0%' : (v > 0 ? '+' : '−') + `${Math.abs(v)}%`
+}
+
+// Расхождение в рублях со знаком: «+12,40 ₽» / «−3,00 ₽» / «0,00 ₽».
+export function gapMoney(x: number): string {
+  return x === 0 ? money(0) : (x > 0 ? '+' : '−') + money(Math.abs(x))
+}
+
+// Цена штуки под курсором у стоимости строки: производная, до копейки для глаза.
+export function perUnitTitle(cost: number, qty: number): string | undefined {
+  return qty ? `за штуку ${money(Math.round(cost / qty * 100) / 100)}` : undefined
 }
 
 // Итог списка в натуре: количества сворачиваются ПО ЕДИНИЦАМ (§13.6) — штуки с метрами
@@ -257,7 +298,7 @@ export function Balance({ value, status, title }: {
   return (
     <span title={title}>
       {value > 0 ? `+${num(value)}` : num(value)}
-      <span className={`ci sg ci-warning sg-${statusTone(status)}`} />
+      <CoverageGlyph status={status} />
     </span>
   )
 }

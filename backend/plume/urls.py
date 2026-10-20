@@ -46,6 +46,7 @@ urlpatterns = [
     path('items/<int:pk>/', views.item_detail, name='item-detail'),
     path('items/<int:pk>/bom/', views.item_bom, name='item-bom'),
     path('items/<int:pk>/recalc-cost/', views.item_recalc_cost, name='item-recalc-cost'),
+    path('items/<int:pk>/adopt-price/', views.item_adopt_price, name='item-adopt-price'),
     # выгрузка изделия в xlsx: `?scope=all` — все вкладки, иначе один лист «Состав»
     path('items/<int:pk>/xlsx/', views.item_xlsx, name='item-xlsx'),
     # фиксация изделия (волна 17). Волна 19 Ф1c: единый глагол замка

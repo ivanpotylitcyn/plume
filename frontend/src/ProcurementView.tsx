@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react'
 import { api, type ProcurementForm, type AllocationRow } from './api'
 import { AuthorField, ProjectField, useFormLock } from './FormHeader'
-import { IntentBudget } from './IntentBudget'
+import { ProcurementMoney } from './ProcurementMoney'
 import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
@@ -175,8 +175,7 @@ export function ProcurementView({ procurementId, isNew, openItem,
       </>}
       // Деньги закупки — панелью над метой (2026-08-07), одна на обе формы контура.
       // Поле «Оценка» отсюда снято: это ровно стат «Закупка». Потребность — по проекту.
-      extra={<IntentBudget demand={c.demand} total={c.estimate} totalLabel="Закупка"
-        overpay={c.overpay} unestimated={c.unestimated} />}
+      extra={<ProcurementMoney c={c} />}
       tabs={tabs}
     />
   </>)

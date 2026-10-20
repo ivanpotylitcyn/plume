@@ -96,7 +96,7 @@ export function Picker<T>({ options, value, onPick, keyOf, textOf, searchOf, ren
         // выглядел бы сломанным (поймано браузерным прогоном Ф13).
         onFocus={t.focus} onClick={t.focus} />
       {onClear && value !== '' && !disabled &&
-        <button className="x" title="Очистить" onClick={onClear}>×</button>}
+        <button className="x ci ci-close" title="Очистить" onClick={onClear} />}
       {t.open &&
         <AnchoredMenu anchor={field} boxRef={menu} className="typeahead-menu">
           {t.matches.map((o, i) => (

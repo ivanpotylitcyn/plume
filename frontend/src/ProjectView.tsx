@@ -12,7 +12,8 @@ import { useEffect, useState } from 'react'
 import { api, type Budget, type Deficit, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
   type ProjectSupply, type ResidualLot } from './api'
-import { Balance, Chevron, LotGlyph, count, money, num, ItemGlyph, rowNumbers } from './status'
+import { Anomaly, Balance, Chevron, LotGlyph, count, money, num, ItemGlyph, pct, rowNumbers,
+  signedPct } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { CommitInput } from './CommitInput'
 import { useFormLock } from './FormHeader'
@@ -286,7 +287,7 @@ function ResidualRow({ no, r, projectId, locked, busy, openItem, run }: {
         <span className="cell-ellip" title={r.item_description}>{r.item_description}</span></td>
       <td className="num">
         <span className={r.anomaly ? 'anomaly' : ''}>{num(r.live_qty)}</span>
-        {r.anomaly && <span className="anomaly" title="недостача — подбей лоты"> ▲</span>}
+        {r.anomaly && <Anomaly title="недостача — подбей лоты" />}
       </td>
       <td className="uom">{r.uom}</td>
       {!locked && <td className="act">
@@ -305,9 +306,9 @@ function ResidualRow({ no, r, projectId, locked, busy, openItem, run }: {
   )
 }
 
-// Панель бюджета (north-star окупаемости): два числа денег + компас, себестоимость/экономия.
-// Волна 20: вёрстка статов уехала в общий `StatPanel` (её взяла вторая форма) — здесь
-// осталась только начинка, то есть сам смысл панели.
+// Блок «Деньги» проекта (волна 26): ★ потрачено + доли освоения, план, бюджет, компас и
+// «сверх потребности». Себестоимость/экономия сняты в BACKLOG. Волна 20: вёрстка статов
+// живёт в общем `StatPanel` — здесь только начинка, то есть сам смысл блока.
 function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
   const [b, setB] = useState<Budget | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -321,13 +322,24 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
   if (!b) return null
 
   const over = b.compass !== null && b.compass < 0   // перерасход
+  // «Сверх потребности» (волна 26): одно число честно смешивает три причины — раскладка
+  // под курсором, чтобы было видно, откуда перерасход.
+  const overNeedTitle = `план ${money(b.plan)} против чистой потребности ${money(b.need)}`
+    + ` (нужда по BOM × оценка, без запаса):\n· запас закупок ${money(b.reserve)}`
+    + `\n· куплено вне BOM ${money(b.outside)}`
+    + `\n· разница цен счёта с оценкой и прочее ${money(b.price_gap)}`
   return (
     <StatPanel>
+      {/* Волна 26 (решение Ивана): главное — потрачено. Освоенные рубли — маркер хода
+          работы и объективный факт для отчёта; остальное — поддержка решений по затратам.
+          Потрачено — обязательства, а не приход по УПД (волна 24). */}
+      <Stat main label="потрачено" value={money(b.spent)}
+        title="Зафиксированные заказы по счёту + поставки без заказа по УПД" />
       <StatGroup>
-        {/* Волна 24 (решение Ивана): потрачено — это обязательства, а не приход по УПД:
-            зафиксированный заказ нам выполнять, и денег на него уже нет. */}
-        <Stat label="потрачено (факт)" value={money(b.spent)}
-          title="Зафиксированные заказы по счёту + поставки без заказа по УПД" />
+        <Stat label="от бюджета" value={pct(b.spent_of_budget)} dim={b.spent_of_budget === null}
+          title="Освоение бюджета на материалы — для отчёта по контракту" />
+        <Stat label="от плана" value={pct(b.spent_of_plan)} dim={b.spent_of_plan === null}
+          title="Ход работы: 100% — план закрыт обязательствами; мало — отстаём с закупкой" />
         <Stat label="план (прогноз)" value={money(b.plan)}
           title="Потрачено + план зафиксированных закупок (с запасом) и нехватка — по оценке изделий" />
         {b.budget !== null
@@ -336,15 +348,13 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
         {b.compass !== null &&
           <Stat label={over ? 'перерасход' : 'запас бюджета'}
             value={money(Math.abs(b.compass))} tone={over ? 'bad' : 'ok'} />}
-      </StatGroup>
-      <StatGroup aside>
-        <Stat label="себестоимость (для КП)" value={money(b.cost)} />
-        <Stat label="экономия (польза заёма)" value={money(b.economy)}
-          tone={b.economy > 0 ? 'ok' : b.economy < 0 ? 'bad' : undefined} />
+        <Stat label="сверх потребности" value={signedPct(b.over_need)}
+          dim={b.over_need === null} title={overNeedTitle}
+          tone={b.over_need !== null && b.over_need > 0 ? 'wip' : undefined} />
       </StatGroup>
       {b.unestimated.length > 0 &&
         <StatWarn title={`нет estimated_cost: ${b.unestimated.join(', ')}`}>
-          ▲ {b.unestimated.length} поз. без оценки — план неполон
+          {b.unestimated.length} поз. без оценки — план неполон
         </StatWarn>}
     </StatPanel>
   )

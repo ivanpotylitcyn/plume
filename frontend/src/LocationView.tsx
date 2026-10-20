@@ -12,6 +12,7 @@ import { api, type LocationForm } from './api'
 import { num, count, sumByUom, LotGlyph } from './status'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { TextField } from './FormField'
 import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
@@ -103,6 +104,9 @@ export function LocationView({ locationId, isNew, openItem, onChanged, onDeleted
         <TextField label="Вид" value={d.kind} locked={locked} busy={busy}
           onCommit={v => run(api.updateLocation(d.id, { kind: v }))} />
       </>}
+      // Блок «Деньги» (волна 26): ★ лежит на сумму — живые остатки партий на этом месте.
+      extra={<MoneyBlock label="лежит на сумму" value={d.total_cost}
+        title="Стоимость живых остатков партий на этом месте хранения" />}
       tabs={tabs}
     />
   )

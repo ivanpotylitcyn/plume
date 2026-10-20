@@ -66,11 +66,10 @@
   проекта → её распределение по заказам (только чтение); плюс веер заказов.
 
 Волна 10 (бюджет/экономия — north-star окупаемости линзы):
-- `project_budget(project)` — проекция денег проекта: **потрачено** (факт по
-  `Receipt`-лотам, заём/свои бесплатны, только покупные) + **план** (прогноз «факт
-  где есть, оценка где нет» через `estimated_cost`) + компас `budget − план` +
-  позиции без оценки; **себестоимость** (Σ снимков лотов-приборов верхних целей,
-  заём по реальной цене) + **экономия** = себестоимость − потрачено. Чистая витрина.
+- `project_budget(project)` — проекция денег проекта: **потрачено** (★, факт) +
+  **план** (прогноз «факт где есть, оценка где нет» через `estimated_cost`) + компас
+  `budget − план` + доли освоения + «сверх потребности» с раскладкой + позиции без
+  оценки. Себестоимость/экономия сняты в волне 26 (BACKLOG). Чистая витрина.
 - `intent_money(lines, need)` (2026-08-07) — те же деньги, но у документа-намерения:
   **потребность** (нужда проекта × цена — сколько надо по-настоящему), **сумма
   документа** (`lines_estimate`) и **переплата** = их разница со знаком. Знаменатель
@@ -135,6 +134,7 @@ from django.utils import timezone
 from . import models
 
 ZERO = Decimal('0')
+KOPECK = Decimal('0.01')   # шаг округления денег (волна 26: и доли стоимости партии)
 _UNSET = object()   # часовой «поле не передано» (отличает от «выставить None»)
 
 
@@ -304,9 +304,14 @@ def rebuild_document_movements(doc):
     знаковыми строками (`doc.lines`, расход/приём источника). Зовётся из всех
     `lock_*`/`unlock_*`; сама пересборка чистая, порядок вызовов не важен.
     """
-    lots = set(doc.lots.all())
-    lots |= {sl.lot for sl in doc.lines.select_related('lot')}
-    for lot in lots:
+    # Волна 26: сначала источники — стоимость рождённой партии требования/комплектации
+    # выводится из стоимостей строк расхода (`_sync_born_cost`), и только потом
+    # материализуется сама партия.
+    sources = {sl.lot for sl in doc.lines.select_related('lot')}
+    for lot in sources:
+        rebuild_movements(lot)
+    _sync_born_cost(doc)
+    for lot in set(doc.lots.all()) - sources:
         rebuild_movements(lot)
 
 
@@ -391,6 +396,78 @@ def _main_location():
     return loc or models.Location.objects.order_by('id').first()
 
 
+def _share(cost, qty, part):
+    """Доля стоимости `cost` партии из `qty` штук, приходящаяся на `part` штук, до копейки.
+
+    Единственное деление денег на штуки в движке (волна 26, учётный канон): цена штуки
+    не хранится нигде, она — промежуточная величина этой формулы."""
+    if not qty:
+        return ZERO
+    return (cost * part / qty).quantize(KOPECK, rounding=ROUND_HALF_UP)
+
+
+def lot_line_values(lot, lines=None):
+    """Стоимость каждой знаковой строки партии: `{stock_line.id: стоимость со знаком}`.
+
+    **Учётный канон** (волна 26, решение Ивана 2026-10-19; так у SAP/Odoo/1С): партия
+    хранит стоимость целиком, расход получает свою долю **накопительным округлением** —
+    `доля(израсходовано после) − доля(израсходовано до)` по зафиксированным расходам в
+    порядке строк (`id`). Сумма долей телескопически равна `доле(всего израсходованного)`,
+    поэтому исчерпанная партия списывается ровно в свою стоимость: «последний забирает
+    остаток» без особого случая, хвостов в копейку не остаётся.
+
+    Перемещение (пара ±) остаток партии не трогает — его стороны оцениваются простой
+    долей и в накопление не входят. Строка черновика тоже получает простую долю: это
+    предпросмотр, в склад она не входит (Ф15), и место в очереди займёт на фиксации.
+
+    Порядок по `id` устойчив к добавлению: новая строка встаёт в хвост и уже посчитанные
+    доли не трогает. Сдвиг на копейку возможен, только если расфиксировать или удалить
+    расход из середины очереди — проекция мутабельна ([[mutable-dna]]).
+    """
+    if lines is None:
+        lines = lot.stock_lines.select_related('document')
+    values = {}
+    drained = ZERO
+    for sl in sorted(lines, key=lambda sl: sl.id):
+        if sl.qty < 0 and sl.document.locked \
+                and sl.document.kind != models.DocumentKind.RELOCATION:
+            before = _share(lot.cost, lot.qty, drained)
+            drained -= sl.qty
+            values[sl.id] = before - _share(lot.cost, lot.qty, drained)
+        else:
+            value = _share(lot.cost, lot.qty, abs(sl.qty))
+            values[sl.id] = value if sl.qty > 0 else -value
+    return values
+
+
+def lines_values(lines):
+    """Стоимости набора строк (обычно — строк одного документа), каждая по правилу
+    `lot_line_values` своей партии. Партии поднимаем один раз на набор."""
+    lines = list(lines)
+    by_lot = {}
+    for sl in lines:
+        by_lot.setdefault(sl.lot_id, sl.lot)
+    # Очереди строк всех партий набора — одним запросом (форма не платит запрос за строку).
+    queues = {}
+    for sl in (models.StockLine.objects.filter(lot_id__in=by_lot)
+               .select_related('document')):
+        queues.setdefault(sl.lot_id, []).append(sl)
+    values = {}
+    for lot_id, lot in by_lot.items():
+        values.update(lot_line_values(lot, queues.get(lot_id, [])))
+    return {sl.id: values[sl.id] for sl in lines}
+
+
+def outflow_money(lines):
+    """Сколько стоимости уводит документ: −Σ стоимостей его расходных строк (волна 26).
+
+    Главное число ордеров («передали / списали / перевели / переместили на сумму») — те
+    же доли, что лягут в проекцию (`lot_line_values`); у черновика — предпросмотр.
+    Перемещение считается один раз — по стороне «откуда» (пара ± стоимость не меняет)."""
+    lines = [sl for sl in lines if sl.qty < 0]
+    return -sum(lines_values(lines).values(), ZERO)
+
+
 def rebuild_movements(lot):
     """Пересобрать StockMovement партии из её документов (чистая пересборка).
 
@@ -414,7 +491,8 @@ def rebuild_movements(lot):
     if lot.origin_id and lot.qty and lot.origin.locked:
         rows.append(models.StockMovement(
             lot=lot, location=main, type=models.StockMovement.Type.RECEIPT,
-            qty=lot.qty, source_type=lot.origin.kind, source_id=lot.origin_id,
+            qty=lot.qty, cost=lot.cost,
+            source_type=lot.origin.kind, source_id=lot.origin_id,
         ))
 
     # движение существующего лота: единые знаковые строки `StockLine` (волна 13, Ф0)
@@ -422,14 +500,18 @@ def rebuild_movements(lot):
     # `StockLine.qty` уже со знаком (− расход); source_type/id — из документа-владельца
     # (`document.kind`/id; дуга схлопнута в один FK в Ф2b). Ф15: строка расфиксированного
     # документа тоже не двигает склад; отмена = удаление документа (каскад строк+лотов).
-    for sl in lot.stock_lines.select_related('location', 'document'):
+    # Волна 26: стоимость движения — по учётному канону (`lot_line_values`).
+    lines = list(lot.stock_lines.select_related('location', 'document'))
+    values = lot_line_values(lot, lines)
+    for sl in lines:
         if not sl.document.locked:
             continue
         rows.append(models.StockMovement(
             lot=lot, location=sl.location,
             type=(models.StockMovement.Type.RECEIPT if sl.qty > 0
                   else models.StockMovement.Type.ISSUE),
-            qty=sl.qty, source_type=sl.document.kind, source_id=sl.document_id,
+            qty=sl.qty, cost=values[sl.id],
+            source_type=sl.document.kind, source_id=sl.document_id,
         ))
 
     models.StockMovement.objects.bulk_create(rows)
@@ -506,7 +588,7 @@ def location_stock(location):
     показываем физически присутствующее.
     """
     agg = (models.StockMovement.objects.filter(location=location)
-           .values('lot').annotate(q=Sum('qty')).order_by('lot'))
+           .values('lot').annotate(q=Sum('qty'), c=Sum('cost')).order_by('lot'))
     lot_ids = [r['lot'] for r in agg if r['q'] and r['q'] > 0]
     lots = {lot.id: lot for lot in models.Lot.objects
             .filter(id__in=lot_ids).select_related('item', 'project', 'origin')}
@@ -523,6 +605,7 @@ def location_stock(location):
             'origin': lot.origin_kind,          # глиф партии (§7a): форма = откуда родилась
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': r['q'],
+            'cost': r['c'] or ZERO,             # волна 26: стоимость лежащего здесь
             'project_id': lot.project_id, 'project_code': lot.project.code,
             'project_name': lot.project.description,
         })
@@ -530,10 +613,14 @@ def location_stock(location):
 
 
 def location_form(location):
-    """Проекция экрана склада: ДНК (код/описание/вид) + что на нём лежит."""
+    """Проекция экрана склада: ДНК (код/описание/вид) + что на нём лежит + ★ блока
+    «Деньги» (волна 26): «лежит на сумму» — Σ стоимостей движений партий на этом месте,
+    по тем же строкам, что таб (партии с живым остатком > 0)."""
+    stock = location_stock(location)
     return {
         'id': location.id, 'code': location.code, 'description': location.description,
-        'kind': location.kind, 'stock': location_stock(location),
+        'kind': location.kind, 'stock': stock,
+        'total_cost': sum((r['cost'] for r in stock), ZERO),
     }
 
 
@@ -595,9 +682,10 @@ def _sum_by(qs, key):
 
 
 def _cost_by(qs, key):
-    """`{key: Σ qty × цена партии}` одним запросом — деньги движений по факту УПД."""
+    """`{key: Σ стоимостей движений}` одним запросом — деньги по факту партий (волна 26:
+    стоимость движения посчитана учётным каноном при пересборке, здесь только сумма)."""
     return {r[key]: r['s'] or ZERO
-            for r in qs.values(key).annotate(s=Sum(F('qty') * F('lot__unit_cost'))).order_by()
+            for r in qs.values(key).annotate(s=Sum('cost')).order_by()
             if r[key] is not None}
 
 
@@ -716,12 +804,14 @@ class ProjectSupply:
                 origin__purchase__in={pu for pu, _i, _q, _p in lines}))
             qty_rest, cost_rest = {}, {}
             for pu, item_id, qty, price in lines:
-                rest = max(ZERO, qty - received.get((pu, item_id), ZERO))
+                got = received.get((pu, item_id), ZERO)
+                rest = max(ZERO, qty - got)
                 qty_rest[item_id] = qty_rest.get(item_id, ZERO) + rest
-                # Цена строки — за всю строку (волна 24); у зафиксированного заказа она
-                # обязательна, но страхуемся от нулевого кол-ва и пустой цены.
-                if rest and qty and price is not None:
-                    cost_rest[item_id] = cost_rest.get(item_id, ZERO) + price * rest / qty
+                # Волна 26: «ждём» — то же правило, что у формы заказа (`line_flow_money`),
+                # до копейки; у зафиксированного заказа цена обязательна, но страхуемся.
+                if rest:
+                    cost_rest[item_id] = (cost_rest.get(item_id, ZERO)
+                                          + line_flow_money(price, qty, got)[1])
             return qty_rest, cost_rest
         return self._get('purchase_rest', build)
 
@@ -762,11 +852,11 @@ class ProjectSupply:
             total = {r['item']: r['s'] or ZERO for r in models.PurchaseLine.objects.filter(
                 purchase__procurement__project=self.project, purchase__locked=True,
             ).values('item').annotate(s=Sum('price')).order_by()}
-            for item_id, qty, cost in models.Lot.objects.filter(
+            for item_id, cost in models.Lot.objects.filter(
                     project=self.project, origin__kind=models.StockDocument.Kind.RECEIPT,
                     origin__locked=True, origin__purchase__isnull=True,
-            ).values_list('item_id', 'qty', 'unit_cost'):
-                total[item_id] = total.get(item_id, ZERO) + qty * cost
+            ).values_list('item_id', 'cost'):
+                total[item_id] = total.get(item_id, ZERO) + cost
             return total
         return self._get('spent', build)
 
@@ -1371,7 +1461,7 @@ def _coverage_status(purchase_id, lines, received):
 # --------------------------------------------------------------------------- #
 #  Бюджет проекта: два числа денег + себестоимость/экономия (north-star окупаемости)
 # --------------------------------------------------------------------------- #
-def _project_spent(project):
+def _project_spent(project, supply=None):
     """Потрачено = **обязательства** + поставки без заказа (волна 24, решение Ивана).
 
     Обязательства — Σ цен строк ЗАФИКСИРОВАННЫХ заказов проекта: заказ — обязательство,
@@ -1381,7 +1471,7 @@ def _project_spent(project):
     считается: её деньги уже в заказе. Поставка БЕЗ заказа по-прежнему считается по своим
     лотам (УПД) — ниже прежний канон для неё.
 
-    Прежний канон (до волны 24 — для всех поставок) — Σ(unit_cost×qty) приходных лотов:
+    Прежний канон (до волны 24 — для всех поставок) — Σ стоимостей приходных лотов:
 
     Точная застывшая цифра «кэша ФЛС». Заёмные/свои бесплатные лоты (origin
     requisition/inventory/kitting) сюда не входят → бесплатны в бюджете (платил
@@ -1396,87 +1486,66 @@ def _project_spent(project):
     """
     # 2026-10-19: правило живёт в одном месте — `ProjectSupply.spent` по позициям; бюджет
     # их складывает. Так «Потр.» строки и план шапки не могут разойтись в определении.
-    return sum(ProjectSupply(project)._spent_by_item().values(), ZERO)
-
-
-def _project_estimate(project):
-    """Прогнозная стоимость ещё-не-полученного покупного материала (по estimated_cost).
-
-    Ф5 (В16): потребность разузловываем до покупных **листьев** (`project_leaf_demand`),
-    затем один разбор `_coverage` на лист. Считаем только листья — производимые узлы
-    разузловываются насквозь, их роллап-`estimated_cost` в план НЕ складываем (иначе
-    двойной счёт: цена узла = Σ его листьев). Оцениваем «в пути + к заказу» (● + ▲) —
-    то, что ещё потребует денег; ✓ уже покрыто (склад приходной = в «потрачено», заём =
-    бесплатно). Возвращает `(estimate, unestimated_codes)` — сумма оценки и коды
-    покупных листьев без `estimated_cost` (план по ним неполон, не молчим 0).
-
-    Волна 24: заказанное по зафиксированным заказам уже в «потрачено» (по счёту), поэтому
-    по оценке остаётся только то, что под обязательство ещё не встало.
-    2026-10-19 (решение Ивана): это план зафиксированных закупок ЦЕЛИКОМ, с запасом, +
-    незакрытая сборка + нехватка (`ProjectSupply.plan_ahead`) — зафиксированная закупка
-    сразу двигает план на свою сумму, а не в момент заказа.
-    """
-    leaves, _incomplete = project_leaf_demand(project)
-    supply = ProjectSupply(project)
-    estimate = ZERO
-    unestimated = []
-    for leaf, need in leaves.items():
-        remaining = supply.plan_ahead(leaf, need)
-        if remaining <= 0:
-            continue
-        if leaf.estimated_cost is None:
-            unestimated.append(leaf.code)
-            continue
-        estimate += remaining * leaf.estimated_cost
-    return estimate, unestimated
-
-
-def _project_cost(project):
-    """Себестоимость проекта = Σ(qty×снимок) по лотам-приборам закрытых комплектаций,
-    чьё изделие — цель потребности проекта (только верхние приборы, без задвоения
-    подсборок: их цена уже в снимке верхнего прибора).
-
-    Снимок `unit_cost` лота-прибора взят на закрытии (`_device_unit_cost`) и включает
-    заёмные компоненты по реальной цене (Requisition-лот наследует цену предка) —
-    честная цена для КП.
-    """
-    targets = {d.target_item_id for d in project.demands.all()}
-    if not targets:
-        return ZERO
-    total = ZERO
-    lots = project.lots.filter(
-        origin__kind=models.StockDocument.Kind.KITTING,
-        origin__locked=True, item_id__in=targets,
-    )
-    for lot in lots:
-        total += lot.qty * lot.unit_cost
-    return total
+    return sum((supply or ProjectSupply(project))._spent_by_item().values(), ZERO)
 
 
 def project_budget(project):
-    """Проекция бюджета проекта (north-star окупаемости линзы).
+    """Деньги проекта — блок «Деньги» его формы (волна 26).
 
-    Два числа денег (не путать): **потрачено** (факт по `Receipt`-лотам) и **план**
-    (прогноз «факт где есть, оценка где нет»). Компас `budget − план` = запас/
-    перерасход. **Себестоимость** (честная цена, заём по реальной цене) и **экономия**
-    = себестоимость − потрачено (оцифрованная польза внутреннего заёма = польза PLM).
+    **Главное число — потрачено** (решение Ивана 2026-10-19): освоенные рубли — маркер
+    того, что работа идёт, и объективный факт для отчёта. Правило «потрачено» живёт в
+    `ProjectSupply.spent` (обязательства по счёту + поставки без заказа по УПД).
+
+    Поддержка решений по затратам:
+    - **план** — потрачено + деньги впереди по оценке (`plan_ahead`: план зафиксированных
+      закупок с запасом, сборка, нехватка); тот же, что сумма над «Потр.» таба;
+    - `spent_of_budget` / `spent_of_plan` — доли освоения (отчёт по контракту / ход
+      работы); компас `budget − план` = запас/перерасход;
+    - **сверх потребности** — `план / чистая потребность − 1`, где чистая потребность =
+      нужда по BOM × оценка, без запаса. Честно смешивает причины; раскладка: запас
+      закупок количеством (`reserve`, то же правило, что «в т.ч. запас» таба), куплено вне
+      BOM (`outside`), остальное — разница цен счёта с оценкой и прочее (`price_gap`).
+    Покупные листья без оценки с деньгами впереди — `unestimated` (план неполон).
+
+    Себестоимость и экономия сняты (волна 26 → BACKLOG): своего не паяем ещё полгода.
     """
-    spent = _project_spent(project)
-    estimate, unestimated = _project_estimate(project)
-    plan = spent + estimate
-    cost = _project_cost(project)
+    leaves, _incomplete = project_leaf_demand(project)
+    supply = ProjectSupply(project)
+    spent = _project_spent(project, supply)
+    ahead, unestimated = ZERO, []
+    need_money, reserve = ZERO, ZERO
+    for leaf, need in leaves.items():
+        price = leaf.estimated_cost
+        remaining = supply.plan_ahead(leaf, need)
+        if remaining > 0:
+            if price is None:
+                unestimated.append(leaf.code)
+            else:
+                ahead += remaining * price
+        if price is not None:
+            need_money += need * price
+            row = supply.balance(leaf, need)
+            if row['planned'] > 0 and row['balance'] > 0:
+                reserve += min(row['planned'], row['balance']) * price
+    plan = spent + ahead
+    outside = supply.spent_outside({leaf.id for leaf in leaves})
     budget = project.budget
     return {
         'project_id': project.id,
         'project_code': project.code,
         'project_name': project.description,
         'budget': budget,                       # может быть None
-        'spent': spent,                         # потрачено (факт)
+        'spent': spent,                         # ★ потрачено (факт)
         'plan': plan,                           # прогноз полной стоимости
         'compass': (budget - plan) if budget is not None else None,
+        'spent_of_budget': spent / budget if budget else None,
+        'spent_of_plan': spent / plan if plan else None,
+        'need': need_money,                     # чистая потребность (нужда × оценка)
+        'over_need': _ratio(plan, need_money),  # сверх потребности (+0,22 = +22%)
+        'reserve': reserve,
+        'outside': outside,
+        'price_gap': plan - need_money - reserve - outside,
         'unestimated': unestimated,             # покупные позиции без оценки
-        'cost': cost,                           # себестоимость (для КП)
-        'economy': cost - spent,                # экономия = польза заёма
     }
 
 
@@ -1556,6 +1625,7 @@ def _candidate_rows(lots, live_by_lot):
         if live > 0:
             result.append({
                 'lot_id': lot.id, 'live_qty': live, 'unit_cost': lot.unit_cost,
+                'cost': lot.cost,
                 'part_number': lot.part_number,
                 'origin': lot.origin_kind, 'lot_name': lot.lot_name,
             })
@@ -1658,7 +1728,7 @@ def kitting_form(kitting):
             'real_lines': real_lines, 'ghost': ghost,
         })
     born_lots = [
-        {'id': lot.id, 'qty': lot.qty, 'unit_cost': lot.unit_cost,
+        {'id': lot.id, 'qty': lot.qty, 'cost': lot.cost, 'unit_cost': lot.unit_cost,
          'lot_name': lot.lot_name, 'part_number': lot.part_number}
         for lot in kitting.lots.all()
     ]
@@ -1674,6 +1744,7 @@ def kitting_form(kitting):
         'worst_status': _worst_of(statuses),   # worst-of призрачных строк
         'rows': rows,
         'born_lots': born_lots,   # рождённые лоты-приборы (после закрытия)
+        'total_cost': kitting_cost(kitting),   # волна 26: ★ «израсходовано на сумму»
     }
 
 
@@ -1715,14 +1786,35 @@ def remove_kitting_line(line):
     rebuild_movements(lot)
 
 
-def _device_unit_cost(kitting):
-    """Снимок себестоимости прибора на закрытии = Σ(qty×цена лотов) / кол-во."""
-    total = ZERO
-    for kl in kitting.lines.select_related('lot'):
-        total += -kl.qty * kl.lot.unit_cost     # qty знаковый (− расход) → магнитуда
-    if kitting.qty and kitting.qty != ZERO:
-        return (total / kitting.qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-    return ZERO
+def kitting_cost(kitting):
+    """Стоимость набора комплектации = Σ стоимостей строк пайки (учётный канон, волна 26).
+
+    Это и «израсходовано на сумму» формы, и снимок себестоимости рождённой партии-прибора
+    (`Lot.cost`) — без деления на штуки и округления: прибор стоит ровно столько, сколько
+    стоили впаянные доли партий. До фиксации строки черновые — сумма их предпросмотр."""
+    lines = [kl for kl in kitting.lines.select_related('lot', 'document') if kl.qty < 0]
+    return -sum(lines_values(lines).values(), ZERO)
+
+
+def _sync_born_cost(doc):
+    """Стоимость партий, которые документ рождает ИЗ своих строк расхода (волна 26).
+
+    Комплектация — партия-прибор стоит Σ впаянного (`kitting_cost`); требование — партия-
+    потомок стоит ровно долю, ушедшую из источника её строкой. Зовётся после пересборки
+    источников (`rebuild_document_movements`) и при правке черновика. Снимок: если позже
+    сдвинется очередь расходов источника (расфиксировали ордер из её середины), доля
+    может уйти на копейку — проекция мутабельна, снимок нет (как и прежде у прибора).
+    Поставка/инвентаризация рождают партии из воздуха документа — их стоимость вводят."""
+    kind = doc.KIND or doc.kind
+    if kind == models.DocumentKind.KITTING:
+        cost = kitting_cost(doc)
+        doc.lots.exclude(cost=cost).update(cost=cost)
+    elif kind == models.DocumentKind.REQUISITION:
+        lines = list(doc.lines.select_related('lot', 'document'))
+        values = lines_values(lines)
+        for line in lines:
+            doc.lots.filter(predecessor=line.lot).exclude(
+                cost=-values[line.id]).update(cost=-values[line.id])
 
 
 def lock_kitting(kitting):
@@ -1739,9 +1831,11 @@ def lock_kitting(kitting):
     _require_header(kitting)
     if kitting.lots.exists():
         raise ValidationError('У комплектации уже есть рождённый лот-прибор.')
+    # Стоимость прибора проставит `_sync_born_cost` — после того, как пайка
+    # материализуется и её доли займут место в очереди расходов источников.
     models.Lot.objects.create(
         item=kitting.target_item, project=kitting.project, origin=kitting,
-        qty=kitting.qty, unit_cost=_device_unit_cost(kitting),
+        qty=kitting.qty, cost=ZERO,
     )
     kitting.locked = True
     kitting.save(update_fields=['locked'])
@@ -1819,14 +1913,23 @@ def receipt_form(receipt):
     receipt_lots = list(receipt.lots.select_related('item', 'item__category').order_by('id'))
     live_by_lot = lots_live_qty(receipt_lots)
     consumed = _consumed_lot_ids(receipt_lots)
+    by_order, matched = None, ZERO
+    shares = _purchase_shares(receipt.purchase, receipt_lots) if receipt.purchase_id else {}
     for lot in receipt_lots:
-        total += lot.qty * lot.unit_cost
+        total += lot.cost
+        # Волна 26: сверка с заказом — что эти позиции стоят по его счёту (доля цены
+        # строки, тем же правилом, что рождение партии из заказа). Позиции вне заказа в
+        # сверку не входят: сравнивать их не с чем.
+        if lot.id in shares:
+            by_order = (by_order or ZERO) + shares[lot.id]
+            matched += lot.cost
         lots.append({
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'item_category': category_code(lot.item),   # фильтр колонки
             'qty': lot.qty, 'live_qty': live_by_lot[lot.id],
-            'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
+            # Волна 26: стоимость строки УПД — первична; цена штуки — производная.
+            'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
             'consumed': lot.id in consumed,
         })
@@ -1844,46 +1947,111 @@ def receipt_form(receipt):
         'project_name': receipt.project.description,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
         'locked': receipt.locked, 'total_cost': total,
+        # Волна 26: «по заказу на эти позиции» и расхождение УПД со счётом (`None` — не из
+        # заказа или сравнивать нечего).
+        'by_order': by_order,
+        'order_gap': (matched - by_order) if by_order is not None else None,
         'lots': lots,
     }
 
 
-def add_receipt_lot(receipt, item, qty, unit_cost=ZERO, lot_name='',
+def add_receipt_lot(receipt, item, qty, cost=ZERO, lot_name='',
                     part_number=''):
-    """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода."""
+    """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода.
+    `cost` — стоимость строки УПД целиком (волна 26), а не цена штуки."""
     _require_unlocked(receipt)
     if qty is None or qty <= 0:
         raise ValidationError('Количество прихода должно быть положительным.')
-    if unit_cost is not None and unit_cost < 0:
-        raise ValidationError('Цена не может быть отрицательной.')
+    if cost is not None and cost < 0:
+        raise ValidationError('Стоимость не может быть отрицательной.')
     lot = models.Lot.objects.create(
         item=item, project=receipt.project, origin=receipt, qty=qty,
-        unit_cost=unit_cost or ZERO, lot_name=lot_name or '',
+        cost=cost or ZERO, lot_name=lot_name or '',
         part_number=part_number or '',
     )
     rebuild_movements(lot)
     return lot
 
 
-def update_receipt_lot(lot, qty=None, unit_cost=None, lot_name=None,
+def _rescaled_cost(lot, qty):
+    """Стоимость партии после правки количества без явной стоимости (волна 26).
+
+    Цена штуки сохраняется: стоимость масштабируется долей. Партия поставки из заказа,
+    которую не правили руками (стоимость = её доля цены строки), пересчитывается ТОЧНО
+    от цены строки — так поставка частями сходится со счётом до копейки."""
+    share = _purchase_share(lot)
+    if share is not None and share[0] == lot.cost:
+        line, before = share[1], share[2]
+        return _share(line.price, line.qty, before + qty) - _share(line.price, line.qty, before)
+    return _share(lot.cost, lot.qty, qty)
+
+
+def _purchase_share(lot):
+    """Доля цены строки заказа, положенная партии поставки из заказа: `(доля, строка,
+    поступило до неё)`; `None` — партия не из заказа или у строки нет цены.
+
+    «Поступило до» — по зафиксированным поставкам этого заказа, рождённым РАНЬШЕ партии
+    (тот же гейт, что `_line_received`: черновая накладная заказ не гасит; порядок по `id`,
+    как у очереди расходов) — так доля зафиксированной партии не зависит от поставок,
+    пришедших после неё."""
+    origin = lot.origin
+    if origin.kind != models.DocumentKind.RECEIPT or not origin.purchase_id:
+        return None
+    line = origin.purchase.lines.filter(item_id=lot.item_id).first()
+    if line is None or line.price is None or not line.qty:
+        return None
+    before = models.Lot.objects.filter(
+        origin__purchase_id=origin.purchase_id, origin__locked=True, item_id=lot.item_id,
+        pk__lt=lot.pk,
+    ).aggregate(s=Sum('qty'))['s'] or ZERO
+    return (_share(line.price, line.qty, before + lot.qty)
+            - _share(line.price, line.qty, before), line, before)
+
+
+def _purchase_shares(purchase, lots):
+    """`{lot.id: доля цены строки}` для партий одной поставки из заказа — пакетом (тем же
+    правилом, что `_purchase_share`: до партии — зафиксированные поставки заказа, рождённые
+    раньше неё). Партии без строки заказа или без цены в словарь не попадают."""
+    lines = {ln.item_id: ln for ln in purchase.lines.all()
+             if ln.price is not None and ln.qty}
+    earlier = list(models.Lot.objects.filter(origin__purchase=purchase, origin__locked=True)
+                   .values_list('id', 'item_id', 'qty'))
+    out = {}
+    for lot in lots:
+        line = lines.get(lot.item_id)
+        if line is None:
+            continue
+        before = sum((q for i, item_id, q in earlier
+                      if item_id == lot.item_id and i < lot.id), ZERO)
+        out[lot.id] = (_share(line.price, line.qty, before + lot.qty)
+                       - _share(line.price, line.qty, before))
+    return out
+
+
+def update_receipt_lot(lot, qty=None, cost=None, lot_name=None,
                        part_number=None):
-    """Автосейв строки УПД (кол-во/цена/название/PN). Правка до замка.
+    """Автосейв строки УПД (кол-во/стоимость/название/PN). Правка до замка.
 
     Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
-    уйдёт в минус (недостача информативнее, в духе мутабельной ДНК).
+    уйдёт в минус (недостача информативнее, в духе мутабельной ДНК). Правка количества
+    без стоимости сохраняет цену штуки (`_rescaled_cost`); явная стоимость — главнее.
     """
     _require_unlocked(lot.origin)
     fields = []
     if qty is not None:
         if qty <= 0:
             raise ValidationError('Количество прихода должно быть положительным.')
+        if cost is None and qty != lot.qty:
+            lot.cost = _rescaled_cost(lot, qty)
+            fields.append('cost')
         lot.qty = qty
         fields.append('qty')
-    if unit_cost is not None:
-        if unit_cost < 0:
-            raise ValidationError('Цена не может быть отрицательной.')
-        lot.unit_cost = unit_cost
-        fields.append('unit_cost')
+    if cost is not None:
+        if cost < 0:
+            raise ValidationError('Стоимость не может быть отрицательной.')
+        lot.cost = cost
+        if 'cost' not in fields:
+            fields.append('cost')
     if lot_name is not None:
         lot.lot_name = lot_name
         fields.append('lot_name')
@@ -1957,8 +2125,8 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
     знал вовсе. Заказ проставляется сразу (`purchase`), поэтому руками связывать в форме
     УПД больше не нужно.
 
-    **Цена — из строки заказа, по счёту** (волна 24, решение Ивана 2026-10-16): цена
-    штуки = цена строки / количество, округлённая до копейки (лот хранит цену штуки). Заказ —
+    **Цена — из строки заказа, по счёту** (волна 24, решение Ивана 2026-10-16): партия
+    получает долю цены строки (волна 26: стоимость, не цену штуки — `_share`). Заказ —
     объективный источник правды о цене, и в 99,9% случаев УПД её повторяет, так что
     вбивать её заново незачем. Копия при рождении, жёстко не связываем — расхождение по
     УПД правится в поставке («ручка для крайних случаев»). Оценку изделия в лот
@@ -1991,12 +2159,13 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
         models.Receipt, purchase.project, user, number, date,
         contractor=purchase.contractor, purchase=purchase)
     for line, rest in remaining:
-        unit = purchase_unit_price(line)
+        # Волна 26: партия получает свою ДОЛЮ цены строки накопительным округлением —
+        # поставки частями в сумме дают счёт до копейки (раньше цена штуки округлялась).
+        received = line.qty - rest
         add_receipt_lot(receipt, line.item, rest,
-                        # цена штуки = цена строки / кол-во, до копейки (`Lot.unit_cost` —
-                        # деньги с двумя знаками); остаток доли копейки — «ручка» поставки
-                        unit_cost=(unit.quantize(KOPECK, rounding=ROUND_HALF_UP)
-                                   if unit is not None else ZERO),
+                        cost=(_share(line.price, line.qty, line.qty)
+                              - _share(line.price, line.qty, received)
+                              if line.price is not None else ZERO),
                         lot_name=line.item.description)
     return receipt
 
@@ -2122,7 +2291,7 @@ def lines_estimate(lines):
     сложить их как 0 значило бы выдать неполную сумму за полную. Тот же приём, что у
     `_project_estimate` (`unestimated`) — вью показывает счётчик, а коды кладёт в title.
 
-    Это НЕ деньги документа: факт живёт в поставке (`Lot.unit_cost`). Здесь — прогноз,
+    Это НЕ деньги документа: факт живёт в поставке (`Lot.cost`). Здесь — прогноз,
     «во сколько это обойдётся», и цена может ещё десять раз поменяться.
     """
     estimate = ZERO
@@ -2184,6 +2353,61 @@ def intent_money(lines, need_by_item):
             'unestimated': unestimated}
 
 
+def _ratio(part, whole):
+    """Отношение `part / whole − 1` (знаковая доля: +0,22 = «на 22% больше»); `None`, если
+    знаменателя нет — процент от нуля не бывает, вью рисует прочерк."""
+    if not whole:
+        return None
+    return part / whole - 1
+
+
+def procurement_money(procurement, lines=None):
+    """Деньги закупки (волна 26) — главное число и его поддержка.
+
+    **Закупка** = обязательства по счёту там, где позиции закрыты заказами, + оценка
+    остатка там, где ещё нет (то же правило, что «план» проекта: факт где есть, оценка где
+    нет). Все позиции закрыты — число становится чистым фактом (`is_fact`): «во сколько
+    обошлась электроника» до копейки.
+
+    - `ordered` — Σ цен строк ЗАФИКСИРОВАННЫХ заказов этой закупки (обязательства);
+    - `rest` — остаток плана сверх заказанного × оценка изделия (`max(0, план − заказано)`);
+    - `total` = ordered + rest;
+    - `invoice_gap` — счёт к оценке по заказанным позициям: `Σ счёт / Σ (кол-во × ТЕКУЩАЯ
+      оценка) − 1`. Оценка текущая, без снимка (решение Ивана): в активном проекте держим
+      около нуля (цены свежие), перед новым контрактом — замер «насколько подорожало».
+      Позиции без оценки в сравнение не входят.
+    Позиции остатка без оценки — в `rest_unestimated` (сумма неполна, не молчим нулём).
+    """
+    if lines is None:
+        lines = list(procurement.lines.select_related('item'))
+    ordered_qty, ordered = {}, ZERO
+    invoice, invoice_est = ZERO, ZERO
+    for pl in models.PurchaseLine.objects.filter(
+            purchase__procurement=procurement, purchase__locked=True).select_related('item'):
+        ordered_qty[pl.item_id] = ordered_qty.get(pl.item_id, ZERO) + pl.qty
+        price = pl.price or ZERO
+        ordered += price
+        if pl.item.estimated_cost is not None and pl.price is not None:
+            invoice += price
+            invoice_est += pl.qty * pl.item.estimated_cost
+    rest, rest_unestimated, open_left = ZERO, [], False
+    for line in lines:
+        left = max(ZERO, line.qty - ordered_qty.get(line.item_id, ZERO))
+        if not left:
+            continue
+        open_left = True
+        if line.item.estimated_cost is None:
+            rest_unestimated.append(line.item.code)
+        else:
+            rest += left * line.item.estimated_cost
+    return {
+        'ordered': ordered, 'rest': rest, 'total': ordered + rest,
+        'is_fact': not open_left,
+        'rest_unestimated': rest_unestimated,
+        'invoice_gap': _ratio(invoice, invoice_est),
+    }
+
+
 # Строка взята с перебором больше чем в ПОЛТОРА раза от нужды — красный член. Порог
 # задан в деньгах («переплата больше половины потребности»), но цена в неравенстве
 # сокращается: `(qty − need)·цена > ½·need·цена` ⇔ `qty > 1.5·need`. Поэтому правило
@@ -2234,6 +2458,20 @@ def purchase_money(lines):
         else:
             estimate += line.price
     return {'estimate': estimate, 'unestimated': unpriced}
+
+
+def line_flow_money(price, qty, received):
+    """Деньги строки заказа по ходу поставки (волна 26): `(получено, ждём)` — доли цены
+    строки по счёту. «Получено» = доля поступившего (сверх заказанного не бывает больше
+    цены), «ждём» = остаток цены, поэтому получено + ждём = цена строки до копейки.
+    Нет цены или кол-ва — `(0, 0)`: деньги строки ещё неизвестны.
+
+    Единственное правило «ждём» в движке: им же считаются обещанные деньги «Заказа» в
+    потребности проекта (`ProjectSupply.ordered_cost`) и «ждём от него» контрагента."""
+    if price is None or not qty:
+        return ZERO, ZERO
+    got = _share(price, qty, min(received, qty))
+    return got, price - got
 
 
 def overpay_threshold(need):
@@ -2314,12 +2552,17 @@ def purchase_form(purchase):
     statuses = []
     total_ordered = ZERO
     total_received = ZERO
+    received_money = ZERO
+    awaiting_money = ZERO
     for line in lines:
         closed_by = closure.get(line.item_id, [])
         received = sum((r['qty'] for r in closed_by), ZERO)
         remaining = max(ZERO, line.qty - received)
         total_ordered += line.qty
         total_received += received
+        got, wait = line_flow_money(line.price, line.qty, received)
+        received_money += got
+        awaiting_money += wait
         if line.qty > 0 and received >= line.qty:
             st = 'available'      # ✓ получено полностью
         elif received > 0:
@@ -2364,7 +2607,9 @@ def purchase_form(purchase):
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'worst_status': _worst_of(statuses),      # worst-of закрытости строк
         'total_ordered': total_ordered, 'total_received': total_received,
-        **money,          # demand / estimate / overpay / unestimated — панель бюджета
+        **money,          # estimate (сумма по счёту) / unestimated — блок «Деньги»
+        # Волна 26: ход поставки в деньгах по счёту; получено + ждём = сумма заказа.
+        'received_money': received_money, 'awaiting_money': awaiting_money,
         'rows': rows, 'receipts': receipts,
     }
 
@@ -2459,6 +2704,10 @@ def lock_purchase(purchase):
     if purchase.contractor_id is None:
         raise ValidationError(
             'Перед фиксацией выберите контрагента — у кого заказано.')
+    # Волна 26: дата обязательна к фиксации (CHECK `purchase_locked_has_date`) — по ней
+    # ищется «последняя цена по счёту» изделия; у счёта/договора она есть всегда.
+    if purchase.date is None:
+        raise ValidationError('Перед фиксацией укажите дату заказа — дату счёта или договора.')
     # Волна 24: обязательство без цены не бывает — счёт её называет (0 законен).
     unpriced = list(purchase.lines.filter(price__isnull=True)
                     .order_by('item__code').values_list('item__code', flat=True))
@@ -2571,6 +2820,7 @@ def transfer_form(transfer):
         'project_id': transfer.project_id, 'project_code': transfer.project.code,
         'project_name': transfer.project.description, 'locked': transfer.locked,
         'total_qty': total_qty, 'lines': lines,
+        'total_cost': outflow_money(doc_lines),    # волна 26: ★ блока «Деньги»
     }
 
 
@@ -2777,6 +3027,7 @@ def writeoff_form(writeoff):
         'project_id': writeoff.project_id, 'project_code': writeoff.project.code,
         'project_name': writeoff.project.description, 'locked': writeoff.locked,
         'total_qty': total_qty, 'lines': lines,
+        'total_cost': outflow_money(doc_lines),    # волна 26: ★ блока «Деньги»
     }
 
 
@@ -2879,6 +3130,7 @@ def requisition_form(requisition):
         'project_id': requisition.project_id, 'project_code': requisition.project.code,
         'project_name': requisition.project.description, 'locked': requisition.locked,
         'total_qty': total_qty, 'lines': lines,
+        'total_cost': outflow_money(doc_lines),    # волна 26: ★ блока «Деньги»
     }
 
 
@@ -2907,8 +3159,10 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
         location=location or _main_location(), qty=-qty)
     born = models.Lot.objects.create(
         item=source_lot.item, project=requisition.project, origin=requisition,
-        predecessor=source_lot, qty=qty, unit_cost=source_lot.unit_cost,
+        predecessor=source_lot, qty=qty, cost=ZERO,
         lot_name=source_lot.lot_name, part_number=source_lot.part_number)
+    _sync_born_cost(requisition)    # волна 26: потомок стоит долю, ушедшую из источника
+    born.refresh_from_db(fields=['cost'])
     rebuild_movements(source_lot)   # −ISSUE у источника
     rebuild_movements(born)         # +RECEIPT у потомка
     return line
@@ -2926,6 +3180,8 @@ def update_requisition_line(line, qty):
     if born is not None:
         born.qty = qty                   # рождённый лот-потомок — положительное кол-во
         born.save(update_fields=['qty'])
+        _sync_born_cost(line.document)   # волна 26: доля источника под новое кол-во
+        born.refresh_from_db(fields=['cost'])
         rebuild_movements(born)
     rebuild_movements(line.lot)
     return line
@@ -3006,6 +3262,7 @@ def relocation_form(relocation):
         'project_id': relocation.project_id, 'project_code': relocation.project.code,
         'project_name': relocation.project.description, 'locked': relocation.locked,
         'total_qty': total_qty, 'moves': moves,
+        'total_cost': outflow_money(relocation.lines.select_related('lot')),   # волна 26
     }
 
 
@@ -3803,6 +4060,7 @@ def procurement_form(procurement):
     # нужда её проекта (волна 24: проект один и назван в шапке — отсева нет).
     project = procurement.project
     money = intent_money(lines, demand_map([project]))
+    money.update(procurement_money(procurement, lines))
     return {
         'id': procurement.id, **_author(procurement), 'locked': procurement.locked,
         'code': procurement.code, 'description': procurement.description,
@@ -4193,10 +4451,10 @@ def purchase_xlsx(purchase):
     return _xlsx_bytes(wb)
 
 
-# Копейка — шаг округления денег в выгрузке. Округляем КАЖДУЮ строку, а потом
-# складываем округлённое: «Всего» обязано сходиться со столбцом, который человек видит
-# глазами, иначе первый же пересчёт калькулятором объявит файл кривым.
-KOPECK = Decimal('0.01')
+# Копейка (`KOPECK`, объявлена в шапке модуля) — шаг округления денег и в выгрузке.
+# Округляем КАЖДУЮ строку, а потом складываем округлённое: «Всего» обязано сходиться со
+# столбцом, который человек видит глазами, иначе первый же пересчёт калькулятором
+# объявит файл кривым.
 # «Финансовый» формат рубля (правка Ивана 2026-09-15) — тот же, что в Excel под этим
 # именем: знак валюты прижат к правому краю графы, разряды отбиты, ноль рисуется
 # прочерком. Деньги в таблице ЧИСЛА, а не строки: получатель считает по ним формулой.
@@ -4539,6 +4797,21 @@ def _counterparty_receipt_lots(counterparty):
             .select_related('item'))
 
 
+def purchases_awaiting(purchases):
+    """«Ждём» по набору ЗАФИКСИРОВАННЫХ заказов (волна 26): Σ по строкам `line_flow_money`
+    — обязательства, ещё не закрытые УПД. Черновик — не обязательство, в сумму не входит.
+    Тем же правилом считает «ждём» форма заказа, поэтому Σ форм = итог контрагента."""
+    ids = [p.id for p in purchases if p.locked]
+    if not ids:
+        return ZERO
+    received = _received_by(models.Lot.objects.filter(origin__purchase_id__in=ids))
+    total = ZERO
+    for pu, item_id, qty, price in models.PurchaseLine.objects.filter(
+            purchase_id__in=ids).values_list('purchase_id', 'item_id', 'qty', 'price'):
+        total += line_flow_money(price, qty, received.get((pu, item_id), ZERO))[1]
+    return total
+
+
 def _counterparty_supply(counterparty):
     """Интеграл закупочной стороны — «сколько у него куплено и что привёз».
 
@@ -4565,7 +4838,9 @@ def _counterparty_supply(counterparty):
         'draft_receipts': receipts.filter(locked=False).count(),
         'lots': len(lots),
         'qty_by_uom': _qty_by_uom((lot.item.uom, lot.qty) for lot in lots),
-        'total': sum((lot.qty * lot.unit_cost for lot in lots), ZERO),
+        'total': sum((lot.cost for lot in lots), ZERO),
+        # Волна 26: ★ блока «Деньги» контрагента — обязательства, не закрытые УПД.
+        'awaiting': purchases_awaiting(purchases),
     }
 
 
@@ -4580,7 +4855,7 @@ def _counterparty_shipment(counterparty):
     lines = list(models.StockLine.objects
                  .filter(document__kind=models.StockDocument.Kind.TRANSFER,
                          document__contractor=counterparty, document__locked=True)
-                 .select_related('lot__item'))
+                 .select_related('lot__item', 'document'))
     transfers = models.Transfer.objects.filter(contractor=counterparty)
     if not transfers.exists():
         return None
@@ -4589,7 +4864,7 @@ def _counterparty_shipment(counterparty):
         'draft_transfers': transfers.filter(locked=False).count(),
         'lots': len({line.lot_id for line in lines}),
         'qty_by_uom': _qty_by_uom((line.lot.item.uom, -line.qty) for line in lines),
-        'total': sum((-line.qty * line.lot.unit_cost for line in lines), ZERO),
+        'total': -sum(lines_values(lines).values(), ZERO),
     }
 
 
@@ -4652,7 +4927,7 @@ def _receipt_rows(queryset):
     привёз», у проекта — «что в проект приехало». Строка одна, и обе стороны (проект и
     поставщик) в ней есть — колонку выбирает вью.
 
-    Деньги здесь — ФАКТ (`Lot.unit_cost` из УПД), а не оценка: поставка тем и отличается
+    Деньги здесь — ФАКТ (`Lot.cost` из УПД), а не оценка: поставка тем и отличается
     от намерения, что цену уже знает.
     """
     rows = []
@@ -4667,7 +4942,7 @@ def _receipt_rows(queryset):
             **_contractor_view(r.contractor),
             'purchase_id': r.purchase_id,
             'lots': len(lots),
-            'total': sum((lot.qty * lot.unit_cost for lot in lots), ZERO),
+            'total': sum((lot.cost for lot in lots), ZERO),
         })
     return rows
 
@@ -4676,7 +4951,8 @@ def _cp_transfer_rows(counterparty):
     """Таб «Передачи»: накладные, которыми ему отдавали (роль заказчика)."""
     rows = []
     qs = (models.Transfer.objects.filter(contractor=counterparty)
-          .select_related('project').prefetch_related('lines__lot__item').order_by('-id'))
+          .select_related('project').prefetch_related('lines__lot__item', 'lines__document')
+          .order_by('-id'))
     for t in qs:
         lines = list(t.lines.all())
         rows.append({
@@ -4684,7 +4960,7 @@ def _cp_transfer_rows(counterparty):
             'locked': t.locked, 'project_code': t.project.code,
             'lines': len(lines),
             'qty': sum((-ln.qty for ln in lines), ZERO),
-            'total': sum((-ln.qty * ln.lot.unit_cost for ln in lines), ZERO),
+            'total': -sum(lines_values(lines).values(), ZERO),
         })
     return rows
 
@@ -4802,13 +5078,13 @@ def inventory_form(inventory):
     live_by_lot = lots_live_qty(inventory_lots)
     consumed = _consumed_lot_ids(inventory_lots)
     for lot in inventory_lots:
-        total += lot.qty * lot.unit_cost
+        total += lot.cost
         pred = lot.predecessor
         lots.append({
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': lot.qty, 'live_qty': live_by_lot[lot.id],
-            'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
+            'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
             'part_number': lot.part_number,
             'predecessor_id': lot.predecessor_id,
             'predecessor_label': _lot_label(pred) if pred else '',
@@ -4829,42 +5105,52 @@ def create_inventory(project, user, number='', date=None):
     return _born_order(models.Inventory, project, user, number, date)
 
 
-def add_inventory_lot(inventory, item, qty, unit_cost=ZERO, lot_name='',
+def add_inventory_lot(inventory, item, qty, cost=None, lot_name='',
                       part_number='', predecessor=None):
     """Добавить строку акта: рождается «найденная» партия (`+RECEIPT`) в его проекте.
 
     `predecessor` (опц.) связывает найденный лот со списанным-источником
     (ре-материализация серого остатка — провенанс/генеалогия). Кол-во не клампим.
+    `cost` — стоимость найденной партии; не задана — у потомка списанного это доля
+    стоимости предшественника на найденное кол-во (волна 26), иначе ноль.
     """
     _require_unlocked(inventory)
     if qty is None or qty <= 0:
         raise ValidationError('Количество должно быть положительным.')
-    if unit_cost is not None and unit_cost < 0:
-        raise ValidationError('Цена не может быть отрицательной.')
+    if cost is not None and cost < 0:
+        raise ValidationError('Стоимость не может быть отрицательной.')
+    if cost is None:
+        cost = (_share(predecessor.cost, predecessor.qty, qty)
+                if predecessor is not None else ZERO)
     lot = models.Lot.objects.create(
         item=item, project=inventory.project, origin=inventory, qty=qty,
-        unit_cost=unit_cost or ZERO, lot_name=lot_name or '',
+        cost=cost, lot_name=lot_name or '',
         part_number=part_number or '', predecessor=predecessor)
     rebuild_movements(lot)
     return lot
 
 
-def update_inventory_lot(lot, qty=None, unit_cost=None, lot_name=None,
+def update_inventory_lot(lot, qty=None, cost=None, lot_name=None,
                          part_number=None):
-    """Автосейв строки акта (кол-во/цена/название/PN). Кол-во не клампим по расходу.
-    Только черновик (замок)."""
+    """Автосейв строки акта (кол-во/стоимость/название/PN). Кол-во не клампим по
+    расходу. Только черновик (замок). Правка количества без стоимости сохраняет цену
+    штуки (стоимость масштабируется долей, волна 26)."""
     _require_unlocked(lot.origin)
     fields = []
     if qty is not None:
         if qty <= 0:
             raise ValidationError('Количество должно быть положительным.')
+        if cost is None and qty != lot.qty:
+            lot.cost = _share(lot.cost, lot.qty, qty)
+            fields.append('cost')
         lot.qty = qty
         fields.append('qty')
-    if unit_cost is not None:
-        if unit_cost < 0:
-            raise ValidationError('Цена не может быть отрицательной.')
-        lot.unit_cost = unit_cost
-        fields.append('unit_cost')
+    if cost is not None:
+        if cost < 0:
+            raise ValidationError('Стоимость не может быть отрицательной.')
+        lot.cost = cost
+        if 'cost' not in fields:
+            fields.append('cost')
     if lot_name is not None:
         lot.lot_name = lot_name
         fields.append('lot_name')
@@ -4935,6 +5221,7 @@ def written_off_lots():
             'item_code': lot.item.code, 'item_description': lot.item.description,
             'uom': lot.item.uom, 'written_qty': written,
             'project_code': lot.project.code, 'unit_cost': lot.unit_cost,
+            'cost': lot.cost, 'qty': lot.qty,
             'lot_name': lot.lot_name, 'part_number': lot.part_number,
         })
     return result
@@ -5376,12 +5663,14 @@ def apply_library_diff(parsed, confirmed):
 # --------------------------------------------------------------------------- #
 #  Роллап оценочной стоимости по BOM (волна 15)
 # --------------------------------------------------------------------------- #
-def _rollup_cost(item, cache, visiting, updated, incomplete):
+def _rollup_cost(item, cache, visiting, updated, incomplete, write=True):
     """Пост-order обход BOM: стоимость узла. Покупной лист → его `estimated_cost`
     (None → неполнота, вверх идёт как 0). Производимый узел → Σ(стоимость компонента
     × qty); результат пишем в `estimated_cost` ВСЕХ производимых узлов поддерева.
     `cache` мемоизирует общие поддеревья, `visiting` ловит циклы (страховка — их
-    гасит уже `add_bom_line`)."""
+    гасит уже `add_bom_line`). `write=False` — живой пересчёт без записи (волна 26:
+    блок «Деньги» сравнивает его с сохранённой оценкой); `updated` тогда — узлы, чья
+    сохранённая оценка разошлась с живой."""
     if item.id in cache:
         return cache[item.id]
     if not item.native:
@@ -5398,12 +5687,13 @@ def _rollup_cost(item, cache, visiting, updated, incomplete):
         incomplete.append(item.code)   # производимый без состава — оценить нечем
     total = ZERO
     for bl in lines:
-        c = _rollup_cost(bl.component, cache, visiting, updated, incomplete)
+        c = _rollup_cost(bl.component, cache, visiting, updated, incomplete, write)
         total += (c if c is not None else ZERO) * bl.qty
     visiting.discard(item.id)
     if item.estimated_cost != total:
-        item.estimated_cost = total
-        item.save(update_fields=['estimated_cost'])
+        if write:
+            item.estimated_cost = total
+            item.save(update_fields=['estimated_cost'])
         updated.append(item.code)
     cache[item.id] = total
     return total
@@ -5422,6 +5712,110 @@ def rollup_estimated_cost(item):
     with transaction.atomic():
         cost = _rollup_cost(item, {}, set(), updated, incomplete)
     return {'estimated_cost': cost, 'updated': updated, 'incomplete': incomplete}
+
+
+# Расхождение оценки покупного с последней ценой, после которого блок «Деньги» изделия
+# предупреждает и предлагает «Взять в оценку» (решение Ивана 2026-10-19: 10%).
+ESTIMATE_DRIFT = Decimal('0.10')
+
+
+def _price_facts(item):
+    """Факты цены покупного изделия (волна 26): `[(дата, id-ключ, кол-во, деньги, док)]`.
+
+    Два источника, оба — зафиксированный факт: строки ЗАФИКСИРОВАННЫХ заказов (цена строки
+    по счёту, дата заказа — обязательна к фиксации) и партии ЗАФИКСИРОВАННЫХ поставок
+    без заказа (стоимость по УПД, дата поставки). Поставка из заказа второй раз не
+    считается — её цена уже в заказе (как у «потрачено»). **Нули пропускаем** (решение
+    Ивана): образцы — исключения отношений с поставщиком, а не рынок."""
+    facts = []
+    for pl in (models.PurchaseLine.objects
+               .filter(item=item, purchase__locked=True, price__gt=0, qty__gt=0)
+               .select_related('purchase__contractor')):
+        pu = pl.purchase
+        facts.append((pu.date, ('purchase', pu.id), pl.qty, pl.price, {
+            'kind': 'purchase', 'id': pu.id, 'code': pu.code, 'date': pu.date,
+            **_contractor_view(pu.contractor)}))
+    for lot in (models.Lot.objects
+                .filter(item=item, origin__kind=models.DocumentKind.RECEIPT,
+                        origin__locked=True, origin__purchase__isnull=True,
+                        cost__gt=0, qty__gt=0)
+                .select_related('origin__contractor')):
+        r = lot.origin
+        facts.append((r.date, ('receipt', lot.id), lot.qty, lot.cost, {
+            'kind': 'receipt', 'id': r.id, 'code': r.code, 'date': r.date,
+            **_contractor_view(r.contractor)}))
+    return facts
+
+
+def item_money(item):
+    """Блок «Деньги» изделия (волна 26). Главное число — ФАКТ, где он есть.
+
+    **Покупное:** ★ последняя цена по счёту (штука; последний по дате документа факт, без
+    фолбэков — дата у зафиксированных заказа и поставки обязательна; при равных датах —
+    позже заведённый), средняя (взвешенная по количеству: все деньги / все штуки),
+    максимальная. Оценка разошлась с последней ценой больше `ESTIMATE_DRIFT` →
+    `estimate_drift` (вью предупреждает и даёт «Взять в оценку»).
+
+    **Производимое:** ★ живой роллап по составу (`_rollup_cost(write=False)`), рядом —
+    позиции без цены и три самых дорогих компонента первого уровня по вкладу; живой
+    роллап ≠ сохранённой оценке (до копейки — это арифметика) → `estimate_stale`.
+
+    Обоим — **на складах на сумму**: Σ стоимостей движений всех партий изделия.
+    """
+    stock_value = (models.StockMovement.objects.filter(lot__item=item)
+                   .aggregate(s=Sum('cost'))['s'] or ZERO)
+    out = {'native': item.native, 'estimate': item.estimated_cost, 'stock_value': stock_value}
+    if item.native:
+        incomplete, stale = [], []
+        cost = _rollup_cost(item, {}, set(), stale, incomplete, write=False)
+        cache = {}
+        top = []
+        for bl in item.bom_lines.select_related('component'):
+            c = _rollup_cost(bl.component, cache, set(), [], [], write=False)
+            if c:
+                top.append({'id': bl.component_id, 'code': bl.component.code,
+                            'qty': bl.qty, 'cost': c * bl.qty})
+        top.sort(key=lambda t: -t['cost'])
+        out.update({
+            'rollup': cost, 'incomplete': incomplete, 'top': top[:3],
+            'estimate_stale': item.estimated_cost != cost,
+        })
+        return out
+    facts = _price_facts(item)
+    if not facts:
+        out.update({'last': None, 'avg': None, 'max': None, 'facts': 0,
+                    'estimate_drift': None})
+        return out
+    date, _key, qty, money, doc = max(facts, key=lambda f: (f[0], f[1]))
+    last = money / qty
+    total_qty = sum((f[2] for f in facts), ZERO)
+    drift = (_ratio(item.estimated_cost, last)
+             if item.estimated_cost is not None else None)
+    out.update({
+        'last': last, 'last_doc': doc,
+        'avg': sum((f[3] for f in facts), ZERO) / total_qty,
+        'max': max(f[3] / f[2] for f in facts),
+        'facts': len(facts),
+        # Оценка против последней цены: `−0,23` = «оценка ниже на 23%». Сигнал — только
+        # сверх порога; нет оценки — тоже сигнал (взять в оценку есть что).
+        'estimate_drift': drift,
+        'estimate_off': item.estimated_cost is None or abs(drift) > ESTIMATE_DRIFT,
+    })
+    return out
+
+
+def adopt_last_price(item):
+    """«Взять в оценку» (волна 26): оценка покупного ← последняя цена по счёту, до копейки.
+
+    Оценка остаётся ручной (Иван перебивает её по КП), команда лишь освежает её в клик.
+    Гейт — тот же, что у ручной правки оценки (`update_item`)."""
+    if item.native:
+        raise ValidationError('У изделия оценка — роллап по составу: «Переоценить».')
+    money = item_money(item)
+    if money['last'] is None:
+        raise ValidationError('Цены по счёту ещё нет — брать в оценку нечего.')
+    return update_item(item, {'estimated_cost': money['last'].quantize(
+        KOPECK, rounding=ROUND_HALF_UP)})
 
 
 def create_project(code=None, description='', budget=None, started=None):
@@ -5983,7 +6377,7 @@ def _lots_word(n):
 
 
 def _lots_cost(lots):
-    return sum((lot.qty * lot.unit_cost for lot in lots), ZERO)
+    return sum((lot.cost for lot in lots), ZERO)
 
 
 def _doc_lines_lots(doc):
@@ -6069,7 +6463,7 @@ def _consequences(entity, obj, lock):
         n_items = len({sl.lot.item_id for sl in obj.lines.select_related('lot') if sl.qty < 0})
         if lock:
             return [{'text': f'родится партия-прибор {target} × {_qty(obj.qty)} в проекте '
-                             f'{project}, себестоимость {_rub(_device_unit_cost(obj))} за шт.'},
+                             f'{project}, себестоимость {_rub(kitting_cost(obj))}'},
                     {'text': f'со склада {_agree(n, "спишется", "спишутся")} {_lots_word(n)} '
                              f'компонентов ({_count(n_items, "позиция", "позиции", "позиций")})'}]
         return [{'text': f'партия-прибор {target} × {_qty(obj.qty)} будет удалена'},

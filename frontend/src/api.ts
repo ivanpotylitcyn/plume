@@ -104,12 +104,15 @@ export interface Deficit {
 export interface Budget {
   project_id: number; project_code: string; project_name: string
   budget: number | null      // бюджет на материалы (может быть не задан)
-  spent: number              // потрачено (факт по Receipt-лотам)
+  spent: number              // ★ потрачено (факт: обязательства по счёту + УПД без заказа)
   plan: number               // прогноз полной стоимости («факт где есть, оценка где нет»)
   compass: number | null     // budget − plan (запас/перерасход); null без бюджета
   unestimated: string[]      // коды покупных позиций без estimated_cost
-  cost: number               // себестоимость (для КП; заём по реальной цене)
-  economy: number            // экономия = cost − spent (польза внутреннего заёма)
+  // Волна 26: доли освоения (null — знаменателя нет) и «сверх потребности» с раскладкой.
+  spent_of_budget: number | null; spent_of_plan: number | null
+  need: number               // чистая потребность: нужда по BOM × оценка, без запаса
+  over_need: number | null   // план / потребность − 1 (+0.22 = +22%)
+  reserve: number; outside: number; price_gap: number   // раскладка plan − need
 }
 
 // `StockMap`/`StockMapRow` («карта остатков по складам-проектам») сняты 2026-08-11:
@@ -125,10 +128,24 @@ export interface ItemMovement {
   date: string | null; locked: boolean; project_code: string
   lot_id: number; lot_name: string; qty: number
 }
+// Блок «Деньги» изделия (волна 26). Покупное: ★ последняя цена по счёту; производимое:
+// ★ живой роллап по составу. Поля другой ветки не приходят.
+export interface PriceDoc {
+  kind: 'purchase' | 'receipt'; id: number; code: string | null; date: string | null
+  contractor_code: string; contractor_name: string
+}
+export interface ItemMoney {
+  native: boolean; estimate: number | null; stock_value: number
+  last?: number | null; last_doc?: PriceDoc; avg?: number | null; max?: number | null
+  facts?: number; estimate_drift?: number | null; estimate_off?: boolean
+  rollup?: number; incomplete?: string[]; estimate_stale?: boolean
+  top?: { id: number; code: string; qty: number; cost: number }[]
+}
 export interface ItemDetail {
   id: number; code: string; description: string; category: Category | null
   uom: string; temperature: string; native: boolean; synced: boolean; used: boolean; locked: boolean
   estimated_cost: number | null
+  money: ItemMoney           // волна 26: блок «Деньги»
   bom: { id: number; component_id: number; component_code: string;
          component_description: string; component_uom: string;
          // `component_category` — код категории (null у изделия без неё): фильтр
@@ -142,7 +159,8 @@ export interface ItemDetail {
   // остатка у неё нет вовсе (не «исчерпана»), вью гасит колонку и тон глифа.
   lots: { id: number; project_code: string; origin: string; origin_locked: boolean
           qty_born: number
-          live_qty: number; unit_cost: number; part_number: string; lot_name: string }[]
+          live_qty: number; cost: number; unit_cost: number | null
+          part_number: string; lot_name: string }[]
   movements: ItemMovement[]
 }
 
@@ -185,8 +203,8 @@ export interface KittingRow {
   qty: number; locked: boolean; date: string | null
 }
 export interface CandidateLot {
-  lot_id: number; live_qty: number; unit_cost: number; part_number: string
-  origin: string; lot_name: string
+  lot_id: number; live_qty: number; cost: number; unit_cost: number | null
+  part_number: string; origin: string; lot_name: string
 }
 export interface RealLine {
   id: number; lot_id: number; lot_label: string; qty: number; date: string | null
@@ -203,7 +221,8 @@ export interface KittingFormRow {
   real_lines: RealLine[]; ghost: Ghost | null
 }
 export interface BornLot {
-  id: number; qty: number; unit_cost: number; lot_name: string; part_number: string
+  id: number; qty: number; cost: number; unit_cost: number | null
+  lot_name: string; part_number: string
 }
 export interface KittingForm extends Authored {
   id: number; locked: boolean; code: string | null; description: string
@@ -211,6 +230,7 @@ export interface KittingForm extends Authored {
   target_id: number | null; target_code: string; target_description: string; uom: string
   qty: number | null; date: string | null; worst_status: Status
   rows: KittingFormRow[]; born_lots: BornLot[]
+  total_cost: number           // волна 26: ★ израсходовано на сумму
 }
 
 // ── Контрагенты (волна 13, Ф2f+ — единая сущность документооборота) ──
@@ -231,6 +251,7 @@ export interface CounterpartySupply {
   purchases: number; open_purchases: number
   receipts: number; draft_receipts: number
   lots: number; qty_by_uom: UomQty[]; total: number
+  awaiting: number             // волна 26: ★ ждём от него (обязательства без УПД)
 }
 export interface CounterpartyShipment {
   transfers: number; draft_transfers: number
@@ -283,7 +304,8 @@ export interface ReceiptRow {
 export interface ReceiptLot {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
   item_category: string | null           // класс изделия — фильтр колонки
-  qty: number; live_qty: number; unit_cost: number; lot_name: string
+  // Волна 26: стоимость строки УПД первична, цена штуки — производная (`unit_cost`).
+  qty: number; live_qty: number; cost: number; unit_cost: number | null; lot_name: string
   part_number: string; consumed: boolean
 }
 export interface ReceiptForm extends Authored {
@@ -294,6 +316,8 @@ export interface ReceiptForm extends Authored {
   project_id: number; project_code: string; project_name: string
   purchase_id: number | null
   locked: boolean; total_cost: number; lots: ReceiptLot[]
+  // Волна 26: сверка с заказом (null — не из заказа): по его счёту и расхождение УПД.
+  by_order: number | null; order_gap: number | null
 }
 
 // ── Заказ / Purchase (волна 4 — записываемое ядро) ──
@@ -332,6 +356,7 @@ export interface PurchaseForm extends Authored {
   // Деньги заказа (волна 24): сумма цен строк по счёту + коды строк без цены (сумма по
   // ним неполна — вью показывает счётчик). Потребности и переплаты у заказа нет.
   estimate: number; unestimated: string[]
+  received_money: number; awaiting_money: number   // волна 26: получено + ждём = счёт
   rows: PurchaseFormLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
@@ -360,6 +385,7 @@ export interface TransferForm extends Authored {
   contractor_id: number | null; contractor_code: string; contractor_name: string
   project_id: number; project_code: string; project_name: string; locked: boolean
   total_qty: number; lines: TransferFormLine[]
+  total_cost: number           // волна 26: ★ сумма движений документа
 }
 
 // ── Списание / Writeoff (волна 6 — записываемое ядро) ──
@@ -378,6 +404,7 @@ export interface WriteoffForm extends Authored {
   code: string | null; description: string
   project_id: number; project_code: string; project_name: string
   locked: boolean; total_qty: number; lines: WriteoffFormLine[]
+  total_cost: number           // волна 26: ★ сумма движений документа
 }
 
 // ── Требование / Requisition (волна 6 — записываемое ядро) ──
@@ -402,6 +429,7 @@ export interface RequisitionForm extends Authored {
   code: string | null; description: string
   project_id: number; project_code: string; project_name: string
   locked: boolean; total_qty: number; lines: RequisitionFormLine[]
+  total_cost: number           // волна 26: ★ сумма движений документа
 }
 
 // ── Место хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
@@ -409,11 +437,13 @@ export interface LocationRow { id: number; code: string; description: string; ki
 export interface LocationStockLot {
   lot_id: number; lot_label: string; part_number: string; lot_name: string; origin: string | null
   item_id: number; item_code: string; item_description: string; uom: string; qty: number
+  cost: number                 // волна 26: стоимость лежащего здесь
   project_id: number; project_code: string; project_name: string
 }
 export interface LocationForm {
   id: number; code: string; description: string; kind: string
   stock: LocationStockLot[]
+  total_cost: number           // волна 26: ★ лежит на сумму
 }
 
 // ── Перемещение / Relocation (волна 13 Ф3 — записываемое ядро) ──
@@ -434,6 +464,7 @@ export interface RelocationForm extends Authored {
   code: string | null; description: string
   project_id: number; project_code: string; project_name: string
   locked: boolean; total_qty: number; moves: RelocationMove[]
+  total_cost: number           // волна 26: ★ сумма движений документа
 }
 export interface LotLocation {
   location_id: number; code: string; description: string; qty: number
@@ -452,7 +483,7 @@ export interface InventoryRow {
 }
 export interface InventoryFormLot {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
-  qty: number; live_qty: number; unit_cost: number; lot_name: string
+  qty: number; live_qty: number; cost: number; unit_cost: number | null; lot_name: string
   part_number: string; predecessor_id: number | null; predecessor_label: string
   consumed: boolean
 }
@@ -464,8 +495,8 @@ export interface InventoryForm extends Authored {
 }
 export interface WrittenOffLot {
   lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
-  written_qty: number; project_code: string; unit_cost: number
-  lot_name: string; part_number: string
+  written_qty: number; project_code: string; unit_cost: number | null
+  cost: number; qty: number; lot_name: string; part_number: string
 }
 
 // ── Панель закрытия проекта (волна 6) ──
@@ -521,6 +552,9 @@ export interface ProcurementForm extends Authored {
   total_qty: number
   // Панель бюджета — см. `PurchaseForm`. Нужда — по проекту закупки.
   demand: number; estimate: number; overpay: number; unestimated: string[]
+  // Волна 26: ★ закупка = заказано по счёту + остаток по оценке; is_fact — всё заказано.
+  ordered: number; rest: number; total: number; is_fact: boolean
+  rest_unestimated: string[]; invoice_gap: number | null
   lines: ProcurementFormLine[]
 }
 
@@ -754,6 +788,8 @@ export const api = {
   // Пересчёт оценочной стоимости роллапом по BOM (кнопка у производимого изделия).
   recalcCost: (id: number) =>
     send<ItemDetailWithRollup>('POST', `/api/items/${id}/recalc-cost/`),
+  // «Взять в оценку» (волна 26): оценка покупного ← последняя цена по счёту.
+  adoptPrice: (id: number) => send<ItemDetail>('POST', `/api/items/${id}/adopt-price/`),
   // Выгрузка изделия в xlsx (2026-07-30): 'bom' — один лист «Состав», 'all' — все
   // вкладки, кроме «Файлов». Не запрос, а ссылка: скачивание ведёт браузер.
   itemXlsxUrl: (id: number, scope: 'bom' | 'all') =>
@@ -797,11 +833,11 @@ export const api = {
   updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<ReceiptForm>('PATCH', `/api/receipts/${id}/`, b),
   addReceiptLot: (id: number, b: {
-    item_id: number; qty: number; unit_cost?: number
+    item_id: number; qty: number; cost?: number
     lot_name?: string; part_number?: string
   }) => send<ReceiptForm>('POST', `/api/receipts/${id}/lots/`, b),
   updateReceiptLot: (id: number, b: Partial<{
-    qty: number; unit_cost: number; lot_name: string; part_number: string
+    qty: number; cost: number; lot_name: string; part_number: string
   }>) => send<ReceiptForm>('PATCH', `/api/lots/${id}/`, b),
   deleteReceiptLot: (id: number) => send<ReceiptForm>('DELETE', `/api/lots/${id}/`),
   lockReceipt: (id: number) => send<ReceiptForm>('POST', `/api/receipts/${id}/lock/`),
@@ -885,10 +921,10 @@ export const api = {
     send<InventoryForm>('PATCH', `/api/inventories/${id}/`, b),
   addInventoryLot: (id: number, b: {
     item_id?: number; predecessor_id?: number; qty: number
-    unit_cost?: number; lot_name?: string; part_number?: string
+    cost?: number; lot_name?: string; part_number?: string
   }) => send<InventoryForm>('POST', `/api/inventories/${id}/lots/`, b),
   updateInventoryLot: (id: number, b: Partial<{
-    qty: number; unit_cost: number; lot_name: string; part_number: string
+    qty: number; cost: number; lot_name: string; part_number: string
   }>) => send<InventoryForm>('PATCH', `/api/inventory-lots/${id}/`, b),
   deleteInventoryLot: (id: number) =>
     send<InventoryForm>('DELETE', `/api/inventory-lots/${id}/`),

@@ -2,6 +2,7 @@
 
 Каждый тест строит минимальный сценарий и проверяет одну формулу.
 """
+import datetime
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ from urllib.parse import quote
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db.models import Sum
 from django.test import Client, TestCase, override_settings
 
 from plume import admin
@@ -22,6 +24,10 @@ from plume import views
 
 def D(x):
     return Decimal(str(x))
+
+
+# Дата счёта по умолчанию для заказов фикстур (волна 26: дата обязательна к фиксации).
+DAY = datetime.date(2026, 10, 1)
 
 
 def _today():
@@ -43,6 +49,7 @@ def _purchase(project, user, **kw):
     """Заказ «как раньше» — через собственную закупку проекта (волна 24: заказ рождается
     только из закупки, проект выводится через неё). Для тестов, которым закупка — фон."""
     proc = engine.create_procurement(project, user)
+    kw.setdefault('date', DAY)
     return engine.create_purchase(proc, user, **kw)
 
 
@@ -283,7 +290,7 @@ class OnOrderTests(EngineTestBase):
         # к фиксации — CHECK `purchase_locked_has_contractor`.
         purchase = models.Purchase.objects.create(
             procurement=engine.create_procurement(self.prj, self.user), user=self.user, contractor=self.supplier,
-            locked=True)
+            locked=True, date=DAY)
         models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=D(40))
         # поступило 15 по этому заказу
         self.receipt_lot(item, self.prj, 15, purchase=purchase)
@@ -318,7 +325,7 @@ class DeficitTests(EngineTestBase):
         # SCR: заказано 25 (зафиксировано), склада нет → ●25 ▲15
         purchase = models.Purchase.objects.create(
             procurement=engine.create_procurement(self.prj, self.user), user=self.user, contractor=self.supplier,
-            locked=True)
+            locked=True, date=DAY)
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=D(25))
 
         d = engine.project_deficit(self.prj)
@@ -342,7 +349,7 @@ class DeficitTests(EngineTestBase):
         models.BomLine.objects.create(parent=device, component=screw, qty=D(1))
         models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(6))
         purchase = models.Purchase.objects.create(
-            procurement=engine.create_procurement(self.prj, self.user), user=self.user, contractor=self.supplier, locked=True)
+            procurement=engine.create_procurement(self.prj, self.user), user=self.user, contractor=self.supplier, locked=True, date=DAY)
         models.PurchaseLine.objects.create(purchase=purchase, item=screw, qty=D(10))
 
         d = engine.project_deficit(self.prj)
@@ -627,9 +634,9 @@ class KittingFormTests(EngineTestBase):
 
     def test_close_births_device_lot_with_cost_snapshot(self):
         case_lot = self.receipt_lot(self.case, self.prj, 10)
-        case_lot.unit_cost = D(800); case_lot.save()
+        case_lot.cost = D(8000); case_lot.save(); engine.rebuild_movements(case_lot)
         res_lot = self.receipt_lot(self.res, self.prj, 100)
-        res_lot.unit_cost = D(1); res_lot.save()
+        res_lot.cost = D(100); res_lot.save(); engine.rebuild_movements(res_lot)
         k = self.make_kitting(qty=2)
         engine.add_kitting_line(k, self.case, case_lot, D(2))   # 2×800
         engine.add_kitting_line(k, self.res, res_lot, D(4))     # 4×1
@@ -637,8 +644,9 @@ class KittingFormTests(EngineTestBase):
         k.refresh_from_db()
         self.assertTrue(k.locked)
         self.assertEqual(lot.qty, D(2))
-        # (2×800 + 4×1) / 2 = 802
-        self.assertEqual(lot.unit_cost, D('802.00'))
+        # 2×800 + 4×1 = 1604 — стоимость набора целиком (волна 26), штука = 802
+        self.assertEqual(lot.cost, D('1604.00'))
+        self.assertEqual(lot.unit_cost, D('802'))
         self.assertEqual(engine.lot_live_qty(lot), D(2))
 
     def test_close_only_wip(self):
@@ -687,7 +695,7 @@ class ReceiptFormTests(EngineTestBase):
     def test_add_lot_births_receipt_movement(self):
         r = self.make_receipt()
         case = self.make_item('CASE')
-        lot = engine.add_receipt_lot(r, case, D(12), unit_cost=D(800),
+        lot = engine.add_receipt_lot(r, case, D(12), cost=D(9600),
                                      lot_name='Корпус Al')
         self.assertEqual(lot.project_id, r.project_id)   # проект наследован
         # Ф15: партия черновой поставки на складе не лежит — движение рождает замок
@@ -701,8 +709,8 @@ class ReceiptFormTests(EngineTestBase):
 
     def test_form_shows_lines_and_total(self):
         r = self.make_receipt()
-        engine.add_receipt_lot(r, self.make_item('A'), D(2), unit_cost=D(100))
-        engine.add_receipt_lot(r, self.make_item('B'), D(3), unit_cost=D(10))
+        engine.add_receipt_lot(r, self.make_item('A'), D(2), cost=D(200))
+        engine.add_receipt_lot(r, self.make_item('B'), D(3), cost=D(30))
         c = engine.receipt_form(r)
         self.assertEqual(len(c['lots']), 2)
         self.assertEqual(c['total_cost'], D(230))        # 2×100 + 3×10
@@ -723,9 +731,10 @@ class ReceiptFormTests(EngineTestBase):
     def test_update_lot_cost_and_name(self):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        engine.update_receipt_lot(lot, unit_cost=D(42), lot_name='Ы',
+        engine.update_receipt_lot(lot, cost=D(210), lot_name='Ы',
                                   part_number='PN-1')
         lot.refresh_from_db()
+        self.assertEqual(lot.cost, D(210))
         self.assertEqual(lot.unit_cost, D(42))
         self.assertEqual(lot.lot_name, 'Ы')
         self.assertEqual(lot.part_number, 'PN-1')
@@ -1042,7 +1051,7 @@ class ReceiptFromPurchaseTests(EngineTestBase):
         self.assertEqual(lots[self.other.id].qty, D(10))
         # Цена — 0, НЕ estimated_cost: оценка, забытая при фиксации, стала бы фактом
         # трат проекта неотличимо от реальной цены УПД.
-        self.assertEqual(lots[self.item.id].unit_cost, D(0))
+        self.assertEqual(lots[self.item.id].cost, D(0))
         self.assertEqual(lots[self.item.id].lot_name, self.item.description)
 
     def test_draft_purchase_rejected(self):
@@ -1401,9 +1410,10 @@ class RequisitionFormTests(EngineTestBase):
         super().setUp()
         self.item = self.make_item('R100')
         self.src = self.receipt_lot(self.item, self.prj, 10)
-        self.src.unit_cost = D('2.50')
+        self.src.cost = D('25.00')
         self.src.part_number = 'ЗН-9'
-        self.src.save(update_fields=['unit_cost', 'part_number'])
+        self.src.save(update_fields=['cost', 'part_number'])
+        engine.rebuild_movements(self.src)
         self.white = models.Project.objects.create(
             code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
@@ -1419,7 +1429,7 @@ class RequisitionFormTests(EngineTestBase):
         self.assertIsNotNone(born)
         self.assertEqual(born.project_id, self.white.id)
         self.assertEqual(born.qty, D(4))
-        self.assertEqual(born.unit_cost, D('2.50'))              # цена унаследована
+        self.assertEqual(born.cost, D('10.00'))                 # доля источника: 4 из 10
         self.assertEqual(born.predecessor_id, self.src.id)      # генеалогия
         self.assertEqual(engine.lot_live_qty(born), D(4))       # +RECEIPT у потомка
 
@@ -1513,8 +1523,9 @@ class ProjectSupplyTests(EngineTestBase):
         blind = self.make_item('NOPRICE')
         engine.update_purchase_line(_line(p, blind, D(2)), price=None)   # цены ещё нет
         lot = self.receipt_lot(self.item, self.prj, 3)
-        lot.unit_cost = D('10.00')
-        lot.save(update_fields=['unit_cost'])
+        lot.cost = D('30.00')
+        lot.save(update_fields=['cost'])
+        engine.rebuild_movements(lot)
         supply = engine.project_supply(self.prj)
         row = supply['purchases'][0]
         self.assertEqual(row['estimate'], D(4) * D('12.50'))
@@ -1561,7 +1572,7 @@ class QueryScalingTests(EngineTestBase):
         models.BomLine.objects.create(parent=device, component=sub, qty=D(1))
         models.ProjectDemand.objects.create(project=prj, target_item=device, qty=D(3))
         proc = engine.create_procurement(prj, self.user)
-        purchase = engine.create_purchase(proc, self.user)
+        purchase = engine.create_purchase(proc, self.user, date=DAY)
         engine.update_purchase(purchase, contractor=self.supplier)
         receipt = engine.create_receipt(prj, self.user, number=f'У-{n}',
                                         contractor=self.supplier)
@@ -2127,6 +2138,7 @@ class ProcurementFormTests(EngineTestBase):
         _line(pu, screw, D(4), price=D('29.00'))                    # 4 шт за 29,00 ₽
         engine.lock_purchase(pu)
         r = engine.create_receipt_from_purchase(pu, self.user)
+        self.assertEqual(r.lots.get(item=screw).cost, D('29.00'))   # доля строки — вся строка
         self.assertEqual(r.lots.get(item=screw).unit_cost, D('7.25'))   # штука — делением
 
     def test_overpay_threshold_rounds_up_to_round_numbers(self):
@@ -2168,7 +2180,7 @@ class ProcurementFormTests(EngineTestBase):
 
         p = engine.create_procurement(self.prj, self.user)
         engine.add_procurement_line(p, screw, D(20))   # нужда проекта 10 шт → 2× = перебор
-        pu = engine.create_purchase(p, self.user, item_ids=[screw.id])
+        pu = engine.create_purchase(p, self.user, item_ids=[screw.id], date=DAY)
         engine.update_purchase_line(pu.lines.get(item=screw), D(12))
 
         row = engine.procurement_allocation(p)['rows'][0]
@@ -2677,7 +2689,7 @@ class AllocationTests(EngineTestBase):
 
     def _order(self, item_ids):
         """Заказ из закупки с контрагентом (обязателен к фиксации; у закупки его нет)."""
-        pu = engine.create_purchase(self.plan, self.user, item_ids=item_ids)
+        pu = engine.create_purchase(self.plan, self.user, item_ids=item_ids, date=DAY)
         return engine.update_purchase(pu, contractor=self.supplier)
 
     def _cells(self, item_code='SCR'):
@@ -2685,7 +2697,7 @@ class AllocationTests(EngineTestBase):
         return rows[item_code], {c['purchase_id']: c for c in rows[item_code]['orders']}
 
     def test_new_purchase_takes_remainders_without_contractor(self):
-        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id, self.nut.id])
+        pu = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id, self.nut.id], date=DAY)
         self.assertEqual(pu.procurement, self.plan)
         self.assertEqual(pu.project, self.prj)                     # проект — через закупку
         self.assertIsNone(pu.contractor)          # волна 24: контрагент — только у заказа
@@ -2696,40 +2708,40 @@ class AllocationTests(EngineTestBase):
 
     def test_split_is_a_second_new_purchase_on_the_remainder(self):
         """Разъезд по счетам: урезал первый заказ → второй берёт ровно остаток."""
-        first = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        first = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id], date=DAY)
         engine.update_purchase_line(first.lines.get(item=self.scr), D(25))
         self.assertEqual(engine.procurement_remainders(self.plan)[self.scr.id], D(15))
-        second = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        second = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id], date=DAY)
         self.assertEqual(second.lines.get(item=self.scr).qty, D(15))
         self.assertEqual(engine.procurement_remainders(self.plan)[self.scr.id], D(0))
         # строка с нулевым остатком берётся осознанно — нулём, не минусом
-        third = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        third = engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id], date=DAY)
         self.assertEqual(third.lines.get(item=self.scr).qty, D(0))
 
     def test_empty_selection_and_foreign_items(self):
-        empty = engine.create_purchase(self.plan, self.user)        # набрать руками
+        empty = engine.create_purchase(self.plan, self.user, date=DAY)        # набрать руками
         self.assertEqual(empty.lines.count(), 0)
         with self.assertRaises(ValidationError):                   # не в плане
-            engine.create_purchase(self.plan, self.user, item_ids=[self.make_item('OTH').id])
+            engine.create_purchase(self.plan, self.user, item_ids=[self.make_item('OTH').id], date=DAY)
 
     def test_purchase_line_must_be_in_the_plan(self):
-        pu = engine.create_purchase(self.plan, self.user)
+        pu = engine.create_purchase(self.plan, self.user, date=DAY)
         with self.assertRaises(ValidationError):
             engine.add_purchase_line(pu, self.make_item('OTH'), D(1))
         engine.add_purchase_line(pu, self.scr, D(5))
         self.assertEqual(pu.lines.get(item=self.scr).qty, D(5))
 
     def test_plan_line_taken_by_purchases_cannot_be_removed(self):
-        engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id], date=DAY)
         with self.assertRaises(ValidationError):
             engine.remove_procurement_line(self.plan.lines.get(item=self.scr))
         engine.remove_procurement_line(self.plan.lines.get(item=self.nut))   # свободную — можно
 
     def test_candidates_shrink_as_purchases_close_the_plan(self):
-        pu = engine.create_purchase(self.plan, self.user)
+        pu = engine.create_purchase(self.plan, self.user, date=DAY)
         codes = lambda: [c['item_code'] for c in engine.purchase_candidates(pu)]
         self.assertEqual(codes(), ['NUT', 'SCR'])
-        engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id])
+        engine.create_purchase(self.plan, self.user, item_ids=[self.scr.id], date=DAY)
         self.assertEqual(codes(), ['NUT'])                         # SCR закрыт другим заказом
         cand = engine.purchase_candidates(pu)[0]
         self.assertEqual(cand['remaining'], D(10))
@@ -2804,7 +2816,7 @@ class AllocationTests(EngineTestBase):
         r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
         engine.lock_receipt(r)
         self.assertEqual(budget()['spent'], D(255))           # поставка из заказа — не дубль
-        self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(unit_cost=D(7))
+        self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(cost=D(14))
         self.assertEqual(budget()['spent'], D(269))           # поставка без заказа — по УПД
 
     def test_ordered_cost_is_money_of_what_is_still_coming(self):
@@ -2833,9 +2845,9 @@ class AllocationTests(EngineTestBase):
         pu = self._order([self.scr.id])
         engine.update_purchase_line(pu.lines.get(item=self.scr), D(30), price=D('255.00'))
         engine.lock_purchase(pu)                         # счёт 255 ₽ за 30 из 40
-        self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(unit_cost=D(7))
+        self.receipt_lot(self.nut, self.prj, 2).origin.lots.update(cost=D(14))
         extra = self.make_item('EXTRA', kind='material')     # не по BOM
-        self.receipt_lot(extra, self.prj, 1).origin.lots.update(unit_cost=D(50))
+        self.receipt_lot(extra, self.prj, 1).origin.lots.update(cost=D(50))
 
         d = engine.project_deficit(self.prj, with_tree=False)
         rows = {c['component_code']: c for c in d['components']}
@@ -2891,7 +2903,7 @@ class AllocationTests(EngineTestBase):
         prj2 = models.Project.objects.create(code='P2', description='Проект 2')
         engine.update_procurement(self.plan, project=prj2)
         self.assertEqual(self.plan.project, prj2)
-        engine.create_purchase(self.plan, self.user)
+        engine.create_purchase(self.plan, self.user, date=DAY)
         with self.assertRaises(ValidationError):
             engine.update_procurement(self.plan, project=self.prj)
 
@@ -3122,7 +3134,8 @@ class ProcurementHttpTests(TestCase):
         oid = self.c.post(f'/api/procurements/{pid}/purchases/', {},
             content_type='application/json').json()['id']
         self.c.patch(f'/api/purchases/{oid}/',
-            {'code': 'Нева-1', 'contractor_id': cp.id}, content_type='application/json')
+            {'code': 'Нева-1', 'contractor_id': cp.id, 'date': '2026-10-01'},
+            content_type='application/json')
         self.c.post(f'/api/purchases/{oid}/lines/',
             {'item_id': self.scr.id, 'qty': 10, 'price': '35.00'},
             content_type='application/json')
@@ -3475,7 +3488,7 @@ class InventoryFormTests(EngineTestBase):
 
     def test_add_lot_births_receipt_movement(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
-        lot = engine.add_inventory_lot(inv, self.item, D(7), unit_cost=D('1.50'),
+        lot = engine.add_inventory_lot(inv, self.item, D(7), cost=D('10.50'),
                                        lot_name='Резистор')
         self.assertEqual(lot.origin_kind, 'inventory')
         self.assertEqual(lot.project_id, self.prj.id)
@@ -3487,7 +3500,7 @@ class InventoryFormTests(EngineTestBase):
     def test_form_totals_and_description(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         engine.update_inventory(inv, description='пересчёт')
-        engine.add_inventory_lot(inv, self.item, D(4), unit_cost=D('2'))
+        engine.add_inventory_lot(inv, self.item, D(4), cost=D('8'))
         engine.lock_inventory(inv)
         c = engine.inventory_form(inv)
         self.assertEqual(c['number'], 'ИНВ-1')
@@ -3498,7 +3511,7 @@ class InventoryFormTests(EngineTestBase):
     def test_number_required_at_lock_not_at_birth(self):
         """Ф12e: акт рождается без номера, но не фиксируется без него."""
         inv = engine.create_inventory(self.prj, self.user)
-        engine.add_inventory_lot(inv, self.item, D(1), unit_cost=D('1.00'))
+        engine.add_inventory_lot(inv, self.item, D(1), cost=D('1.00'))
         with self.assertRaises(ValidationError):
             engine.lock_inventory(inv)
         engine.update_inventory(inv, number='ИНВ-7')
@@ -3510,12 +3523,12 @@ class InventoryFormTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.add_inventory_lot(inv, self.item, D(0))
         with self.assertRaises(ValidationError):
-            engine.add_inventory_lot(inv, self.item, D(1), unit_cost=D(-1))
+            engine.add_inventory_lot(inv, self.item, D(1), cost=D(-1))
 
     def test_update_and_remove_lot(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         lot = engine.add_inventory_lot(inv, self.item, D(4))
-        engine.update_inventory_lot(lot, qty=D(9), unit_cost=D('3'))
+        engine.update_inventory_lot(lot, qty=D(9), cost=D('27'))
         engine.lock_inventory(inv)
         self.assertEqual(engine.lot_live_qty(lot), D(9))
         engine.unlock_inventory(inv)                 # Ф15: правка — под снятым замком
@@ -3534,8 +3547,9 @@ class InventoryFormTests(EngineTestBase):
     def test_rematerialize_written_off_lot_inherits_provenance(self):
         # списываем партию из проекта (серый путь), затем находим и ре-материализуем в GREY
         src = self.receipt_lot(self.item, self.prj, 10)
-        src.unit_cost = D('2.50'); src.lot_name = 'Резистор'; src.part_number = 'ЗН-9'
-        src.save(update_fields=['unit_cost', 'lot_name', 'part_number'])
+        src.cost = D('25.00'); src.lot_name = 'Резистор'; src.part_number = 'ЗН-9'
+        src.save(update_fields=['cost', 'lot_name', 'part_number'])
+        engine.rebuild_movements(src)
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='на серый')
         engine.add_writeoff_line(w, src, D(6))
         engine.lock_writeoff(w)                              # Ф15: списано фиксацией
@@ -3546,13 +3560,13 @@ class InventoryFormTests(EngineTestBase):
         self.assertEqual(picker[src.id]['written_qty'], D(6))
         # ре-материализация: born-лот в GREY с predecessor и унаследованными полями
         inv = engine.create_inventory(self.grey, self.user, 'ИНВ-G1')
-        born = engine.add_inventory_lot(inv, src.item, D(6), unit_cost=src.unit_cost,
+        born = engine.add_inventory_lot(inv, src.item, D(6),
                                         lot_name=src.lot_name,
                                         part_number=src.part_number, predecessor=src)
         engine.lock_inventory(inv)
         self.assertEqual(born.project_id, self.grey.id)
         self.assertEqual(born.predecessor_id, src.id)
-        self.assertEqual(born.unit_cost, D('2.50'))
+        self.assertEqual(born.cost, D('15.00'))                 # доля предшественника: 6 из 10
         self.assertEqual(engine.lot_live_qty(born), D(6))
         c = engine.inventory_form(inv)
         self.assertEqual(c['lots'][0]['predecessor_id'], src.id)
@@ -3575,7 +3589,7 @@ class InventoryHttpTests(TestCase):
         r = models.Receipt.objects.create(number='U-1', date='2026-05-01', locked=True,
             contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
-            origin=r, qty=D(10), unit_cost=D('2.50'), part_number='ЗН-9')
+            origin=r, qty=D(10), cost=D('25.00'), part_number='ЗН-9')
         engine.rebuild_movements(self.lot)
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
@@ -3588,7 +3602,7 @@ class InventoryHttpTests(TestCase):
         iid = r.json()['id']
         # строка = найденная партия (+RECEIPT)
         line = self.c.post(f'/api/inventories/{iid}/lots/',
-            {'item_id': self.item.id, 'qty': 7, 'unit_cost': '1.5',
+            {'item_id': self.item.id, 'qty': 7, 'cost': '10.5',
              'lot_name': 'Резистор'}, content_type='application/json')
         self.assertEqual(line.status_code, 201)
         body = line.json()
@@ -3627,7 +3641,7 @@ class InventoryHttpTests(TestCase):
         self.assertEqual(line.status_code, 201)
         row = line.json()['lots'][0]
         self.assertEqual(row['predecessor_id'], self.lot.id)
-        self.assertEqual(float(row['unit_cost']), 2.50)       # цена унаследована
+        self.assertEqual(float(row['unit_cost']), 2.50)       # цена штуки унаследована
         self.assertEqual(row['part_number'], 'ЗН-9')          # PN унаследован
 
 
@@ -3688,11 +3702,11 @@ class ProjectBudgetTests(EngineTestBase):
     def test_spent_counts_only_receipt_lots(self):
         # приходной лот считается по (цена×кол-во); заём (requisition) — бесплатен
         case = self.make_item('CASE')
-        self.receipt_lot(case, self.prj, 1)  # добавит default unit_cost=0
+        self.receipt_lot(case, self.prj, 1)  # добавит default cost=0
         r = models.Receipt.objects.create(number='U-2', date='2026-05-02', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         paid = models.Lot.objects.create(item=case, project=self.prj, origin=r,
-            qty=D(3), unit_cost=D(800))
+            qty=D(3), cost=D(2400))
         engine.rebuild_movements(paid)
         # заём из белого склада → born-лот в prj (origin requisition), цена наследуется
         white = models.Project.objects.create(code='WHT', description='Склад',
@@ -3700,7 +3714,7 @@ class ProjectBudgetTests(EngineTestBase):
         src = models.Lot.objects.create(item=case, project=white,
             origin=models.Inventory.objects.create(project=white, user=self.user,
                 number='INV-W', date='2026-05-01', locked=True),
-            qty=D(5), unit_cost=D(700))
+            qty=D(5), cost=D(3500))
         engine.rebuild_movements(src)
         req = engine.create_requisition(self.prj, self.user, 'ТРБ-1')
         engine.add_requisition_line(req, src, D(2))
@@ -3730,7 +3744,7 @@ class ProjectBudgetTests(EngineTestBase):
         r = models.Receipt.objects.create(number='U-3', date='2026-05-03', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=screw, project=self.prj, origin=r,
-            qty=D(40), unit_cost=D(45))
+            qty=D(40), cost=D(1800))
         engine.rebuild_movements(lot)
         b = engine.project_budget(self.prj)
         self.assertEqual(b['spent'], D(1800))
@@ -3747,9 +3761,10 @@ class ProjectBudgetTests(EngineTestBase):
         self.assertEqual(b['unestimated'], ['SCR'])
         self.assertEqual(b['plan'], D(0))   # неполон — но флаг поднят
 
-    def test_economy_equals_borrow_value(self):
-        # прибор из купленного CASE (спот) + заёмного RES (бесплатно в бюджете,
-        # но по реальной цене в себестоимости) → экономия = стоимость заёма
+    def test_borrow_is_free_in_budget_but_real_in_device_cost(self):
+        # прибор из купленного CASE (спот) + заёмного RES: заём бесплатен в бюджете, но
+        # входит в стоимость прибора по реальной цене (волна 26: себестоимость/экономия
+        # сняты с панели проекта в BACKLOG — проверяем сам снимок партии-прибора)
         device = self.make_item('DEV', manufactured=True, kind='device')
         case = self.make_item('CASE')
         res = self.make_item('RES')
@@ -3761,7 +3776,7 @@ class ProjectBudgetTests(EngineTestBase):
         r = models.Receipt.objects.create(number='U-4', date='2026-05-04', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         case_lot = models.Lot.objects.create(item=case, project=self.prj, origin=r,
-            qty=D(1), unit_cost=D(800))
+            qty=D(1), cost=D(800))
         engine.rebuild_movements(case_lot)
         # RES: заём 2 @ 10 из белого склада
         white = models.Project.objects.create(code='WHT', description='Склад',
@@ -3769,7 +3784,7 @@ class ProjectBudgetTests(EngineTestBase):
         src = models.Lot.objects.create(item=res, project=white,
             origin=models.Inventory.objects.create(project=white, user=self.user,
                 number='INV-W2', date='2026-05-01', locked=True),
-            qty=D(2), unit_cost=D(10))
+            qty=D(2), cost=D(20))
         engine.rebuild_movements(src)
         req = engine.create_requisition(self.prj, self.user, 'ТРБ-2')
         engine.add_requisition_line(req, src, D(2))
@@ -3785,8 +3800,8 @@ class ProjectBudgetTests(EngineTestBase):
 
         b = engine.project_budget(self.prj)
         self.assertEqual(b['spent'], D(800))    # только CASE
-        self.assertEqual(b['cost'], D(820))     # снимок: 800 + 2×10 (заём по реальной цене)
-        self.assertEqual(b['economy'], D(20))   # польза заёма = 2×10
+        self.assertEqual(k.lots.get().cost, D(820))   # 800 + 2×10 (заём по реальной цене)
+        self.assertNotIn('economy', b)
 
     def test_compass_none_without_budget(self):
         b = engine.project_budget(self.prj)
@@ -5189,7 +5204,7 @@ class CounterpartyFormTests(EngineTestBase):
             contractor=contractor or self.supplier,
             project=self.prj, user=self.user, locked=locked)
         lot = models.Lot.objects.create(item=item, project=self.prj, origin=r,
-                                        qty=D(qty), unit_cost=D(cost))
+                                        qty=D(qty), cost=D(qty) * D(cost))
         engine.rebuild_movements(lot)
         return r, lot
 
@@ -6107,7 +6122,7 @@ class EntityDeleteTests(EngineTestBase):
 
     def test_delete_procurement_blocked_by_purchase(self):
         proc = engine.create_procurement(self.prj, self.user)
-        engine.create_purchase(proc, self.user)          # волна 24: заказ — из закупки
+        engine.create_purchase(proc, self.user, date=DAY)          # волна 24: заказ — из закупки
         with self.assertRaises(ValidationError):
             engine.delete_procurement(proc)          # привязан заказ
 
@@ -6810,7 +6825,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         r = models.Receipt.objects.create(
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        lot = engine.add_receipt_lot(r, self.item, D(10), unit_cost=D(100))
+        lot = engine.add_receipt_lot(r, self.item, D(10), cost=D(1000))
         self.assertTrue(models.Lot.objects.filter(pk=lot.pk).exists())  # партия есть
         self.assertEqual(lot.movements.count(), 0)                      # склада нет
         self.assertEqual(engine.item_available(self.item, self.prj), D(0))
@@ -6899,7 +6914,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         r = models.Receipt.objects.create(
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        engine.add_receipt_lot(r, self.item, D(3), unit_cost=D(800))
+        engine.add_receipt_lot(r, self.item, D(3), cost=D(2400))
         self.assertEqual(engine.project_budget(self.prj)['spent'], D(0))
         engine.lock_receipt(r)
         self.assertEqual(engine.project_budget(self.prj)['spent'], D(2400))
@@ -7167,7 +7182,7 @@ class AccountTests(TestCase):
                                       date='2026-05-02', contractor=cp,
                                       project=prj, user=other)
         mine_plan = engine.create_procurement(prj, self.user, code='Закупка моя')
-        engine.create_purchase(mine_plan, self.user, code='Заказ мой')
+        engine.create_purchase(mine_plan, self.user, code='Заказ мой', date=DAY)
 
         form = self.client.get('/api/account/').json()
         self.assertEqual([d['id'] for d in form['documents']], [mine.id])
@@ -7340,14 +7355,14 @@ class FixationPreviewTests(EngineTestBase):
     def test_kitting_preview_rolls_back_born_lot(self):
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 10)
-        lot.unit_cost = D('5'); lot.save()
+        lot.cost = D('50'); lot.save(); engine.rebuild_movements(lot)
         dev = self.make_item('DEV', manufactured=True)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev, code='К-1',
                                           user=self.user, qty=D(2))
         engine.add_kitting_line(k, comp, lot, D(4))
         r, t = self.texts('kittings', k.id)
         self.assertIsNone(r['refusal'])
-        self.assertEqual(t[0], 'родится партия-прибор DEV × 2 в проекте P1, себестоимость 10 ₽ за шт.')
+        self.assertEqual(t[0], 'родится партия-прибор DEV × 2 в проекте P1, себестоимость 20 ₽')
         self.assertEqual(t[1], 'со склада спишется 1 партия компонентов (1 позиция)')
         self.assertFalse(models.Lot.objects.filter(item=dev).exists())   # пробный прогон откатан
         k.refresh_from_db()
@@ -7379,7 +7394,7 @@ class FixationPreviewTests(EngineTestBase):
         rl = engine.create_relocation(self.prj, self.user, number='П-1')
         engine.add_relocation_line(rl, lot, D(1), self.main, other)
         inv = engine.create_inventory(self.prj, self.user, number='И-1')
-        engine.add_inventory_lot(inv, comp, D(2), unit_cost=D('7'))
+        engine.add_inventory_lot(inv, comp, D(2), cost=D('14'))
         cases = [('transfers', tr.id, '1 партия (1 шт.) уйдёт со склада проекта P1 → Поставщик'),
                  ('writeoffs', wo.id, '1 партия (1 шт.) будет списана со склада проекта P1'),
                  ('requisitions', rq.id, '1 партия перейдёт: P1 → P2'),
@@ -7414,7 +7429,7 @@ class NeedMoneyTests(EngineTestBase):
         engine.add_bom_line(dev, bare, D(1))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(2))
         lot = self.receipt_lot(comp, self.prj, 4)
-        lot.unit_cost = D('7.5'); lot.save()
+        lot.cost = D('30'); lot.save(); engine.rebuild_movements(lot)
         k = models.Kitting.objects.create(project=self.prj, target_item=dev, number='К1',
                                           user=self.user, qty=D(1))
         engine.add_kitting_line(k, comp, lot, D(1))
@@ -7492,3 +7507,238 @@ class ManualComponentFixationTests(EngineTestBase):
         m.refresh_from_db()
         self.assertTrue(m.synced)
         self.assertFalse(m.locked)              # замок снят — глиф станет стрелками
+
+
+class CostFixtures:
+    """Фикстуры денег волны 26 (примесь к `EngineTestBase`)."""
+
+    def costed_lot(self, item, qty, cost):
+        lot = self.receipt_lot(item, self.prj, qty)
+        lot.cost = D(cost)
+        lot.save(update_fields=['cost'])
+        engine.rebuild_movements(lot)
+        return lot
+
+    def transfer(self, lot, qty):
+        t = engine.create_transfer(self.prj, self.user, f'Н-{models.Transfer.objects.count()}',
+                                   contractor=self.supplier)
+        engine.add_transfer_line(t, lot, D(qty))
+        engine.lock_transfer(t)
+        return t
+
+    def live_cost(self, lot):
+        return lot.movements.aggregate(s=Sum('cost'))['s']
+
+
+class LotCostCanonTests(CostFixtures, EngineTestBase):
+    """Волна 26, Ф0 — учётный канон партии: «стоимость + количество, последний забирает
+    остаток» (решение Ивана 2026-10-19; так у SAP/Odoo/1С). Сумма первична, цена штуки —
+    производная; расход делит стоимость накопительным округлением."""
+
+    def test_resistors_from_purchase_match_the_invoice_to_the_kopeck(self):
+        """10 000 резисторов за 3 519,78 ₽: прежняя цена штуки 0,35 давала 3 500,00 ₽."""
+        res = self.make_item('RES')
+        pu = self.make_purchase()
+        _line(pu, res, D(10000), price=D('3519.78'))
+        engine.lock_purchase(pu)
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        lot = r.lots.get()
+        self.assertEqual(lot.cost, D('3519.78'))
+        self.assertEqual(lot.unit_cost, D('0.351978'))
+
+    def test_partial_receipts_sum_to_the_invoice(self):
+        """Поставка частями: 6 000 сейчас (правка кол-ва — доля цены строки), 4 000 потом."""
+        res = self.make_item('RES')
+        pu = self.make_purchase()
+        _line(pu, res, D(10000), price=D('3519.78'))
+        engine.lock_purchase(pu)
+        first = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        lot1 = first.lots.get()
+        engine.update_receipt_lot(lot1, qty=D(6000))
+        lot1.refresh_from_db()
+        self.assertEqual(lot1.cost, D('2111.87'))           # 3519.78 × 0.6 = 2111.868
+        engine.lock_receipt(first)
+        second = engine.create_receipt_from_purchase(pu, self.user, number='У-2')
+        lot2 = second.lots.get()
+        self.assertEqual(lot2.qty, D(4000))
+        self.assertEqual(lot1.cost + lot2.cost, D('3519.78'))
+
+    def test_explicit_cost_wins_over_rescale(self):
+        lot = engine.add_receipt_lot(models.Receipt.objects.create(
+            number='У', date=DAY, contractor=self.supplier, project=self.prj,
+            user=self.user), self.make_item('A'), D(10), cost=D(100))
+        engine.update_receipt_lot(lot, qty=D(5))
+        lot.refresh_from_db()
+        self.assertEqual(lot.cost, D(50))                   # цена штуки сохранилась
+        engine.update_receipt_lot(lot, qty=D(4), cost=D(77))
+        lot.refresh_from_db()
+        self.assertEqual(lot.cost, D(77))                   # явная стоимость — главнее
+
+    def test_last_issue_takes_the_remainder(self):
+        """3 шт. за 1 000 ₽, три передачи по одной: 333,33 + 333,34 + 333,33 = 1 000,00."""
+        lot = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
+        tr = [self.transfer(lot, 1) for _ in range(3)]
+        values = [-models.StockMovement.objects.get(lot=lot, source_id=t.id).cost for t in tr]
+        self.assertEqual(sum(values), D('1000.00'))
+        self.assertEqual(values, [D('333.33'), D('333.34'), D('333.33')])
+        self.assertEqual(self.live_cost(lot), D('0.00'))   # хвоста в копейку нет
+
+    def test_relocation_moves_value_but_keeps_the_lot(self):
+        lot = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
+        other = models.Location.objects.create(code='B', description='Второе место')
+        rl = engine.create_relocation(self.prj, self.user, number='П-1')
+        engine.add_relocation_line(rl, lot, D(1), self.main, other)
+        engine.lock_relocation(rl)
+        self.assertEqual(self.live_cost(lot), D('1000.00'))
+        at_b = lot.movements.filter(location=other).aggregate(s=Sum('cost'))['s']
+        self.assertEqual(at_b, D('333.33'))
+
+    def test_requisition_child_costs_its_share(self):
+        white = models.Project.objects.create(code='W', description='Собственный склад',
+                                              kind=models.Project.Kind.INTERNAL_STOCK)
+        src = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
+        req = engine.create_requisition(white, self.user, 'ТРБ-1')
+        engine.add_requisition_line(req, src, D(1))
+        child = req.lots.get()
+        self.assertEqual(child.cost, D('333.33'))          # предпросмотр черновика
+        engine.update_requisition_line(req.lines.get(), D(3))
+        child.refresh_from_db()
+        self.assertEqual(child.cost, D('1000.00'))         # вся партия — вся стоимость
+        engine.lock_requisition(req)
+        child.refresh_from_db()
+        self.assertEqual(child.cost, D('1000.00'))
+        self.assertEqual(self.live_cost(src), D('0.00'))
+
+    def test_device_costs_exactly_what_was_soldered(self):
+        a = self.costed_lot(self.make_item('A'), 3, '1000.00')
+        b = self.costed_lot(self.make_item('B'), 7, '10.00')
+        dev = self.make_item('DEV', manufactured=True)
+        k = engine.create_kitting(self.prj, self.user, target_item=dev, qty=D(1))
+        engine.add_kitting_line(k, a.item, a, D(1))
+        engine.add_kitting_line(k, b.item, b, D(3))
+        self.assertEqual(engine.kitting_cost(k), D('337.62'))   # 333.33 + 4.29
+        device = engine.lock_kitting(k)
+        self.assertEqual(device.cost, D('337.62'))
+        self.assertEqual(self.live_cost(device), D('337.62'))
+
+    def test_purchase_lock_requires_a_date(self):
+        pu = self.make_purchase(date=None)
+        _line(pu, self.make_item('A'), D(1), price=D(1))
+        with self.assertRaises(ValidationError):
+            engine.lock_purchase(pu)
+        engine.update_purchase(pu, date=DAY)
+        engine.lock_purchase(pu)
+        self.assertTrue(pu.locked)
+
+
+class MoneyBlockTests(CostFixtures, EngineTestBase):
+    """Волна 26, Ф1 — числа блока «Деньги» по формам и их сверки до копейки."""
+
+    def locked_order(self, lines, date=DAY, contractor=None):
+        pu = self.make_purchase(date=date, contractor=contractor)
+        for item, qty, price in lines:
+            _line(pu, item, D(qty), price=D(price))
+        engine.lock_purchase(pu)
+        return pu
+
+    def test_purchase_received_plus_awaiting_is_the_invoice(self):
+        a, b = self.make_item('A'), self.make_item('B')
+        pu = self.locked_order([(a, 3, '1000.00'), (b, 10, '55.55')])
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        engine.update_receipt_lot(r.lots.get(item=a), qty=D(1))
+        r.lots.get(item=b).delete()
+        engine.lock_receipt(r)
+        f = engine.purchase_form(pu)
+        self.assertEqual(f['received_money'], D('333.33'))
+        self.assertEqual(f['received_money'] + f['awaiting_money'], f['estimate'])
+        # «ждём» формы = «ждём от него» контрагента = обещанное «Заказа» проекта
+        cp = engine.counterparty_form(self.supplier)['supply']
+        self.assertEqual(cp['awaiting'], f['awaiting_money'])
+        supply = engine.ProjectSupply(self.prj)
+        self.assertEqual(supply.ordered_cost(a) + supply.ordered_cost(b), f['awaiting_money'])
+
+    def test_receipt_reconciles_with_its_order(self):
+        a = self.make_item('A')
+        pu = self.locked_order([(a, 3, '1000.00')])
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        f = engine.receipt_form(r)
+        self.assertEqual(f['by_order'], D('1000.00'))
+        self.assertEqual(f['order_gap'], D('0.00'))
+        engine.update_receipt_lot(r.lots.get(), cost=D('1012.40'))     # УПД разошёлся
+        self.assertEqual(engine.receipt_form(r)['order_gap'], D('12.40'))
+
+    def test_procurement_total_is_fact_where_ordered_estimate_elsewhere(self):
+        a, b = self.make_item('A'), self.make_item('B')
+        a.estimated_cost = D(100); a.save()
+        b.estimated_cost = D(10); b.save()
+        proc = engine.create_procurement(self.prj, self.user)
+        models.ProcurementLine.objects.create(procurement=proc, item=a, qty=D(5))
+        models.ProcurementLine.objects.create(procurement=proc, item=b, qty=D(20))
+        pu = engine.create_purchase(proc, self.user, item_ids=[a.id], date=DAY)
+        engine.update_purchase(pu, contractor=self.supplier)
+        engine.update_purchase_line(pu.lines.get(), D(3), price=D('330.00'))
+        engine.lock_purchase(pu)
+        m = engine.procurement_money(proc)
+        self.assertEqual(m['ordered'], D('330.00'))
+        self.assertEqual(m['rest'], D(2 * 100 + 20 * 10))
+        self.assertEqual(m['total'], D('730.00'))
+        self.assertFalse(m['is_fact'])
+        self.assertAlmostEqual(float(m['invoice_gap']), 0.10)   # 330 против 3×100
+
+    def test_project_spent_shares_and_over_need(self):
+        dev = self.make_item('DEV', manufactured=True)
+        res = self.make_item('RES')
+        res.estimated_cost = D(10); res.save()
+        engine.add_bom_line(dev, res, D(2))
+        models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(5))
+        self.prj.budget = D(200); self.prj.save()
+        self.locked_order([(res, 12, '132.00')])        # нужда 10, взяли 12 по 11 ₽
+        b = engine.project_budget(self.prj)
+        self.assertEqual(b['spent'], D('132.00'))
+        self.assertEqual(b['spent_of_budget'], D('0.66'))
+        self.assertEqual(b['need'], D(100))
+        self.assertAlmostEqual(float(b['over_need']), 0.32)
+        self.assertEqual(b['plan'] - b['need'],
+                         b['reserve'] + b['outside'] + b['price_gap'])
+        self.assertNotIn('cost', b)
+
+    def test_order_totals(self):
+        lot = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
+        t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=self.supplier)
+        engine.add_transfer_line(t, lot, D(2))
+        self.assertEqual(engine.transfer_form(t)['total_cost'], D('666.67'))
+        other = models.Location.objects.create(code='B', description='Второе место')
+        rl = engine.create_relocation(self.prj, self.user, number='П-1')
+        engine.add_relocation_line(rl, lot, D(1), self.main, other)
+        self.assertEqual(engine.relocation_form(rl)['total_cost'], D('333.33'))
+        engine.lock_relocation(rl)
+        self.assertEqual(engine.location_form(other)['total_cost'], D('333.33'))
+        self.assertEqual(engine.location_form(self.main)['total_cost'], D('666.67'))
+
+    def test_item_last_avg_max_skip_samples(self):
+        res = self.make_item('RES')
+        self.locked_order([(res, 100, '50.00')], date=datetime.date(2026, 9, 1))
+        self.locked_order([(res, 300, '120.00')], date=datetime.date(2026, 10, 1))
+        self.locked_order([(res, 5, '0.00')], date=datetime.date(2026, 10, 5))  # образец
+        m = engine.item_money(res)
+        self.assertEqual(m['last'], D('0.4'))            # 120 / 300, образец пропущен
+        self.assertEqual(m['avg'], D('0.425'))           # 170 / 400
+        self.assertEqual(m['max'], D('0.5'))
+        self.assertTrue(m['estimate_off'])               # оценки нет
+        engine.adopt_last_price(res)
+        res.refresh_from_db()
+        self.assertEqual(res.estimated_cost, D('0.40'))
+        self.assertFalse(engine.item_money(res)['estimate_off'])
+
+    def test_native_live_rollup_flags_stale_estimate(self):
+        dev = self.make_item('DEV', manufactured=True)
+        res = self.make_item('RES')
+        res.estimated_cost = D(10); res.save()
+        engine.add_bom_line(dev, res, D(3))
+        engine.rollup_estimated_cost(dev)
+        self.assertFalse(engine.item_money(dev)['estimate_stale'])
+        res.estimated_cost = D(11); res.save()            # освежили цену компонента
+        m = engine.item_money(dev)
+        self.assertEqual(m['rollup'], D(33))
+        self.assertTrue(m['estimate_stale'])
+        self.assertEqual(m['top'][0]['code'], 'RES')

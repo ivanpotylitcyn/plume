@@ -8,6 +8,7 @@
 // Дублировать вёрстку не стали: стат — единица чтения, и она обязана выглядеть одинаково
 // в бюджете проекта и в интеграле контрагента ([[form-consistency-standard]]).
 import type { ReactNode } from 'react'
+import { money } from './status'
 
 // Карточка-панель. `caption` — имя панели: нужен, когда на форме их несколько (две
 // стороны документооборота контрагента); у одинокой панели бюджета его нет.
@@ -34,18 +35,41 @@ export function StatGroup({ aside, children }: { aside?: boolean; children: Reac
 // `tone` — знак от смысла, который посчитал движок ([[engine-view-seam]]). Тона — тот же
 // словарь статусов, что у глифов (§0.4): `ok` зелёный, `wip` оранжевый (2026-08-07:
 // переплата — «взяли с запасом», это ожидание, а не дефицит), `bad` красный.
-export function Stat({ label, value, tone, dim, title }: {
+//
+// Волна 26 — блок «Деньги»: `main` — ГЛАВНОЕ число формы (самое актуальное на сегодня;
+// правило — факт, где он есть). Стоит первым, крупнее, отделено линией от поддержки —
+// одна роль на все формы, а не размер по месту. Ставится прямо в `StatPanel`, без группы.
+// `note` — короткая расшифровка под значением («факт + оценка», дата и поставщик цены).
+export function Stat({ label, value, tone, dim, title, main, note }: {
   label: string; value: string; tone?: 'ok' | 'wip' | 'bad'; dim?: boolean; title?: string
+  main?: boolean; note?: string
 }) {
   return (
-    <div className="stat" title={title}>
+    <div className={'stat' + (main ? ' main' : '')} title={title}>
       <div className="stat-label">{label}</div>
       <div className={'stat-val' + (tone ? ` t-${tone}` : '') + (dim ? ' dim' : '')}>{value}</div>
+      {note && <div className="stat-note">{note}</div>}
     </div>
   )
 }
 
+// Блок «Деньги» формы (волна 26) — главное число в рублях + необязательная поддержка
+// (`children`: группы статов, предупреждения). Ордера, место хранения, поставка: у них
+// главное число одно, и разметку панели повторять по формам незачем.
+export function MoneyBlock({ label, value, title, note, children }: {
+  label: string; value: number; title?: string; note?: string; children?: ReactNode
+}) {
+  return (
+    <StatPanel>
+      <Stat main label={label} value={money(value)} title={title} note={note} />
+      {children}
+    </StatPanel>
+  )
+}
+
 // Предупреждение под статами (во всю ширину панели): «план неполон», «данных не хватает».
+// Глиф — codicon `warning` (2026-10-19: текстовый ▲ был «не из того набора»); рисует его
+// сам компонент, вызывающий передаёт только текст. Цвет — от `.stat-warn`.
 export function StatWarn({ title, children }: { title?: string; children: ReactNode }) {
-  return <div className="stat-warn" title={title}>{children}</div>
+  return <div className="stat-warn" title={title}><span className="ci sg ci-warning" />{children}</div>
 }

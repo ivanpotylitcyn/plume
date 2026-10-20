@@ -376,7 +376,7 @@ export default function App() {
 
       <div className="sidebar">
         {mode === 'projects' &&
-          <ModeList heading="Проекты" newLabel="＋ Новый проект"
+          <ModeList heading="Проекты" newLabel="Новый проект"
             onNew={() => born('projects', 'project', reloadProjects, openProject)}
             selId={sel?.kind === 'project' ? sel.id : null}
             onSelect={id => setSel({ kind: 'project', id })}
@@ -390,7 +390,7 @@ export default function App() {
             «Компонентов» (2026-10-15: категории разделены по оси, у изделий свои).
             Открывает ту же форму изделия (sel.kind='item'). */}
         {mode === 'products' &&
-          <ModeList heading="Изделия" newLabel="＋ Новое изделие" categoryFilter
+          <ModeList heading="Изделия" newLabel="Новое изделие" categoryFilter
             onNew={() => born('items', 'item', reloadItems,
               id => { setMode('products'); setSel({ kind: 'item', id }) }, { native: true })}
             selId={sel?.kind === 'item' ? sel.id : null}
@@ -401,7 +401,7 @@ export default function App() {
                 glyph: <StatusGlyph locked={i.locked} /> }))} />}
 
         {mode === 'items' &&
-          <ModeList heading="Компоненты" newLabel="＋ Новый компонент" categoryFilter
+          <ModeList heading="Компоненты" newLabel="Новый компонент" categoryFilter
             onNew={() => born('items', 'item', reloadItems, openItem)}
             selId={sel?.kind === 'item' ? sel.id : null}
             onSelect={id => setSel({ kind: 'item', id })}
@@ -424,7 +424,7 @@ export default function App() {
         {/* Волна 20: глиф строки = СТОРОНА контрагента по фактам документооборота
             (своей оси фиксации у справочника нет) — семейство `fold-*`, см. `SideGlyph`. */}
         {mode === 'counterparties' &&
-          <ModeList heading="Контрагенты" newLabel="＋ Новый контрагент"
+          <ModeList heading="Контрагенты" newLabel="Новый контрагент"
             onNew={() => born('counterparties', 'counterparty', reloadCounterparties,
               openCounterparty)}
             selId={sel?.kind === 'counterparty' ? sel.id : null}
@@ -439,7 +439,7 @@ export default function App() {
             onNew={bornOrder} onSelect={openOrderEntry} />}
 
         {mode === 'locations' &&
-          <ModeList heading="Склады" newLabel="＋ Новый склад"
+          <ModeList heading="Склады" newLabel="Новый склад"
             onNew={() => born('locations', 'location', reloadLocations, openLocation)}
             selId={sel?.kind === 'location' ? sel.id : null}
             onSelect={id => setSel({ kind: 'location', id })}
@@ -447,7 +447,7 @@ export default function App() {
               glyph: <span className="ci ci-location" /> }))} />}
 
         {mode === 'purchases' &&
-          <ModeList heading="Заказы" newLabel="＋ Новый заказ — из закупки" projectFilter
+          <ModeList heading="Заказы" newLabel="Новый заказ — из закупки" projectFilter
             // Волна 24: заказ рождается только из закупки — «＋» ведёт в «Закупки».
             onNew={() => { setMode('procurements'); setSel(null) }}
             selId={sel?.kind === 'purchase' ? sel.id : null}
@@ -462,7 +462,7 @@ export default function App() {
             }))} />}
 
         {mode === 'procurements' &&
-          <ModeList heading="Закупки" newLabel="＋ Новая закупка" projectFilter
+          <ModeList heading="Закупки" newLabel="Новая закупка" projectFilter
             onNew={() => born('procurements', 'procurement', reloadProcurements, openProcurement)}
             selId={sel?.kind === 'procurement' ? sel.id : null}
             onSelect={id => setSel({ kind: 'procurement', id })}
@@ -594,7 +594,7 @@ const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
 // Единый список режима (§7): призрачный «＋ Новая…» первым, строка = глиф · моно-код
 // (подписи нет), фильтр-строка и — где есть проект — дропдаун по проекту.
 interface ListRow { id: number; code: string; name: string; glyph: ReactNode; projectCode?: string; category?: string }
-// Ф12e: `newSel` больше нет — «＋ Новый» не выбирает форму создания, а рождает
+// Ф12e: `newSel` больше нет — «Новый» не выбирает форму создания, а рождает
 // сущность и уводит в её каноничную форму, так что подсвечивать нечего.
 function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilter, categoryFilter, headAction }: {
   heading: string; newLabel: string; onNew: () => void
@@ -652,7 +652,7 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
       </div>
       <div className="list-scroll">
         <div className="tree-item new" onClick={onNew}>
-          <span className="code">{newLabel}</span>
+          <span className="ci ci-add" /><span className="code">{newLabel}</span>
         </div>
         {shown.map(r => (
           <div key={r.id} className={'tree-item' + (selId === r.id ? ' sel' : '')}
@@ -737,7 +737,7 @@ function OrderList({ entries, selKey, onSelect, onNew }: {
       </div>
       <div className="list-scroll">
         <div ref={newBtn} className="tree-item new" onClick={() => setMenu(m => !m)}>
-          <span className="code">＋ Новый ордер</span>
+          <span className="ci ci-add" /><span className="code">Новый ордер</span>
           <span className="ci ci-chevron-down" />
         </div>
         {menu &&

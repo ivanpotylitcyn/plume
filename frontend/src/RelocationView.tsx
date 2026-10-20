@@ -12,9 +12,10 @@ import { api, type LocationRow, type RelocationForm, type RelocationMove,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { LotGlyph, count, num, sumByUom } from './status'
+import { Anomaly, LotGlyph, count, num, sumByUom } from './status'
 import { EntityLink } from './EntityLink'
 
 export function RelocationView({ relocationId, isNew, openItem, openProject, onChanged, onDeleted }: {
@@ -93,6 +94,9 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ перемещения"
           openProject={openProject}
           patch={b => run(api.updateRelocation(c.id, b))} />}
+      // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
+      extra={<MoneyBlock label="переместили на сумму" value={c.total_cost}
+        title="Стоимость партий, сменивших место: остаток партии в рублях не меняется" />}
       tabs={tabs}
     />
   )
@@ -130,7 +134,7 @@ function MoveRow({ no, m, relocationId, locs, locked, busy, openItem, run }: {
             остаётся `.anomaly`: раньше инлайновый dim перебивал класс, и красным был
             только треугольник, а число рядом с ним — серым. */}
         <span className={negative ? 'anomaly' : ''}>
-          ({num(m.from_live_qty)}){negative && <span className="anomaly" title="источник в минусе">▲</span>}
+          ({num(m.from_live_qty)}){negative && <Anomaly title="источник в минусе" />}
         </span>
       </td>
       <td className="c-fit">

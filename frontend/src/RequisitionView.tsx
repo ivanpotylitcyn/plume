@@ -13,9 +13,10 @@ import { api, type AllAvailableLot, type RequisitionForm,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { LotGlyph, count, num, sumByUom } from './status'
+import { Anomaly, LotGlyph, count, num, sumByUom } from './status'
 import { EntityLink } from './EntityLink'
 
 export function RequisitionView({ requisitionId, isNew, openItem, openProject, onChanged, onDeleted }: {
@@ -92,6 +93,9 @@ export function RequisitionView({ requisitionId, isNew, openItem, openProject, o
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ требования"
           openProject={openProject}
           patch={b => run(api.updateRequisition(c.id, b))} />}
+      // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
+      extra={<MoneyBlock label="перевели на сумму" value={c.total_cost}
+        title="Стоимость, переехавшая в проект-получатель: доли партий-источников" />}
       tabs={tabs}
     />
   )
@@ -122,7 +126,7 @@ function LineRow({ no, ln, locked, busy, openItem, run }: {
       <td className="uom">{ln.uom}</td>
       <td className="num">
         <span className={negative ? 'anomaly' : ''}>{num(ln.source_live_qty)}</span>
-        {negative && <span className="anomaly" title="перетянули — источник в минусе">▲</span>}
+        {negative && <Anomaly title="перетянули — источник в минусе" />}
       </td>
       {!locked && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку требования"

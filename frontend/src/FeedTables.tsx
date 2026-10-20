@@ -124,7 +124,7 @@ export function ReceiptFeed({ rows, empty, open, openCounterparty, side = 'count
         <th className="c-no">{byProject ? '№' : '№ УПД'}</th>
         <th className="c-date">Дата</th>
         <th className="num c-count">Партий</th>
-        {/* Сумма поставки — ФАКТ по партиям (`Σ qty × unit_cost` из УПД). */}
+        {/* Сумма поставки — ФАКТ по партиям (`Σ cost` из УПД, волна 26). */}
         <th className="num c-money">Сумма</th>
       </tr></thead>
       <tbody>{rows.map((r, i) => (

@@ -12,10 +12,11 @@ import { api, type AvailableLot, type CounterpartyRow, type TransferForm,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { Dropdown } from './Dropdown'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { CounterpartyRef, LotGlyph, count, num, sumByUom } from './status'
+import { Anomaly, CounterpartyRef, LotGlyph, count, num, sumByUom } from './status'
 import { CounterpartyPicker } from './Picker'
 import { EntityLink } from './EntityLink'
 
@@ -112,6 +113,9 @@ export function TransferView({ transferId, isNew, openItem, openProject,
                   .then(cp => { api.counterparties().then(setCustomers)
                     run(api.updateTransfer(c.id, { contractor_id: cp.id })) })} />
             </Field>} />}
+      // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
+      extra={<MoneyBlock label="передали на сумму" value={c.total_cost}
+        title="Стоимость отданных партий — их доли по учётному канону (сумма первична)" />}
       tabs={tabs}
     />
   )
@@ -141,7 +145,7 @@ function LineRow({ no, ln, locked, busy, openItem, run }: {
       <td className="uom">{ln.uom}</td>
       <td className="num">
         <span className={negative ? 'anomaly' : ''}>{num(ln.lot_live_qty)}</span>
-        {negative && <span className="anomaly" title="переотдали — источник в минусе">▲</span>}
+        {negative && <Anomaly title="переотдали — источник в минусе" />}
       </td>
       <td className="c-txt">
         <CommitInput value={ln.display_name} disabled={locked || busy}

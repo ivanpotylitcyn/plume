@@ -7,10 +7,11 @@ import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
 import { num, money, count, sumByUom, CounterpartyRef, LotGlyph,
-  MismatchGlyph, rowNumbers } from './status'
+  MismatchGlyph, gapMoney, moneyField, parseMoney, perUnitTitle, rowNumbers } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock, Stat, StatGroup } from './StatPanel'
 import { Field } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 import { useCategoryFilter } from './ColumnFilter'
@@ -66,7 +67,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
-              <th className="num">Цена, ₽</th>
+              <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость</th>
               <th className="c-txt">Part number</th>
               <th className="c-txt">Название из УПД</th><th className="act" />
             </tr>
@@ -92,11 +93,10 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
       // Мета (§13.6): счёт по табам + то, чего в табах нет. Итог поставки — не одно
       // число: физически это «сколько чего приехало», а единицы у строк разные, и
       // складывать штуки с метрами нельзя. Поэтому кол-во сворачивается ПО ЕДИНИЦАМ
-      // («10 344 шт · 50 м»), деньги — отдельным итогом.
+      // («10 344 шт · 50 м»); деньги — в блоке «Деньги» (волна 26).
       meta={<>
         {count(c.lots.length, 'позиция', 'позиции', 'позиций')}
         {sumByUom(c.lots).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
-        {' · '}{money(c.total_cost)}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
       </>}
       unlocked={unlocked} onToggleLock={toggle}
@@ -150,12 +150,24 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
               {mismatch}
             </Field>
           </>} />}
+      // Блок «Деньги» (волна 26): ★ сумма по УПД; поставка из заказа сверяется с его счётом
+      // (тем же правилом доли, что родило партии) — расхождение видно сразу.
+      extra={<MoneyBlock label="поставка" value={c.total_cost}
+        title="Сумма стоимостей строк УПД (факт)">
+        {c.by_order !== null && <StatGroup>
+          <Stat label="по заказу" value={money(c.by_order)}
+            title="Что эти позиции стоят по счёту заказа (доля цены строки)" />
+          <Stat label="расхождение" value={gapMoney(c.order_gap ?? 0)}
+            tone={(c.order_gap ?? 0) !== 0 ? 'bad' : 'ok'}
+            title="УПД против счёта по тем же позициям; не ноль — проверьте документы" />
+        </StatGroup>}
+      </MoneyBlock>}
       tabs={tabs}
     />
   )
 }
 
-// Реальная строка УПД (лот): автосейв кол-ва/цены/названия, удаление до замка.
+// Реальная строка УПД (лот): автосейв кол-ва/стоимости/названия, удаление до замка.
 // `draft` — поставка ещё не сверена (Ф15): партия на складе не лежит, живого остатка
 // у неё нет вовсе. Показывать «остаток 0» было бы враньём про израсходованную партию,
 // поэтому в черновике остаток не показываем, а глиф гасим в нейтральный.
@@ -183,10 +195,14 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
           validate={v => Number(v) > 0} />
       </td>
       <td className="uom">{lot.uom}</td>
-      <td className="num">
-        <CommitInput value={String(lot.unit_cost)} disabled={locked || busy}
-          onCommit={v => run(api.updateReceiptLot(lot.id, { unit_cost: Number(v) }))}
-          validate={v => Number(v) >= 0} />
+      {/* Волна 26: стоимость строки целиком (как в документе), цена штуки — под курсором.
+          Пустой ввод — ноль: у партии стоимость есть всегда. В просмотре — деньгами, как
+          цена строки заказа (поле с «20054,26» читается хуже «20 054,26 ₽»). */}
+      <td className="num c-money" title={perUnitTitle(lot.cost, lot.qty)}>
+        {locked ? money(lot.cost)
+          : <CommitInput value={moneyField(lot.cost)} disabled={busy} numeric
+              onCommit={v => run(api.updateReceiptLot(lot.id, { cost: parseMoney(v) ?? 0 }))}
+              validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}
       </td>
       <td className="c-txt">
         <CommitInput value={lot.part_number} disabled={locked || busy}
@@ -224,7 +240,7 @@ function GhostRow({ receiptId, items, busy, run }: {
     if (!itemId || !(q > 0)) return
     run(api.addReceiptLot(receiptId, {
       item_id: itemId, qty: q,
-      unit_cost: cost === '' ? undefined : Number(cost),
+      cost: parseMoney(cost) ?? undefined,
       part_number: pn || undefined,
       lot_name: name || undefined,
     }))
@@ -251,8 +267,8 @@ function GhostRow({ receiptId, items, busy, run }: {
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td className="uom">{picked?.uom ?? ''}</td>
-      <td className="num">
-        <input className="qty-in" value={cost} disabled={busy} placeholder="0"
+      <td className="num c-money">
+        <input className="qty-in" value={cost} disabled={busy} placeholder="0,00"
           onChange={e => setCost(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>

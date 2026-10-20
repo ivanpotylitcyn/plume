@@ -665,6 +665,12 @@ class Purchase(models.Model):
             models.CheckConstraint(
                 condition=Q(locked=False) | Q(contractor__isnull=False),
                 name='purchase_locked_has_contractor'),
+            # Волна 26 (решение Ивана 2026-10-19): заказ — это счёт или договор, а у них
+            # в оффлайне дата есть всегда. «Последняя цена по счёту» изделия ищется по
+            # дате документа без фолбэков — поэтому дата обязательна к фиксации.
+            models.CheckConstraint(
+                condition=Q(locked=False) | Q(date__isnull=False),
+                name='purchase_locked_has_date'),
         ]
 
     @property
@@ -691,8 +697,8 @@ class PurchaseLine(models.Model):
     # делением (при 10 000 резисторов цена штуки «гуляет» в долях копейки, а сумма строки
     # и счёта сходится до копейки). Пустая в черновике, обязательна к фиксации заказа
     # (обязательства без цены не бывает; 0 законен — образцы). Держит прикладной гейт
-    # `engine.lock_purchase`: CHECK строки не видит замок заказа. Цена штуки копией уходит
-    # в `Lot.unit_cost` при рождении поставки из заказа.
+    # `engine.lock_purchase`: CHECK строки не видит замок заказа. При рождении поставки из
+    # заказа партия получает свою ДОЛЮ этой суммы (`Lot.cost`, волна 26) — не цену штуки.
     price = money(verbose_name='цена строки (по счёту)', null=True, blank=True)
 
     class Meta:
@@ -825,7 +831,13 @@ class Lot(models.Model):
     predecessor = models.ForeignKey('self', on_delete=models.SET_NULL, null=True,
                                     blank=True, related_name='successors')
     qty = qty(verbose_name='рождённое кол-во')
-    unit_cost = money(verbose_name='цена / себестоимость', default=0)
+    # Волна 26, учётный канон (сверен с SAP/Odoo/1С): первична СУММА, цена — производная.
+    # Партия хранит стоимость целиком (сумма строки УПД / себестоимость сборки), цена
+    # штуки = cost / qty только вычисляется. Прежний `unit_cost` (цена штуки до копейки)
+    # округлял: 10 000 резисторов за 3 519,78 ₽ становились партией на 3 500,00 ₽.
+    # Расход делит стоимость накопительным округлением (`engine.lot_line_values`):
+    # исчерпанная партия списывается ровно в ноль — «последний забирает остаток».
+    cost = money(verbose_name='стоимость партии', default=0)
     # Два идентификатора партии (Волна 13, Ф2f): человеческий и машинный.
     # `lot_name` — человеческий (имена из УПД + заводские №); `part_number` —
     # строгий машинный (MPN с datasheet / децимальный номер; для станка
@@ -857,6 +869,11 @@ class Lot(models.Model):
                 'Lot.project должен совпадать с project прихода-origin (УПД ↔ проект).'
             )
 
+    @property
+    def unit_cost(self):
+        """Цена штуки — производная (`cost / qty`), без округления; `None` без кол-ва."""
+        return self.cost / self.qty if self.qty else None
+
     def __str__(self):
         return f'Lot#{self.pk} {self.item.code} ({self.project.code})'
 
@@ -886,6 +903,9 @@ class StockMovement(models.Model):
     location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name='+')
     type = models.CharField('тип', max_length=16, choices=Type.choices)
     qty = qty(verbose_name='кол-во (со знаком)')
+    # Волна 26: стоимость движения (со знаком, как `qty`) — часть той же проекции, её
+    # пишет только `engine.rebuild_movements`. Σ по партии = стоимость живого остатка.
+    cost = money(verbose_name='стоимость (со знаком)', default=0)
     source_type = models.CharField('тип документа-источника', max_length=32)
     source_id = models.IntegerField('id документа-источника')
     created_at = models.DateTimeField('штамп вставки', auto_now_add=True)

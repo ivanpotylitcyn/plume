@@ -12,10 +12,11 @@ import { api, type AvailableLot, type WriteoffForm,
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { Dropdown } from './Dropdown'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { LotGlyph, count, num, sumByUom } from './status'
+import { Anomaly, LotGlyph, count, num, sumByUom } from './status'
 import { EntityLink } from './EntityLink'
 
 export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChanged, onDeleted }: {
@@ -93,6 +94,9 @@ export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChang
           <TextField label="Причина" value={c.reason} locked={locked} busy={busy}
             onCommit={v => run(api.updateWriteoff(c.id, { reason: v }))} />
         </OrderFields>}
+      // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
+      extra={<MoneyBlock label="списали на сумму" value={c.total_cost}
+        title="Потери в рублях: стоимость списанных партий — их доли по учётному канону" />}
       tabs={tabs}
     />
   )
@@ -122,7 +126,7 @@ function LineRow({ no, ln, locked, busy, openItem, run }: {
       <td className="uom">{ln.uom}</td>
       <td className="num">
         <span className={negative ? 'anomaly' : ''}>{num(ln.lot_live_qty)}</span>
-        {negative && <span className="anomaly" title="пересписали — источник в минусе">▲</span>}
+        {negative && <Anomaly title="пересписали — источник в минусе" />}
       </td>
       {!locked && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку списания"

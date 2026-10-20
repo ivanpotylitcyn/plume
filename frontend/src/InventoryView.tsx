@@ -11,10 +11,11 @@
 import { useEffect, useState } from 'react'
 import { api, type ItemRow, type InventoryForm, type InventoryFormLot,
   type WrittenOffLot } from './api'
-import { LotGlyph, count, money, num, sumByUom } from './status'
+import { LotGlyph, count, money, moneyField, num, parseMoney, perUnitTitle, sumByUom } from './status'
 import { CommitInput } from './CommitInput'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
@@ -48,7 +49,7 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
               <th className="rn">№</th><th className="gl" /><th className="c-key">Изделие</th>
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
-              <th className="num">Цена, ₽</th>
+              <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость</th>
               <th className="c-txt">Part number</th><th className="c-txt">Название</th>
               <th className="c-fit">Провенанс</th><th className="act" />
             </tr>
@@ -79,7 +80,6 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
       meta={<>
         {count(c.lots.length, 'партия', 'партии', 'партий')}
         {sumByUom(c.lots).map(([uom, qty]) => <span key={uom}> · {num(qty)} {uom}</span>)}
-        {' · '}{money(c.total_cost)}
         {' · '}{count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
       </>}
       unlocked={unlocked} onToggleLock={toggle}
@@ -95,6 +95,9 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ акта"
           openProject={openProject}
           patch={b => run(api.updateInventory(c.id, b))} />}
+      // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
+      extra={<MoneyBlock label="нашли на сумму" value={c.total_cost}
+        title="Стоимость найденных партий — введённая или доля списанного предшественника" />}
       tabs={tabs}
     />
   )
@@ -126,10 +129,14 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
           validate={v => Number(v) > 0} />
       </td>
       <td className="uom">{lot.uom}</td>
-      <td className="num">
-        <CommitInput value={String(lot.unit_cost)} disabled={locked || busy}
-          onCommit={v => run(api.updateInventoryLot(lot.id, { unit_cost: Number(v) }))}
-          validate={v => Number(v) >= 0} />
+      {/* Волна 26: стоимость строки целиком (как в документе), цена штуки — под курсором.
+          Пустой ввод — ноль: у партии стоимость есть всегда. В просмотре — деньгами, как
+          цена строки заказа (поле с «20054,26» читается хуже «20 054,26 ₽»). */}
+      <td className="num c-money" title={perUnitTitle(lot.cost, lot.qty)}>
+        {locked ? money(lot.cost)
+          : <CommitInput value={moneyField(lot.cost)} disabled={busy} numeric
+              onCommit={v => run(api.updateInventoryLot(lot.id, { cost: parseMoney(v) ?? 0 }))}
+              validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}
       </td>
       <td className="c-txt">
         <CommitInput value={lot.part_number} disabled={locked || busy}
@@ -142,7 +149,7 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
       <td className="c-fit">
         {lot.predecessor_id
           ? <span className="hint" title="ре-материализовано из списанного лота">
-              ← {lot.predecessor_label}</span>
+              <span className="ci sg ci-arrow-left" /> {lot.predecessor_label}</span>
           : 'излишек'}
       </td>
       <td className="act">
@@ -173,7 +180,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
     if (!itemId || !(q > 0)) return
     run(api.addInventoryLot(inventoryId, {
       item_id: itemId, qty: q,
-      unit_cost: cost === '' ? undefined : Number(cost),
+      cost: parseMoney(cost) ?? undefined,
       part_number: pn || undefined,
       lot_name: name || undefined,
     }))
@@ -200,8 +207,8 @@ function GhostRow({ inventoryId, items, busy, run }: {
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td className="uom">{picked?.uom ?? ''}</td>
-      <td className="num">
-        <input className="qty-in" value={cost} disabled={busy} placeholder="0"
+      <td className="num c-money">
+        <input className="qty-in" value={cost} disabled={busy} placeholder="0,00"
           onChange={e => setCost(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>

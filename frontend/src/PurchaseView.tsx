@@ -22,7 +22,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CounterpartyRef, ItemGlyph, StatusGlyph,
-  count, money, num, rowNumbers } from './status'
+  count, money, moneyField, num, parseMoney, rowNumbers } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
@@ -267,37 +267,27 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
                     run(api.updatePurchase(c.id, { contractor_id: cp.id })) })} />
             </Field>
           </>} />}
-      // Деньги заказа (волна 24, решение Ивана): заказ — онлайн-зеркало оффлайн-счёта,
-      // поэтому в панели ОДНА сумма — сухой факт по счёту, прижатая вправо, над ценами
-      // строк. «Потребность» и «Переплата» сняты: это язык оценки, он живёт в закупке.
+      // Блок «Деньги» заказа (волна 24 → 26, решения Ивана): заказ — онлайн-зеркало
+      // оффлайн-счёта, ★ сумма по счёту; рядом — ход поставки в тех же деньгах: получено +
+      // ждём = счёт до копейки. Оценки нет — это язык закупки.
       extra={<StatPanel>
-        <StatGroup aside>
-          <Stat label="Заказ" value={money(c.estimate)}
-            title="Сумма цен строк по счёту — сходится со счётом до копейки" />
+        <Stat main label="заказ" value={money(c.estimate)}
+          title="Сумма цен строк по счёту — сходится со счётом до копейки" />
+        <StatGroup>
+          <Stat label="получено" value={money(c.received_money)} dim={c.received_money === 0}
+            title="Поступившее по зафиксированным УПД × цена строки по счёту" />
+          <Stat label="ждём от поставщика" value={money(c.awaiting_money)}
+            dim={c.awaiting_money === 0}
+            title="Оплаченное или обещанное по счёту, но ещё не поставленное" />
         </StatGroup>
         {c.unestimated.length > 0 &&
           <StatWarn title={'без цены: ' + c.unestimated.join(', ')}>
-            ▲ {c.unestimated.length} поз. без цены — сумма неполна
+            {c.unestimated.length} поз. без цены — сумма неполна
           </StatWarn>}
       </StatPanel>}
       tabs={tabs}
     />
   )
-}
-
-// Цена строки в поле ввода: ровно два знака после запятой, без разрядов («35197,80») —
-// так поле читается тем же числом, что и просмотр, а ввод остаётся простым числом.
-function priceField(x: number): string {
-  return Number(x).toFixed(2).replace('.', ',')
-}
-
-// Разбор ввода цены: запятая или точка; пробелы разрядов и знак рубля из скопированного
-// счёта допустимы; до копейки. Пусто — `null` (цена стирается); не число — `NaN`, его
-// отобьёт `validate`.
-function parsePrice(v: string): number | null {
-  const s = v.replace(/\s|₽|руб\.?/gi, '').replace(',', '.')
-  if (s === '') return null
-  return Math.round(Number(s) * 100) / 100
 }
 
 // Строка заказа: заказано (автосейв, пока расфиксировано) + поступило/остаток + закрытость.
@@ -348,10 +338,10 @@ function LineRow({ no, ln, editable, busy, openItem, run }: {
           /* Всегда два знака после запятой — и в поле, и в просмотре (решение Ивана):
              числа с разным числом знаков глазами не сравнить. Ввод — с точкой или
              запятой, лишнее округляется до копейки. */
-          ? <CommitInput value={ln.price === null ? '' : priceField(ln.price)}
+          ? <CommitInput value={ln.price === null ? '' : moneyField(ln.price)}
               disabled={busy} numeric
-              onCommit={v => run(api.updatePurchaseLine(ln.id, { price: parsePrice(v) }))}
-              validate={v => v.trim() === '' || (parsePrice(v) ?? -1) >= 0} />
+              onCommit={v => run(api.updatePurchaseLine(ln.id, { price: parseMoney(v) }))}
+              validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />
           : ln.price === null ? <span className="sub">—</span> : money(ln.price)}
       </td>
       {editable && <td className="act">

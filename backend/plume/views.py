@@ -576,7 +576,7 @@ def _item_detail_payload(item):
         {'id': lot.id, 'project_code': lot.project.code, 'origin': lot.origin_kind,
          'origin_locked': lot.origin.locked,
          'qty_born': lot.qty, 'live_qty': engine.lot_live_qty(lot),
-         'unit_cost': lot.unit_cost, 'part_number': lot.part_number,
+         'cost': lot.cost, 'unit_cost': lot.unit_cost, 'part_number': lot.part_number,
          'lot_name': lot.lot_name}
         for lot in item.lots.select_related('project', 'origin')
     ]
@@ -588,6 +588,7 @@ def _item_detail_payload(item):
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
         'movements': engine.item_movements(item),
+        'money': engine.item_money(item),     # волна 26: блок «Деньги»
     }
 
 
@@ -946,7 +947,7 @@ def receipt_lots(request, pk):
         item = models.Item.objects.get(pk=d['item_id'])
         engine.add_receipt_lot(
             r, item, _dec(d.get('qty')),
-            unit_cost=_dec(d.get('unit_cost')) or engine.ZERO,
+            cost=_dec(d.get('cost')) or engine.ZERO,
             lot_name=d.get('lot_name') or '',
             part_number=d.get('part_number') or '')
     except (KeyError, models.Item.DoesNotExist) as e:
@@ -972,7 +973,7 @@ def receipt_lot_detail(request, pk):
             engine.update_receipt_lot(
                 lot,
                 qty=_dec(d['qty']) if 'qty' in d else None,
-                unit_cost=_dec(d['unit_cost']) if 'unit_cost' in d else None,
+                cost=_dec(d['cost']) if 'cost' in d else None,
                 lot_name=d['lot_name'] if 'lot_name' in d else None,
                 part_number=d['part_number'] if 'part_number' in d else None)
     except ValidationError as e:
@@ -1689,19 +1690,19 @@ def inventory_lots(request, pk):
         pred = None
         if d.get('predecessor_id'):
             pred = models.Lot.objects.select_related('item').get(pk=d['predecessor_id'])
+        # Волна 26: стоимость не задана → движок даёт потомку списанного долю стоимости
+        # предшественника (без предшественника — ноль).
+        cost = _dec(d.get('cost'))
         if pred is not None:
             item = pred.item
-            unit_cost = _dec(d.get('unit_cost'))
-            unit_cost = pred.unit_cost if unit_cost is None else unit_cost
             lot_name = d['lot_name'] if 'lot_name' in d else pred.lot_name
             part_number = d['part_number'] if 'part_number' in d else pred.part_number
         else:
             item = models.Item.objects.get(pk=d['item_id'])
-            unit_cost = _dec(d.get('unit_cost')) or engine.ZERO
             lot_name = d.get('lot_name') or ''
             part_number = d.get('part_number') or ''
         engine.add_inventory_lot(
-            i, item, _dec(d.get('qty')), unit_cost=unit_cost,
+            i, item, _dec(d.get('qty')), cost=cost,
             lot_name=lot_name, part_number=part_number,
             predecessor=pred)
     except (KeyError, models.Item.DoesNotExist, models.Lot.DoesNotExist) as e:
@@ -1727,7 +1728,7 @@ def inventory_lot_detail(request, pk):
             engine.update_inventory_lot(
                 lot,
                 qty=_dec(d['qty']) if 'qty' in d else None,
-                unit_cost=_dec(d['unit_cost']) if 'unit_cost' in d else None,
+                cost=_dec(d['cost']) if 'cost' in d else None,
                 lot_name=d['lot_name'] if 'lot_name' in d else None,
                 part_number=d['part_number'] if 'part_number' in d else None)
     except ValidationError as e:
@@ -2098,6 +2099,18 @@ def item_recalc_cost(request, pk):
         return _bad(e.messages[0] if e.messages else e)
     item.refresh_from_db()
     return Response({**_item_detail_payload(item), 'rollup': rollup})
+
+
+@api_view(['POST'])
+def item_adopt_price(request, pk):
+    """«Взять в оценку» (волна 26): оценка покупного ← последняя цена по счёту."""
+    item = get_object_or_404(models.Item, pk=pk)
+    try:
+        engine.adopt_last_price(item)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    item.refresh_from_db()
+    return Response(_item_detail_payload(item))
 
 
 @api_view(['GET'])

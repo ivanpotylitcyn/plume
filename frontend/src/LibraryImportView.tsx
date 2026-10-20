@@ -272,10 +272,10 @@ function RowDetail({ row }: { row: LibraryDiffRow }) {
         {row.incoming.temperature ? ` · ${row.incoming.temperature}` : ''}</span></>
   if (row.status === 'changed' && row.changes)
     return <>{Object.entries(row.changes).map(([f, ch]) => (
-      <div key={f}>{FIELD_RU[f] || f}: <s>{ch!.old || '—'}</s> → <b>{ch!.new || '—'}</b></div>
+      <div key={f}>{FIELD_RU[f] || f}: <s>{ch!.old || '—'}</s> <span className="ci sg ci-arrow-right" /> <b>{ch!.new || '—'}</b></div>
     ))}</>
   if (row.status === 'mark')
-    return <>совпадает с библиотекой → <b>пометим библиотечным</b></>
+    return <>совпадает с библиотекой <span className="ci sg ci-arrow-right" /> <b>пометим библиотечным</b></>
   if (row.current)
     return <>{row.current.description}
       <span className="kind-chip"> · {row.current.category}

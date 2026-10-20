@@ -11,13 +11,14 @@ import { useEffect, useState } from 'react'
 import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
 import { OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
+import { MoneyBlock } from './StatPanel'
 import { Field, TextField } from './FormField'
 import { CommitInput } from './CommitInput'
 import { ItemPicker } from './Picker'
 import { Dropdown } from './Dropdown'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { useCategoryFilter } from './ColumnFilter'
-import { Glyph, ItemGlyph, Segment, count, num, rowNumbers, statusTone } from './status'
+import { CoverageGlyph, ItemGlyph, Segment, count, money, num, rowNumbers, statusTone } from './status'
 import { EntityLink } from './EntityLink'
 
 export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
@@ -53,7 +54,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
           <div className="born">
             Рождён лот-прибор:{' '}
             {c.born_lots.map(l => (
-              <span key={l.id} className="seg">#{l.id} ×{num(l.qty)} · {num(l.unit_cost)} ₽/шт</span>
+              <span key={l.id} className="seg">#{l.id} ×{num(l.qty)} · {money(l.cost)}</span>
             ))}
           </div>
         )}
@@ -135,6 +136,9 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
             onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
             validate={v => Number(v) > 0} />
         </OrderFields>}
+      // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
+      extra={<MoneyBlock label="израсходовано на сумму" value={c.total_cost}
+        title="Стоимость впаянных долей партий — она же себестоимость рождённого прибора" />}
       tabs={tabs}
     />
   )
@@ -230,7 +234,7 @@ function GhostRow({ row, ghost, form, busy, run }: {
   return (
     <tr className={`row ghost s-${ghost.status}`}>
       <td className="rn" />
-      <td className="gl"><Glyph status={ghost.status} /></td>
+      <td className="gl"><CoverageGlyph status={ghost.status} /></td>
       {/* Выбор лота — в колонке кода, описание пустое (волна 25, Ф3): под `colSpan`
           спрятанная колонка описания сдвигала бы строку. Интерфейс комплектации ждёт
           переосмысления — здесь минимум, без своей геометрии. */}

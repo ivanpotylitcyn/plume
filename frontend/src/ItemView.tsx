@@ -4,15 +4,16 @@
 // Движения · Файлы. «Движения» пришли на смену узкому «Отгружено»: вся лента
 // ордеров, коснувшихся изделия (рождение партий + расходы), `engine.item_movements`.
 import { useEffect, useMemo, useState } from 'react'
-import { api, type ItemDetail, type ItemRow, type Category, type RollupResult } from './api'
-import { num, money, count, ItemGlyph, LotGlyph, StatusGlyph, rowNumbers } from './status'
+import { api, type ItemDetail, type ItemMoney, type ItemRow, type Category, type RollupResult } from './api'
+import { num, money, count, ItemGlyph, LotGlyph, StatusGlyph, rowNumbers, unitMoney } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { ItemPicker } from './Picker'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { CommitInput } from './CommitInput'
-import { Field, TextField } from './FormField'
+import { Field, TextField, viewDate } from './FormField'
+import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { Dropdown } from './Dropdown'
 import { useCategoryFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
@@ -57,6 +58,10 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
+
+  // «Взять в оценку» (волна 26): оценка покупного ← последняя цена по счёту, одним
+  // кликом. Команда видна, только когда блок «Деньги» поднял расхождение.
+  const adopt = () => run(api.adoptPrice(itemId))
 
   // Удаление изделия (WAVE14 Ф2) под замком: confirm + friendly-guard бэка → сброс выбора.
   const del = async () => {
@@ -288,6 +293,9 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
         ...(d.native ? [{ onClick: recalc, label: 'Переоценить', icon: 'ci-symbol-operator',
           title: 'Пересчитать стоимость: оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев',
           disabled: busy }] : []),
+        ...(!d.native && d.money.last != null && d.money.estimate_off
+          ? [{ onClick: adopt, label: 'Взять в оценку', icon: 'ci-arrow-swap',
+            title: 'Оценка ← последняя цена по счёту (до копейки)', disabled: busy }] : []),
         { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
           title: 'Загрузить файл (datasheet, КД) — появится в табе «Файлы»',
           disabled: att.busy },
@@ -326,8 +334,66 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
           onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}
           validate={v => v.trim() === '' || Number(v) >= 0} />
       </>}
+      extra={<ItemMoneyBlock m={d.money} />}
       tabs={tabs}
     />
+  )
+}
+
+// Блок «Деньги» изделия (волна 26). Главное — факт, где он есть: у покупного — последняя
+// цена по счёту; у производимого (своего ещё не паяем) — живой пересчёт оценки по составу.
+// Все числа и сигналы считает движок (`engine.item_money`), здесь только знак.
+function ItemMoneyBlock({ m }: { m: ItemMoney }) {
+  const stock = <Stat label="на складах" value={money(m.stock_value)} dim={m.stock_value === 0}
+    title="Стоимость живых остатков всех партий изделия во всех проектах" />
+  if (m.native) {
+    const incomplete = m.incomplete ?? []
+    return (
+      <StatPanel>
+        <Stat main label="оценка по составу" value={money(m.rollup ?? 0)}
+          note="живой пересчёт" title="Σ(компонент × кол-во) по BOM до листьев — прямо сейчас" />
+        <StatGroup>
+          {(m.top ?? []).map(t => (
+            <Stat key={t.id} label={t.code} value={money(t.cost)}
+              title={`вклад компонента в оценку: ${num(t.qty)} × оценка`} />))}
+          {stock}
+        </StatGroup>
+        {m.estimate_stale &&
+          <StatWarn title="живой пересчёт разошёлся с сохранённой оценкой — нажмите «Переоценить»">
+            оценка устарела: сохранена {m.estimate != null ? money(m.estimate) : '—'} — переоцените
+          </StatWarn>}
+        {incomplete.length > 0 &&
+          <StatWarn title={'без цены: ' + incomplete.join(', ')}>
+            {incomplete.length} поз. без цены — оценка неполна
+          </StatWarn>}
+      </StatPanel>
+    )
+  }
+  const doc = m.last_doc
+  const drift = m.estimate_drift ?? null
+  return (
+    <StatPanel>
+      <Stat main label="последняя цена" value={m.last != null ? unitMoney(m.last) : '—'}
+        dim={m.last == null}
+        note={doc ? `${doc.date ? viewDate(doc.date) : ''} · ${doc.contractor_code || doc.contractor_name}`
+          : 'счетов ещё не было'}
+        title={doc ? `за штуку · ${doc.kind === 'purchase' ? 'заказ' : 'поставка без заказа'} ${doc.code ?? ''}`
+          : undefined} />
+      <StatGroup>
+        <Stat label="средняя" value={m.avg != null ? unitMoney(m.avg) : '—'} dim={m.avg == null}
+          title={`взвешенная по количеству: все деньги ÷ все штуки (${m.facts ?? 0} док., образцы с нулевой ценой не в счёт)`} />
+        <Stat label="максимальная" value={m.max != null ? unitMoney(m.max) : '—'}
+          dim={m.max == null} title="потолок цены за штуку — риск для плана" />
+        {stock}
+      </StatGroup>
+      {m.last != null && m.estimate_off &&
+        <StatWarn title="оценка — цена, по которой считаются планы всех проектов">
+          {m.estimate == null || drift === null
+            ? 'оценки нет — возьмите последнюю цену в оценку'
+            : `оценка ${drift < 0 ? 'ниже' : 'выше'} последней цены на ${Math.abs(Math.round(drift * 100))}%`
+              + ` — планы проектов ${drift < 0 ? 'занижены' : 'завышены'}`}
+        </StatWarn>}
+    </StatPanel>
   )
 }
 

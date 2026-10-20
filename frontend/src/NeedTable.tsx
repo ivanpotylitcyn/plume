@@ -16,7 +16,7 @@
 // «Скомплектовано» распирало колонку под слово, которое ни одно число не заполняет.
 import { useState, type ReactNode } from 'react'
 import type { DeficitComponent, Status } from './api'
-import { Balance, balanceTitle, money, num, orderTitle, ItemGlyph } from './status'
+import { Anomaly, Balance, balanceTitle, money, num, orderTitle, ItemGlyph } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
 
@@ -321,7 +321,7 @@ export function BalanceCells({ code, need, kitted, inStock, onOrder, planned = 0
         title="впаяно в изделия проекта (зафиксированные комплектации)" />
       <span className="pnum" title="остаток лотов проекта на складах">
         {num(inStock)}
-        {anomaly && <span className="anomaly" title="есть лот с отрицательным остатком">▲</span>}
+        {anomaly && <Anomaly title="есть лот с отрицательным остатком" />}
         <span className={`ci sg ci-layers sg-${inStock ? 'ok' : 'none'}`} />
       </span>
       <Member glyph="package" tone={planned > 0 || wip > 0 ? 'wip' : 'ok'} value={onOrder}

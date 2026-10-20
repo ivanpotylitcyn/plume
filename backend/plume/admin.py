@@ -112,7 +112,7 @@ class BornLotsInline(_ReadOnlyInline):
 
     model = models.Lot
     fk_name = 'origin'
-    fields = ('item', 'project', 'qty', 'unit_cost', 'part_number', 'lot_name')
+    fields = ('item', 'project', 'qty', 'cost', 'part_number', 'lot_name')
     verbose_name_plural = 'рождённые партии (правка — во фронте, через движок)'
 
 
@@ -267,7 +267,7 @@ class StockDocumentAdmin(admin.ModelAdmin):
 # --- партии / движения: витрины движка ------------------------------------ #
 @admin.register(models.Lot)
 class LotAdmin(_ReadOnlyAdmin):
-    list_display = ('id', 'item', 'project', 'origin_kind', 'unit_cost',
+    list_display = ('id', 'item', 'project', 'origin_kind', 'cost',
                     'part_number', 'lot_name')
     list_filter = ('project',)
     search_fields = ('item__code', 'part_number', 'lot_name')
