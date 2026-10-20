@@ -120,7 +120,7 @@ export function PurchaseFan({ st, openPurchase, openCounterparty }: {
         {p.fan.map((f, i) => (
           <tr key={f.purchase_id} className="row">
             <td className="rn">{i + 1}</td>
-            <td className="gl"><PurchaseGlyph locked={f.locked} /></td>
+            <td className="gl"><PurchaseGlyph locked={f.locked} files={f.files} /></td>
             <td className="c-key">
               <EntityLink kind="purchase" id={f.purchase_id} open={openPurchase}>
                 {f.purchase_code}</EntityLink></td>
@@ -221,7 +221,7 @@ function OrderCell({ c, uom, editable, openPurchase, openCounterparty }: {
       <span className="rn" />
       <span className="tree-cell alloc-sub">
         <span className="tree-lead" />
-        <PurchaseGlyph locked={c.locked} />
+        <PurchaseGlyph locked={c.locked} files={c.files} />
         <EntityLink kind="purchase" id={c.purchase_id} open={openPurchase}>
           {c.purchase_code}</EntityLink>
       </span>

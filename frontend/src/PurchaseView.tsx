@@ -60,7 +60,9 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
     api.purchase(purchaseId).then(setC).catch(e => setErr(String(e)))
   }, [purchaseId])
   useEffect(() => { reloadSuppliers() }, [])
-  const att = useAttachments('purchase', purchaseId)   // владелец заведён Ф12b (§13.8)
+  // Владелец заведён Ф12b (§13.8). Файлы красят печать заказа в списке (`PurchaseGlyph`),
+  // поэтому мутация вложений перечитывает и список режима.
+  const att = useAttachments('purchase', purchaseId, onChanged)
   // Два фильтра на одной таблице и порядок между ними: сперва остаток («что ещё не
   // приехало»), потом класс. Категории собираются уже по отобранному — меню не обещает
   // строк, которых первый фильтр не покажет.
@@ -200,7 +202,12 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               ))}
             </tbody>
           </table> },
+    // Пустой таб «Файлы» зовёт оранжевым (2026-10-20) — только у ЗАФИКСИРОВАННОГО заказа,
+    // как и печать в списке (`PurchaseGlyph`): обязательство есть, а подтверждения из
+    // оффлайна (счёт, договор с ценами) нет. У черновика звать рано — таб обычный.
+    // Пока список грузится (`null`), не зовём.
     { key: 'files', label: 'Файлы', icon: 'files',
+      attention: c.locked && att.rows?.length === 0,
       content: <AttachmentList att={att} locked={locked} /> },
   ]
 

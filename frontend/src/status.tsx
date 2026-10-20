@@ -17,14 +17,24 @@ export function StatusGlyph({ locked, tone = 'fix', title }: {
     title={title ?? (locked ? 'зафиксировано' : 'расфиксировано')} />
 }
 
-// Глиф ЗАКАЗА (2026-10-20, решение Ивана): `verified` зелёный — зафиксирован, обязательство
+// Глиф ЗАКАЗА (2026-10-20, решение Ивана): `verified` — зафиксирован, обязательство
 // возникло (оплачен или подписан договор); `unverified` оранжевый — черновик. Та же ось
 // `locked`, что у всех, — модель не трогали; меняется только знак: у заказа фиксация значит
 // «обязательство подтверждено», и печать читается точнее замка. Ставится везде, где на
 // экране стоит заказ (список режима, ленты, веер и ячейки закупки, пикер).
-export function PurchaseGlyph({ locked, title }: { locked: boolean; title?: string }) {
-  return <span className={`ci sg ci-${locked ? 'verified' : 'unverified'} sg-${locked ? 'ok' : 'wip'}`}
-    title={title ?? (locked ? 'зафиксирован — обязательство' : 'черновик — обязательства нет')} />
+//
+// Цвет печати — не одна фиксация (2026-10-20, правка Ивана): зелёной она становится,
+// только когда к заказу приложен хоть один файл — подтверждение из оффлайна (счёт,
+// договор с ценами). Зафиксирован, а файлов нет — та же печать, но оранжевая: форма
+// говорит «обязательство», цвет — «подтверждения ещё нет» (§7a, форма ⟂ цвет).
+export function PurchaseGlyph({ locked, files, title }: {
+  locked: boolean; files: number; title?: string
+}) {
+  const tone = locked && files > 0 ? 'ok' : 'wip'
+  return <span className={`ci sg ci-${locked ? 'verified' : 'unverified'} sg-${tone}`}
+    title={title ?? (!locked ? 'черновик — обязательства нет'
+      : files > 0 ? 'зафиксирован — обязательство'
+      : 'зафиксирован, но без файлов — приложите подтверждение (счёт, договор)')} />
 }
 
 // Глиф расхождения контрагентов (волна 19, Ф17). Контрагент есть у всех трёх уровней
@@ -227,6 +237,16 @@ export function rowNumbers<T>(rows: readonly T[] | undefined): Map<T, number> {
   const m = new Map<T, number>()
   rows?.forEach((r, i) => m.set(r, i + 1))
   return m
+}
+
+// Порядок списков-документов (2026-10-20, решение Ивана): молодые сверху, старые
+// естественно уходят вниз и не тянут внимание. Без даты — наверх: дата пуста только у
+// черновика, а черновик и есть самое живое. Равные даты — по id, новее выше. Одно правило
+// на «Закупки», «Заказы» и «Ордера».
+export function newestFirst(a: { date: string | null; id: number },
+                            b: { date: string | null; id: number }): number {
+  if ((a.date === null) !== (b.date === null)) return a.date === null ? -1 : 1
+  return (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id
 }
 
 export function num(x: number): string {

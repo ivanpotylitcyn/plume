@@ -127,7 +127,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Sum
+from django.db.models import Count, Exists, F, OuterRef, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -4728,7 +4728,8 @@ def procurement_allocation(procurement):
     `cost` есть на обоих уровнях — `qty × estimated_cost` того документа, чья строка.
     """
     allocations = _plan_allocations(procurement)
-    orders = list(procurement.purchases.select_related('contractor').order_by('id'))
+    orders = list(procurement.purchases.select_related('contractor')
+                  .annotate(file_count=Count('attachments')).order_by('id'))
     project = procurement.project
     need_by_item, _incomplete = project_leaf_demand(project, BomIndex())
     need_by_item = {leaf.id: qty for leaf, qty in need_by_item.items()}
@@ -4746,7 +4747,8 @@ def procurement_allocation(procurement):
             allocated += qty
             cells.append({
                 'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-                'locked': pu.locked, **_contractor_view(pu.contractor),
+                'locked': pu.locked, 'files': pu.file_count,
+                **_contractor_view(pu.contractor),
                 'qty': qty, 'price': price,
                 # стоимость в заказе — его цена строки по счёту, пока её нет — оценка
                 'cost': price if price is not None else line_cost(line.item, qty),
@@ -4772,7 +4774,8 @@ def procurement_allocation(procurement):
     mark_costs(rows)                   # `cost_status` строк плана: overpaid > costly
     fan = [{
         'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-        'locked': pu.locked, **_contractor_view(pu.contractor),
+        'locked': pu.locked, 'files': pu.file_count,
+        **_contractor_view(pu.contractor),
         'lines': pu.lines.count(),
         'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,
     } for pu in orders]
@@ -4944,7 +4947,8 @@ def _purchase_rows(queryset):
     """
     rows = []
     qs = list(queryset.select_related('procurement__project', 'contractor')
-              .prefetch_related('lines__item').order_by('-id'))
+              .prefetch_related('lines__item')
+              .annotate(file_count=Count('attachments')).order_by('-id'))
     coverage = purchases_coverage(qs)
     for p in qs:
         lines = list(p.lines.all())
@@ -4953,6 +4957,7 @@ def _purchase_rows(queryset):
         rows.append({
             'id': p.id, 'code': p.code, 'description': p.description,
             'date': p.date, 'locked': p.locked,
+            'files': p.file_count,           # подтверждение из оффлайна (см. `_purchase_row`)
             'project_code': p.project.code,
             # Обе стороны заказа сразу: в форме контрагента лента отвечает «в каком
             # проекте», в форме проекта — «у кого купили». Число одно и то же, меняется

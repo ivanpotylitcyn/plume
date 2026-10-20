@@ -27,7 +27,10 @@ export interface Attachments {
   run: (p: Promise<unknown>) => void
 }
 
-export function useAttachments(ownerType: string, ownerId: number): Attachments {
+// `onChange` — после удачной мутации (загрузка/удаление/описание): владельцу, у которого
+// вложения входят в знак строки списка (печать заказа), нужно перечитать список режима.
+export function useAttachments(ownerType: string, ownerId: number,
+                               onChange?: () => void): Attachments {
   const [rows, setRows] = useState<AttachmentRow[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -39,7 +42,7 @@ export function useAttachments(ownerType: string, ownerId: number): Attachments 
 
   const run = (p: Promise<unknown>) => {
     setBusy(true); setErr(null)
-    p.then(() => reload())
+    p.then(() => { onChange?.(); return reload() })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }

@@ -286,7 +286,7 @@ export interface FeedProcurementRow {
 // поставщика. Деньги заказа — ОЦЕНКА (`Σ qty × estimated_cost`), позиции без неё
 // перечислены кодами: неполная сумма не выдаёт себя за полную.
 export interface FeedPurchaseRow extends FeedProcurementRow {
-  project_code: string; coverage: Status
+  project_code: string; coverage: Status; files: number
   contractor_id: number | null; contractor_code: string; contractor_name: string
   estimate: number; unestimated: string[]
 }
@@ -341,6 +341,7 @@ export interface PurchaseRow {
   id: number; code: string | null; description: string
   project_code: string; locked: boolean
   date: string | null; lines: number
+  files: number      // 2026-10-20: вложения — подтверждение из оффлайна (цвет печати)
   coverage: Status   // Ф1b: покрытие лотами для цвета в списке
 }
 export interface PurchaseFormLine {
@@ -377,7 +378,7 @@ export interface PurchaseForm extends Authored {
   rows: PurchaseFormLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
-  id: number; locked: boolean; date: string | null
+  id: number; locked: boolean; date: string | null; files: number
   code: string | null; description: string; lines: number
 }
 
@@ -578,7 +579,7 @@ export interface ProcurementForm extends Authored {
 // ── Распределение строки плана по заказам (волна 24 — только чтение) ──
 // Ячейка: заказ, взявший эту позицию, и сколько он взял. Правится в форме заказа.
 export interface AllocationCell {
-  purchase_id: number; purchase_code: string; locked: boolean
+  purchase_id: number; purchase_code: string; locked: boolean; files: number
   contractor_id: number | null; contractor_code: string; contractor_name: string
   qty: number; price: number | null; cost: number | null
 }
@@ -594,7 +595,7 @@ export interface AllocationRow {
   orders: AllocationCell[]
 }
 export interface AllocationFanRow {
-  purchase_id: number; purchase_code: string; locked: boolean
+  purchase_id: number; purchase_code: string; locked: boolean; files: number
   contractor_id: number | null; contractor_code: string; contractor_name: string
   lines: number; total: number
 }

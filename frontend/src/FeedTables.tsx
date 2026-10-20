@@ -83,7 +83,7 @@ export function PurchaseFeed({ rows, empty, open, openCounterparty, side = 'coun
           <td className="rn">{i + 1}</td>
           <td className="gl">
             {/* Глиф заказа — печать фиксации, как в списке «Заказы»: обязательство. */}
-            <PurchaseGlyph locked={p.locked} /></td>
+            <PurchaseGlyph locked={p.locked} files={p.files} /></td>
           <td className="c-key">
             <EntityLink kind="purchase" id={p.id} open={open}>
               {p.code || `Заказ #${p.id}`}</EntityLink></td>

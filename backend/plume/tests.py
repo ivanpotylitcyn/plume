@@ -4141,6 +4141,27 @@ class AttachmentHttpTests(TestCase):
         r = self.c.post('/api/attachments/location/1/', {'file': up})
         self.assertEqual(r.status_code, 400)
 
+    def test_purchase_rows_count_files(self):
+        """Строки заказа несут число файлов (2026-10-20): файл — подтверждение из оффлайна,
+        от него цвет печати. Две аннотации-Count на одной выборке не множат друг друга
+        (две строки × один файл ≠ два файла), и число одно во всех проекциях заказа."""
+        p = _purchase(self.prj, self.user)
+        for code in ('A', 'B'):
+            _line(p, models.Item.objects.create(code=code, description=code,
+                                                category=_cat()), D(1))
+        row = lambda: next(r for r in self.c.get('/api/purchases/').json() if r['id'] == p.id)
+        self.assertEqual((row()['lines'], row()['files']), (2, 0))
+        up = SimpleUploadedFile('invoice.pdf', b'%PDF', content_type='application/pdf')
+        self.c.post(f'/api/attachments/purchase/{p.id}/', {'file': up})
+        self.assertEqual((row()['lines'], row()['files']), (2, 1))
+        picker = self.c.get(f'/api/projects/{self.prj.id}/purchases/').json()
+        self.assertEqual([r['files'] for r in picker if r['id'] == p.id], [1])
+        alloc = engine.procurement_allocation(p.procurement)
+        self.assertEqual([f['files'] for f in alloc['fan']], [1])
+        self.assertEqual({c['files'] for r in alloc['rows'] for c in r['orders']}, {1})
+        feed = engine._purchase_rows(models.Purchase.objects.filter(pk=p.pk))
+        self.assertEqual(feed[0]['files'], 1)
+
     def test_owner_not_found(self):
         """Тип известен (волна 19, Ф12b), а записи нет — тоже 400, но по другой причине."""
         up = SimpleUploadedFile('x.pdf', b'x', content_type='application/pdf')

@@ -35,6 +35,9 @@ export interface FormTab {
   label: string
   icon: string              // codicon-класс без префикса `ci-`
   content: ReactNode
+  // Таб-приглашение (2026-10-20): подпись и глиф горят оранжевым, пока в табе не хватает
+  // того, что форма ждёт (у заказа — файла-подтверждения). Смысл решает форма, знак — здесь.
+  attention?: boolean
 }
 
 export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, locked, ...cmd }:
@@ -111,7 +114,8 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
         <div className="panel fs-body">
           <div className="fs-tabs">
             {tabs.map((t, i) => (
-              <button key={t.key} className={'fh-ctl fs-tab' + (t === active ? ' on' : '')}
+              <button key={t.key} className={'fh-ctl fs-tab' + (t === active ? ' on' : '')
+                + (t.attention ? ' attn' : '')}
                 title={t.label} onClick={() => setTab(i)}>
                 <span className={'ci ci-' + t.icon} />
                 <span className="lbl">{t.label}</span>

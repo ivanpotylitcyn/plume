@@ -1024,11 +1024,15 @@ def receipt_link(request, pk):
 # --------------------------------------------------------------------------- #
 def _purchase_row(p, coverage):
     """Строка списка заказов для дерева навигации (`coverage` — `purchases_coverage`,
-    `line_count` — аннотация выборки)."""
+    `line_count`/`file_count` — аннотации выборки).
+
+    `files` — число вложений (2026-10-20, решение Ивана): файл у заказа — подтверждение
+    из оффлайна (счёт, договор с ценами). Зафиксированный заказ без файлов — обязательство,
+    которое ещё нечем подтвердить; знак выбирает вью ([[engine-view-seam]])."""
     return {
         'id': p.id, 'code': p.code, 'description': p.description,
         'project_code': p.project.code, 'locked': p.locked,
-        'date': p.date, 'lines': p.line_count,
+        'date': p.date, 'lines': p.line_count, 'files': p.file_count,
         'coverage': coverage[p.id],
     }
 
@@ -1038,7 +1042,9 @@ def purchases(request):
     """Список заказов (дерево). Рождения здесь нет (волна 24): заказ рождается только
     из закупки — `POST /procurements/<pk>/purchases/`."""
     purchases_ = list(models.Purchase.objects.select_related('procurement__project')
-                      .annotate(line_count=Count('lines')).order_by('-id'))
+                      .annotate(line_count=Count('lines', distinct=True),
+                                file_count=Count('attachments', distinct=True))
+                      .order_by('-id'))
     coverage = engine.purchases_coverage(purchases_)
     return Response([_purchase_row(p, coverage) for p in purchases_])
 
@@ -1167,9 +1173,10 @@ def project_purchases(request, pk):
     статусу нет, отменённых не существует — отмена = удаление)."""
     project = get_object_or_404(models.Project, pk=pk)
     rows = [
-        {'id': p.id, 'locked': p.locked, 'date': p.date,
+        {'id': p.id, 'locked': p.locked, 'date': p.date, 'files': p.file_count,
          'code': p.code, 'description': p.description, 'lines': p.lines.count()}
-        for p in models.Purchase.objects.filter(procurement__project=project).order_by('-id')
+        for p in models.Purchase.objects.filter(procurement__project=project)
+        .annotate(file_count=Count('attachments')).order_by('-id')
     ]
     return Response(rows)
 

@@ -208,7 +208,7 @@ export function PurchasePicker({ purchases, value, onPick, disabled, onClear }: 
     disabled={disabled} onClear={onClear} placeholder="— не связан —"
     notFound="ничего не найдено — заказ должен существовать."
     renderRow={p => <>
-      <PurchaseGlyph locked={p.locked} />
+      <PurchaseGlyph locked={p.locked} files={p.files} />
       <span className="code">{purchaseText(p)}</span>
       <span className="dim">{p.description}</span>
       <span className="dim">{p.lines} стр.</span>

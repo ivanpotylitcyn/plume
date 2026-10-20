@@ -23,7 +23,7 @@ import { CounterpartyView } from './CounterpartyView'
 import { AccountView } from './AccountView'
 import { applyTheme } from './core/theme'
 import { parsePath, pathOf, type Mode, type Sel } from './core/route'
-import { ItemGlyph, PurchaseGlyph, StatusGlyph, statusTone } from './status'
+import { ItemGlyph, newestFirst, PurchaseGlyph, StatusGlyph, statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 import { Sash, loadSide, saveSide, type Side } from './Sash'
 
@@ -265,7 +265,7 @@ export default function App() {
   const openCounterparty = (id: number) => { setMode('counterparties'); setSel({ kind: 'counterparty', id }) }
 
   // Единый фид ордеров: 6 списков нормализуются в общую строку. Новейшие сверху
-  // (по дате, null — вниз, tiebreak id). Диспетчер открытия — по kind.
+  // (`newestFirst`, одно правило с закупками и заказами). Диспетчер открытия — по kind.
   const orderEntries = useMemo<OrderEntry[]>(() => {
     const es: OrderEntry[] = []
     receipts.forEach(r => es.push({ kind: 'receipt', id: r.id, code: r.code || r.number,
@@ -282,7 +282,7 @@ export default function App() {
       name: i.description, projectCode: i.project_code, locked: i.locked, date: i.date }))
     relocations.forEach(r => es.push({ kind: 'relocation', id: r.id, code: r.code || r.number,
       name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
-    return es.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id)
+    return es.sort(newestFirst)
   }, [receipts, kittings, transfers, requisitions, writeoffs, inventories, relocations])
 
   const openOrderEntry = (e: OrderEntry) => openOrder(e.kind, e.id)
@@ -452,13 +452,14 @@ export default function App() {
             onNew={() => { setMode('procurements'); setSel(null) }}
             selId={sel?.kind === 'purchase' ? sel.id : null}
             onSelect={id => setSel({ kind: 'purchase', id })}
-            rows={[...purchases].reverse().map(p => ({
+            rows={[...purchases].sort(newestFirst).map(p => ({
               id: p.id, code: p.code || `Заказ #${p.id}`, name: p.project_code, projectCode: p.project_code,
               // Волна 24 → 2026-10-20 (решения Ивана): глиф заказа — ось фиксации, знак —
               // печать: оранжевый `unverified` — черновик, денег не потратили; зелёный
               // `verified` — обязательство возникло, трата учтена, ждём компоненты. Покрытие
-              // лотами (бывший цвет) смущало — оно живёт в форме.
-              glyph: <PurchaseGlyph locked={p.locked} />,
+              // лотами (бывший цвет) смущало — оно живёт в форме. Зелёной печать
+              // становится только с файлом-подтверждением (`PurchaseGlyph`).
+              glyph: <PurchaseGlyph locked={p.locked} files={p.files} />,
             }))} />}
 
         {mode === 'procurements' &&
@@ -466,7 +467,7 @@ export default function App() {
             onNew={() => born('procurements', 'procurement', reloadProcurements, openProcurement)}
             selId={sel?.kind === 'procurement' ? sel.id : null}
             onSelect={id => setSel({ kind: 'procurement', id })}
-            rows={[...procurements].reverse().map(p => ({
+            rows={[...procurements].sort(newestFirst).map(p => ({
               id: p.id, code: p.code || `Закупка #${p.id}`, name: p.description,
               projectCode: p.project_code,      // волна 24: закупка проектная
               // Ф1b: закупка-план — ось только фиксация, цвет=фиксация (зелёный заперт).
