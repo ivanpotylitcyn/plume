@@ -490,7 +490,9 @@ export default function App() {
             onDeleted={() => { reloadProjects(); setSel(null) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
           isNew={isFresh('item', sel.id)}
-          openItem={openItem} openOrder={openOrder} onChanged={reloadItems}
+          openItem={openItem} openOrder={openOrder}
+          openProcurement={openProcurement} openPurchase={openPurchase}
+          openCounterparty={openCounterparty} onChanged={reloadItems}
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'library-sync' &&
           <LibraryImportView onApplied={reloadItems} openItem={openItem} />}

@@ -2426,6 +2426,37 @@ class ItemXlsxTests(EngineTestBase):
         return {ws.title: [[c.value for c in row] for row in ws.iter_rows()]
                 for ws in wb.worksheets}
 
+    def test_purchased_item_lists_its_procurements_and_purchases(self):
+        """Табы «Закупки»/«Заказы» покупного (2026-10-20): числа — этой позиции. «Заказано»
+        закупки — только зафиксированными заказами; «Поступило» — зафиксированными
+        поставками. Порядок — живое сверху (черновик без даты первым). Листы xlsx — те же
+        табы в том же порядке; у производимого их нет вовсе."""
+        dated = engine.create_procurement(self.prj, self.user, date=DAY)
+        models.ProcurementLine.objects.create(procurement=dated, item=self.scr, qty=D(10))
+        pu = engine.create_purchase(dated, self.user, item_ids=[self.scr.id], date=DAY)
+        engine.update_purchase(pu, contractor=self.supplier)
+        engine.update_purchase_line(pu.lines.get(), D(6), price=D('60.00'))
+        draft = engine.create_procurement(self.prj, self.user)           # без даты
+        models.ProcurementLine.objects.create(procurement=draft, item=self.scr, qty=D(3))
+        procs = lambda: [(p['id'], p['qty'], p['ordered'], p['closed'])
+                         for p in engine.item_procurements(self.scr)]
+        self.assertEqual(procs(), [(draft.id, D(3), D(0), False), (dated.id, D(10), D(0), False)])
+        engine.lock_purchase(pu)
+        self.assertEqual(procs()[1], (dated.id, D(10), D(6), False))     # 6 из 10
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        self.assertEqual(engine.item_purchases(self.scr)[0]['received'], D(0))  # черновой УПД
+        engine.lock_receipt(r)
+        [row] = engine.item_purchases(self.scr)
+        self.assertEqual((row['id'], row['qty'], row['received'], row['price'], row['files']),
+                         (pu.id, D(6), D(6), D('60.00'), 0))
+        self.assertEqual(engine.item_procurements(self.dev), [])
+        book = self._book(self.scr, engine.ITEM_XLSX_ALL)
+        self.assertEqual(list(book), ['Состав', 'Применение', 'Закупки', 'Заказы',
+                                      'Склад', 'Движения'])
+        self.assertEqual([r[5] for r in book['Закупки'][1:]], [3, 10])   # «План», как на экране
+        self.assertEqual(book['Заказы'][1][5:9], [6, 6, self.scr.uom, 60])
+        self.assertNotIn('Закупки', self._book(self.dev, engine.ITEM_XLSX_ALL))
+
     def test_bom_scope_is_one_sheet_with_direct_components(self):
         """«Только состав» = один лист «Состав», один уровень BOM (не разузлование)."""
         leaf = self.make_item('LEAF')
@@ -2453,13 +2484,15 @@ class ItemXlsxTests(EngineTestBase):
             self.assertEqual(book[name][0][0], '№')
 
     def test_all_scope_covers_every_tab_but_files(self):
-        """«Все вкладки»: состав · применение · склад · движения. Вложений в книге нет
-        (файл — снимок таблиц, а не архив)."""
+        """«Все вкладки»: состав · применение · закупки · заказы (у покупного,
+        2026-10-20) · склад · движения. Вложений в книге нет (файл — снимок таблиц,
+        а не архив)."""
         lot = self.receipt_lot(self.scr, self.prj, 6)
         t = engine.create_transfer(self.prj, self.user, 'Н-7')
         engine.add_transfer_line(t, lot, D(2))
         book = self._book(self.scr, engine.ITEM_XLSX_ALL)
-        self.assertEqual(list(book), ['Состав', 'Применение', 'Склад', 'Движения'])
+        self.assertEqual(list(book), ['Состав', 'Применение', 'Закупки', 'Заказы',
+                                      'Склад', 'Движения'])
         self.assertNotIn('Файлы', book)
         # применение: где используется покупной винт
         self.assertEqual([r[1] for r in book['Применение'][1:]], ['DEV'])

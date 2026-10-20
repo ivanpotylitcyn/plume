@@ -591,6 +591,10 @@ def _item_detail_payload(item):
         'synced': item.synced, 'locked': item.locked, 'used': engine.item_is_used(item),
         'estimated_cost': item.estimated_cost,
         'bom': bom, 'where_used': where_used, 'lots': lots,
+        # 2026-10-20: где позиция в плане и в заказах (табы покупного изделия). У
+        # производимого их не бывает — он рождается сборкой, а не закупкой.
+        'procurements': [] if item.native else engine.item_procurements(item),
+        'purchases': [] if item.native else engine.item_purchases(item),
         'movements': engine.item_movements(item),
         'money': engine.item_money(item),     # волна 26: блок «Деньги»
     }

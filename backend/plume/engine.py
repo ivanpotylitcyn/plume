@@ -2908,6 +2908,65 @@ def _movement_row(document, lot, qty, event):
     }
 
 
+def _newest_first(rows):
+    """Порядок лент документов — тот же, что `newestFirst` списков режимов на фронте:
+    без даты сверху (пустая дата бывает только у черновика — CHECK `*_locked_has_date`),
+    дальше дата по убыванию, при равенстве — `id` по убыванию. Здесь, а не во вью, там,
+    где строки уезжают ещё и в xlsx: файл повторяет экран построчно."""
+    return sorted(rows, key=lambda r: (r['date'] is not None,
+                                       -(r['date'].toordinal() if r['date'] else 0), -r['id']))
+
+
+def item_procurements(item):
+    """Закупки, в плане которых стоит позиция, — таб «Закупки» покупного изделия
+    (2026-10-20): «где этот компонент планируется к закупке».
+
+    Строка = строка плана (`ProcurementLine`, пара `(procurement, item)` уникальна), но
+    с шапкой своей закупки. `qty` — сколько решили купить, `ordered` — сколько из этого
+    взяли ЗАФИКСИРОВАННЫЕ заказы (то же правило, что `_plan_left` и зелёный замок
+    закупки: черновой заказ — ещё не обязательство). `closed` — закрыта ли закупка
+    целиком (`procurements_closed`), под глиф строки.
+    """
+    lines = list(models.ProcurementLine.objects.filter(item=item)
+                 .select_related('procurement__project'))
+    procs = [ln.procurement for ln in lines]
+    closed = procurements_closed(procs)
+    ordered = dict(models.PurchaseLine.objects
+                   .filter(item=item, purchase__locked=True,
+                           purchase__procurement__in=procs)
+                   .values('purchase__procurement_id').annotate(q=Sum('qty'))
+                   .values_list('purchase__procurement_id', 'q'))
+    return _newest_first([{
+        'id': p.id, 'code': p.code, 'description': p.description,
+        'project_code': p.project.code, 'date': p.date,
+        'locked': p.locked, 'closed': closed[p.id],
+        'qty': ln.qty, 'ordered': ordered.get(p.id, ZERO),
+    } for ln in lines for p in (ln.procurement,)])
+
+
+def item_purchases(item):
+    """Заказы, в которых стоит позиция, — таб «Заказы» покупного изделия (2026-10-20):
+    «где этот компонент уже запланирован к поставке».
+
+    Строка = строка заказа (`PurchaseLine`, пара `(purchase, item)` уникальна) с шапкой
+    своего заказа. `received` — поступило по ЗАФИКСИРОВАННЫМ поставкам (`_received_by`,
+    то же число, что в «Строках» формы заказа); `price` — цена всей строки по счёту
+    (`null` — ещё не известна). `files` — под цвет печати (`PurchaseGlyph`).
+    """
+    lines = list(models.PurchaseLine.objects.filter(item=item)
+                 .select_related('purchase__procurement__project', 'purchase__contractor')
+                 .annotate(file_count=Count('purchase__attachments')))
+    received = _received_by(models.Lot.objects.filter(
+        item=item, origin__purchase__in=[ln.purchase_id for ln in lines]))
+    return _newest_first([{
+        'id': p.id, 'code': p.code, 'description': p.description,
+        'project_code': p.project.code, 'date': p.date,
+        'locked': p.locked, 'files': ln.file_count,
+        **_contractor_view(p.contractor),
+        'qty': ln.qty, 'received': received.get((p.id, item.id), ZERO), 'price': ln.price,
+    } for ln in lines for p in (ln.purchase,)])
+
+
 def item_movements(item):
     """Все ордера, коснувшиеся изделия, одной лентой — для его экрана (волна 19, Ф12a).
 
@@ -4671,6 +4730,26 @@ def item_xlsx(item, scope=ITEM_XLSX_BOM):
         rows=[(bl.parent.code, bl.parent.description, float(bl.qty), item.uom)
               for bl in item.used_in.select_related('parent')],
         widths=[5, 22, 48, 12, 8])
+    if not item.native:                # 2026-10-20: табы покупного — те же листы
+        _xlsx_sheet(
+            wb.create_sheet(), 'Закупки',
+            head=[],
+            headers=['№', 'Закупка', 'Описание', 'Проект', 'Дата', 'План', 'Заказано', 'Ед.'],
+            rows=[(p['code'] or f"Закупка #{p['id']}", p['description'], p['project_code'],
+                   _doc_date(p['date']), float(p['qty']), float(p['ordered']), item.uom)
+                  for p in item_procurements(item)],
+            widths=[5, 22, 40, 16, 12, 12, 12, 8])
+        _xlsx_sheet(
+            wb.create_sheet(), 'Заказы',
+            head=[],
+            headers=['№', 'Заказ', 'Проект', 'Поставщик', 'Дата', 'Кол-во', 'Поступило',
+                     'Ед.', 'Цена, ₽'],
+            rows=[(p['code'] or f"Заказ #{p['id']}", p['project_code'],
+                   p['contractor_code'] or p['contractor_name'], _doc_date(p['date']),
+                   float(p['qty']), float(p['received']), item.uom,
+                   float(p['price']) if p['price'] is not None else '—')
+                  for p in item_purchases(item)],
+            widths=[5, 32, 16, 20, 12, 12, 12, 8, 14])
     item_lots = list(item.lots.select_related('project', 'origin'))
     live_by_lot = lots_live_qty(item_lots)
     _xlsx_sheet(

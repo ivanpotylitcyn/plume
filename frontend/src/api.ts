@@ -178,6 +178,23 @@ export interface ItemDetail {
           live_qty: number; cost: number; unit_cost: number | null
           part_number: string; lot_name: string }[]
   movements: ItemMovement[]
+  // 2026-10-20: где покупная позиция в плане и в заказах (у производимого — пусто).
+  procurements: ItemProcurementRow[]; purchases: ItemPurchaseRow[]
+}
+// Строка плана позиции с шапкой своей закупки: `qty` — сколько решили купить,
+// `ordered` — сколько из этого взяли ЗАФИКСИРОВАННЫЕ заказы.
+export interface ItemProcurementRow {
+  id: number; code: string | null; description: string; project_code: string
+  date: string | null; locked: boolean; closed: boolean
+  qty: number; ordered: number
+}
+// Строка заказа позиции с шапкой заказа: `received` — по зафиксированным поставкам,
+// `price` — цена всей строки по счёту (`null` — ещё не известна).
+export interface ItemPurchaseRow {
+  id: number; code: string | null; description: string; project_code: string
+  date: string | null; locked: boolean; files: number
+  contractor_id: number | null; contractor_code: string; contractor_name: string
+  qty: number; received: number; price: number | null
 }
 
 // ── Синхронизация справочника с библиотекой Altium (волна 15) ──

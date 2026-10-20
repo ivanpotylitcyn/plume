@@ -5,7 +5,8 @@
 // ордеров, коснувшихся изделия (рождение партий + расходы), `engine.item_movements`.
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemMoney, type ItemRow, type Category, type RollupResult } from './api'
-import { Chevron, Cost, num, money, count, ItemGlyph, LotGlyph, StatusGlyph, paretoKeys, rowNumbers,
+import { Chevron, Cost, num, money, moneyCol, count, CounterpartyRef, ItemGlyph, LotGlyph,
+  ProcurementGlyph, PurchaseGlyph, StatusGlyph, paretoKeys, rowNumbers,
   unitMoney, visibleTree } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
@@ -20,9 +21,12 @@ import { useCategoryFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
 
-export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged, onDeleted }:
+export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcurement,
+  openPurchase, openCounterparty, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // лента движений кликабельна (§8)
+    openProcurement: (id: number) => void; openPurchase: (id: number) => void
+    openCounterparty: (id: number) => void
     onChanged?: () => void; onDeleted?: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
@@ -150,6 +154,76 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
             </tr>))}</tbody>
         </table>,
   })
+  // «Закупки» и «Заказы» (2026-10-20) — только у покупного: где позиция в плане и где
+  // уже под обязательством поставщика. Стоят за «Применением» — по потоку: куда идёт →
+  // что решили купить → что заказали → что лежит. Порядок строк — движка (`_newest_first`,
+  // то же правило, что `newestFirst` списков): живое сверху, и xlsx повторяет экран.
+  // Количества — этой позиции, а не документа целиком.
+  if (!d.native) {
+    tabs.push({
+      key: 'procurements', label: 'Закупки', icon: 'law',
+      content: d.procurements.length === 0
+        ? <div className="tab-empty">Ни в одной закупке не планируется</div>
+        : <table className="grid">
+            <thead><tr><th className="rn">№</th><th className="gl" />
+              <th className="c-key">Закупка</th><th className="c-desc">Описание</th>
+              <th className="c-cp">Проект</th><th className="c-date">Дата</th>
+              <th className="num">План</th>
+              {/* Взято зафиксированными заказами — то же правило, что зелёный замок. */}
+              <th className="num" title="Взято зафиксированными заказами">Заказано</th>
+              <th className="uom">Ед.</th></tr></thead>
+            <tbody>{d.procurements.map((p, i) => (
+              <tr key={p.id} className="row">
+                <td className="rn">{i + 1}</td>
+                <td className="gl"><ProcurementGlyph locked={p.locked} closed={p.closed} /></td>
+                <td className="c-key">
+                  <EntityLink kind="procurement" id={p.id} open={openProcurement}>
+                    {p.code || `Закупка #${p.id}`}</EntityLink></td>
+                <td className="c-desc">
+                  <span className="cell-ellip" title={p.description}>{p.description}</span></td>
+                <td className="c-cp code">{p.project_code}</td>
+                <td className="c-date">{p.date ? viewDate(p.date) : ''}</td>
+                <td className="num">{num(p.qty)}</td>
+                <td className="num">{num(p.ordered)}</td>
+                <td className="uom">{d.uom}</td>
+              </tr>))}</tbody>
+          </table>,
+    })
+    tabs.push({
+      key: 'purchases', label: 'Заказы', icon: 'package',
+      content: d.purchases.length === 0
+        ? <div className="tab-empty">Ни в одном заказе нет</div>
+        : <table className="grid">
+            <thead><tr><th className="rn">№</th><th className="gl" />
+              <th className="c-key">Заказ</th>
+              <th className="c-cp">Проект</th><th className="c-cp">Поставщик</th>
+              <th className="c-date">Дата</th>
+              <th className="num">Кол-во</th>
+              <th className="num" title="По зафиксированным поставкам">Поступило</th>
+              <th className="uom">Ед.</th>
+              {/* Цена всей строки по счёту, как в «Строках» заказа; нет — прочерк. */}
+              <th className="num c-money">Цена, ₽</th></tr></thead>
+            <tbody>{d.purchases.map((p, i) => (
+              <tr key={p.id} className="row">
+                <td className="rn">{i + 1}</td>
+                <td className="gl"><PurchaseGlyph locked={p.locked} files={p.files} /></td>
+                <td className="c-key">
+                  <EntityLink kind="purchase" id={p.id} open={openPurchase}>
+                    {p.code || `Заказ #${p.id}`}</EntityLink></td>
+                <td className="c-cp code">{p.project_code}</td>
+                <td className="c-cp">
+                  <CounterpartyRef code={p.contractor_code} name={p.contractor_name}
+                    id={p.contractor_id} open={openCounterparty} /></td>
+                <td className="c-date">{p.date ? viewDate(p.date) : ''}</td>
+                <td className="num">{num(p.qty)}</td>
+                <td className="num">{num(p.received)}</td>
+                <td className="uom">{d.uom}</td>
+                <td className="num c-money">
+                  {p.price === null ? <span className="dim">—</span> : moneyCol(p.price)}</td>
+              </tr>))}</tbody>
+          </table>,
+    })
+  }
   tabs.push({
     key: 'lots', label: 'Склад', icon: 'layers',
     content: d.lots.length === 0
@@ -237,6 +311,10 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, onChanged,
       meta={<>
         {composable && <>{count(d.bom.length, 'компонент', 'компонента', 'компонентов')} · </>}
         {count(d.where_used.length, 'вхождение', 'вхождения', 'вхождений')} ·{' '}
+        {!d.native && <>
+          {count(d.procurements.length, 'закупка', 'закупки', 'закупок')} ·{' '}
+          {count(d.purchases.length, 'заказ', 'заказа', 'заказов')} ·{' '}
+        </>}
         {count(d.lots.length, 'партия', 'партии', 'партий')} ·{' '}
         {count(d.movements.length, 'движение', 'движения', 'движений')} ·{' '}
         {count(att.rows?.length ?? 0, 'файл', 'файла', 'файлов')}
