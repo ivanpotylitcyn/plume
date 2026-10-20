@@ -458,8 +458,9 @@ export default function App() {
               // печать: оранжевый `unverified` — черновик, денег не потратили; зелёный
               // `verified` — обязательство возникло, трата учтена, ждём компоненты. Покрытие
               // лотами (бывший цвет) смущало — оно живёт в форме. Зелёной печать
-              // становится только с файлом-подтверждением (`PurchaseGlyph`).
-              glyph: <PurchaseGlyph locked={p.locked} files={p.files} />,
+              // становится только с файлом-подтверждением (`PurchaseGlyph`); закрытый
+              // поставками целиком — заполненная `verified-filled` (2026-10-20).
+              glyph: <PurchaseGlyph locked={p.locked} files={p.files} coverage={p.coverage} />,
             }))} />}
 
         {mode === 'procurements' &&

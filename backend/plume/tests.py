@@ -2457,6 +2457,29 @@ class ItemXlsxTests(EngineTestBase):
         self.assertEqual(book['Заказы'][1][5:9], [6, 6, self.scr.uom, 60])
         self.assertNotIn('Закупки', self._book(self.dev, engine.ITEM_XLSX_ALL))
 
+    def test_purchase_stamp_coverage_is_one_in_all_projections(self):
+        """Печать заказа заполняется, когда заказ закрыт поставками целиком (2026-10-20):
+        `coverage` одно и то же в списке, во вкладке «Заказы» изделия, в веере и ячейках
+        закупки. Черновой УПД заказ не гасит — только зафиксированный."""
+        proc = engine.create_procurement(self.prj, self.user, date=DAY)
+        models.ProcurementLine.objects.create(procurement=proc, item=self.scr, qty=D(6))
+        pu = engine.create_purchase(proc, self.user, item_ids=[self.scr.id], date=DAY)
+        engine.update_purchase(pu, contractor=self.supplier)
+        engine.update_purchase_line(pu.lines.get(), D(6), price=D('60.00'))
+        engine.lock_purchase(pu)
+
+        def covs():
+            alloc = engine.procurement_allocation(proc)
+            return {engine.purchases_coverage([pu])[pu.id],
+                    engine.item_purchases(self.scr)[0]['coverage'],
+                    alloc['fan'][0]['coverage'],
+                    *(c['coverage'] for r in alloc['rows'] for c in r['orders'])}
+        self.assertEqual(covs(), {'to_order'})
+        r = engine.create_receipt_from_purchase(pu, self.user, number='У-1')
+        self.assertEqual(covs(), {'to_order'})                           # черновой УПД
+        engine.lock_receipt(r)
+        self.assertEqual(covs(), {'available'})
+
     def test_bom_scope_is_one_sheet_with_direct_components(self):
         """«Только состав» = один лист «Состав», один уровень BOM (не разузлование)."""
         leaf = self.make_item('LEAF')
@@ -4196,7 +4219,8 @@ class AttachmentHttpTests(TestCase):
         self.c.post(f'/api/attachments/purchase/{p.id}/', {'file': up})
         self.assertEqual((row()['lines'], row()['files']), (2, 1))
         picker = self.c.get(f'/api/projects/{self.prj.id}/purchases/').json()
-        self.assertEqual([r['files'] for r in picker if r['id'] == p.id], [1])
+        self.assertEqual([(r['files'], r['coverage']) for r in picker if r['id'] == p.id],
+                         [(1, 'to_order')])
         alloc = engine.procurement_allocation(p.procurement)
         self.assertEqual([f['files'] for f in alloc['fan']], [1])
         self.assertEqual({c['files'] for r in alloc['rows'] for c in r['orders']}, {1})

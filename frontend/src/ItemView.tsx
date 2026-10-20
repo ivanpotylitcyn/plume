@@ -206,7 +206,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
             <tbody>{d.purchases.map((p, i) => (
               <tr key={p.id} className="row">
                 <td className="rn">{i + 1}</td>
-                <td className="gl"><PurchaseGlyph locked={p.locked} files={p.files} /></td>
+                <td className="gl"><PurchaseGlyph locked={p.locked} files={p.files} coverage={p.coverage} /></td>
                 <td className="c-key">
                   <EntityLink kind="purchase" id={p.id} open={openPurchase}>
                     {p.code || `Заказ #${p.id}`}</EntityLink></td>

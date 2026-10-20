@@ -193,6 +193,7 @@ export interface ItemProcurementRow {
 export interface ItemPurchaseRow {
   id: number; code: string | null; description: string; project_code: string
   date: string | null; locked: boolean; files: number
+  coverage: Status   // закрытость ВСЕГО заказа поставками (печать), не этой строки
   contractor_id: number | null; contractor_code: string; contractor_name: string
   qty: number; received: number; price: number | null
 }
@@ -360,7 +361,7 @@ export interface PurchaseRow {
   project_code: string; locked: boolean
   date: string | null; lines: number
   files: number      // 2026-10-20: вложения — подтверждение из оффлайна (цвет печати)
-  coverage: Status   // Ф1b: покрытие лотами для цвета в списке
+  coverage: Status   // покрытие лотами: `available` — закрыт поставками (печать заполнена)
 }
 export interface PurchaseFormLine {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
@@ -396,7 +397,7 @@ export interface PurchaseForm extends Authored {
   rows: PurchaseFormLine[]; receipts: PurchaseReceiptRow[]
 }
 export interface ProjectPurchaseRow {
-  id: number; locked: boolean; date: string | null; files: number
+  id: number; locked: boolean; date: string | null; files: number; coverage: Status
   code: string | null; description: string; lines: number
 }
 
@@ -599,6 +600,7 @@ export interface ProcurementForm extends Authored {
 // Ячейка: заказ, взявший эту позицию, и сколько он взял. Правится в форме заказа.
 export interface AllocationCell {
   purchase_id: number; purchase_code: string; locked: boolean; files: number
+  coverage: Status   // печать заказа: закрыт ли поставками целиком
   contractor_id: number | null; contractor_code: string; contractor_name: string
   qty: number; price: number | null; cost: number | null
 }
@@ -615,6 +617,7 @@ export interface AllocationRow {
 }
 export interface AllocationFanRow {
   purchase_id: number; purchase_code: string; locked: boolean; files: number
+  coverage: Status
   contractor_id: number | null; contractor_code: string; contractor_name: string
   lines: number; total: number
 }

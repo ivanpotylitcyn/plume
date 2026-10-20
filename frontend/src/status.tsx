@@ -27,12 +27,20 @@ export function StatusGlyph({ locked, tone = 'fix', title }: {
 // только когда к заказу приложен хоть один файл — подтверждение из оффлайна (счёт,
 // договор с ценами). Зафиксирован, а файлов нет — та же печать, но оранжевая: форма
 // говорит «обязательство», цвет — «подтверждения ещё нет» (§7a, форма ⟂ цвет).
-export function PurchaseGlyph({ locked, files, title }: {
-  locked: boolean; files: number; title?: string
+//
+// Третья ступень (2026-10-20, решение Ивана): заказ, закрытый поставками целиком
+// (`coverage === 'available'` — каждую строку погасили ЗАФИКСИРОВАННЫЕ УПД), — печать
+// `verified-filled`, всегда зелёная: обязательство исполнено, ждать больше нечего.
+// Файлы здесь цвет не решают — исполнение и есть подтверждение.
+export function PurchaseGlyph({ locked, files, coverage, title }: {
+  locked: boolean; files: number; coverage: Status; title?: string
 }) {
-  const tone = locked && files > 0 ? 'ok' : 'wip'
-  return <span className={`ci sg ci-${locked ? 'verified' : 'unverified'} sg-${tone}`}
-    title={title ?? (!locked ? 'черновик — обязательства нет'
+  const filled = coverage === 'available'
+  const tone = filled || (locked && files > 0) ? 'ok' : 'wip'
+  const icon = filled ? 'verified-filled' : locked ? 'verified' : 'unverified'
+  return <span className={`ci sg ci-${icon} sg-${tone}`}
+    title={title ?? (filled ? 'закрыт поставками целиком'
+      : !locked ? 'черновик — обязательства нет'
       : files > 0 ? 'зафиксирован — обязательство'
       : 'зафиксирован, но без файлов — приложите подтверждение (счёт, договор)')} />
 }

@@ -1176,11 +1176,14 @@ def project_purchases(request, pk):
     """Заказы проекта — пикер связи прихода с заказом (волна 19, Ф1: отсева по
     статусу нет, отменённых не существует — отмена = удаление)."""
     project = get_object_or_404(models.Project, pk=pk)
+    purchases_ = list(models.Purchase.objects.filter(procurement__project=project)
+                      .annotate(file_count=Count('attachments')).order_by('-id'))
+    coverage = engine.purchases_coverage(purchases_)        # печать: закрыт ли поставками
     rows = [
         {'id': p.id, 'locked': p.locked, 'date': p.date, 'files': p.file_count,
+         'coverage': coverage[p.id],
          'code': p.code, 'description': p.description, 'lines': p.lines.count()}
-        for p in models.Purchase.objects.filter(procurement__project=project)
-        .annotate(file_count=Count('attachments')).order_by('-id')
+        for p in purchases_
     ]
     return Response(rows)
 

@@ -2951,17 +2951,19 @@ def item_purchases(item):
     Строка = строка заказа (`PurchaseLine`, пара `(purchase, item)` уникальна) с шапкой
     своего заказа. `received` — поступило по ЗАФИКСИРОВАННЫМ поставкам (`_received_by`,
     то же число, что в «Строках» формы заказа); `price` — цена всей строки по счёту
-    (`null` — ещё не известна). `files` — под цвет печати (`PurchaseGlyph`).
+    (`null` — ещё не известна). `files` и `coverage` (закрытость заказа целиком, не этой
+    строки) — под печать заказа (`PurchaseGlyph`).
     """
     lines = list(models.PurchaseLine.objects.filter(item=item)
                  .select_related('purchase__procurement__project', 'purchase__contractor')
                  .annotate(file_count=Count('purchase__attachments')))
     received = _received_by(models.Lot.objects.filter(
         item=item, origin__purchase__in=[ln.purchase_id for ln in lines]))
+    coverage = purchases_coverage([ln.purchase for ln in lines])   # закрытость ВСЕГО заказа
     return _newest_first([{
         'id': p.id, 'code': p.code, 'description': p.description,
         'project_code': p.project.code, 'date': p.date,
-        'locked': p.locked, 'files': ln.file_count,
+        'locked': p.locked, 'files': ln.file_count, 'coverage': coverage[p.id],
         **_contractor_view(p.contractor),
         'qty': ln.qty, 'received': received.get((p.id, item.id), ZERO), 'price': ln.price,
     } for ln in lines for p in (ln.purchase,)])
@@ -4841,6 +4843,7 @@ def procurement_allocation(procurement):
     allocations = _plan_allocations(procurement)
     orders = list(procurement.purchases.select_related('contractor')
                   .annotate(file_count=Count('attachments')).order_by('id'))
+    coverage = purchases_coverage(orders)          # печать заказа: закрыт ли поставками
     project = procurement.project
     need_by_item, _incomplete = project_leaf_demand(project, BomIndex())
     need_by_item = {leaf.id: qty for leaf, qty in need_by_item.items()}
@@ -4858,7 +4861,7 @@ def procurement_allocation(procurement):
             allocated += qty
             cells.append({
                 'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-                'locked': pu.locked, 'files': pu.file_count,
+                'locked': pu.locked, 'files': pu.file_count, 'coverage': coverage[pu.id],
                 **_contractor_view(pu.contractor),
                 'qty': qty, 'price': price,
                 # стоимость в заказе — его цена строки по счёту, пока её нет — оценка
@@ -4885,7 +4888,7 @@ def procurement_allocation(procurement):
     mark_costs(rows)                   # `cost_status` строк плана: overpaid > costly
     fan = [{
         'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-        'locked': pu.locked, 'files': pu.file_count,
+        'locked': pu.locked, 'files': pu.file_count, 'coverage': coverage[pu.id],
         **_contractor_view(pu.contractor),
         'lines': pu.lines.count(),
         'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,

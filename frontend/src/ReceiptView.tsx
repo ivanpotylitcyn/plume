@@ -1,8 +1,14 @@
-// Витрина волны 3: форма прихода / УПД (записываемое ядро).
-// Строки УПД = лоты (в модели отдельной ReceiptLine нет): изделие + кол-во +
-// цена + название, автосейв по blur/Enter. Добавление строки = рождение партии
-// (+RECEIPT). Замок «сверено со сканом» (approved) делает форму read-only.
-import { useEffect, useState } from 'react'
+// Витрина волны 3: форма поставки / УПД (записываемое ядро).
+// Строки УПД = лоты (в модели отдельной ReceiptLine нет): изделие + наименование товара +
+// part number + кол-во + стоимость, автосейв по blur/Enter. Добавление строки = рождение
+// партии (+RECEIPT). Фиксация «сверено со сканом» делает форму read-only.
+//
+// 2026-10-20 (решение Ивана): строка читается как графа УПД. Колонки «Описание» (описание
+// изделия из справочника) нет — на её месте «Наименование товара» (графа 1а УПД, бывшее
+// «Название из УПД»): пользователь видит, что куда переписывать. Описание изделия — в
+// подсказке к коду. Просмотр чист (§7): текст вместо погашенных полей, колонка команд
+// строки — только в правке, как у заказа.
+import { type KeyboardEvent, useEffect, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
@@ -64,12 +70,12 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
           <thead>
             <tr>
               <th className="rn">№</th><th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
-              <th className="c-desc">Описание</th>
+              <th className="c-desc c-txt" title="как в графе 1а УПД">Наименование товара</th>
+              <th className="c-txt">Part number</th>
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
               <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость, ₽</th>
-              <th className="c-txt">Part number</th>
-              <th className="c-txt">Название из УПД</th><th className="act" />
+              {!locked && <th className="act" />}
             </tr>
           </thead>
           <tbody>
@@ -166,32 +172,48 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
   )
 }
 
-// Реальная строка УПД (лот): автосейв кол-ва/стоимости/названия, удаление до замка.
-// `draft` — поставка ещё не сверена (Ф15): партия на складе не лежит, живого остатка
-// у неё нет вовсе. Показывать «остаток 0» было бы враньём про израсходованную партию,
-// поэтому в черновике остаток не показываем, а глиф гасим в нейтральный.
+// Реальная строка УПД (лот): автосейв наименования/part number/кол-ва/стоимости,
+// удаление до замка. `draft` — поставка ещё не сверена (Ф15): партия на складе не лежит,
+// живого остатка у неё нет вовсе. Показывать «остаток 0» было бы враньём про
+// израсходованную партию, поэтому в черновике остаток не показываем, а глиф гасим.
 function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
   no?: number
   lot: ReceiptLot; locked: boolean; draft: boolean; busy: boolean
   openItem: (id: number) => void; run: (p: Promise<ReceiptForm>) => void
 }) {
   const short = !draft && lot.live_qty !== lot.qty   // просел под пайку/расход
+  const save = (b: Parameters<typeof api.updateReceiptLot>[1]) =>
+    run(api.updateReceiptLot(lot.id, b))
   return (
     <tr className="row">
       <td className="rn">{no}</td>
       {/* Строка = партия, рождённая этой поставкой: глиф партии (форма — origin,
-          цвет — живость остатка, §7a), код и описание — РАЗНЫМИ колонками. */}
+          цвет — живость остатка, §7a). Описание изделия — в подсказке к коду: колонка
+          текста у строки одна, и это наименование из документа. */}
       <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} draft={draft} /></td>
       <td className="c-key">
-        <EntityLink kind="item" id={lot.item_id} open={openItem}>{lot.item_code}</EntityLink></td>
-      <td className="c-desc">
-        <span className="cell-ellip" title={lot.item_description}>{lot.item_description}</span>
-        {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
+        <EntityLink kind="item" id={lot.item_id} open={openItem} title={lot.item_description}>
+          {lot.item_code}</EntityLink></td>
+      <td className="c-desc c-txt">
+        {locked
+          ? <>
+              <span className="cell-ellip" title={lot.lot_name}>{lot.lot_name}</span>
+              {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
+            </>
+          : <CommitInput value={lot.lot_name} disabled={busy}
+              onCommit={v => save({ lot_name: v })} />}
+      </td>
+      <td className="c-txt">
+        {locked
+          ? <span className="cell-ellip" title={lot.part_number}>{lot.part_number}</span>
+          : <CommitInput value={lot.part_number} disabled={busy}
+              onCommit={v => save({ part_number: v })} />}
       </td>
       <td className="num">
-        <CommitInput value={String(lot.qty)} disabled={locked || busy}
-          onCommit={v => run(api.updateReceiptLot(lot.id, { qty: Number(v) }))}
-          validate={v => Number(v) > 0} />
+        {locked ? num(lot.qty)
+          : <CommitInput value={String(lot.qty)} disabled={busy}
+              onCommit={v => save({ qty: Number(v) })}
+              validate={v => Number(v) > 0} />}
       </td>
       <td className="uom">{lot.uom}</td>
       {/* Волна 26: стоимость строки целиком (как в документе), цена штуки — под курсором.
@@ -200,29 +222,25 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
       <td className="num c-money" title={perUnitTitle(lot.cost, lot.qty)}>
         {locked ? moneyCol(lot.cost)
           : <CommitInput value={moneyField(lot.cost)} disabled={busy} numeric
-              onCommit={v => run(api.updateReceiptLot(lot.id, { cost: parseMoney(v) ?? 0 }))}
+              onCommit={v => save({ cost: parseMoney(v) ?? 0 })}
               validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}
       </td>
-      <td className="c-txt">
-        <CommitInput value={lot.part_number} disabled={locked || busy}
-          onCommit={v => run(api.updateReceiptLot(lot.id, { part_number: v }))} />
-      </td>
-      <td className="c-txt">
-        <CommitInput value={lot.lot_name} disabled={locked || busy}
-          onCommit={v => run(api.updateReceiptLot(lot.id, { lot_name: v }))} />
-      </td>
-      <td className="act">
-        {!locked && !lot.consumed &&
-          <button className="fh-ctl icon fh-del" title="Убрать строку поставки"
-            disabled={busy} onClick={() => run(api.deleteReceiptLot(lot.id))}>
-            <span className="ci ci-trash" /></button>}
-        {lot.consumed && <span className="hint">потреблён</span>}
-      </td>
+      {/* Команда строки — только в правке (§7). Потреблённую партию (расфиксированная
+          поставка, партия уже ушла ниже) убрать нельзя — вместо корзины объяснение. */}
+      {!locked && <td className="act">
+        {lot.consumed
+          ? <span className="hint">потреблён</span>
+          : <button className="fh-ctl icon fh-del" title="Убрать строку поставки"
+              disabled={busy} onClick={() => run(api.deleteReceiptLot(lot.id))}>
+              <span className="ci ci-trash" /></button>}
+      </td>}
     </tr>
   )
 }
 
-// Призрачная строка: добавить строку УПД (рождается партия).
+// Призрачная строка: добавить строку УПД (рождается партия). Колонки — те же, что у
+// данных. Наименование преднабивается описанием выбранного изделия (то же правило, что
+// у поставки, рождённой из заказа) — дальше его правят под графу 1а документа.
 function GhostRow({ receiptId, items, busy, run }: {
   receiptId: number; items: ItemRow[]; busy: boolean
   run: (p: Promise<ReceiptForm>) => void
@@ -234,6 +252,10 @@ function GhostRow({ receiptId, items, busy, run }: {
   const [name, setName] = useState('')
   const picked = items.find(i => i.id === itemId)   // единица известна сразу по выбору
 
+  const pick = (id: number) => {
+    setItemId(id)
+    if (!name) setName(items.find(i => i.id === id)?.description ?? '')
+  }
   const add = () => {
     const q = Number(qty)
     if (!itemId || !(q > 0)) return
@@ -245,41 +267,35 @@ function GhostRow({ receiptId, items, busy, run }: {
     }))
     setItemId(''); setQty(''); setCost(''); setPn(''); setName('')
   }
+  const enter = (e: KeyboardEvent) => { if (e.key === 'Enter') add() }
 
   return (
     <tr className="row ghost">
       <td className="rn" />
       <td className="gl" />
-      {/* Призрак — такая же строка, как данные (волна 25, Ф3): пикер в колонке кода,
-          описание выбранного — в своей. Под `colSpan` спрятанная колонка описания
-          сдвигала бы всю строку. */}
+      {/* Призрак — такая же строка, как данные (волна 25, Ф3): пикер в колонке кода. */}
       <td className="c-key">
-        <ItemPicker items={items} value={itemId} onPick={setItemId} disabled={busy}
+        <ItemPicker items={items} value={itemId} onPick={pick} disabled={busy}
           placeholder="Компонент…" onEnter={add} onClear={() => setItemId('')} />
       </td>
-      <td className="c-desc">
-        <span className="cell-ellip" title={picked?.description}>
-          {picked?.description ?? ''}</span></td>
-      <td className="num">
-        <input className="qty-in" value={qty} disabled={busy} placeholder="0"
-          onChange={e => setQty(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') add() }} />
-      </td>
-      <td className="uom">{picked?.uom ?? ''}</td>
-      <td className="num c-money">
-        <input className="qty-in" value={cost} disabled={busy} placeholder="0,00"
-          onChange={e => setCost(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      <td className="c-desc c-txt">
+        <input className="qty-in" value={name} disabled={busy}
+          placeholder="наименование товара" onChange={e => setName(e.target.value)}
+          onKeyDown={enter} />
       </td>
       <td className="c-txt">
         <input className="qty-in" value={pn} disabled={busy}
           placeholder="part number" onChange={e => setPn(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+          onKeyDown={enter} />
       </td>
-      <td className="c-txt">
-        <input className="qty-in" value={name} disabled={busy}
-          placeholder="название из УПД" onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      <td className="num">
+        <input className="qty-in" value={qty} disabled={busy} placeholder="0"
+          onChange={e => setQty(e.target.value)} onKeyDown={enter} />
+      </td>
+      <td className="uom">{picked?.uom ?? ''}</td>
+      <td className="num c-money">
+        <input className="qty-in" value={cost} disabled={busy} placeholder="0,00"
+          onChange={e => setCost(e.target.value)} onKeyDown={enter} />
       </td>
       <td className="act">
         <button className="fh-ctl icon fh-add" title="Добавить строку поставки"
@@ -289,4 +305,3 @@ function GhostRow({ receiptId, items, busy, run }: {
     </tr>
   )
 }
-
