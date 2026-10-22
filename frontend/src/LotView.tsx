@@ -14,7 +14,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { api, type DocRef, type LotCompositionRow, type LotForm, type LotRef } from './api'
 import { FormShell, type FormTab } from './FormShell'
-import { Field } from './FormField'
+import { Field, viewDate } from './FormField'
 import { MoneyBlock, Stat, StatGroup } from './StatPanel'
 import { EntityLink } from './EntityLink'
 import { LotGlyph, count, money, moneyCol, num } from './status'
@@ -56,8 +56,8 @@ export function LotView({ lotId, openItem, openProject, openOrder, openLot }: {
             {d.draft ? 'Партия ещё не на складе — её ордер не зафиксирован.' : 'Движений нет.'}</div>
         : <table className="grid">
             <thead><tr>
-              <th className="rn">№</th><th className="c-fit c-date">Дата</th>
-              <th className="c-key">Ордер</th><th className="c-fit c-cp">Вид</th>
+              <th className="rn">№</th><th className="c-date">Дата</th>
+              <th className="c-name">Ордер</th><th className="c-cp">Вид</th>
               <th className="c-fit">Место</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="num c-money">Сумма, ₽</th>
@@ -66,10 +66,12 @@ export function LotView({ lotId, openItem, openProject, openOrder, openLot }: {
             <tbody>{d.history.map((r, i) => (
               <tr key={r.id} className="row">
                 <td className="rn">{i + 1}</td>
-                <td className="c-fit c-date">{r.document.date ?? ''}</td>
-                <td className="c-key">{doc(r.document)}</td>
-                <td className="c-fit c-cp">{ORDER_LABEL[r.document.kind as OrderKind] ?? r.document.kind}
-                  {r.event === 'born' && <span className="hint"> · рождение</span>}</td>
+                <td className="c-date">{r.document.date ? viewDate(r.document.date) : ''}</td>
+                <td className="c-name">{doc(r.document)}</td>
+                {/* Что ордер родил партию, читается из вида (поставка / комплектация /
+                    инвентаризация / перевод) — подписью не дублируем, только подсказкой. */}
+                <td className="c-cp" title={r.event === 'born' ? 'этим ордером партия родилась' : undefined}>
+                  {ORDER_LABEL[r.document.kind as OrderKind] ?? r.document.kind}</td>
                 <td className="c-fit code">{r.location_code}</td>
                 <td className="num">{r.qty > 0 ? '+' : ''}{num(r.qty)}</td>
                 <td className="uom">{uom}</td>
@@ -83,8 +85,8 @@ export function LotView({ lotId, openItem, openProject, openOrder, openLot }: {
         ? <div className="tab-empty">В изделия партия ещё не уходила.</div>
         : <table className="grid">
             <thead><tr>
-              <th className="rn">№</th><th className="c-fit c-date">Дата</th>
-              <th className="c-key">Комплектация</th><th className="c-fit">Изделие</th>
+              <th className="rn">№</th><th className="c-date">Дата</th>
+              <th className="c-name">Комплектация</th><th className="c-fit">Изделие</th>
               <th className="num">Впаяно</th><th className="uom">Ед.</th>
               <th className="num c-money">Сумма, ₽</th>
               <th className="c-desc">Партия изделия</th>
@@ -92,8 +94,8 @@ export function LotView({ lotId, openItem, openProject, openOrder, openLot }: {
             <tbody>{d.usage.map((r, i) => (
               <tr key={r.id} className="row">
                 <td className="rn">{i + 1}</td>
-                <td className="c-fit c-date">{r.document.date ?? ''}</td>
-                <td className="c-key">{doc(r.document)}</td>
+                <td className="c-date">{r.document.date ? viewDate(r.document.date) : ''}</td>
+                <td className="c-name">{doc(r.document)}</td>
                 <td className="c-fit">{r.target_id
                   ? <EntityLink kind="item" id={r.target_id} open={openItem}>{r.target_code}</EntityLink>
                   : ''}</td>
@@ -123,7 +125,8 @@ export function LotView({ lotId, openItem, openProject, openOrder, openLot }: {
 
   return (
     <FormShell
-      id={d.id} code={d.code || d.description || d.label} entity="партию" locked error={err}
+      // Титул — Part Number (2026-10-22, решение Ивана); пустой — заглушка «без PN».
+      id={d.id} code={d.code} noCode="без PN" entity="партию" locked error={err}
       meta={<>
         {count(d.history.length, 'движение', 'движения', 'движений')}
         {' · '}{count(d.usage.length, 'комплектация', 'комплектации', 'комплектаций')}

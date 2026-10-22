@@ -777,13 +777,15 @@ function StockList({ rows, locations, selId, onSelect }: {
       </div>
       <div className="list-scroll">
         {shown.map(r => {
-          const code = r.code || r.description || `#${r.id}`
+          // Строка — Part Number (2026-10-22, решение Ивана); пустой — «без PN», а не
+          // подстановка наименования: его видно в подсказке и в форме лота.
           return (
             <div key={r.id} className={'tree-item' + (selId === r.id ? ' sel' : '')}
               onClick={() => onSelect(r.id)}
               title={[r.item_code, r.description, r.project_code].filter(Boolean).join(' · ')}>
               <LotGlyph native={r.item_native} liveQty={r.live_qty} central={r.on_central} />
-              <span className="code">{code}</span>
+              {r.code ? <span className="code" title={r.code}>{r.code}</span>
+                : <span className="code no-code">без PN</span>}
               <span className="row-tag">{num(r.live_qty)} {r.uom}</span>
             </div>
           )

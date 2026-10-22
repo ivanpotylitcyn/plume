@@ -72,7 +72,7 @@ function shortDate(iso: string): string {
 // глиф (вид файла × живость на диске) · имя · описание · размер · загружено · кем ·
 // команды строки. Дубль «имя + Скачать» оставлен намеренно и оправдался: клик по
 // имени ОТКРЫВАЕТ файл во вкладке, кнопка `download` — СКАЧИВАЕТ (принято 2026-07-26).
-// Имя — своя роль `.c-file`, не колонка кода (2026-10-21, решение Ивана): оно ценнее
+// Имя — своя роль `.c-name` (длинное имя), не колонка кода (2026-10-21, решение Ивана): оно ценнее
 // описания и тянется вдвое шире него; обрезанное — целиком в подсказке.
 export function AttachmentList({ att, locked }: { att: Attachments; locked: boolean }) {
   const { rows, err, busy, run } = att
@@ -82,7 +82,7 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
       {busy && <div className="hint">загружаю…</div>}
       {rows && rows.length > 0 &&
         <table className="grid">
-          <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-file">Файл</th>
+          <thead><tr><th className="rn">№</th><th className="gl" /><th className="c-name">Файл</th>
             <th className="c-desc">Описание</th>
             <th className="c-fit num">Размер</th>
             <th className="c-date">Загружено</th><th className="c-fit">Загрузил</th>
@@ -91,7 +91,7 @@ export function AttachmentList({ att, locked }: { att: Attachments; locked: bool
             <tr key={a.id} className="row">
               <td className="rn">{i + 1}</td>
               <td className="gl"><FileGlyph filename={a.filename} state={a.state} /></td>
-              <td className="c-file" title={a.filename}>
+              <td className="c-name" title={a.filename}>
                 <a className="link" href={a.url} target="_blank" rel="noreferrer">{a.filename}</a></td>
               <td className="c-desc"><CommitInput value={a.description} disabled={locked || busy}
                 onCommit={v => run(api.updateAttachment(a.id, v))} /></td>

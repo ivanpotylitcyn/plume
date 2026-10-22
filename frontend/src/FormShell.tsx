@@ -40,10 +40,15 @@ export interface FormTab {
   attention?: boolean
 }
 
-export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, locked, ...cmd }:
+export function FormShell({ id, code, noCode, entity, fields, meta, extra, tabs, error, locked,
+  ...cmd }:
   FormCommandProps & {
     id: number              // смена = другая сущность: сброс таба (канон Ф9)
     code: string            // титул; пустой — так и остаётся пустым (§13.5)
+    // Сущность, чей код не правится в этой форме и законно бывает пустым (партия: PN
+    // вписывают в поставке): пустой титул = приглушённая заглушка, без предупреждения на
+    // уходе (удалять сущность из-за пустого кода нечего).
+    noCode?: string
     entity: string          // винительный падеж для предупреждения: «удалите изделие»
     fields: ReactNode       // содержимое `.props` (пары dt/dd) — зона полей шапки
     meta?: ReactNode
@@ -64,7 +69,7 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
   // и так давит. Удалённую сущность не поминаем: `gone` ставится кликом по корзине
   // (после него форма либо исчезнет, либо пользователь останется — и тогда одно
   // предупреждение будет пропущено; менее навязчиво, чем ложная ругань).
-  const codeRef = useRef(code); codeRef.current = code
+  const codeRef = useRef(code); codeRef.current = noCode ? code || noCode : code
   const entityRef = useRef(entity); entityRef.current = entity
   const gone = useRef(false)
   useEffect(() => {
@@ -85,7 +90,7 @@ export function FormShell({ id, code, entity, fields, meta, extra, tabs, error, 
 
   return (
     <div className={locked ? 'form-locked' : ''}>
-      <div className="fs-title">{code}</div>
+      <div className="fs-title">{code || (noCode && <span className="no-code">{noCode}</span>)}</div>
 
       {/* Высоту шапки задают ПОЛЯ. Колонка команд — один флекс-столбец во всю высоту:
           верхние команды идут построчно с полями, нижняя (корзина/«Скачать») прижата
