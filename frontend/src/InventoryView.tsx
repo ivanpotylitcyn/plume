@@ -13,17 +13,18 @@ import { api, type ItemRow, type InventoryForm, type InventoryFormLot,
   type WrittenOffLot } from './api'
 import { LotGlyph, count, moneyCol, moneyField, num, parseMoney, perUnitTitle, sumByUom } from './status'
 import { CommitInput } from './CommitInput'
-import { OrderFields, useOrderForm } from './FormHeader'
+import { LocationField, OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { MoneyBlock } from './StatPanel'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ItemPicker } from './Picker'
-import { EntityLink } from './EntityLink'
+import { EntityLink, LotLink } from './EntityLink'
 
-export function InventoryView({ inventoryId, items, isNew, openItem, openProject,
+export function InventoryView({ inventoryId, items, isNew, openItem, openLot, openLocation, openProject,
   onChanged, onDeleted }: {
   inventoryId: number; items: ItemRow[]; isNew: boolean
-  openItem: (id: number) => void; openProject: (id: number) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  openLocation: (id: number) => void; openProject: (id: number) => void
   onChanged: () => void; onDeleted: () => void
 }) {
   const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
@@ -50,14 +51,14 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
               <th className="c-desc">Описание</th>
               <th className="num">Кол-во</th><th className="uom">Ед.</th>
               <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость, ₽</th>
-              <th className="c-txt">Part number</th><th className="c-txt">Название</th>
+              <th className="c-txt">PN</th><th className="c-txt">Наименование</th>
               <th className="c-fit">Провенанс</th><th className="act" />
             </tr>
           </thead>
           <tbody>
             {c.lots.map((lot, i) => (
               <LotRow key={lot.id} no={i + 1} lot={lot} locked={locked} draft={!fixed} busy={busy}
-                openItem={openItem} run={run} />
+                openItem={openItem} openLot={openLot} run={run} />
             ))}
             {!locked && <GhostRow inventoryId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
@@ -94,7 +95,10 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
       fields={
         <OrderFields c={c} locked={locked} busy={busy} numberLabel="№ акта"
           openProject={openProject}
-          patch={b => run(api.updateInventory(c.id, b))} />}
+          patch={b => run(api.updateInventory(c.id, b))}
+          // Волна 27: «Куда» — где лежит найденное; только наша локация.
+          anchors={<LocationField c={c} locked={locked} busy={busy} own onOpen={openLocation}
+            onChange={id => run(api.updateInventory(c.id, { location_id: id }))} />} />}
       // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
       extra={<MoneyBlock label="нашли на сумму" value={c.total_cost}
         title="Стоимость найденных партий — введённая или доля списанного предшественника" />}
@@ -106,17 +110,19 @@ export function InventoryView({ inventoryId, items, isNew, openItem, openProject
 // Реальная строка акта (найденный лот): автосейв кол-ва/цены/названия, удаление.
 // `draft` — акт не проведён (Ф15): найденная партия ещё не на складе, живости у неё
 // нет — остаток не показываем, глиф нейтральный (иначе «остаток 0» на каждой строке).
-function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
+function LotRow({ no, lot, locked, draft, busy, openItem, openLot, run }: {
   no?: number
   lot: InventoryFormLot; locked: boolean; draft: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<InventoryForm>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<InventoryForm>) => void
 }) {
   const short = !draft && lot.live_qty !== lot.qty   // просел под последующий расход
   return (
     <tr className="row">
       <td className="rn">{no}</td>
       {/* Строка = партия, рождённая этим актом (origin = инвентаризация). */}
-      <td className="gl"><LotGlyph origin="inventory" liveQty={lot.live_qty} draft={draft} /></td>
+      <td className="gl"><LotLink id={lot.id} open={openLot}>
+        <LotGlyph native={lot.item_native} liveQty={lot.live_qty} draft={draft} /></LotLink></td>
       <td className="c-key">
         <EntityLink kind="item" id={lot.item_id} open={openItem}>{lot.item_code}</EntityLink></td>
       <td className="c-desc">
@@ -139,12 +145,12 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
               validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}
       </td>
       <td className="c-txt">
-        <CommitInput value={lot.part_number} disabled={locked || busy}
-          onCommit={v => run(api.updateInventoryLot(lot.id, { part_number: v }))} />
+        <CommitInput value={lot.lot_code} disabled={locked || busy}
+          onCommit={v => run(api.updateInventoryLot(lot.id, { lot_code: v }))} />
       </td>
       <td className="c-txt">
-        <CommitInput value={lot.lot_name} disabled={locked || busy}
-          onCommit={v => run(api.updateInventoryLot(lot.id, { lot_name: v }))} />
+        <CommitInput value={lot.lot_description} disabled={locked || busy}
+          onCommit={v => run(api.updateInventoryLot(lot.id, { lot_description: v }))} />
       </td>
       <td className="c-fit">
         {lot.predecessor_id
@@ -181,8 +187,8 @@ function GhostRow({ inventoryId, items, busy, run }: {
     run(api.addInventoryLot(inventoryId, {
       item_id: itemId, qty: q,
       cost: parseMoney(cost) ?? undefined,
-      part_number: pn || undefined,
-      lot_name: name || undefined,
+      lot_code: pn || undefined,
+      lot_description: name || undefined,
     }))
     setItemId(''); setQty(''); setCost(''); setPn(''); setName('')
   }
@@ -214,7 +220,7 @@ function GhostRow({ inventoryId, items, busy, run }: {
       </td>
       <td className="c-txt">
         <input className="qty-in" value={pn} disabled={busy}
-          placeholder="part number" onChange={e => setPn(e.target.value)}
+          placeholder="PN" onChange={e => setPn(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
       <td className="c-txt">
@@ -257,7 +263,7 @@ function RematerializeTab({ inventoryId, busy, run }: {
           <th className="c-desc">Описание</th>
           <th className="c-fit">Проект-источник</th>
           <th className="num">Списано</th><th className="uom">Ед.</th>
-          <th className="c-fit">Название</th><th className="act" />
+          <th className="c-fit">Наименование</th><th className="act" />
         </tr>
       </thead>
       <tbody>
@@ -265,14 +271,14 @@ function RematerializeTab({ inventoryId, busy, run }: {
           <tr key={l.lot_id} className="row">
             <td className="rn">{i + 1}</td>
             {/* Партия списана — живого остатка нет: глиф приглушён по определению. */}
-            <td className="gl"><LotGlyph origin={null} liveQty={0} /></td>
+            <td className="gl"><LotGlyph native={false} liveQty={0} draft /></td>
             <td className="c-key">{l.item_code}</td>
             <td className="c-desc">
               <span className="cell-ellip" title={l.item_description}>{l.item_description}</span></td>
             <td className="c-fit code">{l.project_code}</td>
             <td className="num">{num(l.written_qty)}</td>
             <td className="uom">{l.uom}</td>
-            <td className="c-fit">{l.lot_name || '—'}</td>
+            <td className="c-fit">{l.lot_description || '—'}</td>
             <td className="act">
               <button className="btn sm" disabled={busy}
                 onClick={() => rematerialize(l)}>вернуть на баланс</button>

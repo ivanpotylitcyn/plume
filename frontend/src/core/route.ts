@@ -17,10 +17,12 @@
 // Режим сайдбара — какой СПИСОК открыт. Волна 13 Ф1b свернула 6 складских документов в
 // один режим «Ордера», волна 17 разделила справочник по оси `native`, волна 20 добавила
 // контрагентов. Переехал сюда из `App` вместе с `Sel`: типы навигации — не вьюха.
-export type Mode = 'projects' | 'products' | 'items' | 'orders' | 'locations'
+// Волна 27: «Склад» — список партий (что физически лежит), «Локации» — места хранения
+// (бывший режим «Склады»).
+export type Mode = 'projects' | 'products' | 'items' | 'orders' | 'stock' | 'locations'
   | 'procurements' | 'purchases' | 'counterparties'
 
-export const MODES: Mode[] = ['projects', 'products', 'items', 'orders', 'locations',
+export const MODES: Mode[] = ['projects', 'products', 'items', 'orders', 'stock', 'locations',
   'procurements', 'purchases', 'counterparties']
 
 // Выбранная форма. Волна 19, Ф12e: вариантов `new-*` нет — «＋ Новый» рождает сущность
@@ -35,11 +37,13 @@ export type Sel =
   | { kind: 'purchase'; id: number }
   | { kind: 'transfer'; id: number }
   | { kind: 'writeoff'; id: number }
-  | { kind: 'requisition'; id: number }
+  | { kind: 'reassignment'; id: number }
   | { kind: 'procurement'; id: number }
   | { kind: 'inventory'; id: number }
   | { kind: 'relocation'; id: number }
+  | { kind: 'requisition'; id: number }
   | { kind: 'location'; id: number }
+  | { kind: 'lot'; id: number }
   | { kind: 'counterparty'; id: number }
   | { kind: 'account' }
   | null
@@ -50,7 +54,8 @@ export type Sel =
 const KIND_MODE: Record<string, Mode> = {
   project: 'projects', item: 'items',
   kitting: 'orders', receipt: 'orders', transfer: 'orders', writeoff: 'orders',
-  requisition: 'orders', inventory: 'orders', relocation: 'orders',
+  reassignment: 'orders', inventory: 'orders', relocation: 'orders', requisition: 'orders',
+  lot: 'stock',
   purchase: 'purchases', procurement: 'procurements',
   location: 'locations', counterparty: 'counterparties',
 }

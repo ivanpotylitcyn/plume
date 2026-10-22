@@ -33,3 +33,12 @@ export function EntityLink({ kind, id, open, title, className, children }: {
       onClick={click}>{children}</a>
   )
 }
+
+// Ссылка на форму лота, обёрнутая вокруг глифа партии (волна 27): у строк, где своей
+// колонки «Партия» нет (строки поставки/инвентаризации), лот открывается по глифу.
+// Цвет остаётся у глифа — это знак «как дела», а не синий текст ссылки.
+export function LotLink({ id, open, children }: {
+  id: number; open: (id: number) => void; children: ReactNode
+}) {
+  return <EntityLink kind="lot" id={id} open={open} className="lot-link">{children}</EntityLink>
+}

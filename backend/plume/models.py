@@ -9,7 +9,7 @@
 Сквозные принципы, влияющие на код (см. README / docs/JOURNAL.md):
 - `Lot` — главная учётная единица; склад двигается только по `Lot`.
 - `Lot` всегда из одного origin-документа (exclusive arc): поставка/изготовление/
-  инвентаризация/отпочкование — ровно один FK задан.
+  инвентаризация/перевод — ровно один FK задан.
 - Авторство — на документах (`user` → auth.User), движение без документа не живёт.
 - `StockMovement` — пересчитываемая проекция, не append-only журнал.
 """
@@ -77,6 +77,7 @@ class DocumentKind(models.TextChoices):
     RECEIPT = 'receipt', 'Поставка'
     KITTING = 'kitting', 'Комплектация'
     INVENTORY = 'inventory', 'Инвентаризация'
+    REASSIGNMENT = 'reassignment', 'Перевод'
     REQUISITION = 'requisition', 'Требование'
     TRANSFER = 'transfer', 'Передача'
     WRITEOFF = 'writeoff', 'Списание'
@@ -87,6 +88,22 @@ class DocumentKind(models.TextChoices):
 # и для прикладных проверок). Ф14: «пустая колонка не у своего вида» — не стиль,
 # а инвариант БД.
 CONTRACTOR_KINDS = (DocumentKind.RECEIPT, DocumentKind.TRANSFER)
+
+# Виды с локацией «Куда» в шапке (волна 27, решение Ивана 2026-10-21): рождающие партии
+# ордера кладут их в указанное место, Требование везёт туда с Центрального. Перевод в
+# список не входит — проект он меняет, место нет (потомок рождается там, где лежал
+# источник). Поставке «Куда» по умолчанию — Центральный.
+LOCATION_KINDS = (DocumentKind.RECEIPT, DocumentKind.KITTING, DocumentKind.INVENTORY,
+                  DocumentKind.REQUISITION)
+# «Куда» этих видов — только наша локация: комплектация рождает прибор у нас, найденное
+# инвентаризацией лежит у нас, Требование и есть выдача с Центрального к нам.
+OWN_LOCATION_KINDS = (DocumentKind.KITTING, DocumentKind.INVENTORY,
+                      DocumentKind.REQUISITION)
+# Виды-ходы (волна 27): пара знаковых строк `−q`/`+q` одного лота между местами —
+# тотал лота и его стоимость не меняются. Расходная очередь стоимости их не видит.
+MOVE_KINDS = (DocumentKind.RELOCATION, DocumentKind.REQUISITION)
+OWN_LOCATION_ONLY = ('«Куда» — наша локация, не Центральный склад: Центральный '
+                     'принимает только поставки.')
 
 # «Комплектуем только своё» (решение Ивана 2026-07-31, клик-проход комплектации):
 # целью комплектации может быть лишь НАШЕ изделие (`Item.native`) — покупное мы не
@@ -112,7 +129,7 @@ ITEM_CATEGORY_SIDE = ('Категория с другой стороны спр�
 
 class StockDocument(models.Model):
     """**Единая таблица** складского ордера (Поставка/Комплектация/Инвентаризация/
-    Требование/Передача/Списание/Перемещение) — «Ордер» в UI (волна 13, Ф2a).
+    Перевод/Передача/Списание/Перемещение) — «Ордер» в UI (волна 13, Ф2a).
 
     Несёт **единый мягкий замок** `locked` (волна 13, Ф1; строка → bool в волне 19,
     Ф1c): свернул разнородные `Receipt.approved`, `Transfer.posted`,
@@ -157,6 +174,7 @@ class StockDocument(models.Model):
 
     Kind = DocumentKind
     CONTRACTOR_KINDS = CONTRACTOR_KINDS
+    LOCATION_KINDS = LOCATION_KINDS
 
     # Дочерний класс объявляет свой вид (`KIND`); `save()` штампует его в `kind`.
     KIND = None
@@ -172,10 +190,11 @@ class StockDocument(models.Model):
     REQUIRED_HEADER_BY_KIND = {
         Kind.RECEIPT:     ('date', 'number'),
         Kind.INVENTORY:   ('date', 'number'),
-        Kind.REQUISITION: ('date', 'number'),
+        Kind.REASSIGNMENT: ('date', 'number'),
         Kind.TRANSFER:    ('date', 'number'),
         Kind.WRITEOFF:    ('date', 'number'),
         Kind.RELOCATION:  ('date', 'number'),  # Ф2e: реальный документ с номером — строгий
+        Kind.REQUISITION: ('date', 'number'),  # в27: официальный документ бухгалтерии
         Kind.KITTING:     (),
     }
 
@@ -211,6 +230,12 @@ class StockDocument(models.Model):
     contractor = models.ForeignKey('Counterparty', on_delete=models.PROTECT,
                                    null=True, blank=True, related_name='documents',
                                    verbose_name='контрагент')
+    # «Куда» (волна 27): место, куда ордер кладёт партии — рождённые (поставка,
+    # комплектация, инвентаризация) или привезённые с Центрального (требование).
+    # Применимость — `LOCATION_KINDS`, обязательность — фиксация (CHECK ниже).
+    location = models.ForeignKey('Location', on_delete=models.PROTECT, null=True,
+                                 blank=True, related_name='documents',
+                                 verbose_name='куда')
 
     # --- внешние атрибуты (юридическая обвязка) → автор --- #
     # `number` blank (Kitting без номера) — его видимость по `kind` рулит форма/матрица.
@@ -259,6 +284,16 @@ class StockDocument(models.Model):
                            | (Q(target_item__isnull=True) & Q(qty__isnull=True))),
                 name='doc_target_only_kitting',
             ),
+            # --- «Куда» (волна 27): только у своих видов, обязательна к фиксации ---
+            models.CheckConstraint(
+                condition=(Q(kind__in=LOCATION_KINDS) | Q(location__isnull=True)),
+                name='doc_location_only_own_kinds',
+            ),
+            models.CheckConstraint(
+                condition=(~Q(kind__in=LOCATION_KINDS) | Q(locked=False)
+                           | Q(location__isnull=False)),
+                name='doc_locked_has_location',
+            ),
         ]
 
     def clean(self):
@@ -283,6 +318,10 @@ class StockDocument(models.Model):
         if ((self.KIND or self.kind) == DocumentKind.KITTING
                 and self.target_item_id and not self.target_item.native):
             errors['target_item'] = KITTING_TARGET_NATIVE
+        # Волна 27: «Куда» своих видов — не Центральный (чужая таблица → не CHECK).
+        if ((self.KIND or self.kind) in OWN_LOCATION_KINDS
+                and self.location_id and self.location.central):
+            errors['location'] = OWN_LOCATION_ONLY
         if errors:
             raise ValidationError(errors)
 
@@ -465,19 +504,34 @@ class Counterparty(models.Model):
 
 
 class Location(models.Model):
-    """Место хранения. Волна 13, Ф2e — мультисклад активирован: мест может быть
-    несколько (напр. «Основной склад 103» и «Место пайки 105»), движок считает
-    остаток по паре `(лот, локация)`, «Перемещение» (`Relocation`) двигает лот
-    между ними. Синглтон-заглушка MVP снята (справочник редактируем)."""
+    """Место хранения (волна 13, Ф2e — мультисклад): остаток считается по паре
+    `(лот, локация)`, ордера двигают лоты между местами.
+
+    **Волна 27 — Центральный склад** (решение Ивана 2026-10-21): ровно одна локация с
+    `central=True`. Сюда приходят поставки (УПД оформляет бухгалтерия), отсюда партии
+    уходят к нам официальным Требованием. В норме Центральный **пуст**: лот на нём —
+    задача «оформить Требование». Его можно переименовать, но нельзя удалить. Остальные
+    локации — наши кабинеты; между ними ходит онлайн-Перемещение.
+
+    Синглтон держит БД: `central` — True или NULL под `unique` (MySQL пускает сколько
+    угодно NULL под уникальный индекс), False запрещён CHECK. Свободное текстовое
+    `kind` снято — движок его не читал."""
 
     code = models.CharField('код', max_length=64, unique=True)
     description = models.CharField('описание', max_length=255)
-    kind = models.CharField('вид', max_length=32, blank=True, default='')
+    central = models.BooleanField('центральный склад', null=True, blank=True,
+                                  default=None, unique=True)
 
     class Meta:
-        verbose_name = 'склад'
-        verbose_name_plural = 'склады'
+        verbose_name = 'локация'
+        verbose_name_plural = 'локации'
         ordering = ['code']
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(central__isnull=True) | Q(central=True),
+                name='location_central_true_or_null',
+            ),
+        ]
 
     def __str__(self):
         return self.description
@@ -800,10 +854,33 @@ class Inventory(StockDocument):
         return f'Инвентаризация {self.number}'
 
 
-class Requisition(StockDocument):
-    """Требование/отпочкование — рождает лоты в проекте-получателе из source-лота.
+class Reassignment(StockDocument):
+    """Перевод (бывшее отпочкование) — рождает лоты в проекте-получателе из source-лота.
 
     Ф14: proxy — своих колонок у вида нет и не было (таблица содержала только PK).
+    """
+
+    KIND = DocumentKind.REASSIGNMENT
+
+    objects = _KindManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = 'перевод'
+        verbose_name_plural = 'переводы'
+
+    def __str__(self):
+        return f'Перевод {self.number}'
+
+
+class Requisition(StockDocument):
+    """Требование (волна 27) — официальная выдача с Центрального склада на нашу локацию.
+
+    Документ бухгалтерии: без него компоненты нельзя взять в работу, и его вписывают
+    в акт комплектации (акт находит его по своим лотам — связи в схеме нет). Механика
+    перемещения — пара знаковых `StockLine` (`−q`@Центральный / `+q`@«Куда»), проект и
+    тотал лота не меняются. Источник всегда Центральный, «Куда» — шапка (`location`),
+    один проект.
     """
 
     KIND = DocumentKind.REQUISITION
@@ -833,7 +910,7 @@ class Lot(models.Model):
     project = models.ForeignKey(Project, on_delete=models.PROTECT,
                                 related_name='lots', verbose_name='home-проект')
     # origin: рождающий ордер (born-direct). Волна 13, Ф2b — дуга из 4 FK
-    # (receipt/kitting/inventory/requisition) схлопнута в один FK на MTI-родителя;
+    # (receipt/kitting/inventory/reassignment) схлопнута в один FK на MTI-родителя;
     # вид origin читается из `origin.kind` (дискриминатор Ф2a).
     origin = models.ForeignKey(StockDocument, on_delete=models.CASCADE,
                                related_name='lots', verbose_name='ордер-origin')
@@ -847,17 +924,18 @@ class Lot(models.Model):
     # Расход делит стоимость накопительным округлением (`engine.lot_line_values`):
     # исчерпанная партия списывается ровно в ноль — «последний забирает остаток».
     cost = money(verbose_name='стоимость партии', default=0)
-    # Два идентификатора партии (Волна 13, Ф2f): человеческий и машинный.
-    # `lot_name` — человеческий (имена из УПД + заводские №); `part_number` —
-    # строгий машинный (MPN с datasheet / децимальный номер; для станка
-    # автомонтажа). PN живёт на `Lot`, а не на `Item`: упаковка/исполнение
-    # варьируются от поставки; `Item.code` — абстрактный артикул.
-    # Порядок — от диаграммы (§13.4a): машинный PN, затем человеческое имя. Так же
-    # идут колонки в строках формы поставки.
-    part_number = models.CharField('part number', max_length=128,
+    # Идентичность партии — пара `code` + `description`, как у всех сущностей (волна 27,
+    # решение Ивана 2026-10-21; до того `part_number` + `lot_name`, Волна 13, Ф2f). Обе —
+    # ФАКТЫ, введённые один раз в origin-ордере: `code` — PN с коробки (MPN с datasheet /
+    # децимальный номер; для станка автомонтажа), `description` — наименование из УПД
+    # (юридическая сила; у прибора — заводские №). **`code` у лота НЕ уникален** —
+    # единственный в схеме: та же катушка двумя УПД = два лота с одним PN, и это норма
+    # (удобно искать, сколько лотов одного контроллера). Ключ лота — `id`. PN живёт на
+    # `Lot`, а не на `Item`: упаковка/исполнение варьируются от поставки; `Item.code` —
+    # абстрактный артикул. Порядок — от диаграммы (§13.4a): PN, затем наименование.
+    code = models.CharField('код (PN)', max_length=128, blank=True, default='')
+    description = models.CharField('описание (наименование)', max_length=255,
                                    blank=True, default='')
-    lot_name = models.CharField('название партии', max_length=255,
-                                blank=True, default='')
 
     class Meta:
         verbose_name = 'партия'
@@ -865,7 +943,7 @@ class Lot(models.Model):
 
     @property
     def origin_kind(self):
-        """Вид origin-ордера ('receipt'/'kitting'/'inventory'/'requisition') —
+        """Вид origin-ордера ('receipt'/'kitting'/'inventory'/'reassignment') —
         из дискриминатора родителя (совместим со старым именем FK)."""
         return self.origin.kind if self.origin_id else None
 
@@ -935,7 +1013,7 @@ class StockLine(models.Model):
     """Знаковая строка движения СУЩЕСТВУЮЩЕГО лота — единая (волна 13, Ф0).
 
     Сворачивает четыре таблицы строк-расхода (`KittingLine`/`TransferLine`/
-    `WriteoffLine`/`RequisitionLine`) в одну. `qty` со знаком (− = расход/списание/
+    `WriteoffLine`/`ReassignmentLine`) в одну. `qty` со знаком (− = расход/списание/
     пайка; в Ф2 «Перемещение» даст пару −/+ между локациями). Документ-владелец —
     `document` → `StockDocument`: волна 13, Ф2b схлопнула дугу из 4 FK в один FK на
     MTI-родителя (id-пространство унифицировано в Ф2a). Рождение лотов сюда НЕ входит:
@@ -963,7 +1041,7 @@ class StockLine(models.Model):
 
     @property
     def doc_kind(self):
-        """Вид документа-владельца ('kitting'/'transfer'/'writeoff'/'requisition')
+        """Вид документа-владельца ('kitting'/'transfer'/'writeoff'/'reassignment')
         — из дискриминатора родителя (совместим со старым именем FK)."""
         return self.document.kind if self.document_id else None
 

@@ -132,7 +132,7 @@ export interface ItemMovement {
   event: 'born' | 'move'
   kind: string; document_id: number; code: string | null; number: string
   date: string | null; locked: boolean; project_code: string
-  lot_id: number; lot_name: string; qty: number
+  lot_id: number; lot_description: string; qty: number
 }
 // Блок «Деньги» изделия (волна 26). Покупное: ★ последняя цена по счёту; производимое:
 // ★ живой роллап по составу. Поля другой ветки не приходят.
@@ -176,7 +176,7 @@ export interface ItemDetail {
   lots: { id: number; project_code: string; origin: string; origin_locked: boolean
           qty_born: number
           live_qty: number; cost: number; unit_cost: number | null
-          part_number: string; lot_name: string }[]
+          lot_code: string; lot_description: string }[]
   movements: ItemMovement[]
   // 2026-10-20: где покупная позиция в плане и в заказах (у производимого — пусто).
   procurements: ItemProcurementRow[]; purchases: ItemPurchaseRow[]
@@ -230,18 +230,35 @@ export interface RollupResult {
 }
 export type ItemDetailWithRollup = ItemDetail & { rollup: RollupResult }
 
+// ── Волна 27: место партии и «Куда» ордера ──
+// Пикеры строк расхода отдают ПАРЫ «лот @ локация» (выбор строки = выбор лота И места
+// списания); `live_qty` такой строки — остаток в этом месте.
+export interface LotPlace {
+  location_id: number; location_code: string; location_central: boolean
+}
+// «Куда» в шапке ордера (поставка, комплектация, инвентаризация, требование).
+export interface LocationHead {
+  location_id: number | null; location_code: string; location_description: string
+  location_central: boolean
+}
+// Требование, которое привезло лоты комплектации (выводится, связи в схеме нет).
+export interface RequisitionRef {
+  id: number; code: string | null; number: string; date: string | null
+}
+
 // ── Форма комплектации (волна 2 — записываемое ядро) ──
 export interface KittingRow {
   id: number; code: string | null; project_code: string
   target_code: string; target_description: string
   qty: number; locked: boolean; date: string | null
 }
-export interface CandidateLot {
+export interface CandidateLot extends LotPlace {
   lot_id: number; live_qty: number; cost: number; unit_cost: number | null
-  part_number: string; origin: string; lot_name: string
+  lot_code: string; origin: string; lot_description: string; item_native: boolean
 }
 export interface RealLine {
   id: number; lot_id: number; lot_label: string; qty: number; date: string | null
+  location_code: string          // волна 27: откуда списали
 }
 export interface Ghost {
   status: Status; have: number; on_order: number; to_order: number
@@ -256,14 +273,15 @@ export interface KittingFormRow {
 }
 export interface BornLot {
   id: number; qty: number; cost: number; unit_cost: number | null
-  lot_name: string; part_number: string
+  lot_description: string; lot_code: string
 }
-export interface KittingForm extends Authored {
+export interface KittingForm extends Authored, LocationHead {
   id: number; locked: boolean; code: string | null; description: string
   project_id: number; project_code: string
   target_id: number | null; target_code: string; target_description: string; uom: string
   qty: number | null; date: string | null; worst_status: Status
   rows: KittingFormRow[]; born_lots: BornLot[]
+  requisitions: RequisitionRef[]   // волна 27: Требования для акта
   total_cost: number           // волна 26: ★ израсходовано на сумму
 }
 
@@ -337,13 +355,14 @@ export interface ReceiptRow {
   project_code: string; locked: boolean; lines: number
 }
 export interface ReceiptLot {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   id: number; item_id: number; item_code: string; item_description: string; uom: string
   item_category: string | null           // класс изделия — фильтр колонки
   // Волна 26: стоимость строки УПД первична, цена штуки — производная (`unit_cost`).
-  qty: number; live_qty: number; cost: number; unit_cost: number | null; lot_name: string
-  part_number: string; consumed: boolean
+  qty: number; live_qty: number; cost: number; unit_cost: number | null; lot_description: string
+  lot_code: string; consumed: boolean
 }
-export interface ReceiptForm extends Authored {
+export interface ReceiptForm extends Authored, LocationHead {
   id: number; number: string; date: string
   code: string | null; description: string
   contractor_id: number | null; contractor_code: string; contractor_name: string
@@ -406,15 +425,17 @@ export interface TransferRow {
   id: number; code: string | null; number: string; date: string; project_code: string
   locked: boolean; lines: number
 }
-export interface AvailableLot {
+export interface AvailableLot extends LotPlace {
+  item_native: boolean
   lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
-  live_qty: number; origin: string; part_number: string; lot_name: string
+  live_qty: number; origin: string; lot_code: string; lot_description: string
 }
 export interface TransferFormLine {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   id: number; lot_id: number; lot_label: string; origin: string | null
   item_id: number; item_code: string
   item_description: string; uom: string; qty: number; display_name: string
-  lot_live_qty: number; lot_name: string
+  lot_live_qty: number; lot_description: string
 }
 export interface TransferForm extends Authored {
   id: number; number: string; date: string
@@ -431,10 +452,11 @@ export interface WriteoffRow {
   reason: string; locked: boolean; lines: number
 }
 export interface WriteoffFormLine {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   id: number; lot_id: number; lot_label: string; origin: string | null
   item_id: number; item_code: string
   item_description: string; uom: string; qty: number; lot_live_qty: number
-  lot_name: string
+  lot_description: string
 }
 export interface WriteoffForm extends Authored {
   id: number; number: string; date: string; reason: string
@@ -444,41 +466,45 @@ export interface WriteoffForm extends Authored {
   total_cost: number           // волна 26: ★ сумма движений документа
 }
 
-// ── Требование / Requisition (волна 6 — записываемое ядро) ──
-export interface RequisitionRow {
+// ── Перевод / Reassignment (волна 6 — записываемое ядро) ──
+export interface ReassignmentRow {
   id: number; code: string | null; number: string; date: string; project_code: string
   locked: boolean; lines: number
 }
-export interface AllAvailableLot {
+export interface AllAvailableLot extends LotPlace {
+  item_native: boolean
   lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
   live_qty: number; origin: string; project_id: number; project_code: string
-  part_number: string; lot_name: string
+  lot_code: string; lot_description: string
 }
-export interface RequisitionFormLine {
+export interface ReassignmentFormLine {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   id: number; source_lot_id: number; lot_label: string; origin: string | null
   source_project_code: string
   item_id: number; item_code: string; item_description: string; uom: string
   qty: number; source_live_qty: number; born_lot_id: number | null
-  lot_name: string
+  lot_description: string
 }
-export interface RequisitionForm extends Authored {
+export interface ReassignmentForm extends Authored {
   id: number; number: string; date: string
   code: string | null; description: string
   project_id: number; project_code: string; project_name: string
-  locked: boolean; total_qty: number; lines: RequisitionFormLine[]
+  locked: boolean; total_qty: number; lines: ReassignmentFormLine[]
   total_cost: number           // волна 26: ★ сумма движений документа
 }
 
 // ── Место хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
-export interface LocationRow { id: number; code: string; description: string; kind: string }
+export interface LocationRow { id: number; code: string; description: string; central: boolean }
 export interface LocationStockLot {
-  lot_id: number; lot_label: string; part_number: string; lot_name: string; origin: string | null
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
+  lot_id: number; lot_label: string; lot_code: string; lot_description: string; origin: string | null
   item_id: number; item_code: string; item_description: string; uom: string; qty: number
   cost: number                 // волна 26: стоимость лежащего здесь
   project_id: number; project_code: string; project_name: string
 }
 export interface LocationForm {
-  id: number; code: string; description: string; kind: string
+  id: number; code: string; description: string; central: boolean
+  orders: LocationOrderRow[]   // волна 27: требования и перемещения с её участием
   stock: LocationStockLot[]
   total_cost: number           // волна 26: ★ лежит на сумму
 }
@@ -489,6 +515,7 @@ export interface RelocationRow {
   locked: boolean; lines: number
 }
 export interface RelocationMove {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   lot_id: number; lot_label: string; origin: string | null
   item_id: number; item_code: string
   item_description: string; uom: string; qty: number
@@ -507,9 +534,80 @@ export interface LotLocation {
   location_id: number; code: string; description: string; qty: number
 }
 export interface RelocationSourceLot {
+  item_native: boolean
   lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
-  live_qty: number; part_number: string; lot_name: string
+  live_qty: number; lot_code: string; lot_description: string
   by_location: LotLocation[]
+}
+
+// ── Склад и форма лота (волна 27) ──
+export interface StockPlace extends LotPlace { qty: number }
+export interface StockRow {
+  id: number; code: string; description: string
+  item_id: number; item_code: string; item_description: string; item_native: boolean
+  category: string | null; uom: string
+  project_id: number; project_code: string
+  live_qty: number; places: StockPlace[]
+  exhausted: boolean; on_central: boolean; anomaly: boolean
+}
+export interface DocRef {
+  kind: string; id: number; code: string | null; number: string; date: string | null
+  locked: boolean; label: string
+}
+export interface LotRef {
+  id: number; code: string; description: string; item_id: number; item_code: string
+  item_native: boolean; label: string
+}
+export interface LotMoneyPart { qty: number; cost: number }
+export interface LotMoney {
+  born: LotMoneyPart & { unit_cost: number | null }
+  kitted: LotMoneyPart; transferred: LotMoneyPart; written_off: LotMoneyPart
+  reassigned: LotMoneyPart
+  remaining: LotMoneyPart & { places: (StockPlace & { cost: number })[] }
+}
+export interface LotHistoryRow {
+  id: number; event: 'born' | 'move' | 'out' | 'in'; document: DocRef
+  location_code: string; location_central: boolean; qty: number; cost: number
+  related: LotRef[]
+}
+export interface LotUsageRow {
+  id: number; document: DocRef; target_code: string; target_id: number | null
+  qty: number; cost: number; devices: LotRef[]
+}
+export interface LotCompositionRow {
+  id: number; lot: LotRef; uom: string; qty: number; cost: number
+  children: LotCompositionRow[]
+}
+export interface LotForm {
+  id: number; code: string; description: string; label: string
+  item_id: number; item_code: string; item_description: string; item_native: boolean
+  uom: string; project_id: number; project_code: string
+  origin: DocRef; predecessor: LotRef | null; draft: boolean
+  money: LotMoney; history: LotHistoryRow[]; usage: LotUsageRow[]
+  composition: LotCompositionRow[]; composable: boolean
+}
+export interface LocationOrderRow extends DocRef {
+  project_code: string; qty_in: number; qty_out: number
+}
+
+// ── Требование / Requisition (волна 27: Центральный → наша локация, официально) ──
+export interface RequisitionRow {
+  id: number; code: string | null; number: string; date: string; project_code: string
+  location_code: string; locked: boolean; lines: number
+}
+export interface RequisitionLine {
+  lot_id: number; lot_label: string; lot_code: string; lot_description: string
+  origin: string | null; item_id: number; item_code: string; item_native: boolean
+  item_description: string; uom: string; qty: number
+  central_live_qty: number; dest_live_qty: number
+}
+export interface RequisitionForm extends Authored, LocationHead {
+  id: number; number: string; date: string
+  code: string | null; description: string
+  project_id: number; project_code: string; project_name: string
+  locked: boolean; central_id: number; central_code: string
+  total_qty: number; lines: RequisitionLine[]
+  total_cost: number
 }
 
 // ── Инвентаризация / Inventory (волна 9 — записываемое ядро) ──
@@ -519,12 +617,13 @@ export interface InventoryRow {
   locked: boolean; lines: number
 }
 export interface InventoryFormLot {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   id: number; item_id: number; item_code: string; item_description: string; uom: string
-  qty: number; live_qty: number; cost: number; unit_cost: number | null; lot_name: string
-  part_number: string; predecessor_id: number | null; predecessor_label: string
+  qty: number; live_qty: number; cost: number; unit_cost: number | null; lot_description: string
+  lot_code: string; predecessor_id: number | null; predecessor_label: string
   consumed: boolean
 }
-export interface InventoryForm extends Authored {
+export interface InventoryForm extends Authored, LocationHead {
   id: number; number: string; date: string
   code: string | null; description: string
   project_id: number; project_code: string; project_name: string
@@ -533,11 +632,12 @@ export interface InventoryForm extends Authored {
 export interface WrittenOffLot {
   lot_id: number; item_id: number; item_code: string; item_description: string; uom: string
   written_qty: number; project_code: string; unit_cost: number | null
-  cost: number; qty: number; lot_name: string; part_number: string
+  cost: number; qty: number; lot_description: string; lot_code: string
 }
 
 // ── Панель закрытия проекта (волна 6) ──
 export interface ResidualLot {
+  item_native: boolean          // волна 27: глиф партии — изделие/компонент
   lot_id: number; lot_label: string; origin: string | null; item_id: number; item_code: string
   item_description: string; uom: string; live_qty: number; anomaly: boolean
 }
@@ -847,9 +947,11 @@ export const api = {
   kittings: () => get<KittingRow[]>('/api/kittings/'),
   kitting: (id: number) => get<KittingForm>(`/api/kittings/${id}/`),
   updateKitting: (id: number, b: Partial<{ qty: number; date: string; user_id: number
-      project_id: number; target_id: number; code: string | null; description: string }>) =>
+      project_id: number; target_id: number; code: string | null; description: string
+      location_id: number | null }>) =>
     send<KittingForm>('PATCH', `/api/kittings/${id}/`, b),
-  pierce: (id: number, b: { component_id: number; lot_id: number; qty: number }) =>
+  pierce: (id: number, b: { component_id: number; lot_id: number; qty: number
+      location_id?: number }) =>
     send<KittingForm>('POST', `/api/kittings/${id}/lines/`, b),
   updateLine: (id: number, qty: number) =>
     send<KittingForm>('PATCH', `/api/kitting-lines/${id}/`, { qty }),
@@ -870,14 +972,14 @@ export const api = {
   deleteCounterparty: (id: number) => send<void>('DELETE', `/api/counterparties/${id}/`),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptForm>(`/api/receipts/${id}/`),
-  updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string }>) =>
+  updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string; location_id: number | null }>) =>
     send<ReceiptForm>('PATCH', `/api/receipts/${id}/`, b),
   addReceiptLot: (id: number, b: {
     item_id: number; qty: number; cost?: number
-    lot_name?: string; part_number?: string
+    lot_description?: string; lot_code?: string
   }) => send<ReceiptForm>('POST', `/api/receipts/${id}/lots/`, b),
   updateReceiptLot: (id: number, b: Partial<{
-    qty: number; cost: number; lot_name: string; part_number: string
+    qty: number; cost: number; lot_description: string; lot_code: string
   }>) => send<ReceiptForm>('PATCH', `/api/lots/${id}/`, b),
   deleteReceiptLot: (id: number) => send<ReceiptForm>('DELETE', `/api/lots/${id}/`),
   lockReceipt: (id: number) => send<ReceiptForm>('POST', `/api/receipts/${id}/lock/`),
@@ -914,7 +1016,8 @@ export const api = {
   transfer: (id: number) => get<TransferForm>(`/api/transfers/${id}/`),
   updateTransfer: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<TransferForm>('PATCH', `/api/transfers/${id}/`, b),
-  addTransferLine: (id: number, b: { lot_id: number; qty: number; display_name?: string }) =>
+  addTransferLine: (id: number, b: { lot_id: number; qty: number; display_name?: string
+      location_id?: number }) =>
     send<TransferForm>('POST', `/api/transfers/${id}/lines/`, b),
   updateTransferLine: (id: number, b: Partial<{ qty: number; display_name: string }>) =>
     send<TransferForm>('PATCH', `/api/transfer-lines/${id}/`, b),
@@ -930,7 +1033,7 @@ export const api = {
   writeoff: (id: number) => get<WriteoffForm>(`/api/writeoffs/${id}/`),
   updateWriteoff: (id: number, b: Partial<{ number: string; date: string; reason: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
     send<WriteoffForm>('PATCH', `/api/writeoffs/${id}/`, b),
-  addWriteoffLine: (id: number, b: { lot_id: number; qty: number }) =>
+  addWriteoffLine: (id: number, b: { lot_id: number; qty: number; location_id?: number }) =>
     send<WriteoffForm>('POST', `/api/writeoffs/${id}/lines/`, b),
   updateWriteoffLine: (id: number, qty: number) =>
     send<WriteoffForm>('PATCH', `/api/writeoff-lines/${id}/`, { qty }),
@@ -940,31 +1043,32 @@ export const api = {
   unlockWriteoff: (id: number) => send<WriteoffForm>('POST', `/api/writeoffs/${id}/unlock/`),
   deleteWriteoff: (id: number) => send<void>('DELETE', `/api/writeoffs/${id}/`),
 
-  requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
-  requisition: (id: number) => get<RequisitionForm>(`/api/requisitions/${id}/`),
-  updateRequisition: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
-    send<RequisitionForm>('PATCH', `/api/requisitions/${id}/`, b),
-  addRequisitionLine: (id: number, b: { source_lot_id: number; qty: number }) =>
-    send<RequisitionForm>('POST', `/api/requisitions/${id}/lines/`, b),
-  updateRequisitionLine: (id: number, qty: number) =>
-    send<RequisitionForm>('PATCH', `/api/requisition-lines/${id}/`, { qty }),
-  deleteRequisitionLine: (id: number) =>
-    send<RequisitionForm>('DELETE', `/api/requisition-lines/${id}/`),
-  lockRequisition: (id: number) => send<RequisitionForm>('POST', `/api/requisitions/${id}/lock/`),
-  unlockRequisition: (id: number) => send<RequisitionForm>('POST', `/api/requisitions/${id}/unlock/`),
-  deleteRequisition: (id: number) => send<void>('DELETE', `/api/requisitions/${id}/`),
+  reassignments: () => get<ReassignmentRow[]>('/api/reassignments/'),
+  reassignment: (id: number) => get<ReassignmentForm>(`/api/reassignments/${id}/`),
+  updateReassignment: (id: number, b: Partial<{ number: string; date: string; user_id: number; project_id: number; code: string | null; description: string }>) =>
+    send<ReassignmentForm>('PATCH', `/api/reassignments/${id}/`, b),
+  addReassignmentLine: (id: number, b: { source_lot_id: number; qty: number
+      location_id?: number }) =>
+    send<ReassignmentForm>('POST', `/api/reassignments/${id}/lines/`, b),
+  updateReassignmentLine: (id: number, qty: number) =>
+    send<ReassignmentForm>('PATCH', `/api/reassignment-lines/${id}/`, { qty }),
+  deleteReassignmentLine: (id: number) =>
+    send<ReassignmentForm>('DELETE', `/api/reassignment-lines/${id}/`),
+  lockReassignment: (id: number) => send<ReassignmentForm>('POST', `/api/reassignments/${id}/lock/`),
+  unlockReassignment: (id: number) => send<ReassignmentForm>('POST', `/api/reassignments/${id}/unlock/`),
+  deleteReassignment: (id: number) => send<void>('DELETE', `/api/reassignments/${id}/`),
   allAvailableLots: () => get<AllAvailableLot[]>('/api/available-lots/'),
 
   inventories: () => get<InventoryRow[]>('/api/inventories/'),
   inventory: (id: number) => get<InventoryForm>(`/api/inventories/${id}/`),
-  updateInventory: (id: number, b: Partial<{ number: string; date: string; code: string | null; description: string; user_id: number; project_id: number }>) =>
+  updateInventory: (id: number, b: Partial<{ number: string; date: string; code: string | null; description: string; user_id: number; project_id: number; location_id: number | null }>) =>
     send<InventoryForm>('PATCH', `/api/inventories/${id}/`, b),
   addInventoryLot: (id: number, b: {
     item_id?: number; predecessor_id?: number; qty: number
-    cost?: number; lot_name?: string; part_number?: string
+    cost?: number; lot_description?: string; lot_code?: string
   }) => send<InventoryForm>('POST', `/api/inventories/${id}/lots/`, b),
   updateInventoryLot: (id: number, b: Partial<{
-    qty: number; cost: number; lot_name: string; part_number: string
+    qty: number; cost: number; lot_description: string; lot_code: string
   }>) => send<InventoryForm>('PATCH', `/api/inventory-lots/${id}/`, b),
   deleteInventoryLot: (id: number) =>
     send<InventoryForm>('DELETE', `/api/inventory-lots/${id}/`),
@@ -976,7 +1080,7 @@ export const api = {
   // ── Места хранения / Location (волна 13 Ф3 пикер, Ф4 сущность «Склады») ──
   locations: () => get<LocationRow[]>('/api/locations/'),
   location: (id: number) => get<LocationForm>(`/api/locations/${id}/`),
-  updateLocation: (id: number, b: Partial<{ code: string; description: string; kind: string }>) =>
+  updateLocation: (id: number, b: Partial<{ code: string; description: string }>) =>
     send<LocationForm>('PATCH', `/api/locations/${id}/`, b),
   deleteLocation: (id: number) => send<void>('DELETE', `/api/locations/${id}/`),
 
@@ -998,6 +1102,28 @@ export const api = {
   deleteRelocation: (id: number) => send<void>('DELETE', `/api/relocations/${id}/`),
   relocationSourceLots: (id: number) =>
     get<RelocationSourceLot[]>(`/api/relocations/${id}/source-lots/`),
+
+  // ── Склад и форма лота (волна 27) ──
+  stock: () => get<StockRow[]>('/api/stock/'),
+  lot: (id: number) => get<LotForm>(`/api/stock/${id}/`),
+
+  // ── Требование / Requisition (волна 27) ──
+  requisitions: () => get<RequisitionRow[]>('/api/requisitions/'),
+  requisition: (id: number) => get<RequisitionForm>(`/api/requisitions/${id}/`),
+  updateRequisition: (id: number, b: Partial<{ number: string; date: string; user_id: number
+      project_id: number; code: string | null; description: string; location_id: number | null }>) =>
+    send<RequisitionForm>('PATCH', `/api/requisitions/${id}/`, b),
+  addRequisitionLine: (id: number, b: { lot_id: number; qty: number }) =>
+    send<RequisitionForm>('POST', `/api/requisitions/${id}/lines/`, b),
+  updateRequisitionLine: (id: number, lotId: number, qty: number) =>
+    send<RequisitionForm>('PATCH', `/api/requisitions/${id}/lines/${lotId}/`, { qty }),
+  deleteRequisitionLine: (id: number, lotId: number) =>
+    send<RequisitionForm>('DELETE', `/api/requisitions/${id}/lines/${lotId}/`),
+  lockRequisition: (id: number) => send<RequisitionForm>('POST', `/api/requisitions/${id}/lock/`),
+  unlockRequisition: (id: number) => send<RequisitionForm>('POST', `/api/requisitions/${id}/unlock/`),
+  deleteRequisition: (id: number) => send<void>('DELETE', `/api/requisitions/${id}/`),
+  requisitionSourceLots: (id: number) =>
+    get<AvailableLot[]>(`/api/requisitions/${id}/source-lots/`),
 
   // ── Закупка (волна 7; с волны 24 — однопроектная, источник правды) ──
   // Витрина — «Потребность» закупки, по её проекту. Позицию кладёт обычное добавление

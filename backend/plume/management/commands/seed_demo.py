@@ -78,11 +78,11 @@ class Command(BaseCommand):
         # --- КОРПУС-1: приход 12 (✓) ----------------------------------- #
         receipt = models.Receipt.objects.create(
             number='УПД-1', date=D(2026, 5, 20), contractor=supplier, project=prj,
-            user=user, locked=True)
+            user=user, locked=True, location=self.central)
         case_lot = models.Lot.objects.create(item=case, project=prj, origin=receipt,
                                              qty=12, cost=9600,
-                                             lot_name='Корпус Al',
-                                             part_number='AL-CASE-100')
+                                             description='Корпус Al',
+                                             code='AL-CASE-100')
 
         # --- ВИНТ-М3: открытый заказ 25 (●), склада нет ---------------- #
         # Волна 19, Ф1c: строковый `status{draft/sent/…}` у закупки и заказа снят —
@@ -102,33 +102,45 @@ class Command(BaseCommand):
         # складе не лежат (замок гейтит склад) и пайке нечего расходовать.
         r_res = models.Receipt.objects.create(
             number='УПД-2', date=D(2026, 5, 21), contractor=supplier, project=prj,
-            user=user, locked=True)
+            user=user, locked=True, location=self.central)
         res_lot = models.Lot.objects.create(item=res, project=prj, origin=r_res,
-                                            qty=100, cost=100, lot_name='Резистор',
-                                            part_number='RES-10K-0805')
+                                            qty=100, cost=100, description='Резистор',
+                                            code='RES-10K-0805')
+        rebuild_all()   # поставки легли на Центральный — Требованию есть что выдавать
+
+        # --- волна 27: Требование — выдача с Центрального в наши кабинеты ---- #
+        req = engine.create_requisition(prj, user, number='ТР-1', date=D(2026, 5, 22))
+        engine.update_requisition(req, location=main)
+        engine.add_requisition_line(req, case_lot, 12)
+        engine.lock_requisition(req)
+        req2 = engine.create_requisition(prj, user, number='ТР-2', date=D(2026, 5, 23))
+        engine.update_requisition(req2, location=sold)
+        engine.add_requisition_line(req2, res_lot, 100)
+        engine.lock_requisition(req2)
 
         closed_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=3, date=D(2026, 5, 25),
-            locked=True)
+            locked=True, location=sold)
         models.StockLine.objects.create(document=closed_k, lot=res_lot,
-                                        location=main, qty=-6, date=D(2026, 5, 25))
+                                        location=sold, qty=-6, date=D(2026, 5, 25))
         models.Lot.objects.create(item=board, project=prj, origin=closed_k, qty=3,
-                                  cost=4518, lot_name='ПЛ-001..003')
+                                  cost=4518, description='ПЛ-001..003')
 
         # Ф15: пайка черновой комплектации склад НЕ двигает (резервирования нет) —
         # «делается 4» видно дефициту отдельным членом (`_manufactured_in_progress`).
         wip_k = models.Kitting.objects.create(
             project=prj, target_item=board, user=user, qty=4, date=D(2026, 6, 1),
-            locked=False)
+            locked=False, location=sold)
         models.StockLine.objects.create(document=wip_k, lot=res_lot,
-                                        location=main, qty=-4, date=D(2026, 6, 2))
+                                        location=sold, qty=-4, date=D(2026, 6, 2))
 
         # --- КОРПУС-1 на «Собственном складе» (5) — для карты ---------- #
         inv = models.Inventory.objects.create(
             project=white, user=user, number='ИНВ-1', date=D(2026, 6, 3),
-            description='Остаток с прошлого НИР', locked=True)   # Ф15: иначе не на складе
+            description='Остаток с прошлого НИР', locked=True,   # Ф15: иначе не на складе
+            location=main)
         models.Lot.objects.create(item=case, project=white, origin=inv, qty=5,
-                                  cost=4000, lot_name='Корпус Al (остаток)')
+                                  cost=4000, description='Корпус Al (остаток)')
 
         # --- мультисклад: перемещение 4 КОРПУС-1 на место пайки (105) --- #
         # Волна 13, Ф2e: тотал лота (12) сохранён, распределение — 8@103 + 4@105.
@@ -151,7 +163,8 @@ class Command(BaseCommand):
                   models.Lot, models.PurchaseLine, models.ProcurementLine,
                   models.ProjectDemand, models.BomLine,
                   models.Receipt, models.Kitting, models.Transfer, models.Writeoff,
-                  models.Requisition, models.Inventory, models.Relocation,
+                  models.Reassignment, models.Inventory, models.Relocation,
+                  models.Requisition,
                   models.Purchase,
                   models.Procurement, models.Item,
                   models.Counterparty, models.Project, models.Location):
@@ -168,9 +181,11 @@ class Command(BaseCommand):
         return user
 
     def _infrastructure(self):
+        # Волна 27: Центральный склад (поставки) + наши кабинеты (выдача — Требованием).
+        self.central = models.Location.objects.create(
+            code='ЦС', description='Центральный склад', central=True)
         main = models.Location.objects.create(code='103', description='Основной склад')
-        sold = models.Location.objects.create(code='105', description='Место пайки',
-                                              kind='workshop')
+        sold = models.Location.objects.create(code='105', description='Место пайки')
         white = models.Project.objects.create(
             code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)

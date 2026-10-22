@@ -18,17 +18,18 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Anomaly, LotGlyph, count, num, sumByUom } from './status'
 import { EntityLink } from './EntityLink'
 
-export function RelocationView({ relocationId, isNew, openItem, openProject, onChanged, onDeleted }: {
+export function RelocationView({ relocationId, isNew, openItem, openLot, openProject, onChanged, onDeleted }: {
   relocationId: number
   isNew: boolean
-  openItem: (id: number) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
   openProject: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
 }) {
   const [lots, setLots] = useState<RelocationSourceLot[]>([])
   const [locs, setLocs] = useState<LocationRow[]>([])
-  useEffect(() => { api.locations().then(setLocs) }, [])
+  // Волна 27: перемещение — между нашими местами; Центральный в пикерах не участвует.
+  useEffect(() => { api.locations().then(ls => setLocs(ls.filter(l => !l.central))) }, [])
 
   const { c, err, busy, unlocked, toggle, run, del } = useOrderForm(
     relocationId, api.relocation, {
@@ -61,7 +62,7 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
           <tbody>
             {c.moves.map((m, i) => (
               <MoveRow key={m.lot_id} no={i + 1} m={m} relocationId={c.id} locs={locs}
-                locked={locked} busy={busy} openItem={openItem} run={run} />
+                locked={locked} busy={busy} openItem={openItem} openLot={openLot} run={run} />
             ))}
             {!locked && <GhostRow relocationId={c.id} lots={lots} locs={locs}
               busy={busy} run={run} />}
@@ -103,18 +104,20 @@ export function RelocationView({ relocationId, isNew, openItem, openProject, onC
 }
 
 // Реальный ход перемещения (ключ — лот): автосейв кол-ва/мест, удаление хода.
-function MoveRow({ no, m, relocationId, locs, locked, busy, openItem, run }: {
+function MoveRow({ no, m, relocationId, locs, locked, busy, openItem, openLot, run }: {
   no?: number
   m: RelocationMove; relocationId: number; locs: LocationRow[]
   locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<RelocationForm>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<RelocationForm>) => void
 }) {
   const negative = m.from_live_qty < 0   // источник в минусе — переместили больше, чем лежало
   return (
     <tr className="row">
       <td className="rn">{no}</td>
-      <td className="gl"><LotGlyph origin={m.origin} liveQty={m.from_live_qty} /></td>
-      <td className="c-key"><span className="code">{m.lot_label}</span></td>
+      <td className="gl"><LotGlyph native={m.item_native} liveQty={m.from_live_qty} /></td>
+      <td className="c-key">
+        <EntityLink kind="lot" id={m.lot_id} open={openLot}>{m.lot_label}</EntityLink></td>
       <td className="c-fit">
         <EntityLink kind="item" id={m.item_id} open={openItem}>{m.item_code}</EntityLink></td>
       <td className="c-desc">
@@ -195,7 +198,7 @@ function GhostRow({ relocationId, lots, locs, busy, run }: {
         <Dropdown value={lotId} disabled={busy} placeholder="Партия…"
           onPick={v => pick(Number(v))} onClear={() => pick('')}
           options={lots.map(l => ({ value: l.lot_id,
-            label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
+            label: `#${l.lot_id} ${l.item_code}` + (l.lot_description ? ` (${l.lot_description})` : '')
               + ` · ${num(l.live_qty)} ${l.uom}` }))} />
       </td>
       <td className="c-desc">

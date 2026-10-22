@@ -40,12 +40,12 @@
 
 Волна 6 (закрытие проекта — сведение остатков в 0 + мягкий замок):
 - `writeoff_form` / `create_writeoff` / `add|update|remove_writeoff_line` — списание
-  (`−ISSUE`, лот покидает учёт; серый путь). `requisition_form` / `create_requisition`
-  / `add|update|remove_requisition_line` — требование/отпочкование (`−ISSUE` источника +
+  (`−ISSUE`, лот покидает учёт; серый путь). `reassignment_form` / `create_reassignment`
+  / `add|update|remove_reassignment_line` — перевод (бывшее отпочкование) (`−ISSUE` источника +
   рождение лота-потомка в проекте-получателе, `+RECEIPT`; белый путь / заём).
 - `project_closure(project)` — панель сведения остаточных лотов (live≠0) в 0 +
   готовность; `lock_project`/`unlock_project` — мягкий замок-веха «проект отработан».
-- Мосты панели: `writeoff_lot` (списать остаток) / `requisition_lot` (на баланс → белый).
+- Мосты панели: `writeoff_lot` (списать остаток) / `reassignment_lot` (на баланс → белый).
 
 Волна 7 (планирование закупок — записываемый Procurement; с волны 24 — источник правды):
 - `scope_demand(projects)` — свод покупных листьев через **заданный набор** проектов,
@@ -127,7 +127,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 from django.db import transaction
-from django.db.models import Count, Exists, F, OuterRef, Sum
+from django.db.models import Count, Exists, F, OuterRef, Q, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -293,6 +293,8 @@ def _require_header(doc):
     if kind == models.DocumentKind.KITTING and (
             doc.target_item_id is None or doc.qty is None):
         raise ValidationError('Перед фиксацией выберите прибор-цель и кол-во.')
+    if kind in models.LOCATION_KINDS and doc.location_id is None:
+        raise ValidationError('Перед фиксацией укажите «Куда» — локацию.')
 
 
 def rebuild_document_movements(doc):
@@ -304,7 +306,7 @@ def rebuild_document_movements(doc):
     знаковыми строками (`doc.lines`, расход/приём источника). Зовётся из всех
     `lock_*`/`unlock_*`; сама пересборка чистая, порядок вызовов не важен.
     """
-    # Волна 26: сначала источники — стоимость рождённой партии требования/комплектации
+    # Волна 26: сначала источники — стоимость рождённой партии перевода/комплектации
     # выводится из стоимостей строк расхода (`_sync_born_cost`), и только потом
     # материализуется сама партия.
     sources = {sl.lot for sl in doc.lines.select_related('lot')}
@@ -390,10 +392,68 @@ def delete_stock_document(doc):
 # --------------------------------------------------------------------------- #
 #  Склад: пересборка движений и живые остатки
 # --------------------------------------------------------------------------- #
-def _main_location():
-    """Дом приходного движения. В MVP — один «Основной склад» (код MAIN)."""
-    loc = models.Location.objects.filter(code='MAIN').first()
-    return loc or models.Location.objects.order_by('id').first()
+def central_location():
+    """Центральный склад (волна 27) — синглтон `Location.central`.
+
+    Сюда приходят поставки; в норме он пуст (лот на нём ждёт Требования). В БД с
+    данными его заводит миграция `0012`, в пустой (тесты, первый сид) — лениво здесь:
+    у движка не бывает состояния «Центрального нет»."""
+    loc = models.Location.objects.filter(central=True).first()
+    if loc is None:
+        code, n = 'Центральный', 2
+        while models.Location.objects.filter(code=code).exists():
+            code, n = f'Центральный-{n}', n + 1
+        loc = models.Location.objects.create(code=code, description='Центральный склад',
+                                             central=True)
+    return loc
+
+
+def default_own_location():
+    """Наша локация по умолчанию — «Куда» комплектации/инвентаризации/требования при
+    рождении: первая нецентральная по id. `None`, пока наших мест не завели (фиксация
+    тогда попросит выбрать)."""
+    return (models.Location.objects.filter(central__isnull=True)
+            .order_by('id').first())
+
+
+def default_location(kind):
+    """«Куда» нового ордера по виду (волна 27): поставка — Центральный, свои виды —
+    наша локация, остальным «Куда» неприменимо."""
+    if kind == models.DocumentKind.RECEIPT:
+        return central_location()
+    if kind in models.OWN_LOCATION_KINDS:
+        return default_own_location()
+    return None
+
+
+def _born_location(lot):
+    """Где рождается партия (волна 27): в «Куда» своего origin-ордера. Перевод проект
+    меняет, а место нет — потомок рождается там, где лежал источник (место парной
+    строки расхода)."""
+    origin = lot.origin
+    if origin.kind == models.DocumentKind.REASSIGNMENT and lot.predecessor_id:
+        line = (origin.lines.filter(lot_id=lot.predecessor_id)
+                .select_related('location').first())
+        if line is not None:
+            return line.location
+    return origin.location or central_location()
+
+
+def _line_location(lot, location=None):
+    """Место строки расхода — **выбор лота = выбор места** (волна 27, решение Ивана).
+
+    Пикер отдаёт пары «лот @ локация», и строка хранит место пары (`location`). Без
+    него место выводится: лот лежит в одном месте (почти всегда) — там; в нескольких —
+    дружелюбный отказ «выберите, откуда»; остатка нет нигде (мутабельная ДНК пускает
+    в минус) — место рождения. Важен факт списания части лота, а не кабинет."""
+    if location is not None:
+        return location
+    places = [r for r in lot_locations(lot) if r['qty'] > 0]
+    if len(places) == 1:
+        return models.Location.objects.get(pk=places[0]['location_id'])
+    if len(places) > 1:
+        raise ValidationError('Лот лежит в нескольких местах — выберите, откуда списать.')
+    return _born_location(lot)
 
 
 def _share(cost, qty, part):
@@ -430,7 +490,7 @@ def lot_line_values(lot, lines=None):
     drained = ZERO
     for sl in sorted(lines, key=lambda sl: sl.id):
         if sl.qty < 0 and sl.document.locked \
-                and sl.document.kind != models.DocumentKind.RELOCATION:
+                and sl.document.kind not in models.MOVE_KINDS:
             before = _share(lot.cost, lot.qty, drained)
             drained -= sl.qty
             values[sl.id] = before - _share(lot.cost, lot.qty, drained)
@@ -482,7 +542,6 @@ def rebuild_movements(lot):
     карта складов и бюджет подчиняются правилу автоматически.
     """
     lot.movements.all().delete()
-    main = _main_location()
     rows = []
 
     # origin: рождение партии (+). Дуга схлопнута в один FK (Ф2b): вид и id берём
@@ -490,7 +549,7 @@ def rebuild_movements(lot):
     # Ф15: партия черновика на складе не лежит — материализуется на фиксации.
     if lot.origin_id and lot.qty and lot.origin.locked:
         rows.append(models.StockMovement(
-            lot=lot, location=main, type=models.StockMovement.Type.RECEIPT,
+            lot=lot, location=_born_location(lot), type=models.StockMovement.Type.RECEIPT,
             qty=lot.qty, cost=lot.cost,
             source_type=lot.origin.kind, source_id=lot.origin_id,
         ))
@@ -601,8 +660,8 @@ def location_stock(location):
             continue
         rows.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'part_number': lot.part_number, 'lot_name': lot.lot_name,
-            'origin': lot.origin_kind,          # глиф партии (§7a): форма = откуда родилась
+            'lot_code': lot.code, 'lot_description': lot.description,
+            'origin': lot.origin_kind, 'item_native': lot.item.native,          # глиф партии: форма = изделие/компонент (в27)
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': r['q'],
             'cost': r['c'] or ZERO,             # волна 26: стоимость лежащего здесь
@@ -619,25 +678,41 @@ def location_form(location):
     stock = location_stock(location)
     return {
         'id': location.id, 'code': location.code, 'description': location.description,
-        'kind': location.kind, 'stock': stock,
+        'central': bool(location.central), 'stock': stock,
+        'orders': location_orders(location),
         'total_cost': sum((r['cost'] for r in stock), ZERO),
     }
 
 
-def create_location(code=None, description='', kind=''):
+def location_orders(location):
+    """Таб «Ордера» локации (волна 27): требования и перемещения с её участием — ходы,
+    у которых строка стоит на этом месте (или «Куда» требования). Новые сверху."""
+    docs = (models.StockDocument.objects
+            .filter(kind__in=models.MOVE_KINDS)
+            .filter(Q(lines__location=location) | Q(location=location))
+            .select_related('project').distinct())
+    rows = []
+    for doc in docs:
+        lines = [sl for sl in doc.lines.all() if sl.location_id == location.id]
+        rows.append({**_doc_ref(doc), 'project_code': doc.project.code,
+                     'qty_in': sum((sl.qty for sl in lines if sl.qty > 0), ZERO),
+                     'qty_out': -sum((sl.qty for sl in lines if sl.qty < 0), ZERO)})
+    return _newest_first(rows)
+
+
+def create_location(code=None, description=''):
     """Завести место хранения (В13 Ф4). Код уникален (дружелюбная проверка до
     IntegrityError); пустой — фолбэком «Место 12» (Ф12e)."""
     code = (code or '').strip()
     if code and models.Location.objects.filter(code=code).exists():
         raise ValidationError('Место с таким кодом уже есть.')
-    fields = dict(description=(description or '').strip(),
-                  kind=(kind or '').strip())
+    fields = dict(description=(description or '').strip())
     if code:
         return models.Location.objects.create(code=code, **fields)
     return create_with_fallback_code(models.Location, 'Место', **fields)
 
 
-def update_location(location, code=None, description=None, kind=None):
+def update_location(location, code=None, description=None):
     """Правка ДНК места хранения (В13 Ф4) — мутабельная, под интерфейсным замком.
     Часовые `None` (поле не передано); пустой код отклоняем.
 
@@ -653,8 +728,6 @@ def update_location(location, code=None, description=None, kind=None):
         location.code = code
     if description is not None:
         location.description = description.strip()
-    if kind is not None:
-        location.kind = kind.strip()
     location.save()
     return location
 
@@ -662,7 +735,10 @@ def update_location(location, code=None, description=None, kind=None):
 def delete_location(location):
     """Удалить склад (WAVE14 Ф2). Домен: склад с движениями бережём — friendly-guard.
     Ссылки — движения (`StockMovement`) и строки движения (`StockLine`), обе PROTECT;
-    пустой справочный склад сносим свободно."""
+    пустой справочный склад сносим свободно. Центральный (волна 27) не удаляется вовсе
+    — у движка не бывает состояния «Центрального нет»; переименовать его можно."""
+    if location.central:
+        raise ValidationError('Центральный склад не удаляется — его можно переименовать.')
     if (models.StockMovement.objects.filter(location=location).exists()
             or models.StockLine.objects.filter(location=location).exists()):
         raise ValidationError('На складе есть движения — удаление заблокировано.')
@@ -1504,7 +1580,7 @@ def _project_spent(project, supply=None):
     Прежний канон (до волны 24 — для всех поставок) — Σ стоимостей приходных лотов:
 
     Точная застывшая цифра «кэша ФЛС». Заёмные/свои бесплатные лоты (origin
-    requisition/inventory/kitting) сюда не входят → бесплатны в бюджете (платил
+    reassignment/inventory/kitting) сюда не входят → бесплатны в бюджете (платил
     источник). Только покупные материалы — снимок цены собранного узла (лот-прибор
     из Kitting) в бюджет не складываем (иначе двойной счёт).
 
@@ -1644,22 +1720,51 @@ def available_lots(item, project, location=None):
     """
     lots = list(models.Lot.objects.filter(item=item, project=project)
                 .select_related('item', 'origin'))
-    return _candidate_rows(lots, lots_live_qty(lots, location))
+    return _candidate_rows(lots, lots_places(lots), location)
 
 
-def _candidate_rows(lots, live_by_lot):
-    """Строки пикера `available_lots` по уже поднятым партиям и их остаткам."""
+def lots_places(lots):
+    """`{lot_id: [место]}` — где партии лежат (остаток > 0), одним запросом (волна 27).
+
+    Место — `{location_id, location_code, location_central, qty}`. Основа пикеров
+    «лот @ локация»: выбор строки пикера = выбор лота И места списания."""
+    ids = [lot.id for lot in lots]
+    places = {i: [] for i in ids}
+    if ids:
+        for r in (models.StockMovement.objects.filter(lot_id__in=ids)
+                  .values('lot', 'location', 'location__code', 'location__central')
+                  .annotate(q=Sum('qty')).order_by('lot', 'location__code')):
+            if r['q'] and r['q'] > 0:
+                places[r['lot']].append({
+                    'location_id': r['location'], 'location_code': r['location__code'],
+                    'location_central': bool(r['location__central']), 'qty': r['q'],
+                })
+    return places
+
+
+def _pair_rows(lots, places, row_of, location=None):
+    """Строки пикера-пар: по строке на каждое место, где партия лежит (волна 27).
+    `row_of(lot)` — поля партии конкретного пикера; `live_qty` — остаток В ЭТОМ месте.
+    `location` сужает до одного места."""
     result = []
     for lot in lots:
-        live = live_by_lot[lot.id]
-        if live > 0:
-            result.append({
-                'lot_id': lot.id, 'live_qty': live, 'unit_cost': lot.unit_cost,
-                'cost': lot.cost,
-                'part_number': lot.part_number,
-                'origin': lot.origin_kind, 'lot_name': lot.lot_name,
-            })
+        for place in places.get(lot.id, ()):
+            if location is not None and place['location_id'] != location.id:
+                continue
+            result.append({**row_of(lot), 'live_qty': place['qty'],
+                           'location_id': place['location_id'],
+                           'location_code': place['location_code'],
+                           'location_central': place['location_central']})
     return result
+
+
+def _candidate_rows(lots, places, location=None):
+    """Строки пикера `available_lots` (пайка) — пары «лот @ локация»."""
+    return _pair_rows(lots, places, lambda lot: {
+        'lot_id': lot.id, 'unit_cost': lot.unit_cost, 'cost': lot.cost,
+        'lot_code': lot.code, 'origin': lot.origin_kind,
+        'lot_description': lot.description, 'item_native': lot.item.native,
+    }, location)
 
 
 def _require_native_target(item):
@@ -1709,7 +1814,8 @@ def kitting_form(kitting):
     # члены покрытия (`ProjectSupply`) и лоты-кандидаты с остатками — не по запросу на строку.
     component_ids = [bl.component_id for bl in bom_lines]
     pierced_by_item = {}
-    for kl in kitting.lines.filter(lot__item__in=component_ids).select_related('lot'):
+    for kl in (kitting.lines.filter(lot__item__in=component_ids)
+               .select_related('lot', 'location')):
         pierced_by_item.setdefault(kl.lot.item_id, []).append(kl)
     supply = ProjectSupply(project)
     lots_by_item = {}
@@ -1718,7 +1824,7 @@ def kitting_form(kitting):
                             .select_related('item', 'origin'))
         for lot in project_lots:
             lots_by_item.setdefault(lot.item_id, []).append(lot)
-        live_by_lot = lots_live_qty(project_lots)
+        places = lots_places(project_lots)
     for bl in bom_lines:
         component = bl.component
         need = bl.qty * (kitting.qty or ZERO)
@@ -1731,8 +1837,9 @@ def kitting_form(kitting):
             pierced += mag
             real_lines.append({
                 'id': kl.id, 'lot_id': kl.lot_id,
-                'lot_label': f'#{kl.lot_id} {kl.lot.lot_name or component.code}',
+                'lot_label': f'#{kl.lot_id} {kl.lot.description or component.code}',
                 'qty': mag, 'date': kl.date,
+                'location_code': kl.location.code,   # в27: откуда списали (выбор лота = места)
             })
         remaining = max(ZERO, need - pierced)
         ghost = None
@@ -1743,7 +1850,7 @@ def kitting_form(kitting):
                 'status': cov['status'], 'have': cov['have'],
                 'on_order': cov['on_order'], 'to_order': cov['to_order'],
                 'candidate_lots': _candidate_rows(lots_by_item.get(component.id, []),
-                                                  live_by_lot),
+                                                  places),
             }
             statuses.append(cov['status'])
         rows.append({
@@ -1759,11 +1866,11 @@ def kitting_form(kitting):
         })
     born_lots = [
         {'id': lot.id, 'qty': lot.qty, 'cost': lot.cost, 'unit_cost': lot.unit_cost,
-         'lot_name': lot.lot_name, 'part_number': lot.part_number}
+         'lot_description': lot.description, 'lot_code': lot.code}
         for lot in kitting.lots.all()
     ]
     return {
-        'id': kitting.id, **_author(kitting), 'locked': kitting.locked,
+        'id': kitting.id, **_author(kitting), **_location_header(kitting), 'locked': kitting.locked,
         'code': kitting.code, 'description': kitting.description,
         'project_id': project.id, 'project_code': project.code,
         'target_id': target.id if target else None,
@@ -1774,8 +1881,27 @@ def kitting_form(kitting):
         'worst_status': _worst_of(statuses),   # worst-of призрачных строк
         'rows': rows,
         'born_lots': born_lots,   # рождённые лоты-приборы (после закрытия)
+        'requisitions': kitting_requisitions(kitting),   # волна 27: Требования в акт
         'total_cost': kitting_cost(kitting),   # волна 26: ★ «израсходовано на сумму»
     }
+
+
+def kitting_requisitions(kitting):
+    """Требования для акта комплектации (волна 27) — **выводятся**, связи в схеме нет.
+
+    Зафиксированные Требования проекта, которые привезли со склада лоты, списанные
+    этой комплектацией. Лот может прийти несколькими Требованиями (катушку берут
+    частями) — акт собирает все. Не было Требования (паяли прямо с Центрального) —
+    список пуст, и это видно."""
+    lot_ids = set(kitting.lines.values_list('lot_id', flat=True))
+    if not lot_ids:
+        return []
+    reqs = (models.Requisition.objects
+            .filter(project_id=kitting.project_id, locked=True,
+                    lines__lot_id__in=lot_ids, lines__qty__gt=0)
+            .distinct().order_by('date', 'id'))
+    return [{'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date}
+            for r in reqs]
 
 
 # --------------------------------------------------------------------------- #
@@ -1787,12 +1913,12 @@ def add_kitting_line(kitting, component, lot, qty, location=None, date=None):
     if lot.item_id != component.id:
         raise ValidationError('Лот не соответствует компоненту строки.')
     if lot.project_id != kitting.project_id:
-        raise ValidationError('Лот из другого проекта (заём — отдельным требованием).')
+        raise ValidationError('Лот из другого проекта (заём — отдельным переводом).')
     if qty is None or qty <= 0:
         raise ValidationError('Количество пайки должно быть положительным.')
     line = models.StockLine.objects.create(
         document=kitting, lot=lot,
-        location=location or _main_location(), qty=-qty, date=date,
+        location=_line_location(lot, location), qty=-qty, date=date,
     )
     rebuild_movements(lot)
     return line
@@ -1829,7 +1955,7 @@ def kitting_cost(kitting):
 def _sync_born_cost(doc):
     """Стоимость партий, которые документ рождает ИЗ своих строк расхода (волна 26).
 
-    Комплектация — партия-прибор стоит Σ впаянного (`kitting_cost`); требование — партия-
+    Комплектация — партия-прибор стоит Σ впаянного (`kitting_cost`); перевод — партия-
     потомок стоит ровно долю, ушедшую из источника её строкой. Зовётся после пересборки
     источников (`rebuild_document_movements`) и при правке черновика. Снимок: если позже
     сдвинется очередь расходов источника (расфиксировали ордер из её середины), доля
@@ -1839,7 +1965,7 @@ def _sync_born_cost(doc):
     if kind == models.DocumentKind.KITTING:
         cost = kitting_cost(doc)
         doc.lots.exclude(cost=cost).update(cost=cost)
-    elif kind == models.DocumentKind.REQUISITION:
+    elif kind == models.DocumentKind.REASSIGNMENT:
         lines = list(doc.lines.select_related('lot', 'document'))
         values = lines_values(lines)
         for line in lines:
@@ -1957,14 +2083,15 @@ def receipt_form(receipt):
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'item_category': category_code(lot.item),   # фильтр колонки
+            'item_native': lot.item.native,
             'qty': lot.qty, 'live_qty': live_by_lot[lot.id],
             # Волна 26: стоимость строки УПД — первична; цена штуки — производная.
-            'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
-            'part_number': lot.part_number,
+            'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_description': lot.description,
+            'lot_code': lot.code,
             'consumed': lot.id in consumed,
         })
     return {
-        'id': receipt.id, **_author(receipt), 'number': receipt.number, 'date': receipt.date,
+        'id': receipt.id, **_author(receipt), **_location_header(receipt), 'number': receipt.number, 'date': receipt.date,
         'code': receipt.code, 'description': receipt.description,
         # Ф14: колонка стала nullable (обязательность — на фиксации, не на рождении),
         # поэтому проекция больше не опирается на прежний NOT NULL.
@@ -1985,8 +2112,8 @@ def receipt_form(receipt):
     }
 
 
-def add_receipt_lot(receipt, item, qty, cost=ZERO, lot_name='',
-                    part_number=''):
+def add_receipt_lot(receipt, item, qty, cost=ZERO, lot_description='',
+                    lot_code=''):
     """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода.
     `cost` — стоимость строки УПД целиком (волна 26), а не цена штуки."""
     _require_unlocked(receipt)
@@ -1996,8 +2123,8 @@ def add_receipt_lot(receipt, item, qty, cost=ZERO, lot_name='',
         raise ValidationError('Стоимость не может быть отрицательной.')
     lot = models.Lot.objects.create(
         item=item, project=receipt.project, origin=receipt, qty=qty,
-        cost=cost or ZERO, lot_name=lot_name or '',
-        part_number=part_number or '',
+        cost=cost or ZERO, description=lot_description or '',
+        code=lot_code or '',
     )
     rebuild_movements(lot)
     return lot
@@ -2058,8 +2185,8 @@ def _purchase_shares(purchase, lots):
     return out
 
 
-def update_receipt_lot(lot, qty=None, cost=None, lot_name=None,
-                       part_number=None):
+def update_receipt_lot(lot, qty=None, cost=None, lot_description=None,
+                       lot_code=None):
     """Автосейв строки УПД (кол-во/стоимость/название/PN). Правка до замка.
 
     Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
@@ -2082,12 +2209,12 @@ def update_receipt_lot(lot, qty=None, cost=None, lot_name=None,
         lot.cost = cost
         if 'cost' not in fields:
             fields.append('cost')
-    if lot_name is not None:
-        lot.lot_name = lot_name
-        fields.append('lot_name')
-    if part_number is not None:
-        lot.part_number = part_number
-        fields.append('part_number')
+    if lot_description is not None:
+        lot.description = lot_description
+        fields.append('description')
+    if lot_code is not None:
+        lot.code = lot_code
+        fields.append('code')
     if fields:
         lot.save(update_fields=fields)
         rebuild_movements(lot)
@@ -2196,7 +2323,7 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
                         cost=(_share(line.price, line.qty, line.qty)
                               - _share(line.price, line.qty, received)
                               if line.price is not None else ZERO),
-                        lot_name=line.item.description)
+                        lot_description=line.item.description)
     return receipt
 
 
@@ -2830,27 +2957,29 @@ def project_available_lots(project):
     Пикер строки передачи: любой лот проекта, где ещё что-то лежит (обычно
     готовое железо — приборы из комплектации, но модель не ограничивает).
     """
-    result = []
     lots = list(models.Lot.objects.filter(project=project)
                 .select_related('item', 'origin').order_by('item__code', 'id'))
-    live_by_lot = lots_live_qty(lots)
-    for lot in lots:
-        live = live_by_lot[lot.id]
-        if live > 0:
-            result.append({
-                'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_code': lot.item.code, 'item_description': lot.item.description,
-                'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
-                'part_number': lot.part_number,
-                'lot_name': lot.lot_name,
-            })
-    return result
+    return _pair_rows(lots, lots_places(lots), lambda lot: {
+        'lot_id': lot.id, 'item_id': lot.item_id, 'item_native': lot.item.native,
+        'item_code': lot.item.code, 'item_description': lot.item.description,
+        'uom': lot.item.uom, 'origin': lot.origin_kind,
+        'lot_code': lot.code, 'lot_description': lot.description,
+    })
 
 
 def _lot_label(lot):
     """Человекочитаемая метка лота для накладной/строки (название / PN / артикул)."""
-    tail = lot.lot_name or lot.part_number or lot.item.code
+    tail = lot.description or lot.code or lot.item.code
     return f'#{lot.id} {tail}'
+
+
+def _location_header(doc):
+    """«Куда» ордера для проекции шапки (волна 27): id + код + описание + центральный."""
+    loc = doc.location
+    return {'location_id': loc.id if loc else None,
+            'location_code': loc.code if loc else '',
+            'location_description': loc.description if loc else '',
+            'location_central': bool(loc and loc.central)}
 
 
 def _author(doc):
@@ -2879,12 +3008,12 @@ def transfer_form(transfer):
         lines.append({
             'id': line.id, 'lot_id': lot.id,
             'lot_label': _lot_label(lot),
-            'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
+            'origin': lot.origin_kind, 'item_native': lot.item.native,        # глиф партии: форма = изделие/компонент (в27)
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'display_name': line.display_name,
             'lot_live_qty': live_by_lot[lot.id],   # остаток источника после отгрузки
-            'lot_name': lot.lot_name,
+            'lot_description': lot.description,
         })
     return {
         'id': transfer.id, **_author(transfer), 'number': transfer.number, 'date': transfer.date,
@@ -2904,7 +3033,7 @@ def _movement_row(document, lot, qty, event):
         'kind': document.kind, 'document_id': document.id,
         'code': document.code, 'number': document.number, 'date': document.date,
         'locked': document.locked, 'project_code': document.project.code,
-        'lot_id': lot.id, 'lot_name': lot.lot_name, 'qty': qty,
+        'lot_id': lot.id, 'lot_description': lot.description, 'qty': qty,
     }
 
 
@@ -2977,9 +3106,9 @@ def item_movements(item):
     как в модели:
 
     * **рождение партии** (born-direct) — `Lot.origin` (поставка / комплектация /
-      инвентаризация / требование), знак `+`;
+      инвентаризация / перевод), знак `+`;
     * **движение существующей партии** — `StockLine` (пайка в комплектацию, передача,
-      списание, требование, перемещение), знак уже в `qty` (− расход).
+      списание, перевод, перемещение), знак уже в `qty` (− расход).
 
     `StockMovement` намеренно НЕ читаем: это проекция-остаток, её `source_type`/
     `source_id` пришлось бы резолвить обратно в документы. Порядок — свежие сверху;
@@ -3010,10 +3139,10 @@ def create_transfer(project, user, number='', date=None, contractor=None):
                        contractor=contractor)
 
 
-def add_transfer_line(transfer, lot, qty, display_name=''):
+def add_transfer_line(transfer, lot, qty, display_name='', location=None):
     """Отгрузить партию заказчику: строка передачи (`−ISSUE` на лоте).
 
-    Лот — того же проекта (передаём своё, чужое — через требование). Кол-во не
+    Лот — того же проекта (передаём своё, чужое — через перевод). Кол-во не
     клампим по остатку: переотдать можно, лот уйдёт в минус (недостача информативна,
     в духе мутабельной ДНК).
     """
@@ -3023,7 +3152,7 @@ def add_transfer_line(transfer, lot, qty, display_name=''):
     if qty is None or qty <= 0:
         raise ValidationError('Количество передачи должно быть положительным.')
     line = models.StockLine.objects.create(
-        document=transfer, lot=lot, location=_main_location(), qty=-qty,
+        document=transfer, lot=lot, location=_line_location(lot, location), qty=-qty,
         display_name=(display_name or '').strip() or _lot_label(lot))
     rebuild_movements(lot)
     return line
@@ -3071,7 +3200,7 @@ def unlock_transfer(transfer):
 
 
 # --------------------------------------------------------------------------- #
-#  Закрытие проекта (волна 6): списание / требование + панель + мягкий замок
+#  Закрытие проекта (волна 6): списание / перевод + панель + мягкий замок
 # --------------------------------------------------------------------------- #
 def default_document_project():
     """Проект-якорь для ордера, рождённого по клику (Ф12e).
@@ -3102,32 +3231,25 @@ def _internal_project(kind):
 
 
 def _auto_number(prefix, project):
-    """Авто-№ документа для мостов панели (акт списания/требование одним кликом)."""
+    """Авто-№ документа для мостов панели (акт списания/перевод одним кликом)."""
     return f'{prefix}-{project.code}-{timezone.localdate():%Y%m%d}'
 
 
 def all_available_lots():
-    """Лоты всех проектов с живым остатком > 0 — пикер источника требования.
+    """Лоты всех проектов с живым остатком > 0 — пикер источника перевода.
 
-    Требование тянет из любого проекта (постановка своего на баланс, заём у
+    Перевод тянет из любого проекта (постановка своего на баланс, заём у
     соседнего активного) — поэтому пикер сквозной, с кодом проекта-источника.
     """
-    result = []
     lots = list(models.Lot.objects.select_related('item', 'project', 'origin')
                 .order_by('project__code', 'item__code', 'id'))
-    live_by_lot = lots_live_qty(lots)
-    for lot in lots:
-        live = live_by_lot[lot.id]
-        if live > 0:
-            result.append({
-                'lot_id': lot.id, 'item_id': lot.item_id,
-                'item_code': lot.item.code, 'item_description': lot.item.description,
-                'uom': lot.item.uom, 'live_qty': live, 'origin': lot.origin_kind,
-                'project_id': lot.project_id, 'project_code': lot.project.code,
-                'part_number': lot.part_number,
-                'lot_name': lot.lot_name,
-            })
-    return result
+    return _pair_rows(lots, lots_places(lots), lambda lot: {
+        'lot_id': lot.id, 'item_id': lot.item_id, 'item_native': lot.item.native,
+        'item_code': lot.item.code, 'item_description': lot.item.description,
+        'uom': lot.item.uom, 'origin': lot.origin_kind,
+        'project_id': lot.project_id, 'project_code': lot.project.code,
+        'lot_code': lot.code, 'lot_description': lot.description,
+    })
 
 
 # ── Списание / Writeoff (серый путь: чистый −ISSUE, лот покидает учёт) ──
@@ -3148,11 +3270,11 @@ def writeoff_form(writeoff):
         total_qty += mag
         lines.append({
             'id': line.id, 'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
+            'origin': lot.origin_kind, 'item_native': lot.item.native,        # глиф партии: форма = изделие/компонент (в27)
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'qty': mag, 'lot_live_qty': live_by_lot[lot.id],
-            'lot_name': lot.lot_name,
+            'lot_description': lot.description,
         })
     return {
         'id': writeoff.id, **_author(writeoff), 'number': writeoff.number, 'date': writeoff.date,
@@ -3184,7 +3306,7 @@ def add_writeoff_line(writeoff, lot, qty, location=None):
     if qty is None or qty <= 0:
         raise ValidationError('Количество списания должно быть положительным.')
     line = models.StockLine.objects.create(
-        document=writeoff, lot=lot, location=location or _main_location(), qty=-qty)
+        document=writeoff, lot=lot, location=_line_location(lot, location), qty=-qty)
     rebuild_movements(lot)
     return line
 
@@ -3219,19 +3341,19 @@ def unlock_writeoff(writeoff):
     return unlock_document(writeoff)
 
 
-# ── Требование / Requisition (белый путь: −ISSUE источника + рождение потомка) ──
-def _requisition_born_lot(requisition, source_lot):
-    """Порождённый требованием лот-потомок источника (пара строки).
+# ── Перевод / Reassignment (белый путь: −ISSUE источника + рождение потомка) ──
+def _reassignment_born_lot(reassignment, source_lot):
+    """Порождённый переводом лот-потомок источника (пара строки).
 
-    Один источник = одна строка (guard в `add_requisition_line`), поэтому пара
-    `(requisition, predecessor)` однозначна.
+    Один источник = одна строка (guard в `add_reassignment_line`), поэтому пара
+    `(reassignment, predecessor)` однозначна.
     """
-    return requisition.lots.filter(predecessor=source_lot,
+    return reassignment.lots.filter(predecessor=source_lot,
                                    item=source_lot.item).first()
 
 
-def requisition_form(requisition):
-    """Проекция формы требования: шапка (проект-получатель) + строки + итог.
+def reassignment_form(reassignment):
+    """Проекция формы перевода: шапка (проект-получатель) + строки + итог.
 
     Каждая строка тянет из лота-источника (`−ISSUE`) и рождает лот-потомок в
     проекте-получателе (`+RECEIPT`, наследует item/цену/провенанс через
@@ -3239,7 +3361,7 @@ def requisition_form(requisition):
     """
     lines = []
     total_qty = ZERO
-    doc_lines = list(requisition.lines
+    doc_lines = list(reassignment.lines
                      .select_related('lot__item', 'lot__project', 'lot__origin')
                      .order_by('id'))
     live_by_lot = lots_live_qty([line.lot for line in doc_lines])
@@ -3247,33 +3369,33 @@ def requisition_form(requisition):
         src = line.lot                        # StockLine.lot = лот-источник расхода
         mag = -line.qty                       # знаковая строка (− расход) → магнитуда
         total_qty += mag
-        born = _requisition_born_lot(requisition, src)
+        born = _reassignment_born_lot(reassignment, src)
         lines.append({
             'id': line.id, 'source_lot_id': src.id, 'lot_label': _lot_label(src),
-            'origin': src.origin_kind,        # глиф партии (§7a): форма = откуда родилась
+            'origin': src.origin_kind, 'item_native': src.item.native,        # глиф партии: форма = изделие/компонент (в27)
             'source_project_code': src.project.code,
             'item_id': src.item_id, 'item_code': src.item.code,
             'item_description': src.item.description, 'uom': src.item.uom,
             'qty': mag, 'source_live_qty': live_by_lot[src.id],
             'born_lot_id': born.id if born else None,
-            'lot_name': src.lot_name,
+            'lot_description': src.description,
         })
     return {
-        'id': requisition.id, **_author(requisition), 'number': requisition.number, 'date': requisition.date,
-        'code': requisition.code, 'description': requisition.description,
-        'project_id': requisition.project_id, 'project_code': requisition.project.code,
-        'project_name': requisition.project.description, 'locked': requisition.locked,
+        'id': reassignment.id, **_author(reassignment), 'number': reassignment.number, 'date': reassignment.date,
+        'code': reassignment.code, 'description': reassignment.description,
+        'project_id': reassignment.project_id, 'project_code': reassignment.project.code,
+        'project_name': reassignment.project.description, 'locked': reassignment.locked,
         'total_qty': total_qty, 'lines': lines,
         'total_cost': outflow_money(doc_lines),    # волна 26: ★ блока «Деньги»
     }
 
 
-def create_requisition(project, user, number='', date=None):
-    """Создать требование в проект-получатель (`project` = куда кладём потомков)."""
-    return _born_order(models.Requisition, project, user, number, date)
+def create_reassignment(project, user, number='', date=None):
+    """Создать перевод в проект-получатель (`project` = куда кладём потомков)."""
+    return _born_order(models.Reassignment, project, user, number, date)
 
 
-def add_requisition_line(requisition, source_lot, qty, location=None):
+def add_reassignment_line(reassignment, source_lot, qty, location=None):
     """Отпочкование: `−ISSUE` от источника + рождение лота-потомка у получателя.
 
     Источник — из любого проекта (постановка своего на баланс → белый, заём у
@@ -3281,36 +3403,36 @@ def add_requisition_line(requisition, source_lot, qty, location=None):
     `predecessor` → источник (генеалогия/провенанс для kitting из остатков). Один
     источник = одна строка (пара строки↔потомок однозначна). Кол-во не клампим.
     """
-    _require_unlocked(requisition)
+    _require_unlocked(reassignment)
     if qty is None or qty <= 0:
-        raise ValidationError('Количество требования должно быть положительным.')
-    if source_lot.project_id == requisition.project_id:
+        raise ValidationError('Количество перевода должно быть положительным.')
+    if source_lot.project_id == reassignment.project_id:
         raise ValidationError('Источник и получатель — один проект (перекладывать некуда).')
-    if requisition.lines.filter(lot=source_lot).exists():
-        raise ValidationError('Этот лот уже в требовании — правьте существующую строку.')
+    if reassignment.lines.filter(lot=source_lot).exists():
+        raise ValidationError('Этот лот уже в переводе — правьте существующую строку.')
     line = models.StockLine.objects.create(
-        document=requisition, lot=source_lot,
-        location=location or _main_location(), qty=-qty)
+        document=reassignment, lot=source_lot,
+        location=_line_location(source_lot, location), qty=-qty)
     born = models.Lot.objects.create(
-        item=source_lot.item, project=requisition.project, origin=requisition,
+        item=source_lot.item, project=reassignment.project, origin=reassignment,
         predecessor=source_lot, qty=qty, cost=ZERO,
-        lot_name=source_lot.lot_name, part_number=source_lot.part_number)
-    _sync_born_cost(requisition)    # волна 26: потомок стоит долю, ушедшую из источника
+        description=source_lot.description, code=source_lot.code)
+    _sync_born_cost(reassignment)    # волна 26: потомок стоит долю, ушедшую из источника
     born.refresh_from_db(fields=['cost'])
     rebuild_movements(source_lot)   # −ISSUE у источника
     rebuild_movements(born)         # +RECEIPT у потомка
     return line
 
 
-def update_requisition_line(line, qty):
+def update_reassignment_line(line, qty):
     """Автосейв количества: правит и строку-источник (`−ISSUE`), и потомок (`+RECEIPT`).
     Только черновик (замок)."""
     _require_unlocked(line.document)
     if qty is None or qty <= 0:
-        raise ValidationError('Количество требования должно быть положительным.')
+        raise ValidationError('Количество перевода должно быть положительным.')
     line.qty = -qty                      # знаковая строка (− расход) у источника
     line.save(update_fields=['qty'])
-    born = _requisition_born_lot(line.document, line.lot)
+    born = _reassignment_born_lot(line.document, line.lot)
     if born is not None:
         born.qty = qty                   # рождённый лот-потомок — положительное кол-во
         born.save(update_fields=['qty'])
@@ -3321,17 +3443,17 @@ def update_requisition_line(line, qty):
     return line
 
 
-def remove_requisition_line(line):
-    """Убрать строку требования: снять потомок + вернуть остаток источнику.
+def remove_reassignment_line(line):
+    """Убрать строку перевода: снять потомок + вернуть остаток источнику.
 
     Guard: потомок не должен быть потреблён ниже (спаян/передан/списан из белого).
     """
     _require_unlocked(line.document)
     src = line.lot
-    born = _requisition_born_lot(line.document, src)
+    born = _reassignment_born_lot(line.document, src)
     if born is not None and _lot_consumed_downstream(born):
         raise ValidationError(
-            'Поставленный на баланс лот уже потреблён ниже — удаление заблокировано.')
+            'Переведённый лот уже потреблён ниже — удаление заблокировано.')
     line.delete()
     if born is not None:
         born.movements.all().delete()
@@ -3339,15 +3461,15 @@ def remove_requisition_line(line):
     rebuild_movements(src)
 
 
-def lock_requisition(requisition):
-    """Провести требование (замок, форма read-only)."""
-    return lock_document(requisition, requisition.lines,
-                         'Нельзя провести пустое требование — добавьте строку.')
+def lock_reassignment(reassignment):
+    """Провести перевод (замок, форма read-only)."""
+    return lock_document(reassignment, reassignment.lines,
+                         'Нельзя провести пустой перевод — добавьте строку.')
 
 
-def unlock_requisition(requisition):
-    """Снять замок требования — снова разрешить правку."""
-    return unlock_document(requisition)
+def unlock_reassignment(reassignment):
+    """Снять замок перевода — снова разрешить правку."""
+    return unlock_document(reassignment)
 
 
 # ── Перемещение / Relocation (мультисклад: лот между локациями внутри проекта) ──
@@ -3380,7 +3502,7 @@ def relocation_form(relocation):
         total_qty += mag
         moves.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'origin': lot.origin_kind,        # глиф партии (§7a): форма = откуда родилась
+            'origin': lot.origin_kind, 'item_native': lot.item.native,        # глиф партии: форма = изделие/компонент (в27)
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': mag,
             'from_location_id': src.location_id if src else None,
@@ -3405,6 +3527,17 @@ def create_relocation(project, user, number='', date=None):
     return _born_order(models.Relocation, project, user, number, date)
 
 
+RELOCATION_OWN_ONLY = ('Перемещение — между нашими локациями. С Центрального склада '
+                       'забирают Требованием, а принимает он только поставки.')
+
+
+def _require_own_places(*locations):
+    """Перемещение не касается Центрального ни одной стороной (волна 27): его остаток
+    меняют только официальные документы — поставка (вход) и требование (выход)."""
+    if any(loc.central for loc in locations):
+        raise ValidationError(RELOCATION_OWN_ONLY)
+
+
 def add_relocation_line(relocation, lot, qty, from_location, to_location):
     """Ход перемещения: пара знаковых строк (`−q` на источнике, `+q` на приёмнике).
 
@@ -3423,6 +3556,7 @@ def add_relocation_line(relocation, lot, qty, from_location, to_location):
         raise ValidationError('Нужны место-источник и место-приёмник.')
     if from_location.id == to_location.id:
         raise ValidationError('Источник и приёмник — одно место (перемещать некуда).')
+    _require_own_places(from_location, to_location)
     if relocation.lines.filter(lot=lot).exists():
         raise ValidationError('Этот лот уже в перемещении — правьте существующий ход.')
     src = models.StockLine.objects.create(
@@ -3451,6 +3585,7 @@ def update_relocation_line(relocation, lot, qty=None, from_location=None,
         dst.location = to_location
     if src.location_id == dst.location_id:
         raise ValidationError('Источник и приёмник — одно место (перемещать некуда).')
+    _require_own_places(src.location, dst.location)
     src.save(update_fields=['qty', 'location'])
     dst.save(update_fields=['qty', 'location'])
     rebuild_movements(lot)
@@ -3477,23 +3612,364 @@ def unlock_relocation(relocation):
 
 def relocation_source_lots(project):
     """Лоты проекта с живым остатком > 0 — кандидаты на перемещение, с разбивкой по
-    местам хранения (`lot_locations`): пикер видит, где лот лежит и сколько."""
+    местам хранения (`lot_locations`): пикер видит, где лот лежит и сколько.
+
+    Волна 27: перемещение ходит только между НАШИМИ местами, поэтому Центральный в
+    разбивке не участвует — лот, лежащий только там, ждёт Требования, а не перемещения."""
     result = []
     lots = list(models.Lot.objects.filter(project=project)
                 .select_related('item', 'origin').order_by('item__code', 'id'))
-    live_by_lot = lots_live_qty(lots)
+    places = lots_places(lots)
     for lot in lots:
-        live = live_by_lot[lot.id]
+        own = [p for p in places[lot.id] if not p['location_central']]
+        live = sum((p['qty'] for p in own), ZERO)
         if live > 0:
             result.append({
-                'lot_id': lot.id, 'item_id': lot.item_id,
+                'lot_id': lot.id, 'item_id': lot.item_id, 'item_native': lot.item.native,
                 'item_code': lot.item.code, 'item_description': lot.item.description,
                 'uom': lot.item.uom, 'live_qty': live,
-                'part_number': lot.part_number,
-                'lot_name': lot.lot_name,
-                'by_location': lot_locations(lot),
+                'lot_code': lot.code,
+                'lot_description': lot.description,
+                'by_location': [{'location_id': p['location_id'], 'code': p['location_code'],
+                                 'qty': p['qty']} for p in own],
             })
     return result
+
+
+# ── Склад и форма лота (волна 27): лоты как главная учётная единица на экране ──
+# Члены «жизни лота» — куда ушло рождённое. Ход (перемещение/требование) тотал не
+# меняет и в раскладку не входит: он двигает место, а не количество.
+LOT_OUTFLOW = (
+    ('kitted', models.DocumentKind.KITTING),
+    ('transferred', models.DocumentKind.TRANSFER),
+    ('written_off', models.DocumentKind.WRITEOFF),
+    ('reassigned', models.DocumentKind.REASSIGNMENT),
+)
+
+
+def _lot_all_places(lot_ids):
+    """`{lot_id: [место]}` — ВСЕ места с ненулевым остатком, включая минус (аномалию):
+    списку Склада минус нужен, пикерам — нет (`lots_places`)."""
+    places = {i: [] for i in lot_ids}
+    if lot_ids:
+        for r in (models.StockMovement.objects.filter(lot_id__in=lot_ids)
+                  .values('lot', 'location', 'location__code', 'location__central')
+                  .annotate(q=Sum('qty'), c=Sum('cost')).order_by('lot', 'location__code')):
+            if r['q']:
+                places[r['lot']].append({
+                    'location_id': r['location'], 'location_code': r['location__code'],
+                    'location_central': bool(r['location__central']),
+                    'qty': r['q'], 'cost': r['c'] or ZERO,
+                })
+    return places
+
+
+def _category_label(item):
+    return item.category.description if item.category_id else None
+
+
+def stock_lots():
+    """Список режима «Склад» (волна 27): все партии, что когда-либо лежали на складе
+    (origin зафиксирован — партия черновика на складе не лежит, Ф15).
+
+    Строка — идентичность лота (PN / наименование), изделие (ось `native` → глиф
+    `chip`/`rocket`, категория под фильтр), проект-владелец, места с остатком и флаги:
+    `exhausted` (остаток 0 — по умолчанию прячется), `on_central` (ждёт Требования),
+    `anomaly` (где-то минус). Фильтры — на клиенте: строк немного, а фильтров три."""
+    lots = list(models.Lot.objects.filter(origin__locked=True)
+                .select_related('item', 'item__category', 'project', 'origin')
+                .order_by('item__code', 'id'))
+    places = _lot_all_places([lot.id for lot in lots])
+    rows = []
+    for lot in lots:
+        pl = places[lot.id]
+        live = sum((p['qty'] for p in pl), ZERO)
+        rows.append({
+            'id': lot.id, 'code': lot.code, 'description': lot.description,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_description': lot.item.description, 'item_native': lot.item.native,
+            'category': _category_label(lot.item), 'uom': lot.item.uom,
+            'project_id': lot.project_id, 'project_code': lot.project.code,
+            'live_qty': live,
+            'places': [{k: p[k] for k in ('location_id', 'location_code',
+                                          'location_central', 'qty')} for p in pl],
+            'exhausted': not pl,
+            'on_central': any(p['location_central'] and p['qty'] > 0 for p in pl),
+            'anomaly': any(p['qty'] < 0 for p in pl),
+        })
+    return rows
+
+
+def _doc_ref(doc):
+    """Ссылка на ордер в проекциях лота: вид + id + ярлык (код → номер → «Вид #id»)."""
+    return {'kind': doc.kind, 'id': doc.id, 'code': doc.code, 'number': doc.number,
+            'date': doc.date, 'locked': doc.locked,
+            'label': doc.code or doc.number
+            or f'{models.DocumentKind(doc.kind).label} #{doc.id}'}
+
+
+def _lot_ref(lot):
+    return {'id': lot.id, 'code': lot.code, 'description': lot.description,
+            'item_id': lot.item_id, 'item_code': lot.item.code,
+            'item_native': lot.item.native, 'label': _lot_label(lot)}
+
+
+def lot_money(lot, movements=None):
+    """«Деньги» формы лота (волна 27) — раскладка жизни партии:
+
+        рождено = впаяно + передано + списано + переведено + остаток
+
+    в штуках и рублях. Источник — проекция (`StockMovement`), то есть только
+    зафиксированное; члены — расходы по видам ордера, ходы (перемещение/требование)
+    тотал не меняют и в раскладку не входят. Остаток разложен по местам. Сумма сходится
+    до копейки по построению: все члены — суммы одних и тех же строк проекции."""
+    if movements is None:
+        movements = list(lot.movements.all())
+    born_q = born_c = ZERO
+    outflow = {key: [ZERO, ZERO] for key, _ in LOT_OUTFLOW}
+    by_kind = {kind: key for key, kind in LOT_OUTFLOW}
+    for m in movements:
+        if m.source_type in models.MOVE_KINDS:
+            continue
+        if m.qty > 0 and m.source_id == lot.origin_id:
+            born_q += m.qty
+            born_c += m.cost
+        elif m.qty < 0 and m.source_type in by_kind:
+            outflow[by_kind[m.source_type]][0] -= m.qty
+            outflow[by_kind[m.source_type]][1] -= m.cost
+    places = _lot_all_places([lot.id])[lot.id]
+    remaining_q = sum((p['qty'] for p in places), ZERO)
+    remaining_c = sum((p['cost'] for p in places), ZERO)
+    return {
+        'born': {'qty': born_q, 'cost': born_c,
+                 'unit_cost': (born_c / born_q) if born_q else None},
+        **{key: {'qty': q, 'cost': c} for key, (q, c) in outflow.items()},
+        'remaining': {'qty': remaining_q, 'cost': remaining_c, 'places': places},
+    }
+
+
+def lot_history(lot):
+    """Таб «История»: все зафиксированные ходы партии по датам — рождение, требования,
+    перемещения, переводы, расходы (ордер, место, ±шт, ±₽). Из проекции: история —
+    это факты, а черновик фактом ещё не стал (Ф15). У перевода — ссылка на
+    лот-потомок, у пайки — на рождённый прибор."""
+    movements = list(lot.movements.order_by('id'))
+    doc_ids = {m.source_id for m in movements}
+    docs = {d.id: d for d in models.StockDocument.objects.filter(id__in=doc_ids)}
+    locs = {loc.id: loc for loc in models.Location.objects.filter(
+        id__in={m.location_id for m in movements})}
+    children = {}
+    for child in (models.Lot.objects.filter(origin_id__in=doc_ids)
+                  .select_related('item')):
+        children.setdefault(child.origin_id, []).append(child)
+    rows = []
+    for m in movements:
+        doc = docs.get(m.source_id)
+        if doc is None:
+            continue
+        loc = locs.get(m.location_id)
+        born = m.qty > 0 and m.source_id == lot.origin_id
+        related = []
+        if not born and m.qty < 0 and doc.kind == models.DocumentKind.REASSIGNMENT:
+            related = [c for c in children.get(doc.id, []) if c.predecessor_id == lot.id]
+        elif not born and m.qty < 0 and doc.kind == models.DocumentKind.KITTING:
+            related = children.get(doc.id, [])
+        rows.append({
+            'id': m.id, 'event': 'born' if born else ('move' if doc.kind in models.MOVE_KINDS
+                                                       else 'out' if m.qty < 0 else 'in'),
+            'document': _doc_ref(doc),
+            'location_code': loc.code if loc else '',
+            'location_central': bool(loc and loc.central),
+            'qty': m.qty, 'cost': m.cost,
+            'related': [_lot_ref(c) for c in related],
+        })
+    rows.sort(key=lambda r: (r['document']['date'] is None, r['document']['date'] or
+                             dt_date.min, r["id"]))
+    return rows
+
+
+def lot_usage(lot):
+    """Таб «Применение»: в какие изделия ушла партия — зафиксированные комплектации,
+    списавшие её, и лоты-приборы, которые они родили (сколько впаяно и на сколько)."""
+    lines = list(models.StockLine.objects
+                 .filter(lot=lot, document__kind=models.DocumentKind.KITTING,
+                         document__locked=True)
+                 .select_related('document', 'document__target_item')
+                 .order_by('document__date', 'document_id', 'id'))
+    values = lot_line_values(lot) if lines else {}
+    rows = []
+    for line in lines:
+        k = line.document
+        rows.append({
+            'id': line.id, 'document': _doc_ref(k),
+            'target_code': k.target_item.code if k.target_item_id else '',
+            'target_id': k.target_item_id,
+            'qty': -line.qty, 'cost': -values.get(line.id, ZERO),
+            'devices': [_lot_ref(d) for d in k.lots.select_related('item')],
+        })
+    return rows
+
+
+def lot_composition(lot, depth=0):
+    """Таб «Состав» лота-прибора — паспорт: лоты компонентов, списанные его
+    комплектацией-origin, рекурсивно по подсборкам (прибор из прибора). Только у
+    партии, рождённой комплектацией; глубина ограничена от зацикливания данных."""
+    origin = lot.origin
+    if origin.kind != models.DocumentKind.KITTING or depth > 12:
+        return []
+    lines = list(origin.lines.filter(qty__lt=0).select_related('lot__item', 'lot__origin')
+                 .order_by('id'))
+    values = lines_values(lines)
+    return [{
+        'id': line.id, 'lot': _lot_ref(line.lot), 'uom': line.lot.item.uom,
+        'qty': -line.qty, 'cost': -values[line.id],
+        'children': lot_composition(line.lot, depth + 1),
+    } for line in lines]
+
+
+def lot_form(lot):
+    """Форма лота (волна 27) — целиком только для чтения: идентичность (PN /
+    наименование) правится в origin-ордере, всё остальное — следствие ордеров.
+
+    Шапка — однозначное (изделие, проект, origin, предшественник); «Деньги» —
+    раскладка жизни (`lot_money`); табы — История / Применение / Состав (у прибора)."""
+    origin = lot.origin
+    return {
+        'id': lot.id, 'code': lot.code, 'description': lot.description,
+        'label': _lot_label(lot),
+        'item_id': lot.item_id, 'item_code': lot.item.code,
+        'item_description': lot.item.description, 'item_native': lot.item.native,
+        'uom': lot.item.uom,
+        'project_id': lot.project_id, 'project_code': lot.project.code,
+        'origin': _doc_ref(origin),
+        'predecessor': _lot_ref(lot.predecessor) if lot.predecessor_id else None,
+        'draft': not origin.locked,
+        'money': lot_money(lot),
+        'history': lot_history(lot),
+        'usage': lot_usage(lot),
+        'composition': lot_composition(lot),
+        'composable': origin.kind == models.DocumentKind.KITTING,
+    }
+
+
+# ── Требование / Requisition (волна 27: официальная выдача Центральный → наша локация) ──
+REQUISITION_NEEDS_LOCATION = 'Сначала укажите «Куда» — нашу локацию, на которую выдаём.'
+
+
+def create_requisition(project, user, number='', date=None):
+    """Создать требование проекта. «Куда» по умолчанию — наша локация
+    (`default_location`); источник всегда Центральный."""
+    return _born_order(models.Requisition, project, user, number, date)
+
+
+def requisition_source_lots(requisition):
+    """Пикер требования: лоты ПРОЕКТА требования, лежащие на Центральном (остаток там
+    > 0) — то, что пришло поставками и ждёт выдачи."""
+    lots = list(models.Lot.objects.filter(project=requisition.project_id)
+                .select_related('item', 'origin').order_by('item__code', 'id'))
+    return _pair_rows(lots, lots_places(lots), lambda lot: {
+        'lot_id': lot.id, 'item_id': lot.item_id, 'item_native': lot.item.native,
+        'item_code': lot.item.code, 'item_description': lot.item.description,
+        'uom': lot.item.uom, 'origin': lot.origin_kind,
+        'lot_code': lot.code, 'lot_description': lot.description,
+    }, central_location())
+
+
+def requisition_form(requisition):
+    """Проекция формы требования: шапка («Куда», проект, № и дата бухгалтерии) +
+    строки (лот, кол-во, остаток лота на Центральном и в «Куда») + итог.
+
+    Строка — пара знаковых `StockLine` (`−q`@Центральный / `+q`@«Куда»), та же
+    механика, что у перемещения: тотал лота и проект не меняются."""
+    rows = []
+    total_qty = ZERO
+    central = central_location()
+    dest = requisition.location
+    seen = set()
+    for line in requisition.lines.select_related('lot__item', 'lot__origin').order_by('id'):
+        if line.lot_id in seen:
+            continue
+        seen.add(line.lot_id)
+        lot = line.lot
+        src, dst = _relocation_pair(requisition, lot)
+        mag = (-src.qty) if src else (dst.qty if dst else ZERO)
+        total_qty += mag
+        rows.append({
+            'lot_id': lot.id, 'lot_label': _lot_label(lot),
+            'lot_code': lot.code, 'lot_description': lot.description,
+            'origin': lot.origin_kind, 'item_native': lot.item.native,
+            'item_id': lot.item_id, 'item_code': lot.item.code, 'item_native': lot.item.native,
+            'item_description': lot.item.description, 'uom': lot.item.uom, 'qty': mag,
+            'central_live_qty': lot_live_qty(lot, central),
+            'dest_live_qty': lot_live_qty(lot, dest) if dest else ZERO,
+        })
+    return {
+        'id': requisition.id, **_author(requisition), **_location_header(requisition),
+        'number': requisition.number, 'date': requisition.date,
+        'code': requisition.code, 'description': requisition.description,
+        'project_id': requisition.project_id, 'project_code': requisition.project.code,
+        'project_name': requisition.project.description, 'locked': requisition.locked,
+        'central_id': central.id, 'central_code': central.code,
+        'total_qty': total_qty, 'lines': rows,
+        'total_cost': outflow_money(requisition.lines.select_related('lot')),
+    }
+
+
+def add_requisition_line(requisition, lot, qty):
+    """Строка требования: пара `−q`@Центральный / `+q`@«Куда». Лот — проекта
+    требования; один лот = одна строка. Кол-во не клампим (мутабельная ДНК): выдать
+    больше, чем лежит, можно — Центральный уйдёт в минус, и это видно."""
+    _require_unlocked(requisition)
+    if lot.project_id != requisition.project_id:
+        raise ValidationError('Лот из другого проекта — требование выдаёт лоты своего проекта.')
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество требования должно быть положительным.')
+    if requisition.location_id is None:
+        raise ValidationError(REQUISITION_NEEDS_LOCATION)
+    if requisition.lines.filter(lot=lot).exists():
+        raise ValidationError('Этот лот уже в требовании — правьте существующую строку.')
+    models.StockLine.objects.create(document=requisition, lot=lot,
+                                    location=central_location(), qty=-qty)
+    models.StockLine.objects.create(document=requisition, lot=lot,
+                                    location=requisition.location, qty=qty)
+    rebuild_movements(lot)
+
+
+def update_requisition_line(requisition, lot, qty):
+    """Автосейв количества строки требования (обе стороны пары). Только черновик."""
+    _require_unlocked(requisition)
+    if qty is None or qty <= 0:
+        raise ValidationError('Количество требования должно быть положительным.')
+    src, dst = _relocation_pair(requisition, lot)
+    if src is None or dst is None:
+        raise ValidationError('Строка требования не найдена.')
+    src.qty, dst.qty = -qty, qty
+    src.save(update_fields=['qty'])
+    dst.save(update_fields=['qty'])
+    rebuild_movements(lot)
+
+
+def remove_requisition_line(requisition, lot):
+    """Убрать строку требования (обе строки пары) + пересобрать движения лота."""
+    _require_unlocked(requisition)
+    requisition.lines.filter(lot=lot).delete()
+    rebuild_movements(lot)
+
+
+def lock_requisition(requisition):
+    """Зафиксировать требование — выдача с Центрального становится видна складу."""
+    return lock_document(requisition, requisition.lines,
+                         'Нельзя зафиксировать пустое требование — добавьте строку.')
+
+
+def unlock_requisition(requisition):
+    """Снять замок требования — снова разрешить правку."""
+    return unlock_document(requisition)
+
+
+def update_requisition(requisition, **kw):
+    """Шапка требования: № / дата / «Куда» / код / описание / автор / проект-якорь."""
+    return update_document(requisition, **kw)
 
 
 # ── Закупочный контур проекта: заказы и поставки одной проекцией ──
@@ -3532,7 +4008,7 @@ def project_closure(project):
     уводит остаток мгновенно — он кладёт его в **черновой** закрывающий документ.
     Чтобы панель не выглядела «кнопка не сработала», отдаём `closing_drafts` —
     расфиксированные документы, уже разобравшие остатки этого проекта (в т.ч. чужого
-    проекта-получателя, как требование в «Собственный склад»): их видно строкой
+    проекта-получателя, как перевод в «Собственный склад»): их видно строкой
     «ждут фиксации», и они же становятся причиной отказа в `blocker`.
     """
     residuals = []
@@ -3546,7 +4022,7 @@ def project_closure(project):
             continue
         residuals.append({
             'lot_id': lot.id, 'lot_label': _lot_label(lot),
-            'origin': lot.origin_kind,          # глиф партии (§7a): форма = откуда родилась
+            'origin': lot.origin_kind, 'item_native': lot.item.native,          # глиф партии: форма = изделие/компонент (в27)
             'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'live_qty': live, 'anomaly': live < 0,
@@ -3595,7 +4071,7 @@ def _closing_drafts(project):
     """Расфиксированные документы, уже разобравшие остатки проекта (Ф15).
 
     Ищем по строкам: любой `locked=False` документ, чья `StockLine` ссылается на лот
-    этого проекта. Документ может жить в другом проекте (требование в «Собственный
+    этого проекта. Документ может жить в другом проекте (перевод в «Собственный
     склад» тянет наш лот) — поэтому фильтр по строкам, а не по `document.project`.
     `qty` — сколько остатка ждёт фиксации (магнитуда расхода по нашим лотам).
     """
@@ -3655,7 +4131,7 @@ def _require_no_closing_draft(lot):
     сработавшим». Правильный ответ — не второй документ, а напоминание, где лежит
     первый: работа уже сделана, осталось её зафиксировать.
     """
-    kinds = (models.StockDocument.Kind.WRITEOFF, models.StockDocument.Kind.REQUISITION)
+    kinds = (models.StockDocument.Kind.WRITEOFF, models.StockDocument.Kind.REASSIGNMENT)
     doc = (models.StockDocument.objects
            .filter(locked=False, kind__in=kinds, lines__lot=lot, lines__qty__lt=0)
            .distinct().order_by('id').first())
@@ -3688,24 +4164,24 @@ def writeoff_lot(project, lot, qty, user):
     return writeoff
 
 
-def requisition_lot(project, lot, qty, user, dest_kind=None):
+def reassignment_lot(project, lot, qty, user, dest_kind=None):
     """Мост «на баланс»: отпочковать остаток проекта в белый «Собственный склад».
 
-    Один клик панели кладёт остаток в требование: на фиксации он уйдёт в 0 у проекта
+    Один клик панели кладёт остаток в перевод: на фиксации он уйдёт в 0 у проекта
     (`−ISSUE`) и появится лотом-потомком на балансе (`+RECEIPT`) — до неё склад не
-    двигается (Ф15). Переиспользует последнее **черновое** требование в целевой склад;
+    двигается (Ф15). Переиспользует последний **черновой** перевод в целевой склад;
     зафиксированное не трогаем.
     """
     if lot.project_id != project.id:
         raise ValidationError('Лот из другого проекта.')
     _require_no_closing_draft(lot)
     dest = _internal_project(dest_kind or models.Project.Kind.INTERNAL_STOCK)
-    requisition = (models.Requisition.objects.filter(project=dest, locked=False)
+    reassignment = (models.Reassignment.objects.filter(project=dest, locked=False)
                    .order_by('-id').first())
-    if requisition is None:
-        requisition = create_requisition(dest, user, _auto_number('ТРБ', dest))
-    add_requisition_line(requisition, lot, qty)
-    return requisition
+    if reassignment is None:
+        reassignment = create_reassignment(dest, user, _auto_number('ТРБ', dest))
+    add_reassignment_line(reassignment, lot, qty)
+    return reassignment
 
 
 # --------------------------------------------------------------------------- #
@@ -3835,6 +4311,8 @@ def _born_order(model, project, user, number='', date=None, **specifics):
     сегодня документ и правда заводят; к фиксации человек поправит его на дату УПД.
     Код — общий шаблон («Поставка 12»), пространство кода одно на все виды.
     """
+    if model.KIND in models.LOCATION_KINDS and 'location' not in specifics:
+        specifics['location'] = default_location(model.KIND)   # волна 27: «Куда»
     doc = model.objects.create(
         project=project, user=user, number=(number or '').strip(),
         date=date or timezone.localdate(), **specifics)
@@ -3892,6 +4370,27 @@ def _set_project(doc, project):
     doc.save(update_fields=['project'])
 
 
+def _set_location(doc, location):
+    """Сменить «Куда» ордера (волна 27). Часовой `_UNSET` → не трогаем; `None` →
+    очистить (черновик вправе быть неполным, обязательность стережёт фиксация).
+
+    Применимость — `LOCATION_KINDS` (CHECK `doc_location_only_own_kinds`); своим видам
+    Центральный нельзя (`OWN_LOCATION_ONLY`). У требования «Куда» — приёмник всех ходов,
+    поэтому сторона `+q` его строк едет следом. Замок проверяет вызывающий."""
+    if location is _UNSET:
+        return
+    kind = doc.KIND or doc.kind
+    if kind not in models.LOCATION_KINDS:
+        raise ValidationError('«Куда» есть только у поставки, комплектации, '
+                              'инвентаризации и требования.')
+    if location is not None and location.central and kind in models.OWN_LOCATION_KINDS:
+        raise ValidationError(models.OWN_LOCATION_ONLY)
+    doc.location = location
+    doc.save(update_fields=['location'])
+    if kind == models.DocumentKind.REQUISITION and location is not None:
+        doc.lines.filter(qty__gt=0).update(location=location)
+
+
 def _set_target_item(kitting, item):
     """Сменить целевое изделие комплектации (Ф2k) — якорь #A, специфичный для kitting.
 
@@ -3922,7 +4421,8 @@ def _set_target_item(kitting, item):
 
 
 def update_document(doc, number=None, date=None, code=_UNSET, description=None,
-                    user=_UNSET, project=_UNSET, contractor=_UNSET, reason=None):
+                    user=_UNSET, project=_UNSET, contractor=_UNSET, reason=None,
+                    location=_UNSET):
     """**Единая** правка шапки ордера (волна 19, Ф14).
 
     До Ф14 шесть видов несли шесть одинаковых `update_*`, различавшихся ровно двумя
@@ -3945,6 +4445,7 @@ def update_document(doc, number=None, date=None, code=_UNSET, description=None,
     _set_author(doc, user)
     _set_project(doc, project)
     _set_code(doc, code)
+    _set_location(doc, location)
     if contractor is not _UNSET:
         if doc.kind not in models.CONTRACTOR_KINDS:
             raise ValidationError(
@@ -4010,9 +4511,9 @@ def update_writeoff(writeoff, **kw):
     return update_document(writeoff, **kw)
 
 
-def update_requisition(requisition, **kw):
-    """Шапка требования: № / дата / код / описание / автор / проект-получатель."""
-    return update_document(requisition, **kw)
+def update_reassignment(reassignment, **kw):
+    """Шапка перевода: № / дата / код / описание / автор / проект-получатель."""
+    return update_document(reassignment, **kw)
 
 
 def update_relocation(relocation, **kw):
@@ -4024,7 +4525,7 @@ def update_relocation(relocation, **kw):
 
 
 def update_kitting(kitting, qty=None, date=None, code=_UNSET, description=None,
-                   user=_UNSET, project=_UNSET, target_item=_UNSET):
+                   user=_UNSET, project=_UNSET, target_item=_UNSET, location=_UNSET):
     """Правка шапки комплектации (кол-во образцов / дата / код / описание / автор / проект / цель).
     Только «в работе».
 
@@ -4036,6 +4537,7 @@ def update_kitting(kitting, qty=None, date=None, code=_UNSET, description=None,
     _set_project(kitting, project)
     _set_target_item(kitting, target_item)
     _set_code(kitting, code)
+    _set_location(kitting, location)
     if qty is not None and qty <= 0:
         raise ValidationError('Количество образцов должно быть положительным.')
     fields = []
@@ -4083,7 +4585,7 @@ def scope_demand(projects, active_only=True):
     сознательная смена семантики). Прежний свод не перенеттивал: `to_order` каждого
     проекта клампился в ноль, поэтому профицит проекта A не гасил нужду проекта B. Баланс
     знаковый, и в сумме гасит — но это НЕ ложь продукта: остаток соседнего проекта в
-    контуре доступен, просто через документ (`Requisition`, заём B→A — штатный путь
+    контуре доступен, просто через документ (`Reassignment`, заём B→A — штатный путь
     домена). Витрина отвечает «хватает ли по закупке в целом»; вопрос «хватает ли ИМЕННО
     в этом проекте» задают форме проекта, где перенеттивать нечего.
     """
@@ -4758,11 +5260,11 @@ def item_xlsx(item, scope=ITEM_XLSX_BOM):
         wb.create_sheet(), 'Склад',
         head=[],
         headers=['№', 'Партия', 'Проект', 'Рожд.', 'Остаток', 'Ед.',
-                 'Part number', 'Название'],
+                 'PN', 'Наименование'],
         # Остаток партии черновика — прочерк, а не 0 (Ф15: «едет, ещё не принято»).
         rows=[(f'#{lot.id}', lot.project.code, float(lot.qty),
                float(live_by_lot[lot.id]) if lot.origin.locked else '—',
-               item.uom, lot.part_number, lot.lot_name)
+               item.uom, lot.code, lot.description)
               for lot in item_lots],
         widths=[5, 10, 16, 12, 12, 8, 22, 32])
     _xlsx_sheet(
@@ -4790,7 +5292,7 @@ def _movement_kind_label(m):
 
 def _movement_lot_label(m):
     """Партия в ленте: `#id`, плюс имя из УПД, когда оно есть."""
-    return f'#{m["lot_id"]} · {m["lot_name"]}' if m['lot_name'] else f'#{m["lot_id"]}'
+    return f'#{m["lot_id"]} · {m["lot_description"]}' if m['lot_description'] else f'#{m["lot_id"]}'
 
 
 # --------------------------------------------------------------------------- #
@@ -5233,7 +5735,7 @@ def delete_counterparty(counterparty):
 # item/цену/название/зав.№). Отдельной `InventoryLine` в модели нет: строки акта =
 # его лоты (`inventory.lots`, как приход/УПД). Origin `inventory` несёт единый
 # `Lot.origin` (Ф2b) и знает `rebuild_movements` — волна добавила записываемую надстройку.
-# Замка нет (у модели нет поля-статуса, как у Writeoff/Requisition): правимо всегда,
+# Замка нет (у модели нет поля-статуса, как у Writeoff/Reassignment): правимо всегда,
 # корректность держат guard'ы + PROTECT.
 def inventory_form(inventory):
     """Проекция формы инвентаризации: шапка акта + строки-лоты (`+RECEIPT`) + итог.
@@ -5254,15 +5756,16 @@ def inventory_form(inventory):
         lots.append({
             'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
+            'item_native': lot.item.native,
             'qty': lot.qty, 'live_qty': live_by_lot[lot.id],
-            'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_name': lot.lot_name,
-            'part_number': lot.part_number,
+            'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_description': lot.description,
+            'lot_code': lot.code,
             'predecessor_id': lot.predecessor_id,
             'predecessor_label': _lot_label(pred) if pred else '',
             'consumed': lot.id in consumed,
         })
     return {
-        'id': inventory.id, **_author(inventory), 'number': inventory.number, 'date': inventory.date,
+        'id': inventory.id, **_author(inventory), **_location_header(inventory), 'number': inventory.number, 'date': inventory.date,
         'code': inventory.code, 'description': inventory.description,
         'project_id': inventory.project_id, 'project_code': inventory.project.code,
         'project_name': inventory.project.description, 'locked': inventory.locked,
@@ -5276,8 +5779,8 @@ def create_inventory(project, user, number='', date=None):
     return _born_order(models.Inventory, project, user, number, date)
 
 
-def add_inventory_lot(inventory, item, qty, cost=None, lot_name='',
-                      part_number='', predecessor=None):
+def add_inventory_lot(inventory, item, qty, cost=None, lot_description='',
+                      lot_code='', predecessor=None):
     """Добавить строку акта: рождается «найденная» партия (`+RECEIPT`) в его проекте.
 
     `predecessor` (опц.) связывает найденный лот со списанным-источником
@@ -5295,14 +5798,14 @@ def add_inventory_lot(inventory, item, qty, cost=None, lot_name='',
                 if predecessor is not None else ZERO)
     lot = models.Lot.objects.create(
         item=item, project=inventory.project, origin=inventory, qty=qty,
-        cost=cost, lot_name=lot_name or '',
-        part_number=part_number or '', predecessor=predecessor)
+        cost=cost, description=lot_description or '',
+        code=lot_code or '', predecessor=predecessor)
     rebuild_movements(lot)
     return lot
 
 
-def update_inventory_lot(lot, qty=None, cost=None, lot_name=None,
-                         part_number=None):
+def update_inventory_lot(lot, qty=None, cost=None, lot_description=None,
+                         lot_code=None):
     """Автосейв строки акта (кол-во/стоимость/название/PN). Кол-во не клампим по
     расходу. Только черновик (замок). Правка количества без стоимости сохраняет цену
     штуки (стоимость масштабируется долей, волна 26)."""
@@ -5322,12 +5825,12 @@ def update_inventory_lot(lot, qty=None, cost=None, lot_name=None,
         lot.cost = cost
         if 'cost' not in fields:
             fields.append('cost')
-    if lot_name is not None:
-        lot.lot_name = lot_name
-        fields.append('lot_name')
-    if part_number is not None:
-        lot.part_number = part_number
-        fields.append('part_number')
+    if lot_description is not None:
+        lot.description = lot_description
+        fields.append('description')
+    if lot_code is not None:
+        lot.code = lot_code
+        fields.append('code')
     if fields:
         lot.save(update_fields=fields)
         rebuild_movements(lot)
@@ -5393,7 +5896,7 @@ def written_off_lots():
             'uom': lot.item.uom, 'written_qty': written,
             'project_code': lot.project.code, 'unit_cost': lot.unit_cost,
             'cost': lot.cost, 'qty': lot.qty,
-            'lot_name': lot.lot_name, 'part_number': lot.part_number,
+            'lot_description': lot.description, 'lot_code': lot.code,
         })
     return result
 
@@ -6207,8 +6710,8 @@ def remove_bom_line(line):
 ATTACHMENT_OWNER_MODELS = {
     'item': models.Item, 'receipt': models.Receipt, 'transfer': models.Transfer,
     'kitting': models.Kitting, 'inventory': models.Inventory,
-    'writeoff': models.Writeoff, 'requisition': models.Requisition,
-    'relocation': models.Relocation,
+    'writeoff': models.Writeoff, 'reassignment': models.Reassignment,
+    'relocation': models.Relocation, 'requisition': models.Requisition,
     # Волна 19, Ф12b: не-ордерные владельцы. Вид ордера остаётся именем в API
     # (`receipt`/`transfer`/…) и ложится в общее поле `document`; у этих —
     # своё поле, имя типа = имя поля.
@@ -6693,14 +7196,14 @@ def _consequences(entity, obj, lock):
                              f'{project} → {to}'}]
         return [{'text': f'{head} {_agree(n, "будет списана", "будут списаны")} со склада '
                          f'проекта {project}'}]
-    if entity == 'requisitions':
+    if entity == 'reassignments':
         lines = [sl for sl in obj.lines.select_related('lot__project') if sl.qty < 0]
         sources = ', '.join(sorted({sl.lot.project.code for sl in lines})) or '—'
         n = len({sl.lot_id for sl in lines})
         return [{'text': f'{_lots_word(n)} {_agree(n, "перейдёт", "перейдут")}: {sources} → {project}'
                  if lock else
                  f'{_lots_word(n)} {_agree(n, "вернётся", "вернутся")}: {project} → {sources}'}]
-    if entity == 'relocations':
+    if entity in ('relocations', 'requisitions'):
         lines = list(obj.lines.select_related('location'))
         src = ', '.join(sorted({sl.location.code for sl in lines if sl.qty < 0})) or '—'
         dst = ', '.join(sorted({sl.location.code for sl in lines if sl.qty > 0})) or '—'
@@ -6722,9 +7225,10 @@ FIXATION_KINDS = {
     'kittings': (models.Kitting, 'комплектацию'),
     'transfers': (models.Transfer, 'передачу'),
     'writeoffs': (models.Writeoff, 'списание'),
-    'requisitions': (models.Requisition, 'требование'),
+    'reassignments': (models.Reassignment, 'перевод'),
     'inventories': (models.Inventory, 'инвентаризацию'),
     'relocations': (models.Relocation, 'перемещение'),
+    'requisitions': (models.Requisition, 'требование'),
 }
 
 
@@ -6736,9 +7240,10 @@ def _fixation_fns():
         'receipts': (lock_receipt, unlock_receipt), 'kittings': (lock_kitting, unlock_kitting),
         'transfers': (lock_transfer, unlock_transfer),
         'writeoffs': (lock_writeoff, unlock_writeoff),
-        'requisitions': (lock_requisition, unlock_requisition),
+        'reassignments': (lock_reassignment, unlock_reassignment),
         'inventories': (lock_inventory, unlock_inventory),
         'relocations': (lock_relocation, unlock_relocation),
+        'requisitions': (lock_requisition, unlock_requisition),
     }
 
 

@@ -112,7 +112,7 @@ class BornLotsInline(_ReadOnlyInline):
 
     model = models.Lot
     fk_name = 'origin'
-    fields = ('item', 'project', 'qty', 'cost', 'part_number', 'lot_name')
+    fields = ('item', 'project', 'qty', 'cost', 'code', 'description')
     verbose_name_plural = 'рождённые партии (правка — во фронте, через движок)'
 
 
@@ -122,12 +122,13 @@ LINES_INLINE_BY_KIND = {
     Kind.KITTING: KittingLinesInline,
     Kind.TRANSFER: TransferLinesInline,
     Kind.WRITEOFF: StockLinesInline,
-    Kind.REQUISITION: StockLinesInline,
+    Kind.REASSIGNMENT: StockLinesInline,
     Kind.RELOCATION: StockLinesInline,
+    Kind.REQUISITION: StockLinesInline,
 }
 
 # Виды, рождающие партии (`Lot.origin` — ровно один origin-документ).
-BORN_LOTS_KINDS = (Kind.RECEIPT, Kind.KITTING, Kind.INVENTORY, Kind.REQUISITION)
+BORN_LOTS_KINDS = (Kind.RECEIPT, Kind.KITTING, Kind.INVENTORY, Kind.REASSIGNMENT)
 
 
 def specific_fields(kind):
@@ -140,6 +141,8 @@ def specific_fields(kind):
     fields = []
     if kind in models.CONTRACTOR_KINDS:
         fields.append('contractor')        # поставка → поставщик, передача → заказчик
+    if kind in models.LOCATION_KINDS:
+        fields.append('location')          # «Куда» (волна 27)
     if kind == Kind.RECEIPT:
         fields.append('purchase')
     if kind == Kind.KITTING:
@@ -184,7 +187,7 @@ class CounterpartyAdmin(admin.ModelAdmin):
 
 @admin.register(models.Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ('code', 'description', 'kind')
+    list_display = ('code', 'description', 'central')
 
 
 # --- закупки -------------------------------------------------------------- #
@@ -268,9 +271,9 @@ class StockDocumentAdmin(admin.ModelAdmin):
 @admin.register(models.Lot)
 class LotAdmin(_ReadOnlyAdmin):
     list_display = ('id', 'item', 'project', 'origin_kind', 'cost',
-                    'part_number', 'lot_name')
+                    'code', 'description')
     list_filter = ('project',)
-    search_fields = ('item__code', 'part_number', 'lot_name')
+    search_fields = ('item__code', 'code', 'description')
     list_select_related = ('item', 'project', 'origin')
 
 

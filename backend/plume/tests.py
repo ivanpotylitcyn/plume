@@ -73,6 +73,13 @@ def _line(purchase, item, qty, price=None):
 _TEST_MEDIA = tempfile.mkdtemp(prefix='plume-test-media-')
 
 
+def _own_loc():
+    """Наша локация фикстур (волна 27): «Куда» комплектаций и инвентаризаций — не
+    Центральный. `MAIN` в базах тестов — Центральный (туда приходят поставки)."""
+    return models.Location.objects.get_or_create(
+        code='LAB', defaults={'description': 'Наш склад'})[0]
+
+
 def tearDownModule():
     shutil.rmtree(_TEST_MEDIA, ignore_errors=True)
 
@@ -80,7 +87,8 @@ def tearDownModule():
 class EngineTestBase(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create(username='t')
-        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад', central=True)
+        self.lab = _own_loc()
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.supplier = models.Counterparty.objects.create(description='Поставщик')
@@ -102,11 +110,11 @@ class EngineTestBase(TestCase):
         p = _purchase(project or self.prj, self.user, **kw)
         return engine.update_purchase(p, contractor=contractor or self.supplier)
 
-    def receipt_lot(self, item, project, qty, purchase=None, locked=True):
+    def receipt_lot(self, item, project, qty, purchase=None, locked=True, location=None):
         """Партия, приехавшая по УПД. Волна 19, Ф15: поставка **зафиксирована** —
         иначе её партия на складе не лежит (замок гейтит склад), а фикстура значит
         именно «товар на складе». `locked=False` — для тестов самого гейта."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=location or engine.central_location(),
             number=f'UPD-{item.code}-{qty}', date='2026-05-01', contractor=self.supplier,
             project=project, user=self.user, purchase=purchase, locked=locked)
         lot = models.Lot.objects.create(item=item, project=project, origin=r, qty=D(qty))
@@ -124,7 +132,7 @@ class RebuildAndStockTests(EngineTestBase):
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 100)
         dev = self.make_item('DEV', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           locked=True)     # Ф15: спаяно = зафиксировано
         models.StockLine.objects.create(document=k, lot=lot,
@@ -136,7 +144,7 @@ class RebuildAndStockTests(EngineTestBase):
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 5)
         dev = self.make_item('DEV', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           locked=True)
         models.StockLine.objects.create(document=k, lot=lot,
@@ -157,7 +165,7 @@ class RebuildAndStockTests(EngineTestBase):
         comp = self.make_item('R')
         lot = self.receipt_lot(comp, self.prj, 10)
         dev = self.make_item('DEV', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1))
         engine.add_kitting_line(k, comp, lot, D(4))
         born = engine.lock_kitting(k)              # posted + рождается лот-прибор
@@ -181,7 +189,7 @@ class RebuildAndStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         # Ф15: расход виден складу только у зафиксированных документов — фикстура
         # моделирует свершившийся факт, поэтому все три заведены под замком.
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           locked=True)
         w = models.Writeoff.objects.create(project=self.prj, user=self.user,
@@ -306,7 +314,7 @@ class OnOrderTests(EngineTestBase):
 
     def test_manufactured_wip_is_on_order(self):
         board = self.make_item('BRD', manufactured=True)
-        models.Kitting.objects.create(project=self.prj, target_item=board,
+        models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=board,
                                       user=self.user, qty=D(4),
                                       locked=False)
         self.assertEqual(engine.item_on_order(board, self.prj), D(4))
@@ -451,7 +459,7 @@ class ProjectHealthTests(EngineTestBase):
     def test_all_assembled_green(self):
         dev, case = self._device_demand(1)
         lot = self.receipt_lot(case, self.prj, 5)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1), locked=False)
         engine.add_kitting_line(k, case, lot, D(1))
         engine.lock_kitting(k)                     # рождает прибор → собрано
@@ -465,7 +473,7 @@ class StockMapTests(EngineTestBase):
             kind=models.Project.Kind.INTERNAL_STOCK)
         item = self.make_item('CASE')
         self.receipt_lot(item, self.prj, 12)
-        inv = models.Inventory.objects.create(project=white, user=self.user,
+        inv = models.Inventory.objects.create(location=_own_loc(), project=white, user=self.user,
                                               number='INV-1', date='2026-06-01',
                                               locked=True)   # Ф15: иначе не на складе
         lot = models.Lot.objects.create(item=item, project=white, origin=inv, qty=D(5))
@@ -499,7 +507,7 @@ class KittingFormTests(EngineTestBase):
         models.BomLine.objects.create(parent=self.device, component=self.res, qty=D(2))
 
     def make_kitting(self, qty=2):
-        return models.Kitting.objects.create(
+        return models.Kitting.objects.create(location=_own_loc(), 
             project=self.prj, target_item=self.device, user=self.user,
             qty=D(qty), locked=False)
 
@@ -538,7 +546,7 @@ class KittingFormTests(EngineTestBase):
         """Второй слой правила. CHECK его выразить не может (смотрит в чужую таблицу,
         а MySQL в CHECK подзапросы запрещает), поэтому страхует `clean()`: путь мимо
         движка (прямой ORM, админка) упирается в отказ на фиксации."""
-        k = models.Kitting.objects.create(project=self.prj, target_item=self.res,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=self.res,
                                           user=self.user, qty=D(1), locked=False)
         self.receipt_lot(self.res, self.prj, 5)
         lot = models.Lot.objects.filter(item=self.res).first()
@@ -552,7 +560,7 @@ class KittingFormTests(EngineTestBase):
         """Страховка того же места: пустое кол-во у цели с составом — не 500, а «надо 0»
         без призраков. Проекция обязана пережить любой неполный черновик, каким бы
         путём он ни возник (админка, прямой ORM)."""
-        k = models.Kitting.objects.create(project=self.prj, target_item=self.device,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=self.device,
                                           user=self.user, qty=None, locked=False)
         rows = engine.kitting_form(k)['rows']
         self.assertEqual(rows[0]['need'], D(0))
@@ -688,7 +696,7 @@ class ReceiptFormTests(EngineTestBase):
     """Волна 3: форма прихода — строки-лоты УПД, рождение +RECEIPT, замок."""
 
     def make_receipt(self, approved=False):
-        return models.Receipt.objects.create(
+        return models.Receipt.objects.create(location=engine.central_location(), 
             number='УПД-Т', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user,
             locked=approved)
@@ -697,7 +705,7 @@ class ReceiptFormTests(EngineTestBase):
         r = self.make_receipt()
         case = self.make_item('CASE')
         lot = engine.add_receipt_lot(r, case, D(12), cost=D(9600),
-                                     lot_name='Корпус Al')
+                                     lot_description='Корпус Al')
         self.assertEqual(lot.project_id, r.project_id)   # проект наследован
         # Ф15: партия черновой поставки на складе не лежит — движение рождает замок
         self.assertEqual(engine.lot_live_qty(lot), D(0))
@@ -732,13 +740,13 @@ class ReceiptFormTests(EngineTestBase):
     def test_update_lot_cost_and_name(self):
         r = self.make_receipt()
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
-        engine.update_receipt_lot(lot, cost=D(210), lot_name='Ы',
-                                  part_number='PN-1')
+        engine.update_receipt_lot(lot, cost=D(210), lot_description='Ы',
+                                  lot_code='PN-1')
         lot.refresh_from_db()
         self.assertEqual(lot.cost, D(210))
         self.assertEqual(lot.unit_cost, D(42))
-        self.assertEqual(lot.lot_name, 'Ы')
-        self.assertEqual(lot.part_number, 'PN-1')
+        self.assertEqual(lot.description, 'Ы')
+        self.assertEqual(lot.code, 'PN-1')
 
     def test_remove_lot(self):
         r = self.make_receipt()
@@ -751,7 +759,7 @@ class ReceiptFormTests(EngineTestBase):
         comp = self.make_item('R')
         lot = engine.add_receipt_lot(r, comp, D(100))
         dev = self.make_item('DEV', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           locked=False)
         engine.add_kitting_line(k, comp, lot, D(30))   # спаяли — потреблён ниже
@@ -796,7 +804,7 @@ class ReceiptFormTests(EngineTestBase):
         engine.lock_receipt(r)
         dev = self.make_item('DEV', manufactured=True)
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1),
                                           locked=False)
         c = engine.kitting_form(k)
@@ -969,7 +977,7 @@ class PurchaseFormTests(EngineTestBase):
         other = models.Project.objects.create(
             code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         p = _purchase(other, self.user)
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='УПД-Х', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         with self.assertRaises(ValidationError):
@@ -1053,7 +1061,7 @@ class ReceiptFromPurchaseTests(EngineTestBase):
         # Цена — 0, НЕ estimated_cost: оценка, забытая при фиксации, стала бы фактом
         # трат проекта неотличимо от реальной цены УПД.
         self.assertEqual(lots[self.item.id].cost, D(0))
-        self.assertEqual(lots[self.item.id].lot_name, self.item.description)
+        self.assertEqual(lots[self.item.id].description, self.item.description)
 
     def test_draft_purchase_rejected(self):
         engine.unlock_purchase(self.p)
@@ -1232,8 +1240,8 @@ class TransferFormTests(EngineTestBase):
         self.assertEqual(row['display_name'], 'Прибор зав.№7')
 
     def test_default_display_name_from_lot(self):
-        self.lot.lot_name = 'ЗН-42'
-        self.lot.save(update_fields=['lot_name'])
+        self.lot.description = 'ЗН-42'
+        self.lot.save(update_fields=['description'])
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         line = engine.add_transfer_line(t, self.lot, D(1))
         self.assertIn('ЗН-42', line.display_name)               # авто-метка лота
@@ -1403,8 +1411,8 @@ class WriteoffFormTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(self.lot), D(10))
 
 
-class RequisitionFormTests(EngineTestBase):
-    """Волна 6: требование/отпочкование — `−ISSUE` источника + рождение
+class ReassignmentFormTests(EngineTestBase):
+    """Волна 6: перевод (бывшее отпочкование) — `−ISSUE` источника + рождение
     лота-потомка (`+RECEIPT`) у получателя с наследованием цены/провенанса."""
 
     def setUp(self):
@@ -1412,21 +1420,21 @@ class RequisitionFormTests(EngineTestBase):
         self.item = self.make_item('R100')
         self.src = self.receipt_lot(self.item, self.prj, 10)
         self.src.cost = D('25.00')
-        self.src.part_number = 'ЗН-9'
-        self.src.save(update_fields=['cost', 'part_number'])
+        self.src.code = 'ЗН-9'
+        self.src.save(update_fields=['cost', 'code'])
         engine.rebuild_movements(self.src)
         self.white = models.Project.objects.create(
             code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
 
     def test_add_line_issues_source_and_births_child(self):
-        req = engine.create_requisition(self.white, self.user, 'ТР-1')
-        engine.add_requisition_line(req, self.src, D(4))
-        # Ф15: черновое требование не двигает ни источник, ни потомка
+        req = engine.create_reassignment(self.white, self.user, 'ТР-1')
+        engine.add_reassignment_line(req, self.src, D(4))
+        # Ф15: черновой перевод не двигает ни источник, ни потомка
         self.assertEqual(engine.lot_live_qty(self.src), D(10))
-        engine.lock_requisition(req)
+        engine.lock_reassignment(req)
         self.assertEqual(engine.lot_live_qty(self.src), D(6))    # источник просел
-        born = engine._requisition_born_lot(req, self.src)
+        born = engine._reassignment_born_lot(req, self.src)
         self.assertIsNotNone(born)
         self.assertEqual(born.project_id, self.white.id)
         self.assertEqual(born.qty, D(4))
@@ -1435,10 +1443,10 @@ class RequisitionFormTests(EngineTestBase):
         self.assertEqual(engine.lot_live_qty(born), D(4))       # +RECEIPT у потомка
 
     def test_form_shows_source_and_born(self):
-        req = engine.create_requisition(self.white, self.user, 'ТР-1')
-        engine.add_requisition_line(req, self.src, D(4))
-        engine.lock_requisition(req)
-        c = engine.requisition_form(req)
+        req = engine.create_reassignment(self.white, self.user, 'ТР-1')
+        engine.add_reassignment_line(req, self.src, D(4))
+        engine.lock_reassignment(req)
+        c = engine.reassignment_form(req)
         self.assertEqual(c['total_qty'], D(4))
         row = c['lines'][0]
         self.assertEqual(row['source_project_code'], self.prj.code)
@@ -1446,34 +1454,34 @@ class RequisitionFormTests(EngineTestBase):
         self.assertIsNotNone(row['born_lot_id'])
 
     def test_same_project_rejected(self):
-        req = engine.create_requisition(self.prj, self.user, 'ТР-1')
+        req = engine.create_reassignment(self.prj, self.user, 'ТР-1')
         with self.assertRaises(ValidationError):
-            engine.add_requisition_line(req, self.src, D(1))    # источник = получатель
+            engine.add_reassignment_line(req, self.src, D(1))    # источник = получатель
 
     def test_duplicate_source_rejected(self):
-        req = engine.create_requisition(self.white, self.user, 'ТР-1')
-        engine.add_requisition_line(req, self.src, D(2))
+        req = engine.create_reassignment(self.white, self.user, 'ТР-1')
+        engine.add_reassignment_line(req, self.src, D(2))
         with self.assertRaises(ValidationError):
-            engine.add_requisition_line(req, self.src, D(1))
+            engine.add_reassignment_line(req, self.src, D(1))
 
     def test_update_syncs_source_and_child(self):
-        req = engine.create_requisition(self.white, self.user, 'ТР-1')
-        line = engine.add_requisition_line(req, self.src, D(4))
-        engine.update_requisition_line(line, D(7))
-        engine.lock_requisition(req)
-        born = engine._requisition_born_lot(req, self.src)
+        req = engine.create_reassignment(self.white, self.user, 'ТР-1')
+        line = engine.add_reassignment_line(req, self.src, D(4))
+        engine.update_reassignment_line(line, D(7))
+        engine.lock_reassignment(req)
+        born = engine._reassignment_born_lot(req, self.src)
         self.assertEqual(engine.lot_live_qty(self.src), D(3))
         self.assertEqual(engine.lot_live_qty(born), D(7))
 
     def test_remove_restores_source_and_deletes_child(self):
-        req = engine.create_requisition(self.white, self.user, 'ТР-1')
-        line = engine.add_requisition_line(req, self.src, D(4))
-        engine.lock_requisition(req)
+        req = engine.create_reassignment(self.white, self.user, 'ТР-1')
+        line = engine.add_reassignment_line(req, self.src, D(4))
+        engine.lock_reassignment(req)
         self.assertEqual(engine.lot_live_qty(self.src), D(6))
-        engine.unlock_requisition(req)                  # Ф15: отпочкование отпущено
-        engine.remove_requisition_line(line)
+        engine.unlock_reassignment(req)                  # Ф15: отпочкование отпущено
+        engine.remove_reassignment_line(line)
         self.assertEqual(engine.lot_live_qty(self.src), D(10))
-        self.assertIsNone(engine._requisition_born_lot(req, self.src))
+        self.assertIsNone(engine._reassignment_born_lot(req, self.src))
 
     def test_all_available_lots_picker(self):
         rows = engine.all_available_lots()
@@ -1668,9 +1676,9 @@ class ProjectClosureTests(EngineTestBase):
         # Ф1c: дата `closed` информационная — фиксация её НЕ штампует.
         self.assertIsNone(self.prj.closed)
 
-    def test_requisition_bridge_moves_to_white(self):
-        req = engine.requisition_lot(self.prj, self.lot, D(10), self.user)
-        engine.lock_requisition(req)                            # Ф15: перекладка = фиксация
+    def test_reassignment_bridge_moves_to_white(self):
+        req = engine.reassignment_lot(self.prj, self.lot, D(10), self.user)
+        engine.lock_reassignment(req)                            # Ф15: перекладка = фиксация
         self.assertEqual(engine.lot_live_qty(self.lot), D(0))
         white = engine._internal_project(models.Project.Kind.INTERNAL_STOCK)
         moved = engine.item_available(self.item, white)
@@ -1740,7 +1748,7 @@ class HeaderEditTests(EngineTestBase):
         self.assertTrue(t.locked)
 
     def test_receipt_header_locked(self):
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-1', date='2026-05-01',
             contractor=self.supplier, project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.make_item('A'), D(2))
         engine.update_receipt(r, number='U-2')
@@ -1763,7 +1771,7 @@ class HeaderEditTests(EngineTestBase):
         self.receipt_lot(comp, self.prj, 100)
         dev = self.make_item('DEV', manufactured=True)
         models.BomLine.objects.create(parent=dev, component=comp, qty=D(2))
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
             user=self.user, qty=D(1), locked=False)
         self.assertEqual(engine.kitting_form(k)['rows'][0]['need'], D(2))
         engine.update_kitting(k, qty=D(3))
@@ -1772,15 +1780,15 @@ class HeaderEditTests(EngineTestBase):
         with self.assertRaises(ValidationError):
             engine.update_kitting(k, qty=D(4))               # не wip — нельзя
 
-    def test_writeoff_and_requisition_header(self):
+    def test_writeoff_and_reassignment_header(self):
         w = engine.create_writeoff(self.prj, self.user, 'СП-1')
         engine.update_writeoff(w, number='СП-2', reason='брак')
         w.refresh_from_db()
         self.assertEqual((w.number, w.reason), ('СП-2', 'брак'))
         white = models.Project.objects.create(code='WHITE', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
-        req = engine.create_requisition(white, self.user, 'ТР-1')
-        engine.update_requisition(req, number='ТР-2', date='2026-06-01')
+        req = engine.create_reassignment(white, self.user, 'ТР-1')
+        engine.update_reassignment(req, number='ТР-2', date='2026-06-01')
         req.refresh_from_db()
         self.assertEqual(req.number, 'ТР-2')
 
@@ -1841,7 +1849,7 @@ class ScopeDemandTests(EngineTestBase):
 
         Прежний свод клампил `to_order` по проектам, и профицит A не гасил нужду B.
         Знаковый баланс гасит — и это не ложь: остаток соседнего проекта в контуре
-        доступен через `Requisition` (заём B→A — штатный путь домена). Витрина закупки
+        доступен через `Reassignment` (заём B→A — штатный путь домена). Витрина закупки
         отвечает «хватает ли по закупке в целом»; вопрос «хватает ли ИМЕННО в этом
         проекте» задают форме проекта, где нечего перенеттивать.
         """
@@ -3027,12 +3035,13 @@ class ClosureHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад', central=True)
+        self.lab = _own_loc()
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, locked=True,   # Ф15: партия на складе
             user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
@@ -3065,15 +3074,15 @@ class ClosureHttpTests(TestCase):
         panel = self.c.get(f'/api/projects/{self.prj.id}/closure/').json()
         self.assertFalse(panel['can_close'])
         self.assertEqual(len(panel['residuals']), 1)
-        # мост «на баланс» → черновое требование; Ф15: остаток уйдёт на его фиксации
+        # мост «на баланс» → черновой перевод; Ф15: остаток уйдёт на его фиксации
         r = self.c.post(f'/api/projects/{self.prj.id}/stock-lot/',
             {'lot_id': self.lot.id, 'qty': 10}, content_type='application/json')
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.json()['can_close'])
         drafts = r.json()['closing_drafts']
         self.assertEqual(len(drafts), 1)                    # панель показывает черновик
-        self.assertEqual(drafts[0]['kind'], 'requisition')
-        lock = self.c.post(f'/api/requisitions/{drafts[0]["document_id"]}/lock/')
+        self.assertEqual(drafts[0]['kind'], 'reassignment')
+        lock = self.c.post(f'/api/reassignments/{drafts[0]["document_id"]}/lock/')
         self.assertEqual(lock.status_code, 200)
         panel = self.c.get(f'/api/projects/{self.prj.id}/closure/').json()
         self.assertTrue(panel['can_close'])
@@ -3087,14 +3096,14 @@ class ClosureHttpTests(TestCase):
         ro = self.c.post(f'/api/projects/{self.prj.id}/unlock/')
         self.assertFalse(ro.json()['locked'])
 
-    def test_requisition_flow(self):
+    def test_reassignment_flow(self):
         white = models.Project.objects.create(code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
-        r = self.c.post('/api/requisitions/', {'project_id': white.id, 'number': 'ТР-1'},
+        r = self.c.post('/api/reassignments/', {'project_id': white.id, 'number': 'ТР-1'},
             content_type='application/json')
         self.assertEqual(r.status_code, 201)
         rid = r.json()['id']
-        line = self.c.post(f'/api/requisitions/{rid}/lines/',
+        line = self.c.post(f'/api/reassignments/{rid}/lines/',
             {'source_lot_id': self.lot.id, 'qty': 3}, content_type='application/json')
         self.assertEqual(line.status_code, 201)
         self.assertIsNotNone(line.json()['lines'][0]['born_lot_id'])
@@ -3449,7 +3458,7 @@ class BornByClickTests(EngineTestBase):
                 (engine.create_receipt, 'Поставка'),
                 (engine.create_transfer, 'Передача'),
                 (engine.create_writeoff, 'Списание'),
-                (engine.create_requisition, 'Требование'),
+                (engine.create_reassignment, 'Перевод'),
                 (engine.create_inventory, 'Инвентаризация'),
                 (engine.create_relocation, 'Перемещение')):
             doc = create(self.prj, self.user)
@@ -3488,7 +3497,7 @@ class BornByClickTests(EngineTestBase):
         c.force_login(self.user)
         paths = ['projects', 'items', 'locations', 'procurements',
                  'receipts', 'kittings', 'transfers', 'writeoffs',
-                 'requisitions', 'inventories', 'relocations']
+                 'reassignments', 'inventories', 'relocations']
         for path in paths:
             self.assertEqual(
                 c.post(f'/api/{path}/', {}, content_type='application/json')
@@ -3554,7 +3563,7 @@ class InventoryFormTests(EngineTestBase):
     def test_add_lot_births_receipt_movement(self):
         inv = engine.create_inventory(self.prj, self.user, 'ИНВ-1')
         lot = engine.add_inventory_lot(inv, self.item, D(7), cost=D('10.50'),
-                                       lot_name='Резистор')
+                                       lot_description='Резистор')
         self.assertEqual(lot.origin_kind, 'inventory')
         self.assertEqual(lot.project_id, self.prj.id)
         self.assertEqual(engine.lot_live_qty(lot), D(0))       # Ф15: акт — черновик
@@ -3612,8 +3621,8 @@ class InventoryFormTests(EngineTestBase):
     def test_rematerialize_written_off_lot_inherits_provenance(self):
         # списываем партию из проекта (серый путь), затем находим и ре-материализуем в GREY
         src = self.receipt_lot(self.item, self.prj, 10)
-        src.cost = D('25.00'); src.lot_name = 'Резистор'; src.part_number = 'ЗН-9'
-        src.save(update_fields=['cost', 'lot_name', 'part_number'])
+        src.cost = D('25.00'); src.description = 'Резистор'; src.code = 'ЗН-9'
+        src.save(update_fields=['cost', 'description', 'code'])
         engine.rebuild_movements(src)
         w = engine.create_writeoff(self.prj, self.user, 'СП-1', reason='на серый')
         engine.add_writeoff_line(w, src, D(6))
@@ -3626,8 +3635,8 @@ class InventoryFormTests(EngineTestBase):
         # ре-материализация: born-лот в GREY с predecessor и унаследованными полями
         inv = engine.create_inventory(self.grey, self.user, 'ИНВ-G1')
         born = engine.add_inventory_lot(inv, src.item, D(6),
-                                        lot_name=src.lot_name,
-                                        part_number=src.part_number, predecessor=src)
+                                        lot_description=src.description,
+                                        lot_code=src.code, predecessor=src)
         engine.lock_inventory(inv)
         self.assertEqual(born.project_id, self.grey.id)
         self.assertEqual(born.predecessor_id, src.id)
@@ -3643,7 +3652,8 @@ class InventoryHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад', central=True)
+        self.lab = _own_loc()
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.grey = models.Project.objects.create(
@@ -3651,10 +3661,10 @@ class InventoryHttpTests(TestCase):
             kind=models.Project.Kind.INTERNAL_WRITEOFF)
         self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01', locked=True,
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-1', date='2026-05-01', locked=True,
             contractor=self.sup, project=self.prj, user=get_user_model().objects.first())
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
-            origin=r, qty=D(10), cost=D('25.00'), part_number='ЗН-9')
+            origin=r, qty=D(10), cost=D('25.00'), code='ЗН-9')
         engine.rebuild_movements(self.lot)
         self.c = Client()
         # Волна 12: весь /api/ за логином — HTTP-путь ходит от суперюзера-админа.
@@ -3668,7 +3678,7 @@ class InventoryHttpTests(TestCase):
         # строка = найденная партия (+RECEIPT)
         line = self.c.post(f'/api/inventories/{iid}/lots/',
             {'item_id': self.item.id, 'qty': 7, 'cost': '10.5',
-             'lot_name': 'Резистор'}, content_type='application/json')
+             'lot_description': 'Резистор'}, content_type='application/json')
         self.assertEqual(line.status_code, 201)
         body = line.json()
         self.assertEqual(float(body['total_cost']), 10.5)
@@ -3707,7 +3717,7 @@ class InventoryHttpTests(TestCase):
         row = line.json()['lots'][0]
         self.assertEqual(row['predecessor_id'], self.lot.id)
         self.assertEqual(float(row['unit_cost']), 2.50)       # цена штуки унаследована
-        self.assertEqual(row['part_number'], 'ЗН-9')          # PN унаследован
+        self.assertEqual(row['lot_code'], 'ЗН-9')          # PN унаследован
 
 
 class OrderDeleteHttpTests(TestCase):
@@ -3715,12 +3725,13 @@ class OrderDeleteHttpTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад', central=True)
+        self.lab = _own_loc()
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.item = models.Item.objects.create(code='R100', description='R100', category=_cat())
         self.sup = models.Counterparty.objects.create(description='П')
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01', locked=True,
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-1', date='2026-05-01', locked=True,
             contractor=self.sup, project=self.prj, user=self.user)
         self.lot = models.Lot.objects.create(item=self.item, project=self.prj,
             origin=r, qty=D(10))
@@ -3750,7 +3761,7 @@ class OrderDeleteHttpTests(TestCase):
         self.assertEqual(engine.lot_live_qty(self.lot), D(10))
 
     def test_receipt_delete_draft(self):
-        r = models.Receipt.objects.create(number='U-2', date='2026-05-01',
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-2', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.item, D(5))
         resp = self.c.delete(f'/api/receipts/{r.id}/')
@@ -3765,25 +3776,25 @@ class ProjectBudgetTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=device, qty=D(qty))
 
     def test_spent_counts_only_receipt_lots(self):
-        # приходной лот считается по (цена×кол-во); заём (requisition) — бесплатен
+        # приходной лот считается по (цена×кол-во); заём (reassignment) — бесплатен
         case = self.make_item('CASE')
         self.receipt_lot(case, self.prj, 1)  # добавит default cost=0
-        r = models.Receipt.objects.create(number='U-2', date='2026-05-02', locked=True,
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-2', date='2026-05-02', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         paid = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(3), cost=D(2400))
         engine.rebuild_movements(paid)
-        # заём из белого склада → born-лот в prj (origin requisition), цена наследуется
+        # заём из белого склада → born-лот в prj (origin reassignment), цена наследуется
         white = models.Project.objects.create(code='WHT', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=case, project=white,
-            origin=models.Inventory.objects.create(project=white, user=self.user,
+            origin=models.Inventory.objects.create(location=_own_loc(), project=white, user=self.user,
                 number='INV-W', date='2026-05-01', locked=True),
             qty=D(5), cost=D(3500))
         engine.rebuild_movements(src)
-        req = engine.create_requisition(self.prj, self.user, 'ТРБ-1')
-        engine.add_requisition_line(req, src, D(2))
-        engine.lock_requisition(req)                 # Ф15: заём материализуется фиксацией
+        req = engine.create_reassignment(self.prj, self.user, 'ТРБ-1')
+        engine.add_reassignment_line(req, src, D(2))
+        engine.lock_reassignment(req)                 # Ф15: заём материализуется фиксацией
 
         b = engine.project_budget(self.prj)
         self.assertEqual(b['spent'], D(2400))   # только 3×800; заём не в счёт
@@ -3806,7 +3817,7 @@ class ProjectBudgetTests(EngineTestBase):
         self.assertEqual(b['unestimated'], [])
 
         # пришёл УПД на все 40 по реальной цене 45 → оценка сменилась фактом
-        r = models.Receipt.objects.create(number='U-3', date='2026-05-03', locked=True,
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-3', date='2026-05-03', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=screw, project=self.prj, origin=r,
             qty=D(40), cost=D(1800))
@@ -3838,7 +3849,7 @@ class ProjectBudgetTests(EngineTestBase):
         self.make_demand(device, 1)
 
         # CASE: куплен ровно 1 @ 800
-        r = models.Receipt.objects.create(number='U-4', date='2026-05-04', locked=True,
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-4', date='2026-05-04', locked=True,
             contractor=self.supplier, project=self.prj, user=self.user)
         case_lot = models.Lot.objects.create(item=case, project=self.prj, origin=r,
             qty=D(1), cost=D(800))
@@ -3847,17 +3858,17 @@ class ProjectBudgetTests(EngineTestBase):
         white = models.Project.objects.create(code='WHT', description='Склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
         src = models.Lot.objects.create(item=res, project=white,
-            origin=models.Inventory.objects.create(project=white, user=self.user,
+            origin=models.Inventory.objects.create(location=_own_loc(), project=white, user=self.user,
                 number='INV-W2', date='2026-05-01', locked=True),
             qty=D(2), cost=D(20))
         engine.rebuild_movements(src)
-        req = engine.create_requisition(self.prj, self.user, 'ТРБ-2')
-        engine.add_requisition_line(req, src, D(2))
-        engine.lock_requisition(req)                 # Ф15: заём материализуется фиксацией
+        req = engine.create_reassignment(self.prj, self.user, 'ТРБ-2')
+        engine.add_reassignment_line(req, src, D(2))
+        engine.lock_reassignment(req)                 # Ф15: заём материализуется фиксацией
         res_lot = req.lots.first()
 
         # собираем прибор
-        k = models.Kitting.objects.create(project=self.prj, target_item=device,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=device,
             user=self.user, qty=D(1), locked=False)
         engine.add_kitting_line(k, case, case_lot, D(1))
         engine.add_kitting_line(k, res, res_lot, D(2))
@@ -3990,7 +4001,8 @@ class ProjectBudgetHttpTests(TestCase):
 
     def setUp(self):
         get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад', central=True)
+        self.lab = _own_loc()
         self.prj = models.Project.objects.create(code='P1', description='Проект 1',
             kind=models.Project.Kind.EXTERNAL, budget=D(5000))
         self.sup = models.Counterparty.objects.create(description='П')
@@ -4019,7 +4031,7 @@ class AttachmentTests(EngineTestBase):
 
     def setUp(self):
         super().setUp()
-        self.receipt = models.Receipt.objects.create(
+        self.receipt = models.Receipt.objects.create(location=engine.central_location(), 
             number='УПД-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
 
@@ -4155,7 +4167,7 @@ class AttachmentHttpTests(TestCase):
         self.supplier = models.Counterparty.objects.create(description='П')
         self.prj = models.Project.objects.create(
             code='P1', description='Проект', kind=models.Project.Kind.EXTERNAL)
-        self.receipt = models.Receipt.objects.create(
+        self.receipt = models.Receipt.objects.create(location=engine.central_location(), 
             number='УПД-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         self.c = Client()
@@ -4494,15 +4506,15 @@ class UnifiedLockTests(EngineTestBase):
 
     def test_all_docs_default_to_unlocked(self):
         """Плоское создание любого ордера рождает черновик (единый дефолт)."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        k = models.Kitting.objects.create(
+        k = models.Kitting.objects.create(location=_own_loc(), 
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
             user=self.user, qty=D(1))
-        inv = models.Inventory.objects.create(
+        inv = models.Inventory.objects.create(location=_own_loc(), 
             project=self.prj, user=self.user, number='И-1', date='2026-05-01')
-        req = models.Requisition.objects.create(
+        req = models.Reassignment.objects.create(
             project=self.prj, user=self.user, number='Т-1', date='2026-05-01')
         t = models.Transfer.objects.create(
             project=self.prj, user=self.user, number='Н-1', date='2026-05-01')
@@ -4515,7 +4527,7 @@ class UnifiedLockTests(EngineTestBase):
     def test_single_guard_freezes_edits_across_doc_types(self):
         """Один `_require_draft` гейтит правку прихода / передачи / комплектации."""
         # приход
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.make_item('A'), D(5))
@@ -4536,7 +4548,7 @@ class UnifiedLockTests(EngineTestBase):
 
     def test_kitting_lock_projection(self):
         """До фронт-среза (Ф1b) форма отдаёт исторические `wip`/`closed`."""
-        k = models.Kitting.objects.create(
+        k = models.Kitting.objects.create(location=_own_loc(), 
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
             user=self.user, qty=D(1))
         self.assertFalse(engine.kitting_form(k)['locked'])
@@ -4555,7 +4567,7 @@ class DocumentLockAndDeleteRulesTests(EngineTestBase):
 
     # ── post/unpost round-trip + пустой guard ──
     def test_post_unpost_roundtrip_three_docs(self):
-        """draft → posted → draft для списания/требования/инвентаризации."""
+        """draft → posted → draft для списания/перевода/инвентаризации."""
         # списание
         lot = self.receipt_lot(self.make_item('A'), self.prj, 10)
         w = engine.create_writeoff(self.prj, self.user, 'С-1')
@@ -4573,14 +4585,14 @@ class DocumentLockAndDeleteRulesTests(EngineTestBase):
         self.assertTrue(engine.inventory_form(inv)['locked'])
         engine.unlock_inventory(inv); inv.refresh_from_db()
         self.assertFalse(inv.locked)
-        # требование
+        # перевод
         src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
-        req = engine.create_requisition(self.prj, self.user, 'Т-1')
-        engine.add_requisition_line(req, src, D(2))
-        engine.lock_requisition(req); req.refresh_from_db()
+        req = engine.create_reassignment(self.prj, self.user, 'Т-1')
+        engine.add_reassignment_line(req, src, D(2))
+        engine.lock_reassignment(req); req.refresh_from_db()
         self.assertTrue(req.locked)
-        self.assertTrue(engine.requisition_form(req)['locked'])
-        engine.unlock_requisition(req); req.refresh_from_db()
+        self.assertTrue(engine.reassignment_form(req)['locked'])
+        engine.unlock_reassignment(req); req.refresh_from_db()
         self.assertFalse(req.locked)
 
     def test_post_empty_doc_refused(self):
@@ -4591,9 +4603,9 @@ class DocumentLockAndDeleteRulesTests(EngineTestBase):
         inv = engine.create_inventory(self.prj, self.user, 'И-2')
         with self.assertRaises(ValidationError):
             engine.lock_inventory(inv)
-        req = engine.create_requisition(self.prj, self.user, 'Т-2')
+        req = engine.create_reassignment(self.prj, self.user, 'Т-2')
         with self.assertRaises(ValidationError):
-            engine.lock_requisition(req)
+            engine.lock_reassignment(req)
 
     # ── edit-freeze: проведённый документ read-only ──
     def test_edit_freeze_blocks_edits_on_posted_three_docs(self):
@@ -4623,17 +4635,17 @@ class DocumentLockAndDeleteRulesTests(EngineTestBase):
             engine.update_inventory_lot(ilot, qty=D(9))
         with self.assertRaises(ValidationError):
             engine.remove_inventory_lot(ilot)
-        # требование
+        # перевод
         src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
-        req = engine.create_requisition(self.prj, self.user, 'Т-3')
-        rline = engine.add_requisition_line(req, src, D(2))
-        engine.lock_requisition(req)
+        req = engine.create_reassignment(self.prj, self.user, 'Т-3')
+        rline = engine.add_reassignment_line(req, src, D(2))
+        engine.lock_reassignment(req)
         with self.assertRaises(ValidationError):
-            engine.update_requisition(req, number='Т-3x')
+            engine.update_reassignment(req, number='Т-3x')
         with self.assertRaises(ValidationError):
-            engine.update_requisition_line(rline, D(1))
+            engine.update_reassignment_line(rline, D(1))
         with self.assertRaises(ValidationError):
-            engine.remove_requisition_line(rline)
+            engine.remove_reassignment_line(rline)
 
     # ── удаление: правило draft/posted ──
     def test_delete_draft_writeoff_rebuilds_source(self):
@@ -4659,11 +4671,11 @@ class DocumentLockAndDeleteRulesTests(EngineTestBase):
         engine.delete_stock_document(w)
         self.assertFalse(models.Writeoff.objects.filter(pk=w.pk).exists())
 
-    def test_delete_draft_requisition_drops_born_and_restores_source(self):
-        """Удаление черновика требования: born-потомок снят, источник восстановлен."""
+    def test_delete_draft_reassignment_drops_born_and_restores_source(self):
+        """Удаление черновика перевода: born-потомок снят, источник восстановлен."""
         src = self.receipt_lot(self.make_item('C'), self._other_project(), 10)
-        req = engine.create_requisition(self.prj, self.user, 'Т-4')
-        engine.add_requisition_line(req, src, D(3))
+        req = engine.create_reassignment(self.prj, self.user, 'Т-4')
+        engine.add_reassignment_line(req, src, D(3))
         born = req.lots.get()
         self.assertEqual(engine.lot_live_qty(src), D(10))   # Ф15: черновик не двигал
         engine.delete_stock_document(req)
@@ -4672,7 +4684,7 @@ class DocumentLockAndDeleteRulesTests(EngineTestBase):
 
     def test_delete_receipt_draft_cascades_born_lot(self):
         """Удаление черновика прихода уносит рождённый им лот (born-direct)."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-9', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
@@ -4702,22 +4714,22 @@ class DocumentKindStampTests(EngineTestBase):
     `_KindManager`: на нём держатся 108 обращений `models.<Вид>.objects` в движке."""
 
     def _one_of_each(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        k = models.Kitting.objects.create(
+        k = models.Kitting.objects.create(location=_own_loc(), 
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
             user=self.user, qty=D(1))
-        inv = models.Inventory.objects.create(
+        inv = models.Inventory.objects.create(location=_own_loc(), 
             project=self.prj, user=self.user, number='И-1', date='2026-05-01')
-        req = models.Requisition.objects.create(
+        req = models.Reassignment.objects.create(
             project=self.prj, user=self.user, number='Т-1', date='2026-05-01')
         t = models.Transfer.objects.create(
             project=self.prj, user=self.user, number='Н-1', date='2026-05-01')
         w = models.Writeoff.objects.create(
             project=self.prj, user=self.user, number='С-1', date='2026-05-01')
         return {'receipt': r, 'kitting': k, 'inventory': inv,
-                'requisition': req, 'transfer': t, 'writeoff': w}
+                'reassignment': req, 'transfer': t, 'writeoff': w}
 
     def test_kind_stamped_on_each_doc_type(self):
         """`save()` штампует свой `kind` в родителя на плоской вставке каждого типа."""
@@ -4754,7 +4766,7 @@ class DocumentOwnershipFkTests(EngineTestBase):
 
     def test_lot_origin_is_single_fk_no_arc(self):
         """`Lot.origin` — один FK на родителя; старых 4 FK и Check origin нет."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(5))
@@ -4762,7 +4774,7 @@ class DocumentOwnershipFkTests(EngineTestBase):
         self.assertEqual(lot.origin_kind, models.StockDocument.Kind.RECEIPT)
         field_names = {f.name for f in models.Lot._meta.get_fields()}
         self.assertIn('origin', field_names)
-        self.assertFalse({'receipt', 'kitting', 'inventory', 'requisition'}
+        self.assertFalse({'receipt', 'kitting', 'inventory', 'reassignment'}
                          & field_names)
         self.assertNotIn('lot_exactly_one_origin', self._constraint_names(models.Lot))
 
@@ -4775,7 +4787,7 @@ class DocumentOwnershipFkTests(EngineTestBase):
         self.assertEqual(line.doc_kind, models.StockDocument.Kind.WRITEOFF)
         field_names = {f.name for f in models.StockLine._meta.get_fields()}
         self.assertIn('document', field_names)
-        self.assertFalse({'kitting', 'transfer', 'writeoff', 'requisition'}
+        self.assertFalse({'kitting', 'transfer', 'writeoff', 'reassignment'}
                          & field_names)
         self.assertNotIn('stockline_exactly_one_document',
                          self._constraint_names(models.StockLine))
@@ -4798,7 +4810,7 @@ class DocumentOwnershipFkTests(EngineTestBase):
         """Шесть видов ордера схлопнуты в один FK `document`, остальные владельцы держат
         своё поле: 'receipt' → `document`, 'item' → `item`; API-строки owner_type те же;
         ровно один задан (Check жив, теперь на шесть путей — волна 19, Ф12b)."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         item = self.make_item('A')
@@ -4815,7 +4827,7 @@ class DocumentOwnershipFkTests(EngineTestBase):
         self.assertEqual(len(engine.attachments_for('transfer', r.pk)), 0)
         field_names = {f.name for f in models.Attachment._meta.get_fields()}
         self.assertFalse({'transfer', 'kitting', 'inventory', 'writeoff',
-                          'requisition'} & field_names)
+                          'reassignment'} & field_names)
         # не-ордерные владельцы, наоборот, поля имеют (Ф12b)
         self.assertLessEqual({'project', 'procurement', 'purchase', 'counterparty'},
                              field_names)
@@ -4825,7 +4837,7 @@ class DocumentOwnershipFkTests(EngineTestBase):
     def test_reverse_accessors_read_from_document(self):
         """Реверсы дуг объявлены на `StockDocument`, но читаются с любого вида:
         `receipt.lots`, `writeoff.lines`, `receipt.attachments`."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-3', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.make_item('A'), D(7))
@@ -4847,16 +4859,16 @@ class DocumentHeaderFieldsTests(EngineTestBase):
     именно это здесь и проверяется; реверс общего поля — `project.documents`."""
 
     def _one_of_each(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        k = models.Kitting.objects.create(
+        k = models.Kitting.objects.create(location=_own_loc(), 
             project=self.prj, target_item=self.make_item('DEV', manufactured=True),
             user=self.user, qty=D(1), date='2026-05-02')
-        inv = models.Inventory.objects.create(
+        inv = models.Inventory.objects.create(location=_own_loc(), 
             project=self.prj, user=self.user, number='И-1', date='2026-05-03',
             description='примечание акта')
-        req = models.Requisition.objects.create(
+        req = models.Reassignment.objects.create(
             project=self.prj, user=self.user, number='Т-1', date='2026-05-04')
         t = models.Transfer.objects.create(
             project=self.prj, user=self.user, number='Н-1', date='2026-05-05')
@@ -4864,7 +4876,7 @@ class DocumentHeaderFieldsTests(EngineTestBase):
             project=self.prj, user=self.user, number='С-1', date='2026-05-06',
             reason='порча')
         return {'receipt': r, 'kitting': k, 'inventory': inv,
-                'requisition': req, 'transfer': t, 'writeoff': w}
+                'reassignment': req, 'transfer': t, 'writeoff': w}
 
     def test_all_columns_live_on_one_table(self):
         """Шапка и специфика — колонки `StockDocument`; у видов своих колонок НЕТ.
@@ -4879,7 +4891,7 @@ class DocumentHeaderFieldsTests(EngineTestBase):
                      'contractor', 'purchase', 'target_item', 'qty', 'reason'):
             self.assertIn(name, parent)
         for child in (models.Receipt, models.Kitting, models.Inventory,
-                      models.Requisition, models.Transfer, models.Writeoff,
+                      models.Reassignment, models.Transfer, models.Writeoff,
                       models.Relocation):
             own = {f.name for f in child._meta.get_fields()
                    if getattr(f, 'model', None) is child}
@@ -4900,7 +4912,7 @@ class DocumentHeaderFieldsTests(EngineTestBase):
         """Менеджер вида фильтрует/сортирует по полю шапки прозрачно
         (как в движке `Writeoff.objects.filter(project=…)`)."""
         self._one_of_each()
-        r2 = models.Receipt.objects.create(
+        r2 = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-2', date='2026-06-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         latest = models.Receipt.objects.filter(project=self.prj).order_by('-date').first()
@@ -4919,7 +4931,7 @@ class HeaderRequiredByKindTests(EngineTestBase):
         строгим (реальный документ с номером), только kitting остаётся свободным."""
         req = models.StockDocument.REQUIRED_HEADER_BY_KIND
         K = models.StockDocument.Kind
-        for kind in (K.RECEIPT, K.INVENTORY, K.REQUISITION, K.TRANSFER, K.WRITEOFF,
+        for kind in (K.RECEIPT, K.INVENTORY, K.REASSIGNMENT, K.TRANSFER, K.WRITEOFF,
                      K.RELOCATION):
             self.assertEqual(set(req[kind]), {'date', 'number'})
         self.assertEqual(req[K.KITTING], ())
@@ -4964,7 +4976,7 @@ class HeaderRequiredByKindTests(EngineTestBase):
 
     def test_approve_receipt_gated_on_missing_date(self):
         """lock_receipt гейтит отсутствующую дату (прямой ORM-обход дефолта create)."""
-        r = models.Receipt.objects.create(project=self.prj, user=self.user,
+        r = models.Receipt.objects.create(location=engine.central_location(), project=self.prj, user=self.user,
                                            contractor=self.supplier, number='У-9', date=None)
         models.Lot.objects.create(item=self.make_item('B'), project=self.prj,
                                   origin=r, qty=D(3))
@@ -4982,10 +4994,12 @@ class RelocationAndLocationStockTests(EngineTestBase):
 
     def setUp(self):
         super().setUp()
-        # self.main (код MAIN) уже есть; добавим второе место — станок пайки.
+        # Волна 27: перемещение — между НАШИМИ местами (Центральный не трогает), поэтому
+        # «основное» место этих тестов — наша LAB, и поставка кладёт лот прямо туда.
+        self.main = self.lab
         self.sold = models.Location.objects.create(code='105', description='Место пайки')
         self.case = self.make_item('CASE')
-        self.lot = self.receipt_lot(self.case, self.prj, 12)   # рождён на self.main
+        self.lot = self.receipt_lot(self.case, self.prj, 12, location=self.main)
 
     def _reloc_move(self, qty=4, lock=True):
         """Ход перемещения. Ф15: по умолчанию **проводим** — до фиксации перемещение
@@ -5022,8 +5036,10 @@ class RelocationAndLocationStockTests(EngineTestBase):
         at_sold = engine.available_lots(self.case, self.prj, self.sold)
         self.assertEqual(at_main[0]['live_qty'], D(8))
         self.assertEqual(at_sold[0]['live_qty'], D(4))
-        # без локации — тотал (байт-в-байт со старым контрактом формы)
-        self.assertEqual(engine.available_lots(self.case, self.prj)[0]['live_qty'], D(12))
+        # без локации — пары «лот @ место» (волна 27): по строке на место, в сумме тотал
+        rows = engine.available_lots(self.case, self.prj)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(r['live_qty'] for r in rows), D(12))
 
     def test_stock_map_by_location(self):
         self._reloc_move(4)
@@ -5141,8 +5157,8 @@ class RelocationAndLocationStockTests(EngineTestBase):
 
 
 class LotIdentifiersTests(EngineTestBase):
-    """У партии два независимых идентификатора: `lot_name` (человеческий, из УПД) и
-    `part_number` (машинный — MPN/децимальный). Писатели, формы и метка лота разводят
+    """У партии два независимых идентификатора: `lot_description` (человеческий, из УПД) и
+    `lot_code` (машинный — MPN/децимальный). Писатели, формы и метка лота разводят
     их порознь и не подменяют один другим (волна 13, Ф2f)."""
 
     def setUp(self):
@@ -5151,55 +5167,55 @@ class LotIdentifiersTests(EngineTestBase):
         self.receipt = self.make_receipt()
 
     def make_receipt(self, approved=False):
-        return models.Receipt.objects.create(
+        return models.Receipt.objects.create(location=engine.central_location(), 
             number='UPD-2f', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user,
             locked=approved)
 
     def test_born_lot_carries_both_identifiers(self):
         lot = engine.add_receipt_lot(self.receipt, self.item, D(5),
-                                     lot_name='Резистор 10к',
-                                     part_number='RES-10K-0805')
-        self.assertEqual(lot.lot_name, 'Резистор 10к')
-        self.assertEqual(lot.part_number, 'RES-10K-0805')
+                                     lot_description='Резистор 10к',
+                                     lot_code='RES-10K-0805')
+        self.assertEqual(lot.description, 'Резистор 10к')
+        self.assertEqual(lot.code, 'RES-10K-0805')
         row = engine.receipt_form(self.receipt)['lots'][0]
-        self.assertEqual(row['lot_name'], 'Резистор 10к')
-        self.assertEqual(row['part_number'], 'RES-10K-0805')
+        self.assertEqual(row['lot_description'], 'Резистор 10к')
+        self.assertEqual(row['lot_code'], 'RES-10K-0805')
 
     def test_update_separates_identifiers(self):
         lot = engine.add_receipt_lot(self.receipt, self.item, D(5))
-        engine.update_receipt_lot(lot, part_number='PN-1')   # только PN
+        engine.update_receipt_lot(lot, lot_code='PN-1')   # только PN
         lot.refresh_from_db()
-        self.assertEqual(lot.part_number, 'PN-1')
-        self.assertEqual(lot.lot_name, '')                   # имя не тронуто
-        engine.update_receipt_lot(lot, lot_name='Имя')       # только имя
+        self.assertEqual(lot.code, 'PN-1')
+        self.assertEqual(lot.description, '')                   # имя не тронуто
+        engine.update_receipt_lot(lot, lot_description='Имя')       # только имя
         lot.refresh_from_db()
-        self.assertEqual(lot.lot_name, 'Имя')
-        self.assertEqual(lot.part_number, 'PN-1')
+        self.assertEqual(lot.description, 'Имя')
+        self.assertEqual(lot.code, 'PN-1')
 
     def test_lot_label_prefers_lot_name_then_part_number(self):
         lot = engine.add_receipt_lot(self.receipt, self.item, D(1),
-                                     part_number='PN-ONLY')
+                                     lot_code='PN-ONLY')
         # только PN → метка берёт PN (нет человеческого имени)
         self.assertIn('PN-ONLY', engine._lot_label(lot))
-        engine.update_receipt_lot(lot, lot_name='Человек')
+        engine.update_receipt_lot(lot, lot_description='Человек')
         lot.refresh_from_db()
         # появилось имя → приоритет у него
         label = engine._lot_label(lot)
         self.assertIn('Человек', label)
         self.assertNotIn('PN-ONLY', label)
 
-    def test_requisition_child_inherits_both(self):
+    def test_reassignment_child_inherits_both(self):
         src = engine.add_receipt_lot(self.receipt, self.item, D(10),
-                                     lot_name='Исходник', part_number='PN-SRC')
+                                     lot_description='Исходник', lot_code='PN-SRC')
         white = models.Project.objects.create(
             code='WHITE', description='Собственный склад',
             kind=models.Project.Kind.INTERNAL_STOCK)
-        req = engine.create_requisition(white, self.user, 'ТР-1')
-        engine.add_requisition_line(req, src, D(4))
+        req = engine.create_reassignment(white, self.user, 'ТР-1')
+        engine.add_reassignment_line(req, src, D(4))
         born = models.Lot.objects.get(origin=req)
-        self.assertEqual(born.lot_name, 'Исходник')
-        self.assertEqual(born.part_number, 'PN-SRC')
+        self.assertEqual(born.description, 'Исходник')
+        self.assertEqual(born.code, 'PN-SRC')
 
 
 class CounterpartyRolesTests(EngineTestBase):
@@ -5209,7 +5225,7 @@ class CounterpartyRolesTests(EngineTestBase):
     сторона выводится из фактов, см. `CounterpartySidesTests`."""
 
     def test_receipt_form_emits_contractor(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-g', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         cp = engine.receipt_form(r)
@@ -5286,7 +5302,7 @@ class CounterpartyFormTests(EngineTestBase):
         if uom:
             item = models.Item.objects.create(code=f'C-{uom}', description=uom,
                                               category=_cat(), uom=uom)
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number=f'УПД-{qty}-{cost}', date='2026-05-01',
             contractor=contractor or self.supplier,
             project=self.prj, user=self.user, locked=locked)
@@ -5548,7 +5564,7 @@ class CounterpartyHttpTests(TestCase):
         cp = engine.create_counterparty(description='Держит')
         prj = models.Project.objects.create(code='P1', description='Проект 1',
                                             kind=models.Project.Kind.EXTERNAL)
-        models.Receipt.objects.create(number='УПД-9', date='2026-05-01', contractor=cp,
+        models.Receipt.objects.create(location=engine.central_location(), number='УПД-9', date='2026-05-01', contractor=cp,
                                       project=prj, user=self.user)
         blocked = self.client.delete(f'/api/counterparties/{cp.id}/')
         self.assertEqual(blocked.status_code, 400)
@@ -5581,7 +5597,7 @@ class OrderAdminTests(EngineTestBase):
         from django.contrib import admin as dj_admin
         self.assertIn(models.StockDocument, dj_admin.site._registry)
         for proxy in (models.Receipt, models.Kitting, models.Inventory,
-                      models.Requisition, models.Transfer, models.Writeoff,
+                      models.Reassignment, models.Transfer, models.Writeoff,
                       models.Relocation):
             self.assertNotIn(proxy, dj_admin.site._registry,
                              f'{proxy.__name__} снова отдельным пунктом сайдбара')
@@ -5590,10 +5606,10 @@ class OrderAdminTests(EngineTestBase):
         """Поля и инлайны формы зависят от вида: специфика чужого вида не показывается
         (её колонка обязана быть пустой — CHECK `doc_*_only_*`)."""
         ma, req = self._admin(), self._request()
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='ПР-f', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
-        k = models.Kitting.objects.create(
+        k = models.Kitting.objects.create(location=_own_loc(), 
             project=self.prj, user=self.user, qty=D(1),
             target_item=self.make_item('DEV-f', manufactured=True))
         w = models.Writeoff.objects.create(
@@ -5623,7 +5639,7 @@ class OrderAdminTests(EngineTestBase):
     def test_lock_and_delete_belong_to_engine(self):
         """Замок read-only, удаления нет, вид у существующего ордера не меняется."""
         ma, req = self._admin(), self._request()
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='ПР-g', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         self.assertIn('locked', ma.get_readonly_fields(req, r))
@@ -5646,7 +5662,7 @@ class OrderAdminTests(EngineTestBase):
 
     def test_changelist_and_form_http(self):
         """HTTP-путь: смешанный список видит все виды, форма вида открывается."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='ПР-http', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         models.Writeoff.objects.create(
@@ -5676,15 +5692,15 @@ class OrderAdminTests(EngineTestBase):
         c.force_login(su)
         Kind = models.StockDocument.Kind
         docs = {
-            Kind.RECEIPT: models.Receipt.objects.create(
+            Kind.RECEIPT: models.Receipt.objects.create(location=engine.central_location(), 
                 number='ПР-r', date='2026-05-01', contractor=self.supplier,
                 project=self.prj, user=self.user),
-            Kind.KITTING: models.Kitting.objects.create(
+            Kind.KITTING: models.Kitting.objects.create(location=_own_loc(), 
                 project=self.prj, user=self.user, qty=D(1),
                 target_item=self.make_item('DEV-r', manufactured=True)),
-            Kind.INVENTORY: models.Inventory.objects.create(
+            Kind.INVENTORY: models.Inventory.objects.create(location=_own_loc(), 
                 number='ИН-r', date='2026-05-01', project=self.prj, user=self.user),
-            Kind.REQUISITION: models.Requisition.objects.create(
+            Kind.REASSIGNMENT: models.Reassignment.objects.create(
                 number='ТР-r', date='2026-05-01', project=self.prj, user=self.user),
             Kind.TRANSFER: models.Transfer.objects.create(
                 number='НК-r', date='2026-05-01', project=self.prj, user=self.user),
@@ -5713,7 +5729,7 @@ class DocumentAuthorTests(EngineTestBase):
             username='ivan', first_name='Иван', last_name='Пэ')
 
     def test_form_emits_author(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-j', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.author2)
         cp = engine.receipt_form(r)
@@ -5727,7 +5743,7 @@ class DocumentAuthorTests(EngineTestBase):
         self.assertEqual(engine.procurement_form(proc)['user_id'], self.author2.id)
 
     def test_update_changes_author(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-j2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.update_receipt(r, user=self.author2)
@@ -5736,7 +5752,7 @@ class DocumentAuthorTests(EngineTestBase):
 
     def test_author_sentinel_keeps_current(self):
         """Часовой `_UNSET`: правка номера/даты не сбрасывает автора."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-j3', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.author2)
         engine.update_receipt(r, number='U-j3-ред')        # user не передан
@@ -5746,7 +5762,7 @@ class DocumentAuthorTests(EngineTestBase):
 
     def test_author_none_rejected(self):
         """Автор обязателен (FK NOT NULL) — явный `None` отклоняется."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-j4', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         with self.assertRaises(ValidationError):
@@ -5772,7 +5788,7 @@ class DocumentAuthorTests(EngineTestBase):
         self.assertNotIn(inactive.id, ids)                 # неактивные скрыты
 
     def test_patch_user_id_changes_author_http(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-j5', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         c = Client()
@@ -5817,7 +5833,7 @@ class OrderAnchorTests(EngineTestBase):
         self.assertEqual(w.project_id, self.prj.id)      # якорь не сдвинулся
 
     def test_project_refused_when_born_lots_exist(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-k', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.make_item('Rk3'), D(5))   # рождает born-лот
@@ -5826,7 +5842,7 @@ class OrderAnchorTests(EngineTestBase):
 
     def test_project_sentinel_keeps_current(self):
         """Часовой `_UNSET`: правка номера не сбрасывает проект-якорь."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-k2', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.update_receipt(r, number='U-k2-ред')       # project не передан
@@ -5835,7 +5851,7 @@ class OrderAnchorTests(EngineTestBase):
         self.assertEqual(r.number, 'U-k2-ред')
 
     def test_project_none_rejected(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='U-k3', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         with self.assertRaises(ValidationError):
@@ -5854,7 +5870,7 @@ class OrderAnchorTests(EngineTestBase):
     def test_target_item_changes_on_empty_kitting(self):
         dev = self.make_item('DEV-k', manufactured=True)
         dev2 = self.make_item('DEV-k2', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1))
         engine.update_kitting(k, target_item=dev2)
         k.refresh_from_db()
@@ -5865,7 +5881,7 @@ class OrderAnchorTests(EngineTestBase):
         lot = self.receipt_lot(comp, self.prj, 10)
         dev = self.make_item('DEV-k3', manufactured=True)
         dev2 = self.make_item('DEV-k4', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1))
         engine.add_kitting_line(k, comp, lot, D(3))
         with self.assertRaises(ValidationError):
@@ -5907,7 +5923,7 @@ class OrderAnchorTests(EngineTestBase):
     def test_patch_kitting_target_http(self):
         dev = self.make_item('DEV-k5', manufactured=True)
         dev2 = self.make_item('DEV-k6', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1))
         c = Client()
         c.force_login(self.user)
@@ -5927,9 +5943,10 @@ class RelocationHttpTests(EngineTestBase):
         super().setUp()
         self.user.is_superuser = True
         self.user.save()
+        self.main = self.lab              # волна 27: перемещаем между нашими местами
         self.sold = models.Location.objects.create(code='105', description='Место пайки')
         self.item = self.make_item('R100')
-        self.lot = self.receipt_lot(self.item, self.prj, 12)  # born @ MAIN
+        self.lot = self.receipt_lot(self.item, self.prj, 12, location=self.main)
         self.c = Client()
         self.c.force_login(self.user)
 
@@ -5943,7 +5960,7 @@ class RelocationHttpTests(EngineTestBase):
     def test_locations_endpoint_lists_places(self):
         rows = self.c.get('/api/locations/').json()
         codes = {row['code'] for row in rows}
-        self.assertEqual(codes, {'MAIN', '105'})
+        self.assertEqual(codes, {'MAIN', 'LAB', '105'})
 
     def test_source_lots_picker_shows_live_lot_with_breakdown(self):
         rid = self._create()
@@ -5951,8 +5968,8 @@ class RelocationHttpTests(EngineTestBase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['lot_id'], self.lot.id)
         self.assertEqual(D(str(rows[0]['live_qty'])), D(12))
-        # разбивка по местам: весь остаток на MAIN
-        self.assertEqual(rows[0]['by_location'][0]['code'], 'MAIN')
+        # разбивка по местам: весь остаток на нашей LAB (волна 27)
+        self.assertEqual(rows[0]['by_location'][0]['code'], 'LAB')
 
     def test_add_move_splits_distribution_total_preserved(self):
         rid = self._create()
@@ -6065,9 +6082,10 @@ class LocationEntityTests(EngineTestBase):
         super().setUp()
         self.user.is_superuser = True
         self.user.save()
+        self.main = self.lab              # волна 27: перемещаем между нашими местами
         self.sold = models.Location.objects.create(code='105', description='Место пайки')
         self.item = self.make_item('R100')
-        self.lot = self.receipt_lot(self.item, self.prj, 12)  # born @ MAIN
+        self.lot = self.receipt_lot(self.item, self.prj, 12, location=self.main)
         self.c = Client()
         self.c.force_login(self.user)
 
@@ -6090,16 +6108,15 @@ class LocationEntityTests(EngineTestBase):
         self.assertEqual(sold_rows[0]['qty'], D(5))
 
     def test_create_location_and_duplicate_code_rejected(self):
-        loc = engine.create_location('201', 'Архив', kind='хранилище')
-        self.assertEqual(loc.kind, 'хранилище')
+        loc = engine.create_location('201', 'Архив')
+        self.assertIsNone(loc.central)                # новая локация — наша
         with self.assertRaises(ValidationError):
             engine.create_location('201', 'Дубль')
 
     def test_update_location_dna_and_duplicate_guard(self):
-        engine.update_location(self.sold, description='Пайка-2', kind='цех')
+        engine.update_location(self.sold, description='Пайка-2')
         self.sold.refresh_from_db()
         self.assertEqual(self.sold.description, 'Пайка-2')
-        self.assertEqual(self.sold.kind, 'цех')
         # код на занятый — дружелюбный отказ
         with self.assertRaises(ValidationError):
             engine.update_location(self.sold, code='MAIN')
@@ -6108,13 +6125,13 @@ class LocationEntityTests(EngineTestBase):
         resp = self.c.get(f'/api/locations/{self.main.id}/')
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        self.assertEqual(body['code'], 'MAIN')
+        self.assertEqual(body['code'], 'LAB')
         self.assertEqual(len(body['stock']), 1)
-        # PATCH вида (свободный текст)
+        self.assertFalse(body['central'])
         patched = self.c.patch(f'/api/locations/{self.main.id}/',
-                              {'kind': 'основной'}, content_type='application/json')
+                              {'description': 'Лаборатория'}, content_type='application/json')
         self.assertEqual(patched.status_code, 200)
-        self.assertEqual(patched.json()['kind'], 'основной')
+        self.assertEqual(patched.json()['description'], 'Лаборатория')
 
     def test_http_create_location(self):
         resp = self.c.post('/api/locations/',
@@ -6244,7 +6261,8 @@ class EntityDeleteHttpTests(TestCase):
 
     def setUp(self):
         self.user = get_user_model().objects.create(username='admin', is_superuser=True)
-        self.main = models.Location.objects.create(code='MAIN', description='Основной склад')
+        self.main = models.Location.objects.create(code='MAIN', description='Основной склад', central=True)
+        self.lab = _own_loc()
         self.prj = models.Project.objects.create(
             code='P1', description='Проект 1', kind=models.Project.Kind.EXTERNAL)
         self.sup = models.Counterparty.objects.create(description='П')
@@ -6257,7 +6275,7 @@ class EntityDeleteHttpTests(TestCase):
         self.assertFalse(models.Item.objects.filter(pk=it.pk).exists())
         # с лотом → 400
         it2 = models.Item.objects.create(code='WL', description='WL', category=_cat())
-        r = models.Receipt.objects.create(number='U-1', date='2026-05-01',
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-1', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(item=it2, project=self.prj, origin=r, qty=D(1))
         engine.rebuild_movements(lot)
@@ -6266,7 +6284,7 @@ class EntityDeleteHttpTests(TestCase):
     def test_location_delete_204_and_guard_400(self):
         loc = models.Location.objects.create(code='EMPTY', description='Пустой')
         self.assertEqual(self.c.delete(f'/api/locations/{loc.id}/').status_code, 204)
-        r = models.Receipt.objects.create(number='U-2', date='2026-05-01', locked=True,
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-2', date='2026-05-01', locked=True,
             contractor=self.sup, project=self.prj, user=self.user)   # Ф15: движение есть
         lot = models.Lot.objects.create(
             item=models.Item.objects.create(code='M', description='M', category=_cat()),
@@ -6278,7 +6296,7 @@ class EntityDeleteHttpTests(TestCase):
         empty = models.Project.objects.create(
             code='E', description='E', kind=models.Project.Kind.EXTERNAL)
         self.assertEqual(self.c.delete(f'/api/projects/{empty.id}/').status_code, 204)
-        r = models.Receipt.objects.create(number='U-3', date='2026-05-01',
+        r = models.Receipt.objects.create(location=engine.central_location(), number='U-3', date='2026-05-01',
             contractor=self.sup, project=self.prj, user=self.user)
         lot = models.Lot.objects.create(
             item=models.Item.objects.create(code='Q', description='Q', category=_cat()),
@@ -6909,7 +6927,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
 
     # ── рождение партии: поставка / инвентаризация ──
     def test_draft_receipt_lot_is_not_on_stock(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.item, D(10), cost=D(1000))
@@ -6918,7 +6936,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         self.assertEqual(engine.item_available(self.item, self.prj), D(0))
 
     def test_lock_materializes_unlock_takes_back(self):
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.item, D(10))
@@ -6943,17 +6961,17 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
             code='P2', description='Проект 2', kind=models.Project.Kind.EXTERNAL)
         dev = self.make_item('DEV', manufactured=True)
 
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev,
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev,
                                           user=self.user, qty=D(1))
         engine.add_kitting_line(k, self.item, lot, D(2))
         t = engine.create_transfer(self.prj, self.user, 'Н-1')
         engine.add_transfer_line(t, lot, D(3))
         w = engine.create_writeoff(self.prj, self.user, 'СП-1')
         engine.add_writeoff_line(w, lot, D(4))
-        req = engine.create_requisition(other, self.user, 'ТР-1')
-        engine.add_requisition_line(req, lot, D(5))
+        req = engine.create_reassignment(other, self.user, 'ТР-1')
+        engine.add_reassignment_line(req, lot, D(5))
         rel = engine.create_relocation(self.prj, self.user, 'ПЕР-1')
-        engine.add_relocation_line(rel, lot, D(6), self.main,
+        engine.add_relocation_line(rel, lot, D(6), self.lab,
                                    models.Location.objects.create(code='105',
                                                                   description='Пайка'))
         # все пять — черновики: остаток нетронут, движение ровно одно (рождение)
@@ -6961,14 +6979,14 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         self.assertEqual(lot.movements.count(), 1)
 
         engine.lock_kitting(k); engine.lock_transfer(t); engine.lock_writeoff(w)
-        engine.lock_requisition(req); engine.lock_relocation(rel)
+        engine.lock_reassignment(req); engine.lock_relocation(rel)
         # 100 − 2 − 3 − 4 − 5 = 86 (перемещение тотал не меняет: −6/+6)
         self.assertEqual(engine.lot_live_qty(lot), D(86))
 
     def test_issue_from_draft_receipt_goes_negative(self):
         """Решение Ивана: расход непринятой партии **пускаем в минус** — не клампим,
         недостача информативнее (канон мутабельной ДНК)."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         lot = engine.add_receipt_lot(r, self.item, D(10))
@@ -6982,7 +7000,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         dev = self.make_item('DEV', manufactured=True)
         models.BomLine.objects.create(parent=dev, component=self.item, qty=D(1))
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(10))
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.item, D(10))
@@ -6998,7 +7016,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
     def test_draft_receipt_does_not_spend_budget(self):
         """Деньги — единственное чтение мимо движений, поэтому гейт продублирован в
         `_project_spent`: черновой УПД не двигает бюджет проекта (Ф15)."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.item, D(3), cost=D(2400))
@@ -7040,7 +7058,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         входящий поток («10 едет, 0 принято»). Значит проекция обязана отдать замок
         origin-документа: иначе вью не отличит непринятую партию от израсходованной
         (обе с остатком 0) и подпишет её «исчерпана»."""
-        r = models.Receipt.objects.create(
+        r = models.Receipt.objects.create(location=engine.central_location(), 
             number='У-1', date='2026-05-01', contractor=self.supplier,
             project=self.prj, user=self.user)
         engine.add_receipt_lot(r, self.item, D(10))
@@ -7077,7 +7095,7 @@ class DraftDoesNotMoveStockTests(EngineTestBase):
         self.assertIn(w.code, e.exception.messages[0])
         # и второй мост тоже: черновик один на лот, чьего бы вида он ни был
         with self.assertRaises(ValidationError):
-            engine.requisition_lot(self.prj, lot, D(10), self.user)
+            engine.reassignment_lot(self.prj, lot, D(10), self.user)
         self.assertEqual(models.Writeoff.objects.filter(project=self.prj).count(), 1)
         engine.lock_writeoff(w)                            # зафиксировали — путь открыт
         self.assertEqual(engine.lot_live_qty(lot), D(0))
@@ -7262,10 +7280,10 @@ class AccountTests(TestCase):
         prj = models.Project.objects.create(code='P1', description='Проект 1',
                                             kind=models.Project.Kind.EXTERNAL)
         cp = engine.create_counterparty(code='КОМПЭЛ', description='ООО Компэл')
-        mine = models.Receipt.objects.create(code='Поставка моя', number='У-1',
+        mine = models.Receipt.objects.create(location=engine.central_location(), code='Поставка моя', number='У-1',
                                              date='2026-05-01', contractor=cp,
                                              project=prj, user=self.user)
-        models.Receipt.objects.create(code='Поставка чужая', number='У-2',
+        models.Receipt.objects.create(location=engine.central_location(), code='Поставка чужая', number='У-2',
                                       date='2026-05-02', contractor=cp,
                                       project=prj, user=other)
         mine_plan = engine.create_procurement(prj, self.user, code='Закупка моя')
@@ -7444,7 +7462,7 @@ class FixationPreviewTests(EngineTestBase):
         lot = self.receipt_lot(comp, self.prj, 10)
         lot.cost = D('50'); lot.save(); engine.rebuild_movements(lot)
         dev = self.make_item('DEV', manufactured=True)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev, code='К-1',
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev, code='К-1',
                                           user=self.user, qty=D(2))
         engine.add_kitting_line(k, comp, lot, D(4))
         r, t = self.texts('kittings', k.id)
@@ -7476,16 +7494,16 @@ class FixationPreviewTests(EngineTestBase):
         engine.add_transfer_line(tr, lot, D(1))
         wo = engine.create_writeoff(self.prj, self.user, number='А-1')
         engine.add_writeoff_line(wo, lot, D(1))
-        rq = engine.create_requisition(dst, self.user, number='Т-1')
-        engine.add_requisition_line(rq, lot, D(1))
+        rq = engine.create_reassignment(dst, self.user, number='Т-1')
+        engine.add_reassignment_line(rq, lot, D(1))
         rl = engine.create_relocation(self.prj, self.user, number='П-1')
-        engine.add_relocation_line(rl, lot, D(1), self.main, other)
+        engine.add_relocation_line(rl, lot, D(1), self.lab, other)
         inv = engine.create_inventory(self.prj, self.user, number='И-1')
         engine.add_inventory_lot(inv, comp, D(2), cost=D('14'))
         cases = [('transfers', tr.id, '1 партия (1 шт.) уйдёт со склада проекта P1 → Поставщик'),
                  ('writeoffs', wo.id, '1 партия (1 шт.) будет списана со склада проекта P1'),
-                 ('requisitions', rq.id, '1 партия перейдёт: P1 → P2'),
-                 ('relocations', rl.id, '1 партия переедет: MAIN → B'),
+                 ('reassignments', rq.id, '1 партия перейдёт: P1 → P2'),
+                 ('relocations', rl.id, '1 партия переедет: LAB → B'),
                  ('inventories', inv.id, '1 найденная партия на 14 ₽ ляжет на склад проекта P1'),
                  ('items', comp.id, 'свойства станут только для чтения — кроме цены')]
         for entity, pk, first in cases:
@@ -7517,7 +7535,7 @@ class NeedMoneyTests(EngineTestBase):
         models.ProjectDemand.objects.create(project=self.prj, target_item=dev, qty=D(2))
         lot = self.receipt_lot(comp, self.prj, 4)
         lot.cost = D('30'); lot.save(); engine.rebuild_movements(lot)
-        k = models.Kitting.objects.create(project=self.prj, target_item=dev, number='К1',
+        k = models.Kitting.objects.create(location=_own_loc(), project=self.prj, target_item=dev, number='К1',
                                           user=self.user, qty=D(1))
         engine.add_kitting_line(k, comp, lot, D(1))
         engine.lock_kitting(k)
@@ -7599,8 +7617,8 @@ class ManualComponentFixationTests(EngineTestBase):
 class CostFixtures:
     """Фикстуры денег волны 26 (примесь к `EngineTestBase`)."""
 
-    def costed_lot(self, item, qty, cost):
-        lot = self.receipt_lot(item, self.prj, qty)
+    def costed_lot(self, item, qty, cost, location=None):
+        lot = self.receipt_lot(item, self.prj, qty, location=location)
         lot.cost = D(cost)
         lot.save(update_fields=['cost'])
         engine.rebuild_movements(lot)
@@ -7658,7 +7676,7 @@ class LotCostCanonTests(CostFixtures, EngineTestBase):
         self.assertEqual(lot1.cost + lot2.cost, D('3519.78'))
 
     def test_explicit_cost_wins_over_rescale(self):
-        lot = engine.add_receipt_lot(models.Receipt.objects.create(
+        lot = engine.add_receipt_lot(models.Receipt.objects.create(location=engine.central_location(), 
             number='У', date=DAY, contractor=self.supplier, project=self.prj,
             user=self.user), self.make_item('A'), D(10), cost=D(100))
         engine.update_receipt_lot(lot, qty=D(5))
@@ -7681,24 +7699,24 @@ class LotCostCanonTests(CostFixtures, EngineTestBase):
         lot = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
         other = models.Location.objects.create(code='B', description='Второе место')
         rl = engine.create_relocation(self.prj, self.user, number='П-1')
-        engine.add_relocation_line(rl, lot, D(1), self.main, other)
+        engine.add_relocation_line(rl, lot, D(1), self.lab, other)
         engine.lock_relocation(rl)
         self.assertEqual(self.live_cost(lot), D('1000.00'))
         at_b = lot.movements.filter(location=other).aggregate(s=Sum('cost'))['s']
         self.assertEqual(at_b, D('333.33'))
 
-    def test_requisition_child_costs_its_share(self):
+    def test_reassignment_child_costs_its_share(self):
         white = models.Project.objects.create(code='W', description='Собственный склад',
                                               kind=models.Project.Kind.INTERNAL_STOCK)
         src = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
-        req = engine.create_requisition(white, self.user, 'ТРБ-1')
-        engine.add_requisition_line(req, src, D(1))
+        req = engine.create_reassignment(white, self.user, 'ТРБ-1')
+        engine.add_reassignment_line(req, src, D(1))
         child = req.lots.get()
         self.assertEqual(child.cost, D('333.33'))          # предпросмотр черновика
-        engine.update_requisition_line(req.lines.get(), D(3))
+        engine.update_reassignment_line(req.lines.get(), D(3))
         child.refresh_from_db()
         self.assertEqual(child.cost, D('1000.00'))         # вся партия — вся стоимость
-        engine.lock_requisition(req)
+        engine.lock_reassignment(req)
         child.refresh_from_db()
         self.assertEqual(child.cost, D('1000.00'))
         self.assertEqual(self.live_cost(src), D('0.00'))
@@ -7814,17 +7832,17 @@ class MoneyBlockTests(CostFixtures, EngineTestBase):
         self.assertNotIn('cost', b)
 
     def test_order_totals(self):
-        lot = self.costed_lot(self.make_item('BOX'), 3, '1000.00')
+        lot = self.costed_lot(self.make_item('BOX'), 3, '1000.00', location=self.lab)
         t = engine.create_transfer(self.prj, self.user, 'Н-1', contractor=self.supplier)
         engine.add_transfer_line(t, lot, D(2))
         self.assertEqual(engine.transfer_form(t)['total_cost'], D('666.67'))
         other = models.Location.objects.create(code='B', description='Второе место')
         rl = engine.create_relocation(self.prj, self.user, number='П-1')
-        engine.add_relocation_line(rl, lot, D(1), self.main, other)
+        engine.add_relocation_line(rl, lot, D(1), self.lab, other)
         self.assertEqual(engine.relocation_form(rl)['total_cost'], D('333.33'))
         engine.lock_relocation(rl)
         self.assertEqual(engine.location_form(other)['total_cost'], D('333.33'))
-        self.assertEqual(engine.location_form(self.main)['total_cost'], D('666.67'))
+        self.assertEqual(engine.location_form(self.lab)['total_cost'], D('666.67'))
 
     def test_item_last_avg_max_skip_samples(self):
         res = self.make_item('RES')
@@ -7957,3 +7975,332 @@ class BomAccordionTests(EngineTestBase):
         self.assertEqual(rows['BRD']['cost'], D(600))          # узел = Σ детей
         self.assertEqual(tree['RES']['depth'], 0)
         self.assertTrue(tree['RES']['is_leaf'])
+
+
+class Wave27StockContourTests(EngineTestBase):
+    """Волна 27: Центральный склад (синглтон), «Куда» в шапке рождающих ордеров,
+    «выбор лота = выбор места» в строках расхода, Требование (Центральный → наша)."""
+
+    def setUp(self):
+        super().setUp()
+        self.central = self.main              # MAIN фикстур — Центральный
+        self.sold = models.Location.objects.create(code='105', description='Пайка')
+        self.res = self.make_item('RES')
+
+    def _requisition(self, lot, qty, lock=True, to=None):
+        req = engine.create_requisition(self.prj, self.user, number='ТР-1', date='2026-10-21')
+        if to is not None:
+            engine.update_requisition(req, location=to)
+        engine.add_requisition_line(req, lot, D(qty))
+        if lock:
+            engine.lock_requisition(req)
+        return req
+
+    # --- Центральный ---------------------------------------------------------
+    def test_central_is_db_singleton_and_undeletable(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            models.Location.objects.create(code='X', description='Второй', central=True)
+        with self.assertRaises(ValidationError):
+            engine.delete_location(self.central)
+        engine.update_location(self.central, code='ЦС', description='Бухгалтерия')
+        self.assertEqual(engine.central_location().code, 'ЦС')
+
+    def test_central_created_lazily_when_missing(self):
+        self.central.central = None
+        self.central.save()
+        loc = engine.central_location()
+        self.assertTrue(loc.central)
+        self.assertNotEqual(loc.pk, self.central.pk)
+
+    # --- «Куда» --------------------------------------------------------------
+    def test_born_order_default_location_by_kind(self):
+        self.assertEqual(engine.create_receipt(self.prj, self.user).location, self.central)
+        self.assertEqual(engine.create_kitting(self.prj, self.user).location, self.lab)
+        self.assertEqual(engine.create_inventory(self.prj, self.user).location, self.lab)
+        self.assertEqual(engine.create_requisition(self.prj, self.user).location, self.lab)
+        self.assertIsNone(engine.create_transfer(self.prj, self.user).location)
+
+    def test_own_kinds_refuse_central_and_foreign_kinds_refuse_location(self):
+        k = engine.create_kitting(self.prj, self.user)
+        with self.assertRaises(ValidationError):
+            engine.update_kitting(k, location=self.central)
+        t = engine.create_transfer(self.prj, self.user)
+        with self.assertRaises(ValidationError):
+            engine.update_transfer(t, location=self.lab)
+
+    def test_lock_demands_location(self):
+        inv = engine.create_inventory(self.prj, self.user, number='И-1')
+        engine.add_inventory_lot(inv, self.res, D(2), cost=D('10'))
+        engine.update_inventory(inv, location=None)
+        with self.assertRaises(ValidationError):
+            engine.lock_inventory(inv)
+        engine.update_inventory(inv, location=self.sold)
+        engine.lock_inventory(inv)
+        lot = inv.lots.get()
+        self.assertEqual(engine.lot_live_qty(lot, self.sold), D(2))
+
+    def test_receipt_lot_born_on_header_location(self):
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        self.assertEqual(engine.lot_live_qty(lot, self.central), D(10))
+        lot2 = self.receipt_lot(self.res, self.prj, 5, location=self.sold)
+        self.assertEqual(engine.lot_live_qty(lot2, self.sold), D(5))
+
+    def test_reassignment_child_born_where_source_lay(self):
+        lot = self.receipt_lot(self.res, self.prj, 10, location=self.sold)
+        other = models.Project.objects.create(code='P2', description='П2')
+        ra = engine.create_reassignment(other, self.user, number='П-1')
+        engine.add_reassignment_line(ra, lot, D(4))
+        engine.lock_reassignment(ra)
+        child = ra.lots.get()
+        self.assertEqual(engine.lot_live_qty(child, self.sold), D(4))
+        self.assertEqual(engine.lot_live_qty(lot, self.sold), D(6))
+
+    # --- выбор лота = выбор места -------------------------------------------
+    def test_line_location_inferred_from_single_place(self):
+        lot = self.receipt_lot(self.res, self.prj, 10, location=self.sold)
+        t = engine.create_transfer(self.prj, self.user, number='Н-1', contractor=self.supplier)
+        line = engine.add_transfer_line(t, lot, D(3))
+        self.assertEqual(line.location, self.sold)        # не «главная», а где лежит
+        engine.lock_transfer(t)
+        self.assertEqual(engine.lot_live_qty(lot, self.sold), D(7))
+
+    def test_line_location_ambiguous_asks_and_explicit_wins(self):
+        lot = self.receipt_lot(self.res, self.prj, 10, location=self.lab)
+        rl = engine.create_relocation(self.prj, self.user, number='ПЕР-1')
+        engine.add_relocation_line(rl, lot, D(4), self.lab, self.sold)
+        engine.lock_relocation(rl)
+        w = engine.create_writeoff(self.prj, self.user, number='А-1')
+        with self.assertRaises(ValidationError):
+            engine.add_writeoff_line(w, lot, D(1))
+        line = engine.add_writeoff_line(w, lot, D(1), location=self.sold)
+        self.assertEqual(line.location, self.sold)
+
+    def test_pickers_offer_lot_location_pairs(self):
+        lot = self.receipt_lot(self.res, self.prj, 10, location=self.lab)
+        rl = engine.create_relocation(self.prj, self.user, number='ПЕР-1')
+        engine.add_relocation_line(rl, lot, D(4), self.lab, self.sold)
+        engine.lock_relocation(rl)
+        rows = engine.project_available_lots(self.prj)
+        self.assertEqual({(r['location_code'], r['live_qty']) for r in rows},
+                         {('LAB', D(6)), ('105', D(4))})
+
+    def test_relocation_never_touches_central(self):
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        rl = engine.create_relocation(self.prj, self.user, number='ПЕР-1')
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(rl, lot, D(1), self.central, self.sold)
+        with self.assertRaises(ValidationError):
+            engine.add_relocation_line(rl, lot, D(1), self.sold, self.central)
+        self.assertEqual(engine.relocation_source_lots(self.prj), [])   # лежит только на ЦС
+
+    # --- Требование ----------------------------------------------------------
+    def test_requisition_moves_from_central_to_destination(self):
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        req = self._requisition(lot, 4, to=self.sold)
+        self.assertEqual(engine.lot_live_qty(lot), D(10))                  # тотал цел
+        self.assertEqual(engine.lot_live_qty(lot, self.central), D(6))
+        self.assertEqual(engine.lot_live_qty(lot, self.sold), D(4))
+        form = engine.requisition_form(req)
+        self.assertEqual(form['lines'][0]['central_live_qty'], D(6))
+        self.assertEqual(form['location_code'], '105')
+
+    def test_requisition_gates(self):
+        """Гейты: «Куда» не Центральный, один проект, без «Куда» строки нет, № к фиксации."""
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        req = engine.create_requisition(self.prj, self.user)
+        with self.assertRaises(ValidationError):
+            engine.update_requisition(req, location=self.central)         # «Куда» — наша
+        other = models.Project.objects.create(code='P2', description='П2')
+        foreign = self.receipt_lot(self.res, other, 3)
+        with self.assertRaises(ValidationError):
+            engine.add_requisition_line(req, foreign, D(1))               # один проект
+        engine.update_requisition(req, location=None)
+        with self.assertRaises(ValidationError):
+            engine.add_requisition_line(req, lot, D(1))                   # нет «Куда»
+        engine.update_requisition(req, location=self.lab)
+        engine.add_requisition_line(req, lot, D(1))
+        with self.assertRaises(ValidationError):
+            engine.lock_requisition(req)                                  # № обязателен
+
+    def test_requisition_header_destination_follows_lines(self):
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        req = self._requisition(lot, 4, lock=False)
+        engine.update_requisition(req, location=self.sold)
+        engine.lock_requisition(req)
+        self.assertEqual(engine.lot_live_qty(lot, self.sold), D(4))
+        self.assertEqual(engine.lot_live_qty(lot, self.lab), D(0))
+
+    def test_requisition_source_picker_is_project_lots_on_central(self):
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        self.receipt_lot(self.res, self.prj, 5, location=self.lab)     # не на ЦС — мимо
+        req = engine.create_requisition(self.prj, self.user)
+        rows = engine.requisition_source_lots(req)
+        self.assertEqual([(r['lot_id'], r['live_qty']) for r in rows], [(lot.id, D(10))])
+
+    def test_requisition_does_not_drain_value(self):
+        lot = self.receipt_lot(self.res, self.prj, 3)
+        lot.cost = D('1000.00')
+        lot.save(update_fields=['cost'])
+        engine.rebuild_movements(lot)
+        req = self._requisition(lot, 1)
+        self.assertEqual(lot.movements.aggregate(s=Sum('cost'))['s'], D('1000.00'))
+        self.assertEqual(engine.requisition_form(req)['total_cost'], D('333.33'))
+
+    def test_kitting_act_lists_requisitions_by_lots(self):
+        lot = self.receipt_lot(self.res, self.prj, 100)
+        r1 = self._requisition(lot, 10)
+        r2 = engine.create_requisition(self.prj, self.user, number='ТР-2', date='2026-10-22')
+        engine.add_requisition_line(r2, lot, D(5))
+        engine.lock_requisition(r2)
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=self.res, qty=D(2))
+        k = engine.create_kitting(self.prj, self.user, target_item=dev, qty=D(5))
+        self.assertEqual(engine.kitting_form(k)['requisitions'], [])
+        engine.add_kitting_line(k, self.res, lot, D(10), location=self.lab)
+        reqs = engine.kitting_form(k)['requisitions']
+        self.assertEqual([r['id'] for r in reqs], [r1.id, r2.id])
+
+    def test_kitting_device_born_on_own_location(self):
+        lot = self.receipt_lot(self.res, self.prj, 100)
+        dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=dev, component=self.res, qty=D(2))
+        k = engine.create_kitting(self.prj, self.user, target_item=dev, qty=D(1))
+        engine.add_kitting_line(k, self.res, lot, D(2))       # прямо с Центрального — можно
+        engine.lock_kitting(k)
+        device = k.lots.get()
+        self.assertEqual(engine.lot_live_qty(device, self.lab), D(1))
+        self.assertEqual(engine.lot_live_qty(lot, self.central), D(98))
+
+    def test_http_requisition_flow(self):
+        self.user.is_superuser = True
+        self.user.save()
+        c = Client()
+        c.force_login(self.user)
+        lot = self.receipt_lot(self.res, self.prj, 10)
+        rid = c.post('/api/requisitions/', {'project_id': self.prj.id},
+                     content_type='application/json').json()['id']
+        r = c.patch(f'/api/requisitions/{rid}/', {'location_id': self.sold.id, 'number': 'Т-9'},
+                    content_type='application/json')
+        self.assertEqual(r.json()['location_code'], '105')
+        picker = c.get(f'/api/requisitions/{rid}/source-lots/').json()
+        self.assertEqual(picker[0]['lot_id'], lot.id)
+        r = c.post(f'/api/requisitions/{rid}/lines/', {'lot_id': lot.id, 'qty': 3},
+                   content_type='application/json')
+        self.assertEqual(r.status_code, 201)
+        r = c.post(f'/api/requisitions/{rid}/lock/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(engine.lot_live_qty(lot, self.sold), D(3))
+        self.assertEqual(c.get('/api/requisitions/').json()[0]['location_code'], '105')
+
+
+class Wave27LotFormTests(EngineTestBase):
+    """Волна 27, Ф3: список «Склад» и форма лота — раскладка жизни сходится до копейки,
+    история и применение читают проекцию, состав прибора — паспорт рекурсивно."""
+
+    def setUp(self):
+        super().setUp()
+        self.res = self.make_item('RES')
+        self.dev = self.make_item('DEV', manufactured=True)
+        models.BomLine.objects.create(parent=self.dev, component=self.res, qty=D(2))
+        self.lot = self.receipt_lot(self.res, self.prj, 10)
+        self.lot.cost = D('100.00')
+        self.lot.code, self.lot.description = 'RC0603-10K', 'Резистор 10 кОм'
+        self.lot.save()
+        engine.rebuild_movements(self.lot)
+
+    def _spend_everything_kind(self):
+        req = engine.create_requisition(self.prj, self.user, number='ТР-1', date='2026-10-01')
+        engine.add_requisition_line(req, self.lot, D(6))
+        engine.lock_requisition(req)
+        k = engine.create_kitting(self.prj, self.user, target_item=self.dev, qty=D(1))
+        engine.add_kitting_line(k, self.res, self.lot, D(2), location=self.lab)
+        engine.lock_kitting(k)
+        t = engine.create_transfer(self.prj, self.user, number='Н-1', contractor=self.supplier)
+        engine.add_transfer_line(t, self.lot, D(1), location=self.lab)
+        engine.lock_transfer(t)
+        w = engine.create_writeoff(self.prj, self.user, number='А-1')
+        engine.add_writeoff_line(w, self.lot, D(1), location=self.central_loc())
+        engine.lock_writeoff(w)
+        other = models.Project.objects.create(code='P2', description='П2')
+        ra = engine.create_reassignment(other, self.user, number='П-1')
+        engine.add_reassignment_line(ra, self.lot, D(3), location=self.central_loc())
+        engine.lock_reassignment(ra)
+        return k, ra
+
+    def central_loc(self):
+        return engine.central_location()
+
+    def test_money_breakdown_sums_to_born_to_the_kopeck(self):
+        self._spend_everything_kind()
+        m = engine.lot_money(self.lot)
+        self.assertEqual(m['born'], {'qty': D(10), 'cost': D('100.00'), 'unit_cost': D(10)})
+        self.assertEqual(m['kitted']['qty'], D(2))
+        self.assertEqual(m['transferred']['qty'], D(1))
+        self.assertEqual(m['written_off']['qty'], D(1))
+        self.assertEqual(m['reassigned']['qty'], D(3))
+        self.assertEqual(m['remaining']['qty'], D(3))
+        parts = ('kitted', 'transferred', 'written_off', 'reassigned', 'remaining')
+        self.assertEqual(sum(m[k]['qty'] for k in parts), m['born']['qty'])
+        self.assertEqual(sum(m[k]['cost'] for k in parts), m['born']['cost'])
+        # остаток разложен по местам: 3 на нашей LAB (6 выдано − 2 − 1), 0 на ЦС
+        self.assertEqual({(p['location_code'], p['qty']) for p in m['remaining']['places']},
+                         {('LAB', D(3))})
+
+    def test_history_usage_and_composition(self):
+        k, ra = self._spend_everything_kind()
+        form = engine.lot_form(self.lot)
+        events = [(r['document']['kind'], r['event']) for r in form['history']]
+        self.assertIn(('receipt', 'born'), events)
+        self.assertIn(('requisition', 'move'), events)
+        reassign = next(r for r in form['history'] if r['document']['kind'] == 'reassignment')
+        self.assertEqual(reassign['related'][0]['id'], ra.lots.get().id)   # лот-потомок
+        self.assertEqual(len(form['usage']), 1)
+        device = k.lots.get()
+        self.assertEqual(form['usage'][0]['devices'][0]['id'], device.id)
+        self.assertEqual(form['usage'][0]['qty'], D(2))
+        self.assertFalse(form['composable'])
+        passport = engine.lot_form(device)
+        self.assertTrue(passport['composable'])
+        self.assertEqual(passport['composition'][0]['lot']['id'], self.lot.id)
+        self.assertEqual(passport['composition'][0]['cost'], D('20.00'))
+
+    def test_stock_list_flags(self):
+        rows = {r['id']: r for r in engine.stock_lots()}
+        row = rows[self.lot.id]
+        self.assertTrue(row['on_central'])                  # пришёл — ждёт Требования
+        self.assertFalse(row['exhausted'])
+        self.assertEqual(row['code'], 'RC0603-10K')
+        draft = self.receipt_lot(self.res, self.prj, 5, locked=False)
+        self.assertNotIn(draft.id, {r['id'] for r in engine.stock_lots()})
+        w = engine.create_writeoff(self.prj, self.user, number='А-1')
+        engine.add_writeoff_line(w, self.lot, D(12))       # пересписали — минус
+        engine.lock_writeoff(w)
+        row = next(r for r in engine.stock_lots() if r['id'] == self.lot.id)
+        self.assertTrue(row['anomaly'])
+
+    def test_http_stock_and_lot_form(self):
+        self.user.is_superuser = True
+        self.user.save()
+        c = Client()
+        c.force_login(self.user)
+        rows = c.get('/api/stock/').json()
+        self.assertEqual(rows[0]['item_native'], False)
+        body = c.get(f'/api/stock/{self.lot.id}/').json()
+        self.assertEqual(body['code'], 'RC0603-10K')
+        self.assertEqual(body['origin']['kind'], 'receipt')
+
+
+class Wave27SeedTests(TestCase):
+    """Демо-сид живёт по контуру волны 27: поставки — на Центральный, выдача —
+    Требованием, сборка — у нас; Центральный после выдачи пуст, как и должен быть."""
+
+    def test_seed_demo_follows_stock_contour(self):
+        from django.core.management import call_command
+        call_command('seed_demo', stdout=open(os.devnull, 'w'))
+        central = engine.central_location()
+        self.assertEqual(central.code, 'ЦС')
+        self.assertEqual(engine.location_stock(central), [])           # всё выдано
+        case_lot = models.Lot.objects.get(code='AL-CASE-100')
+        places = {p['code']: p['qty'] for p in engine.lot_locations(case_lot)}
+        self.assertEqual(places, {'103': D(8), '105': D(4)})
+        self.assertEqual(models.Requisition.objects.filter(locked=True).count(), 2)

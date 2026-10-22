@@ -18,11 +18,12 @@ import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Anomaly, LotGlyph, count, num, sumByUom } from './status'
 import { EntityLink } from './EntityLink'
+import { pairKey, pairLabel } from './lotPairs'
 
-export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChanged, onDeleted }: {
+export function WriteoffView({ writeoffId, isNew, openItem, openLot, openProject, onChanged, onDeleted }: {
   writeoffId: number
   isNew: boolean
-  openItem: (id: number) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
   openProject: (id: number) => void
   onChanged: () => void
   onDeleted: () => void
@@ -58,7 +59,7 @@ export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChang
           </thead>
           <tbody>
             {c.lines.map((ln, i) => (
-              <LineRow key={ln.id} no={i + 1} ln={ln} locked={locked} busy={busy} openItem={openItem} run={run} />
+              <LineRow key={ln.id} no={i + 1} ln={ln} locked={locked} busy={busy} openItem={openItem} openLot={openLot} run={run} />
             ))}
             {!locked && <GhostRow writeoffId={c.id} lots={lots} busy={busy} run={run} />}
           </tbody>
@@ -103,17 +104,19 @@ export function WriteoffView({ writeoffId, isNew, openItem, openProject, onChang
 }
 
 // Реальная строка списания (лот): автосейв кол-ва, удаление (коррекция).
-function LineRow({ no, ln, locked, busy, openItem, run }: {
+function LineRow({ no, ln, locked, busy, openItem, openLot, run }: {
   no?: number
   ln: WriteoffFormLine; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<WriteoffForm>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<WriteoffForm>) => void
 }) {
   const negative = ln.lot_live_qty < 0   // пересписали — источник в минусе
   return (
     <tr className="row">
       <td className="rn">{no}</td>
-      <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
-      <td className="c-key"><span className="code">{ln.lot_label}</span></td>
+      <td className="gl"><LotGlyph native={ln.item_native} liveQty={ln.lot_live_qty} /></td>
+      <td className="c-key">
+        <EntityLink kind="lot" id={ln.lot_id} open={openLot}>{ln.lot_label}</EntityLink></td>
       <td className="c-fit">
         <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
       <td className="c-desc">
@@ -142,15 +145,16 @@ function GhostRow({ writeoffId, lots, busy, run }: {
   writeoffId: number; lots: AvailableLot[]; busy: boolean
   run: (p: Promise<WriteoffForm>) => void
 }) {
-  const [lotId, setLotId] = useState<number | ''>('')
+  // Волна 27: строка пикера — пара «лот @ локация» (выбор лота = выбор места).
+  const [pick, setPick] = useState('')
   const [qty, setQty] = useState('')
-  const picked = lots.find(l => l.lot_id === lotId)
+  const picked = lots.find(l => pairKey(l) === pick)
 
   const add = () => {
     const q = Number(qty)
-    if (!lotId || !(q > 0)) return
-    run(api.addWriteoffLine(writeoffId, { lot_id: lotId, qty: q }))
-    setLotId(''); setQty('')
+    if (!picked || !(q > 0)) return
+    run(api.addWriteoffLine(writeoffId, { lot_id: picked.lot_id, location_id: picked.location_id, qty: q }))
+    setPick(''); setQty('')
   }
 
   return (
@@ -158,16 +162,15 @@ function GhostRow({ writeoffId, lots, busy, run }: {
       <td className="rn" />
       <td className="gl" />
       <td className="c-key" colSpan={2}>
-        <Dropdown value={lotId} disabled={busy} placeholder="Партия…"
-          onPick={v => setLotId(Number(v))} onClear={() => setLotId('')}
-          options={lots.map(l => ({ value: l.lot_id,
-            label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
-              + ` · ${num(l.live_qty)} ${l.uom}` }))} />
+        <Dropdown value={pick} disabled={busy} placeholder="Партия…"
+          onPick={v => setPick(String(v))} onClear={() => setPick('')}
+          options={lots.map(l => ({ value: pairKey(l),
+            label: pairLabel(l, `#${l.lot_id} ${l.item_code}`) }))} />
       </td>
       <td className="c-desc">
         {picked?.item_description ?? ''}</td>
       <td className="num">
-        <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
+        <input className="qty-in" value={qty} disabled={busy || !picked} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
@@ -177,7 +180,7 @@ function GhostRow({ writeoffId, lots, busy, run }: {
       </td>
       <td className="act">
         <button className="fh-ctl icon fh-add" title="Добавить строку списания"
-          disabled={busy || !lotId || !(Number(qty) > 0)} onClick={add}>
+          disabled={busy || !picked || !(Number(qty) > 0)} onClick={add}>
           <span className="ci ci-add" /></button>
       </td>
     </tr>

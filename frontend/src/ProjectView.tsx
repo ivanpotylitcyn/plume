@@ -34,13 +34,14 @@ import { ask } from './dialog'
 const META_SCALE = ['ПРБ', 'УП']
 
 export function ProjectView({ projectId, items, isNew, openItem, openOrder, openPurchase,
-  openProcurement, openCounterparty, onChanged, onDeleted }:
+  openProcurement, openCounterparty, openLot, onChanged, onDeleted }:
   { projectId: number; items: ItemRow[]; isNew: boolean
     openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // Ф15: черновики закрытия кликабельны
     openPurchase: (id: number) => void                 // лента «Заказы» — свой режим
     openProcurement: (id: number) => void              // лента «Закупки» (волна 24)
     openCounterparty: (id: number) => void             // поставщик в лентах — ссылка
+    openLot: (id: number) => void                      // в27: партии таба «Склад» — ссылки
     onChanged?: () => void; onDeleted?: () => void }) {
   const [data, setData] = useState<Deficit | null>(null)
   const [phead, setPhead] = useState<ProjectDetail | null>(null)  // реквизиты шапки
@@ -190,7 +191,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
               <tbody>
                 {residuals.map((r, i) => (
                   <ResidualRow key={r.lot_id} no={i + 1} r={r} projectId={projectId} locked={locked}
-                    busy={busy} openItem={openItem} run={runC} />
+                    busy={busy} openItem={openItem} openLot={openLot} run={runC} />
                 ))}
               </tbody>
             </table>
@@ -267,17 +268,19 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
 
 // Живой лот проекта: один клик сводит его в 0 (списать → серый / на баланс → белый).
 // Переехала сюда из `ClosurePanel` вместе со всей панелью закрытия (Ф12c).
-function ResidualRow({ no, r, projectId, locked, busy, openItem, run }: {
+function ResidualRow({ no, r, projectId, locked, busy, openItem, openLot, run }: {
   no?: number
   r: ResidualLot; projectId: number; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<ProjectClosure>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<ProjectClosure>) => void
 }) {
   const positive = r.live_qty > 0
   return (
     <tr className="row">
       <td className="rn">{no}</td>
-      <td className="gl"><LotGlyph origin={r.origin} liveQty={r.live_qty} /></td>
-      <td className="c-key"><span className="code">{r.lot_label}</span></td>
+      <td className="gl"><LotGlyph native={r.item_native} liveQty={r.live_qty} /></td>
+      <td className="c-key">
+        <EntityLink kind="lot" id={r.lot_id} open={openLot}>{r.lot_label}</EntityLink></td>
       <td className="c-fit">
         <EntityLink kind="item" id={r.item_id} open={openItem}>{r.item_code}</EntityLink></td>
       <td className="c-desc">
@@ -441,7 +444,7 @@ function DeviceRow({ d, no, open, onToggle, costly, editable, busy, openItem, ru
             начато ↔ «Баланс» со знаком минус. «На складе» у прибора пусто намеренно:
             собранный прибор лежит теми же лотами, что породила комплектация, и показать
             его здесь значило бы посчитать дважды. */}
-        <Member glyph="notebook" tone="ok" value={dev.done}
+        <Member glyph="rocket" tone="ok" value={dev.done}
           title="собрано — зафиксированные акты комплектации" />
         <span className="pnum sub">—</span>
         <Member glyph="package" tone="wip" value={dev.wip}

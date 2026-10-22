@@ -7,16 +7,17 @@ import { KittingView } from './KittingView'
 import { ReceiptView } from './ReceiptView'
 import { TransferView } from './TransferView'
 import { WriteoffView } from './WriteoffView'
-import { RequisitionView } from './RequisitionView'
+import { ReassignmentView } from './ReassignmentView'
 import { InventoryView } from './InventoryView'
 import { RelocationView } from './RelocationView'
+import { RequisitionView } from './RequisitionView'
 
 // Тип и подписи видов — в `./orders` (знание домена, не компонент).
 import type { OrderKind } from './orders'
 export type { OrderKind }
 
 export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, openProject,
-  openCounterparty, onChanged, onDeleted }: {
+  openCounterparty, openLot, openLocation, openRequisition, onChanged, onDeleted }: {
   kind: OrderKind
   id: number
   items: ItemRow[]
@@ -25,6 +26,9 @@ export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, open
   openPurchase: (id: number) => void
   openProject: (id: number) => void   // якорь-проект шапки кликабелен под замком (§8)
   openCounterparty: (id: number) => void   // контрагент в шапке — ссылка в его карточку
+  openLot: (id: number) => void            // в27: партии строк — ссылки на форму лота
+  openLocation: (id: number) => void       // в27: «Куда» шапки — ссылка на локацию
+  openRequisition: (id: number) => void    // в27: требования в акте комплектации
   onChanged: () => void
   onDeleted: () => void
 }) {
@@ -32,26 +36,32 @@ export function OrderForm({ kind, id, items, isNew, openItem, openPurchase, open
     case 'receipt':
       return <ReceiptView receiptId={id} items={items} isNew={isNew} openItem={openItem}
         openPurchase={openPurchase} openProject={openProject}
-        openCounterparty={openCounterparty}
-        onChanged={onChanged} onDeleted={onDeleted} />
-    case 'kitting':
-      return <KittingView kittingId={id} isNew={isNew} openItem={openItem}
-        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
-    case 'transfer':
-      return <TransferView transferId={id} isNew={isNew} openItem={openItem}
-        openProject={openProject} openCounterparty={openCounterparty}
+        openCounterparty={openCounterparty} openLot={openLot} openLocation={openLocation}
         onChanged={onChanged} onDeleted={onDeleted} />
     case 'requisition':
       return <RequisitionView requisitionId={id} isNew={isNew} openItem={openItem}
-        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
+        openProject={openProject} openLot={openLot} openLocation={openLocation}
+        onChanged={onChanged} onDeleted={onDeleted} />
+    case 'kitting':
+      return <KittingView kittingId={id} isNew={isNew} openItem={openItem}
+        openProject={openProject} openLot={openLot} openLocation={openLocation}
+        openRequisition={openRequisition} onChanged={onChanged} onDeleted={onDeleted} />
+    case 'transfer':
+      return <TransferView transferId={id} isNew={isNew} openItem={openItem} openLot={openLot}
+        openProject={openProject} openCounterparty={openCounterparty}
+        onChanged={onChanged} onDeleted={onDeleted} />
+    case 'reassignment':
+      return <ReassignmentView reassignmentId={id} isNew={isNew} openItem={openItem}
+        openLot={openLot} openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'writeoff':
-      return <WriteoffView writeoffId={id} isNew={isNew} openItem={openItem}
+      return <WriteoffView writeoffId={id} isNew={isNew} openItem={openItem} openLot={openLot}
         openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'inventory':
       return <InventoryView inventoryId={id} items={items} isNew={isNew} openItem={openItem}
+        openLot={openLot} openLocation={openLocation}
         openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
     case 'relocation':
       return <RelocationView relocationId={id} isNew={isNew} openItem={openItem}
-        openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
+        openLot={openLot} openProject={openProject} onChanged={onChanged} onDeleted={onDeleted} />
   }
 }

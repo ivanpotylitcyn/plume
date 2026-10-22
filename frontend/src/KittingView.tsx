@@ -9,7 +9,7 @@
 // второй фронт внутри Ф12c мы не стали.
 import { useEffect, useState } from 'react'
 import { api, type KittingForm, type KittingFormRow, type ItemRow } from './api'
-import { OrderFields, useOrderForm } from './FormHeader'
+import { LocationField, OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { MoneyBlock } from './StatPanel'
 import { Field, TextField } from './FormField'
@@ -20,11 +20,14 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { useCategoryFilter } from './ColumnFilter'
 import { CoverageGlyph, ItemGlyph, Segment, count, money, num, rowNumbers, statusTone } from './status'
 import { EntityLink } from './EntityLink'
+import { pairKey, pairLabel } from './lotPairs'
 
-export function KittingView({ kittingId, isNew, openItem, openProject, onChanged, onDeleted }:
+export function KittingView({ kittingId, isNew, openItem, openProject, openLot, openLocation,
+  openRequisition, onChanged, onDeleted }:
   { kittingId: number; isNew: boolean; openItem: (id: number) => void
-    openProject: (id: number) => void; onChanged: () => void
-    onDeleted: () => void }) {
+    openProject: (id: number) => void; openLot: (id: number) => void
+    openLocation: (id: number) => void; openRequisition: (id: number) => void
+    onChanged: () => void; onDeleted: () => void }) {
   // Справочник изделий — для якоря «целевое изделие» (Ф2k). Загружаем один раз.
   const [items, setItems] = useState<ItemRow[]>([])
   useEffect(() => { api.items().then(setItems) }, [])
@@ -54,7 +57,9 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
           <div className="born">
             Рождён лот-прибор:{' '}
             {c.born_lots.map(l => (
-              <span key={l.id} className="seg">#{l.id} ×{num(l.qty)} · {money(l.cost)}</span>
+              <span key={l.id} className="seg">
+                <EntityLink kind="lot" id={l.id} open={openLot}>#{l.id}</EntityLink>
+                {' '}×{num(l.qty)} · {money(l.cost)}</span>
             ))}
           </div>
         )}
@@ -74,7 +79,7 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
               <tbody>
                 {byCat.shown.map(row => (
                   <Component key={row.component_id} no={no.get(row)} row={row} form={c} wip={!locked}
-                    busy={busy} openItem={openItem} run={run} />
+                    busy={busy} openItem={openItem} openLot={openLot} run={run} />
                 ))}
               </tbody>
             </table>}
@@ -105,7 +110,10 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
       fields={
         <OrderFields c={c} locked={locked} busy={busy}
           openProject={openProject}
-          patch={b => run(api.updateKitting(c.id, b))}>
+          patch={b => run(api.updateKitting(c.id, b))}
+          // Волна 27: «Куда» — где родится прибор; только наша локация.
+          anchors={<LocationField c={c} locked={locked} busy={busy} own onOpen={openLocation}
+            onChange={id => run(api.updateKitting(c.id, { location_id: id }))} />}>
           {/* Атрибуты вида — хвостом, в порядке модели (§13.4a): `target_item`, затем
               `qty`. Ширина поля — токеном темы, не пикселями в JSX (Ф12d: инлайн-стиль
               сильнее любого класса и выбивал поле из общей сетки шапки). */}
@@ -135,6 +143,14 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
             locked={locked} busy={busy}
             onCommit={v => run(api.updateKitting(c.id, { qty: Number(v) }))}
             validate={v => Number(v) > 0} />
+          {/* Волна 27: Требования для акта — выводятся по списанным лотам (связи в
+              схеме нет), поэтому поле только читается и в правке тоже. Пусто — паяли
+              прямо с Центрального склада. */}
+          <Field label="Требования" locked
+            view={c.requisitions.length === 0 ? '' : c.requisitions.map((r, i) => (
+              <span key={r.id}>{i > 0 && ', '}
+                <EntityLink kind="requisition" id={r.id} open={openRequisition}>
+                  {r.code || r.number || `Требование #${r.id}`}</EntityLink></span>))} />
         </OrderFields>}
       // Блок «Деньги» (волна 26): у ордера одно число — сумма его движений.
       extra={<MoneyBlock label="израсходовано на сумму" value={c.total_cost}
@@ -150,10 +166,11 @@ export function KittingView({ kittingId, isNew, openItem, openProject, onChanged
 // компонент был отдельным блоком `.kit-comp` со своей таблицей: колонки не
 // выстраивались между компонентами, описания разливались на три строки, а «надо ·
 // пробито · остаток» шло свободным текстом справа — то, что Иван назвал мусором.
-function Component({ no, row, form, wip, busy, openItem, run }: {
+function Component({ no, row, form, wip, busy, openItem, openLot, run }: {
   no?: number
   row: KittingFormRow; form: KittingForm; wip: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<KittingForm>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<KittingForm>) => void
 }) {
   const g = row.ghost
   const status = g ? g.status : 'available'
@@ -184,8 +201,9 @@ function Component({ no, row, form, wip, busy, openItem, run }: {
         <tr key={ln.id} className="row">
           <td className="rn" />
           <td className="gl" />
-          <td className="c-key ind">{ln.lot_label}</td>
-          <td className="c-desc">{ln.date ?? ''}</td>
+          <td className="c-key ind">
+            <EntityLink kind="lot" id={ln.lot_id} open={openLot}>{ln.lot_label}</EntityLink></td>
+          <td className="c-desc">{[ln.location_code, ln.date].filter(Boolean).join(' · ')}</td>
           <td className="num" />
           <td className="uom">{row.uom}</td>
           <td className="num">
@@ -213,21 +231,25 @@ function GhostRow({ row, ghost, form, busy, run }: {
   row: KittingFormRow; ghost: NonNullable<KittingFormRow['ghost']>; form: KittingForm
   busy: boolean; run: (p: Promise<KittingForm>) => void
 }) {
+  // Волна 27: кандидаты — пары «лот @ локация»; выбор строки = выбор лота И места.
   const lots = ghost.candidate_lots
-  const [lotId, setLotId] = useState<number | ''>(lots[0]?.lot_id ?? '')
+  const [pick, setPick] = useState<string>(lots[0] ? pairKey(lots[0]) : '')
   const [qty, setQty] = useState(String(row.remaining))
   // Кандидаты пересобираются на каждый ответ формы, а выбор живёт в локальном
   // стейте — и мог пережить исчезновение своего лота (пробили, расфиксировали,
   // кончился): пайка ушла бы по несуществующему lot_id. Сверяем выбор со свежим
   // списком: свой остаётся, пропавший откатывается на первый (аудит-1, Б1а-7).
   useEffect(() => {
-    setLotId(prev => (lots.some(l => l.lot_id === prev) ? prev : lots[0]?.lot_id ?? ''))
+    setPick(prev => (lots.some(l => pairKey(l) === prev) ? prev
+      : lots[0] ? pairKey(lots[0]) : ''))
   }, [lots])
+  const picked = lots.find(l => pairKey(l) === pick)
 
   const pierce = () => {
     const n = Number(qty)
-    if (!lotId || !(n > 0)) return
-    run(api.pierce(form.id, { component_id: row.component_id, lot_id: lotId, qty: n }))
+    if (!picked || !(n > 0)) return
+    run(api.pierce(form.id, { component_id: row.component_id, lot_id: picked.lot_id,
+      location_id: picked.location_id, qty: n }))
   }
 
   const empty = lots.length === 0
@@ -245,10 +267,8 @@ function GhostRow({ row, ghost, form, busy, run }: {
               <Segment status="on_order" value={ghost.on_order} />
               <Segment status="to_order" value={ghost.to_order} />
             </>
-          : <Dropdown value={lotId} disabled={busy} onPick={v => setLotId(Number(v))}
-              options={lots.map(l => ({ value: l.lot_id,
-                label: `#${l.lot_id} · остаток ${num(l.live_qty)}`
-                  + (l.lot_name ? ` · ${l.lot_name}` : '') }))} />}
+          : <Dropdown value={pick} disabled={busy} onPick={v => setPick(String(v))}
+              options={lots.map(l => ({ value: pairKey(l), label: pairLabel(l) }))} />}
       </td>
       <td className="c-desc" />
       <td className="num" />

@@ -137,33 +137,26 @@ export function FileGlyph({ filename, state }: {
   return <span className={`ci sg ci-${icon} ${FILE_TONE[state]}`} title={FILE_TITLE[state]} />
 }
 
-// Глиф партии (волна 19, Ф12c). Своей оси состояния у лота нет — решение Ивана
-// 2026-07-26: ФОРМА = откуда партия родилась (origin-ордер, `Lot.origin_kind`), ЦВЕТ =
-// живость остатка (зелёный — есть, приглушённый — исчерпана, красный — минус, то есть
-// недостача «подбей лоты»). Тот же приём, что у `FileGlyph`: форма отвечает «что это»,
-// цвет — «как дела» (§7a, ось ⟂ ось). Лот без origin (данные до волны 13) — `layers`.
-const LOT_GLYPH: Record<string, string> = {
-  receipt: 'inbox',            // приехало от поставщика по УПД
-  kitting: 'tools',            // изготовлено нами (комплектация родила прибор)
-  inventory: 'checklist',      // найдено сверкой
-  requisition: 'git-branch',   // отпочковано требованием от другой партии
-}
-const LOT_ORIGIN: Record<string, string> = {
-  receipt: 'из поставки', kitting: 'изготовлено',
-  inventory: 'найдено инвентаризацией', requisition: 'отпочковано требованием',
-}
-// `draft` — партия ещё не на складе: её родил РАСФИКСИРОВАННЫЙ ордер (волна 19, Ф15 —
-// замок гейтит склад). Живости у неё нет вовсе, поэтому цвет не «исчерпана» (это была
-// бы ложь про израсходованную партию), а нейтральный «ждёт фиксации».
-export function LotGlyph({ origin, liveQty, draft }: {
-  origin: string | null; liveQty: number; draft?: boolean
+// Глиф партии. Волна 27 (решение Ивана 2026-10-21): ФОРМА = что это — `rocket` у
+// партии изделия (наше, `native`), `chip` у партии компонента; одна сущность носит один
+// знак, тот же, что у режимов «Изделия» / «Компоненты». До волны 27 форма говорила
+// «откуда родилась» (решение 07-26) — origin теперь читается ссылкой в шапке формы
+// лота. ЦВЕТ = как дела, по старшинству: минус (недостача — подбей лоты) > ждёт
+// Требования (лежит на Центральном) > есть остаток > исчерпана. `draft` — партия ещё не
+// на складе: её родил расфиксированный ордер (Ф15), поэтому цвет не «исчерпана» (это
+// была бы ложь), а нейтральный «ждёт фиксации».
+export function LotGlyph({ native, liveQty, draft, central }: {
+  native: boolean; liveQty: number; draft?: boolean
+  central?: boolean             // есть остаток на Центральном — ждёт Требования
 }) {
-  const icon = LOT_GLYPH[origin ?? ''] ?? 'layers'
-  const tone = draft ? 'sg-none' : liveQty > 0 ? 'sg-ok' : liveQty < 0 ? 'sg-order' : 'sg-none'
-  const life = draft ? 'ещё не на складе — зафиксируйте документ'
-    : liveQty > 0 ? 'есть остаток' : liveQty < 0 ? 'недостача — подбей лоты' : 'исчерпана'
+  const icon = native ? 'rocket' : 'chip'
+  const [tone, life] = draft ? ['sg-none', 'ещё не на складе — зафиксируйте документ']
+    : liveQty < 0 ? ['sg-order', 'недостача — подбей лоты']
+    : central ? ['sg-wip', 'на Центральном складе — ждёт Требования']
+    : liveQty > 0 ? ['sg-ok', 'есть остаток']
+    : ['sg-none', 'исчерпана']
   return <span className={`ci sg ci-${icon} ${tone}`}
-    title={`${LOT_ORIGIN[origin ?? ''] ?? 'партия'} · ${life}`} />
+    title={`${native ? 'партия изделия' : 'партия компонента'} · ${life}`} />
 }
 
 // Status → тон StatusGlyph (Ф1b): ось покрытия/worst-of в цвет замка (списки Заказов

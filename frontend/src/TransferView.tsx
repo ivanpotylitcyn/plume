@@ -19,12 +19,13 @@ import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Anomaly, CounterpartyRef, LotGlyph, count, num, sumByUom } from './status'
 import { CounterpartyPicker } from './Picker'
 import { EntityLink } from './EntityLink'
+import { pairKey, pairLabel } from './lotPairs'
 
-export function TransferView({ transferId, isNew, openItem, openProject,
+export function TransferView({ transferId, isNew, openItem, openLot, openProject,
   openCounterparty, onChanged, onDeleted }: {
   transferId: number
   isNew: boolean
-  openItem: (id: number) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
   openProject: (id: number) => void
   openCounterparty: (id: number) => void
   onChanged: () => void
@@ -66,7 +67,7 @@ export function TransferView({ transferId, isNew, openItem, openProject,
           <tbody>
             {c.lines.map((ln, i) => (
               <LineRow key={ln.id} no={i + 1} ln={ln} locked={locked} busy={busy}
-                openItem={openItem} run={run} />
+                openItem={openItem} openLot={openLot} run={run} />
             ))}
             {!locked && <GhostRow transferId={c.id} lots={lots} busy={busy} run={run} />}
           </tbody>
@@ -122,17 +123,19 @@ export function TransferView({ transferId, isNew, openItem, openProject,
 }
 
 // Реальная строка передачи (лот): автосейв кол-ва/имени, удаление (коррекция).
-function LineRow({ no, ln, locked, busy, openItem, run }: {
+function LineRow({ no, ln, locked, busy, openItem, openLot, run }: {
   no?: number
   ln: TransferFormLine; locked: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<TransferForm>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<TransferForm>) => void
 }) {
   const negative = ln.lot_live_qty < 0   // переотдали — источник в минусе
   return (
     <tr className="row">
       <td className="rn">{no}</td>
-      <td className="gl"><LotGlyph origin={ln.origin} liveQty={ln.lot_live_qty} /></td>
-      <td className="c-key"><span className="code">{ln.lot_label}</span></td>
+      <td className="gl"><LotGlyph native={ln.item_native} liveQty={ln.lot_live_qty} /></td>
+      <td className="c-key">
+        <EntityLink kind="lot" id={ln.lot_id} open={openLot}>{ln.lot_label}</EntityLink></td>
       <td className="c-fit">
         <EntityLink kind="item" id={ln.item_id} open={openItem}>{ln.item_code}</EntityLink></td>
       <td className="c-desc">
@@ -165,18 +168,20 @@ function GhostRow({ transferId, lots, busy, run }: {
   transferId: number; lots: AvailableLot[]; busy: boolean
   run: (p: Promise<TransferForm>) => void
 }) {
-  const [lotId, setLotId] = useState<number | ''>('')
+  // Волна 27: строка пикера — пара «лот @ локация» (выбор лота = выбор места).
+  const [pick, setPick] = useState('')
   const [qty, setQty] = useState('')
   const [name, setName] = useState('')
-  const picked = lots.find(l => l.lot_id === lotId)
+  const picked = lots.find(l => pairKey(l) === pick)
 
   const add = () => {
     const q = Number(qty)
-    if (!lotId || !(q > 0)) return
+    if (!picked || !(q > 0)) return
     run(api.addTransferLine(transferId, {
-      lot_id: lotId, qty: q, display_name: name || undefined,
+      lot_id: picked.lot_id, location_id: picked.location_id, qty: q,
+      display_name: name || undefined,
     }))
-    setLotId(''); setQty(''); setName('')
+    setPick(''); setQty(''); setName('')
   }
 
   return (
@@ -184,16 +189,15 @@ function GhostRow({ transferId, lots, busy, run }: {
       <td className="rn" />
       <td className="gl" />
       <td className="c-key" colSpan={2}>
-        <Dropdown value={lotId} disabled={busy} placeholder="Партия…"
-          onPick={v => setLotId(Number(v))} onClear={() => setLotId('')}
-          options={lots.map(l => ({ value: l.lot_id,
-            label: `#${l.lot_id} ${l.item_code}` + (l.lot_name ? ` (${l.lot_name})` : '')
-              + ` · ${num(l.live_qty)} ${l.uom}` }))} />
+        <Dropdown value={pick} disabled={busy} placeholder="Партия…"
+          onPick={v => setPick(String(v))} onClear={() => setPick('')}
+          options={lots.map(l => ({ value: pairKey(l),
+            label: pairLabel(l, `#${l.lot_id} ${l.item_code}`) }))} />
       </td>
       <td className="c-desc">
         {picked?.item_description ?? ''}</td>
       <td className="num">
-        <input className="qty-in" value={qty} disabled={busy || !lotId} placeholder="0"
+        <input className="qty-in" value={qty} disabled={busy || !picked} placeholder="0"
           onChange={e => setQty(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') add() }} />
       </td>
@@ -208,7 +212,7 @@ function GhostRow({ transferId, lots, busy, run }: {
       </td>
       <td className="act">
         <button className="fh-ctl icon fh-add" title="Добавить строку передачи"
-          disabled={busy || !lotId || !(Number(qty) > 0)} onClick={add}>
+          disabled={busy || !picked || !(Number(qty) > 0)} onClick={add}>
           <span className="ci ci-add" /></button>
       </td>
     </tr>

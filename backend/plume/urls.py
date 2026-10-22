@@ -103,13 +103,13 @@ urlpatterns = [
     path('writeoffs/<int:pk>/lock/', views.writeoff_lock, name='writeoff-lock'),
     path('writeoffs/<int:pk>/unlock/', views.writeoff_unlock, name='writeoff-unlock'),
     path('writeoff-lines/<int:pk>/', views.writeoff_line_detail, name='writeoff-line'),
-    # требование / Requisition (записываемое ядро, волна 6)
-    path('requisitions/', views.requisitions, name='requisitions'),
-    path('requisitions/<int:pk>/', views.requisition_detail, name='requisition-detail'),
-    path('requisitions/<int:pk>/lines/', views.requisition_lines, name='requisition-lines'),
-    path('requisitions/<int:pk>/lock/', views.requisition_lock, name='requisition-lock'),
-    path('requisitions/<int:pk>/unlock/', views.requisition_unlock, name='requisition-unlock'),
-    path('requisition-lines/<int:pk>/', views.requisition_line_detail, name='requisition-line'),
+    # перевод / Reassignment (записываемое ядро, волна 6)
+    path('reassignments/', views.reassignments, name='reassignments'),
+    path('reassignments/<int:pk>/', views.reassignment_detail, name='reassignment-detail'),
+    path('reassignments/<int:pk>/lines/', views.reassignment_lines, name='reassignment-lines'),
+    path('reassignments/<int:pk>/lock/', views.reassignment_lock, name='reassignment-lock'),
+    path('reassignments/<int:pk>/unlock/', views.reassignment_unlock, name='reassignment-unlock'),
+    path('reassignment-lines/<int:pk>/', views.reassignment_line_detail, name='reassignment-line'),
     # инвентаризация / Inventory (записываемое ядро, волна 9)
     path('inventories/', views.inventories, name='inventories'),
     path('inventories/<int:pk>/', views.inventory_detail, name='inventory-detail'),
@@ -128,6 +128,17 @@ urlpatterns = [
     path('relocations/<int:pk>/unlock/', views.relocation_unlock, name='relocation-unlock'),
     path('relocations/<int:pk>/source-lots/', views.relocation_source_lots, name='relocation-source-lots'),
     path('relocations/<int:pk>/lines/<int:lot_pk>/', views.relocation_line_detail, name='relocation-line'),
+    # склад и форма лота (волна 27)
+    path('stock/', views.stock, name='stock'),
+    path('stock/<int:pk>/', views.stock_lot, name='stock-lot'),
+    # требование / Requisition (волна 27: Центральный → наша локация)
+    path('requisitions/', views.requisitions, name='requisitions'),
+    path('requisitions/<int:pk>/', views.requisition_detail, name='requisition-detail'),
+    path('requisitions/<int:pk>/lines/', views.requisition_lines, name='requisition-lines'),
+    path('requisitions/<int:pk>/lock/', views.requisition_lock, name='requisition-lock'),
+    path('requisitions/<int:pk>/unlock/', views.requisition_unlock, name='requisition-unlock'),
+    path('requisitions/<int:pk>/source-lots/', views.requisition_source_lots, name='requisition-source-lots'),
+    path('requisitions/<int:pk>/lines/<int:lot_pk>/', views.requisition_line_detail, name='requisition-line'),
     # планирование закупок (волна 7): записываемый Procurement + xlsx-бланк.
     # Свод живёт витриной самой закупки: `/command-deficit/` ×2 сняты волной 19 (Ф13),
     # а `deficit/` вместе с мостом `take/` — 2026-08-11, при пересборке табов. Ручка

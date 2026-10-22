@@ -15,19 +15,20 @@ import { CommitInput } from './CommitInput'
 import { num, money, count, sumByUom, CounterpartyRef, LotGlyph,
   MismatchGlyph, gapMoney, moneyCol, moneyField, parseMoney, perUnitTitle, rowNumbers } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { OrderFields, useOrderForm } from './FormHeader'
+import { LocationField, OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
 import { MoneyBlock, Stat, StatGroup } from './StatPanel'
 import { Field } from './FormField'
 import { CounterpartyPicker, ItemPicker, PurchasePicker } from './Picker'
 import { useCategoryFilter } from './ColumnFilter'
-import { EntityLink } from './EntityLink'
+import { EntityLink, LotLink } from './EntityLink'
 
 export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, openProject,
-  openCounterparty, onChanged, onDeleted }: {
+  openCounterparty, openLot, openLocation, onChanged, onDeleted }: {
   receiptId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openPurchase: (id: number) => void
   openProject: (id: number) => void; openCounterparty: (id: number) => void
+  openLot: (id: number) => void; openLocation: (id: number) => void
   onChanged: () => void; onDeleted: () => void
 }) {
   const [purchases, setPurchases] = useState<ProjectPurchaseRow[]>([])
@@ -71,7 +72,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
             <tr>
               <th className="rn">№</th><th className="gl" /><th className="c-key">Компонент{byCat.head}</th>
               <th className="c-desc c-txt" title="как в графе 1а УПД">Наименование товара</th>
-              <th className="c-txt">Part number</th>
+              <th className="c-txt">PN</th>
               <th className="num">Кол-во</th>
               <th className="uom">Ед.</th>
               <th className="num c-money" title="стоимость всей строки — как в документе; цена штуки — под курсором">Стоимость, ₽</th>
@@ -81,7 +82,7 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
           <tbody>
             {byCat.shown.map(lot => (
               <LotRow key={lot.id} no={no.get(lot)} lot={lot} locked={locked} draft={!fixed} busy={busy}
-                openItem={openItem} run={run} />
+                openItem={openItem} openLot={openLot} run={run} />
             ))}
             {!locked && <GhostRow receiptId={c.id} items={items} busy={busy} run={run} />}
           </tbody>
@@ -155,6 +156,10 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
                     run(api.updateReceipt(c.id, { contractor_id: cp.id })) })} />
               {mismatch}
             </Field>
+            {/* Волна 27: «Куда» — по умолчанию Центральный склад (УПД оформляет
+                бухгалтерия, в работу партии уходят Требованием). */}
+            <LocationField c={c} locked={locked} busy={busy} onOpen={openLocation}
+              onChange={id => run(api.updateReceipt(c.id, { location_id: id }))} />
           </>} />}
       // Блок «Деньги» (волна 26): ★ сумма по УПД; поставка из заказа сверяется с его счётом
       // (тем же правилом доли, что родило партии) — расхождение видно сразу.
@@ -176,10 +181,11 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
 // удаление до замка. `draft` — поставка ещё не сверена (Ф15): партия на складе не лежит,
 // живого остатка у неё нет вовсе. Показывать «остаток 0» было бы враньём про
 // израсходованную партию, поэтому в черновике остаток не показываем, а глиф гасим.
-function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
+function LotRow({ no, lot, locked, draft, busy, openItem, openLot, run }: {
   no?: number
   lot: ReceiptLot; locked: boolean; draft: boolean; busy: boolean
-  openItem: (id: number) => void; run: (p: Promise<ReceiptForm>) => void
+  openItem: (id: number) => void; openLot: (id: number) => void
+  run: (p: Promise<ReceiptForm>) => void
 }) {
   const short = !draft && lot.live_qty !== lot.qty   // просел под пайку/расход
   const save = (b: Parameters<typeof api.updateReceiptLot>[1]) =>
@@ -187,27 +193,28 @@ function LotRow({ no, lot, locked, draft, busy, openItem, run }: {
   return (
     <tr className="row">
       <td className="rn">{no}</td>
-      {/* Строка = партия, рождённая этой поставкой: глиф партии (форма — origin,
-          цвет — живость остатка, §7a). Описание изделия — в подсказке к коду: колонка
-          текста у строки одна, и это наименование из документа. */}
-      <td className="gl"><LotGlyph origin="receipt" liveQty={lot.live_qty} draft={draft} /></td>
+      {/* Строка = партия, рождённая этой поставкой: глиф партии (форма — изделие/
+          компонент, цвет — как дела, в27) — ссылка на форму лота. Описание изделия — в
+          подсказке к коду: колонка текста у строки одна, и это наименование из документа. */}
+      <td className="gl"><LotLink id={lot.id} open={openLot}>
+        <LotGlyph native={lot.item_native} liveQty={lot.live_qty} draft={draft} /></LotLink></td>
       <td className="c-key">
         <EntityLink kind="item" id={lot.item_id} open={openItem} title={lot.item_description}>
           {lot.item_code}</EntityLink></td>
       <td className="c-desc c-txt">
         {locked
           ? <>
-              <span className="cell-ellip" title={lot.lot_name}>{lot.lot_name}</span>
+              <span className="cell-ellip" title={lot.lot_description}>{lot.lot_description}</span>
               {short && <span className="hint">остаток {num(lot.live_qty)} {lot.uom}</span>}
             </>
-          : <CommitInput value={lot.lot_name} disabled={busy}
-              onCommit={v => save({ lot_name: v })} />}
+          : <CommitInput value={lot.lot_description} disabled={busy}
+              onCommit={v => save({ lot_description: v })} />}
       </td>
       <td className="c-txt">
         {locked
-          ? <span className="cell-ellip" title={lot.part_number}>{lot.part_number}</span>
-          : <CommitInput value={lot.part_number} disabled={busy}
-              onCommit={v => save({ part_number: v })} />}
+          ? <span className="cell-ellip" title={lot.lot_code}>{lot.lot_code}</span>
+          : <CommitInput value={lot.lot_code} disabled={busy}
+              onCommit={v => save({ lot_code: v })} />}
       </td>
       <td className="num">
         {locked ? num(lot.qty)
@@ -262,8 +269,8 @@ function GhostRow({ receiptId, items, busy, run }: {
     run(api.addReceiptLot(receiptId, {
       item_id: itemId, qty: q,
       cost: parseMoney(cost) ?? undefined,
-      part_number: pn || undefined,
-      lot_name: name || undefined,
+      lot_code: pn || undefined,
+      lot_description: name || undefined,
     }))
     setItemId(''); setQty(''); setCost(''); setPn(''); setName('')
   }
@@ -285,7 +292,7 @@ function GhostRow({ receiptId, items, busy, run }: {
       </td>
       <td className="c-txt">
         <input className="qty-in" value={pn} disabled={busy}
-          placeholder="part number" onChange={e => setPn(e.target.value)}
+          placeholder="PN" onChange={e => setPn(e.target.value)}
           onKeyDown={enter} />
       </td>
       <td className="num">

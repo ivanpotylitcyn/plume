@@ -288,7 +288,7 @@ export function NeedSums({ rows, acts, outside, filtered }: {
           уехал над «Оценку». Рядом они и есть «сверх потребности» блока «Деньги» — но по
           фильтру: электроника, крепёж, детали по отдельности. */}
       <SumCell value={need} what="чистая потребность: нужда по BOM × оценка, без запаса" />
-      <SumCell value={kitted} glyph="notebook" tone="ok" what="впаяно, по цене партий" />
+      <SumCell value={kitted} glyph="rocket" tone="ok" what="впаяно, по цене партий" />
       <SumCell value={stock} glyph="layers" tone="ok" what="на складе, по цене партий" />
       <OrderSumCell paid={paid} unpaid={unpaid} unpaidMissing={unpaidMissing}
         ours={oursAny} />
@@ -332,7 +332,8 @@ export function BalanceCells({ code, need, kitted, inStock, onOrder, planned = 0
 }) {
   return (
     <>
-      <Member glyph="notebook" tone="ok" value={kitted}
+      {/* Волна 27: впаянное живёт в изделии — знак изделия (`rocket`), а не ордера. */}
+      <Member glyph="rocket" tone="ok" value={kitted}
         title="впаяно в изделия проекта (зафиксированные комплектации)" />
       <span className="pnum" title="остаток лотов проекта на складах">
         {num(inStock)}

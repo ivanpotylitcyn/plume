@@ -22,11 +22,12 @@ import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcurement,
-  openPurchase, openCounterparty, onChanged, onDeleted }:
+  openPurchase, openCounterparty, openLot, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // лента движений кликабельна (§8)
     openProcurement: (id: number) => void; openPurchase: (id: number) => void
     openCounterparty: (id: number) => void
+    openLot: (id: number) => void                      // в27: партии таба «Склад» — ссылки
     onChanged?: () => void; onDeleted?: () => void }) {
   const [d, setD] = useState<ItemDetail | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
@@ -100,7 +101,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
 
   // Табы (§13.7): порядок — от сути изделия к его следам на складе. Глифы взяты у
   // РЕЖИМОВ навигации (§2): состав = `chip` (Компоненты), применение = `rocket`
-  // (Изделия), склад = `layers` (Склады), отгружено = `notebook` (Ордера) — одна
+  // (Изделия), склад = `layers` (Склад, волна 27), отгружено = `notebook` (Ордера) — одна
   // сущность носит один знак, где бы ни встретилась. Счётчиков в табах нет: числа
   // ушли в мету. «Состав» появляется только там, где состав вообще бывает.
   const tabs: FormTab[] = []
@@ -238,14 +239,15 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
             <th className="num">Рожд.</th>
             <th className="num">Остаток</th>
             <th className="uom">Ед.</th>
-            <th className="c-fit">Part number</th><th className="c-desc">Название</th>
+            <th className="c-fit">PN</th><th className="c-desc">Наименование</th>
           </tr></thead>
           <tbody>{d.lots.map((l, i) => (
             <tr key={l.id} className="row">
               <td className="rn">{i + 1}</td>
-              <td className="gl"><LotGlyph origin={l.origin} liveQty={l.live_qty}
+              <td className="gl"><LotGlyph native={d.native} liveQty={l.live_qty}
                 draft={!l.origin_locked} /></td>
-              <td className="c-key">#{l.id}</td>
+              <td className="c-key">
+                <EntityLink kind="lot" id={l.id} open={openLot}>#{l.id}</EntityLink></td>
               <td className="c-fit code">{l.project_code}</td>
               <td className="num">{num(l.qty_born)}</td>
               {/* Ф15: у партии черновика остатка нет вовсе — прочерк, а не 0 (ноль
@@ -255,13 +257,13 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
                 : 'Партия ещё не на складе — зафиксируйте документ-origin'}>
                 {l.origin_locked ? num(l.live_qty) : '—'}</td>
               <td className="uom">{d.uom}</td>
-              <td className="c-fit">{l.part_number || '—'}</td>
-              <td className="c-desc">{l.lot_name || '—'}</td>
+              <td className="c-fit">{l.lot_code || '—'}</td>
+              <td className="c-desc">{l.lot_description || '—'}</td>
             </tr>))}</tbody>
         </table>,
   })
   // «Движения» (2026-07-26, вместо узкого «Отгружено»): ВСЕ ордера, коснувшиеся
-  // изделия — рождение партии (поставка/комплектация/инвентаризация/требование) и её
+  // изделия — рождение партии (поставка/комплектация/инвентаризация/перевод) и её
   // движения (пайка, передача, списание, перемещение). Знак сохраняем: расход виден
   // расходом. Ордер кликабелен (§8), глиф — ось фиксации документа.
   tabs.push({
@@ -288,7 +290,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
                 {m.event === 'born' && <span className="hint">партия рождена</span>}</td>
               <td>{m.date ?? '—'}</td>
               <td className="code">{m.project_code}</td>
-              <td>#{m.lot_id}{m.lot_name && ` · ${m.lot_name}`}</td>
+              <td>#{m.lot_id}{m.lot_description && ` · ${m.lot_description}`}</td>
               <td className="num">{m.qty > 0 ? `+${num(m.qty)}` : num(m.qty)}</td>
               <td className="uom">{d.uom}</td>
             </tr>))}</tbody>

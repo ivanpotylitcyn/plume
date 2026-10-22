@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { api, setUnauthorizedHandler, type User, type ProjectRow, type ItemRow,
   type KittingRow, type ReceiptRow, type PurchaseRow,
-  type TransferRow, type WriteoffRow, type RequisitionRow, type ProcurementRow,
-  type InventoryRow, type RelocationRow, type LocationRow,
-  type CounterpartyRow } from './api'
+  type TransferRow, type WriteoffRow, type ReassignmentRow, type ProcurementRow,
+  type InventoryRow, type RelocationRow, type LocationRow, type RequisitionRow,
+  type StockRow, type CounterpartyRow } from './api'
 import { Login } from './Login'
 import { Dropdown } from './Dropdown'
 import { CommandPalette, type PaletteEntry } from './CommandPalette'
@@ -19,11 +19,13 @@ import { ProcurementView } from './ProcurementView'
 import { OrderForm } from './OrderForm'
 import { ORDER_KINDS, ORDER_LABEL, type OrderKind } from './orders'
 import { LocationView } from './LocationView'
+import { LotView } from './LotView'
 import { CounterpartyView } from './CounterpartyView'
 import { AccountView } from './AccountView'
 import { applyTheme } from './core/theme'
 import { parsePath, pathOf, type Mode, type Sel } from './core/route'
-import { ItemGlyph, newestFirst, ProcurementGlyph, PurchaseGlyph, StatusGlyph, statusTone } from './status'
+import { ItemGlyph, LotGlyph, newestFirst, num, ProcurementGlyph, PurchaseGlyph, StatusGlyph,
+  statusTone } from './status'
 import { AnchoredMenu } from './AnchoredMenu'
 import { Sash, loadSide, saveSide, type Side } from './Sash'
 
@@ -72,10 +74,12 @@ export default function App() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [transfers, setTransfers] = useState<TransferRow[]>([])
   const [writeoffs, setWriteoffs] = useState<WriteoffRow[]>([])
-  const [requisitions, setRequisitions] = useState<RequisitionRow[]>([])
+  const [reassignments, setReassignments] = useState<ReassignmentRow[]>([])
   const [procurements, setProcurements] = useState<ProcurementRow[]>([])
   const [inventories, setInventories] = useState<InventoryRow[]>([])
   const [relocations, setRelocations] = useState<RelocationRow[]>([])
+  const [requisitions, setRequisitions] = useState<RequisitionRow[]>([])
+  const [stockRows, setStockRows] = useState<StockRow[]>([])
   const [locationRows, setLocationRows] = useState<LocationRow[]>([])
   const [counterparties, setCounterparties] = useState<CounterpartyRow[]>([])
   const [sel, setSel] = useState<Sel>(start?.sel ?? null)
@@ -101,10 +105,14 @@ export default function App() {
   const reloadPurchases = useCallback(() => api.purchases().then(setPurchases), [])
   const reloadTransfers = useCallback(() => api.transfers().then(setTransfers), [])
   const reloadWriteoffs = useCallback(() => api.writeoffs().then(setWriteoffs), [])
-  const reloadRequisitions = useCallback(() => api.requisitions().then(setRequisitions), [])
+  const reloadReassignments = useCallback(() => api.reassignments().then(setReassignments), [])
   const reloadProcurements = useCallback(() => api.procurements().then(setProcurements), [])
   const reloadInventories = useCallback(() => api.inventories().then(setInventories), [])
   const reloadRelocations = useCallback(() => api.relocations().then(setRelocations), [])
+  const reloadRequisitions = useCallback(() => api.requisitions().then(setRequisitions), [])
+  // Волна 27: список «Склада» — следствие ордеров, поэтому перечитывается при входе в
+  // режим и после правки любого ордера (см. `reloadOrderKind`).
+  const reloadStock = useCallback(() => api.stock().then(setStockRows), [])
   const reloadLocations = useCallback(() => api.locations().then(setLocationRows), [])
   const reloadCounterparties = useCallback(
     () => api.counterparties().then(setCounterparties), [])
@@ -139,15 +147,20 @@ export default function App() {
     reloadPurchases()
     reloadTransfers()
     reloadWriteoffs()
-    reloadRequisitions()
+    reloadReassignments()
     reloadProcurements()
     reloadInventories()
     reloadRelocations()
+    reloadRequisitions()
     reloadLocations()
     reloadCounterparties()
+    reloadStock()
   }, [user, reloadKittings, reloadReceipts, reloadPurchases, reloadTransfers,
-      reloadWriteoffs, reloadRequisitions, reloadProcurements, reloadInventories,
-      reloadRelocations, reloadLocations, reloadCounterparties])
+      reloadWriteoffs, reloadReassignments, reloadProcurements, reloadInventories,
+      reloadRelocations, reloadRequisitions, reloadLocations, reloadCounterparties,
+      reloadStock])
+
+  useEffect(() => { if (user && mode === 'stock') reloadStock() }, [user, mode, reloadStock])
 
   // Смена формы → новый адрес. `pushState` кладёт запись в браузерную историю (её
   // «Назад» придёт к нам через `popstate`), `replaceState` — когда форму выбрали НЕ
@@ -256,9 +269,11 @@ export default function App() {
   const openReceipt = (id: number) => { setMode('orders'); setSel({ kind: 'receipt', id }) }
   const openTransfer = (id: number) => { setMode('orders'); setSel({ kind: 'transfer', id }) }
   const openWriteoff = (id: number) => { setMode('orders'); setSel({ kind: 'writeoff', id }) }
-  const openRequisition = (id: number) => { setMode('orders'); setSel({ kind: 'requisition', id }) }
+  const openReassignment = (id: number) => { setMode('orders'); setSel({ kind: 'reassignment', id }) }
   const openInventory = (id: number) => { setMode('orders'); setSel({ kind: 'inventory', id }) }
   const openRelocation = (id: number) => { setMode('orders'); setSel({ kind: 'relocation', id }) }
+  const openRequisition = (id: number) => { setMode('orders'); setSel({ kind: 'requisition', id }) }
+  const openLot = (id: number) => { setMode('stock'); setSel({ kind: 'lot', id }) }
   const openLocation = (id: number) => { setMode('locations'); setSel({ kind: 'location', id }) }
   const openPurchase = (id: number) => { setMode('purchases'); setSel({ kind: 'purchase', id }) }
   const openProcurement = (id: number) => { setMode('procurements'); setSel({ kind: 'procurement', id }) }
@@ -274,7 +289,7 @@ export default function App() {
       name: k.target_description, projectCode: k.project_code, locked: k.locked, date: k.date }))
     transfers.forEach(t => es.push({ kind: 'transfer', id: t.id, code: t.code || t.number,
       name: t.project_code, projectCode: t.project_code, locked: t.locked, date: t.date }))
-    requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.code || r.number,
+    reassignments.forEach(r => es.push({ kind: 'reassignment', id: r.id, code: r.code || r.number,
       name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
     writeoffs.forEach(w => es.push({ kind: 'writeoff', id: w.id, code: w.code || w.number,
       name: w.reason, projectCode: w.project_code, locked: w.locked, date: w.date }))
@@ -282,22 +297,28 @@ export default function App() {
       name: i.description, projectCode: i.project_code, locked: i.locked, date: i.date }))
     relocations.forEach(r => es.push({ kind: 'relocation', id: r.id, code: r.code || r.number,
       name: r.project_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
+    requisitions.forEach(r => es.push({ kind: 'requisition', id: r.id, code: r.code || r.number,
+      name: r.location_code, projectCode: r.project_code, locked: r.locked, date: r.date }))
     return es.sort(newestFirst)
-  }, [receipts, kittings, transfers, requisitions, writeoffs, inventories, relocations])
+  }, [receipts, kittings, transfers, reassignments, writeoffs, inventories, relocations,
+      requisitions])
 
   const openOrderEntry = (e: OrderEntry) => openOrder(e.kind, e.id)
   // Ф2i: перезагрузить фид нужного вида ордера — единый колбэк для <OrderForm>.
-  const reloadOrderKind = (k: OrderKind) => ({
-    receipt: reloadReceipts, kitting: reloadKittings, transfer: reloadTransfers,
-    requisition: reloadRequisitions, writeoff: reloadWriteoffs, inventory: reloadInventories,
-    relocation: reloadRelocations,
-  }[k])()
+  const reloadOrderKind = (k: OrderKind) => {
+    reloadStock()
+    return ({
+      receipt: reloadReceipts, kitting: reloadKittings, transfer: reloadTransfers,
+      reassignment: reloadReassignments, writeoff: reloadWriteoffs, inventory: reloadInventories,
+      relocation: reloadRelocations, requisition: reloadRequisitions,
+    }[k])()
+  }
   // Ф12e: рождение ордера выбранного вида. Маршруты множественные — словарь один
   // на семь видов (`kind` ↔ путь API), сценарий общий (`born`).
   const ORDER_PATH: Record<OrderKind, string> = {
     receipt: 'receipts', kitting: 'kittings', transfer: 'transfers',
-    requisition: 'requisitions', writeoff: 'writeoffs', inventory: 'inventories',
-    relocation: 'relocations',
+    reassignment: 'reassignments', writeoff: 'writeoffs', inventory: 'inventories',
+    relocation: 'relocations', requisition: 'requisitions',
   }
   const bornOrder = (k: OrderKind) =>
     born(ORDER_PATH[k], k, () => reloadOrderKind(k), id => openOrder(k, id))
@@ -320,8 +341,8 @@ export default function App() {
       kind: 'Передача', open: () => openTransfer(t.id) }))
     writeoffs.forEach(w => e.push({ key: `w${w.id}`, code: w.code || w.number, name: w.project_code,
       kind: 'Списание', open: () => openWriteoff(w.id) }))
-    requisitions.forEach(r => e.push({ key: `q${r.id}`, code: r.code || r.number, name: r.project_code,
-      kind: 'Требование', open: () => openRequisition(r.id) }))
+    reassignments.forEach(r => e.push({ key: `q${r.id}`, code: r.code || r.number, name: r.project_code,
+      kind: 'Перевод', open: () => openReassignment(r.id) }))
     inventories.forEach(i => e.push({ key: `v${i.id}`, code: i.code || i.number, name: i.project_code,
       kind: 'Инвентаризация', open: () => openInventory(i.id) }))
     purchases.forEach(p => e.push({ key: `u${p.id}`, code: p.code || `Заказ #${p.id}`, name: p.project_code,
@@ -330,16 +351,21 @@ export default function App() {
       kind: 'Комплектация', open: () => openKitting(k.id) }))
     relocations.forEach(r => e.push({ key: `l${r.id}`, code: r.code || r.number, name: r.project_code,
       kind: 'Перемещение', open: () => openRelocation(r.id) }))
+    requisitions.forEach(r => e.push({ key: `rq${r.id}`, code: r.code || r.number, name: r.location_code,
+      kind: 'Требование', open: () => openRequisition(r.id) }))
     locationRows.forEach(l => e.push({ key: `loc${l.id}`, code: l.code, name: l.description,
-      kind: 'Склад', open: () => openLocation(l.id) }))
+      kind: 'Локация', open: () => openLocation(l.id) }))
+    // Волна 27: партии ищутся по PN и наименованию — «сколько у нас лотов этого контроллера».
+    stockRows.forEach(r => e.push({ key: `lot${r.id}`, code: r.code || r.description || `#${r.id}`,
+      name: r.description || r.item_code, kind: 'Партия', open: () => openLot(r.id) }))
     // Волна 20: контрагент ищется по коду-жаргону («КОМПЭЛ»), как и всё остальное;
     // у старых записей кода может не быть — тогда в палитру идёт описание.
     counterparties.forEach(cp => e.push({ key: `cp${cp.id}`, code: cp.code || cp.description,
       name: cp.description, kind: 'Контрагент', open: () => openCounterparty(cp.id) }))
     return e
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, items, receipts, transfers, writeoffs, requisitions, inventories,
-      purchases, kittings, relocations, locationRows, counterparties])
+  }, [projects, items, receipts, transfers, writeoffs, reassignments, inventories,
+      purchases, kittings, relocations, requisitions, locationRows, stockRows, counterparties])
 
   // Гейт аутентификации: загрузка → логин → приложение.
   if (user === undefined)
@@ -438,13 +464,21 @@ export default function App() {
           <OrderList entries={orderEntries} selKey={orderSelKey}
             onNew={bornOrder} onSelect={openOrderEntry} />}
 
+        {mode === 'stock' &&
+          <StockList rows={stockRows} locations={locationRows}
+            selId={sel?.kind === 'lot' ? sel.id : null} onSelect={openLot} />}
+
+        {/* Волна 27: «Склады» → «Локации». Центральный — первым и с подписью роли. */}
         {mode === 'locations' &&
-          <ModeList heading="Склады" newLabel="Новый склад"
+          <ModeList heading="Локации" newLabel="Новая локация"
             onNew={() => born('locations', 'location', reloadLocations, openLocation)}
             selId={sel?.kind === 'location' ? sel.id : null}
             onSelect={id => setSel({ kind: 'location', id })}
-            rows={[...locationRows].map(l => ({ id: l.id, code: l.code, name: l.description,
-              glyph: <span className="ci ci-location" /> }))} />}
+            rows={[...locationRows].sort((a, b) => Number(b.central) - Number(a.central))
+              .map(l => ({ id: l.id, code: l.code, name: l.description,
+                glyph: <span className="ci sg ci-location"
+                  title={l.central ? 'Центральный склад' : 'наша локация'} />,
+                tag: l.central ? 'центральный' : undefined }))} />}
 
         {mode === 'purchases' &&
           <ModeList heading="Заказы" newLabel="Новый заказ — из закупки" projectFilter
@@ -487,13 +521,14 @@ export default function App() {
             openItem={openItem}
             openOrder={openOrder} openPurchase={openPurchase}
             openProcurement={openProcurement} openCounterparty={openCounterparty}
-            onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadRequisitions() }}
+            openLot={openLot}
+            onChanged={() => { reloadProjects(); reloadWriteoffs(); reloadReassignments() }}
             onDeleted={() => { reloadProjects(); setSel(null) }} />}
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
           isNew={isFresh('item', sel.id)}
           openItem={openItem} openOrder={openOrder}
           openProcurement={openProcurement} openPurchase={openPurchase}
-          openCounterparty={openCounterparty} onChanged={reloadItems}
+          openCounterparty={openCounterparty} openLot={openLot} onChanged={reloadItems}
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'library-sync' &&
           <LibraryImportView onApplied={reloadItems} openItem={openItem} />}
@@ -503,7 +538,8 @@ export default function App() {
           return <OrderForm kind={o.kind} id={o.id} items={items}
             isNew={isFresh(o.kind, o.id)}
             openItem={openItem} openPurchase={openPurchase} openProject={openProject}
-            openCounterparty={openCounterparty}
+            openCounterparty={openCounterparty} openLot={openLot} openLocation={openLocation}
+            openRequisition={openRequisition}
             onChanged={() => reloadOrderKind(o.kind)}
             onDeleted={() => { reloadOrderKind(o.kind); setSel(null) }} />
         })()}
@@ -527,8 +563,12 @@ export default function App() {
               openPurchase(id) }}
             onChanged={reloadProcurements}
             onDeleted={() => { reloadProcurements(); setSel(null) }} />}
+        {sel?.kind === 'lot' &&
+          <LotView lotId={sel.id} openItem={openItem} openProject={openProject}
+            openOrder={openOrder} openLot={openLot} />}
         {sel?.kind === 'location' &&
-          <LocationView locationId={sel.id} openItem={openItem}
+          <LocationView locationId={sel.id} openItem={openItem} openLot={openLot}
+            openOrder={openOrder}
             isNew={isFresh('location', sel.id)} onChanged={reloadLocations}
             onDeleted={() => { reloadLocations(); setSel(null) }} />}
         {sel?.kind === 'counterparty' &&
@@ -569,16 +609,16 @@ const MODES: { mode: Mode; icon: string; title: string }[] = [
   { mode: 'counterparties', icon: 'call-outgoing', title: 'Контрагенты — поставщики и заказчики, что привезли и что им передали' },
   { mode: 'procurements', icon: 'law',           title: 'Закупки — что покупаем для проекта; отсюда рождаются заказы' },
   { mode: 'purchases',    icon: 'package',       title: 'Заказы — обязательства поставщику' },
-  { mode: 'orders',       icon: 'notebook',      title: 'Ордера — поставки, комплектации, передачи, требования, списания, инвентаризации, перемещения' },
-  { mode: 'locations',    icon: 'layers',        title: 'Склады — места хранения, что на них лежит' },
+  { mode: 'orders',       icon: 'notebook',      title: 'Ордера — поставки, комплектации, передачи, переводы, списания, инвентаризации, перемещения' },
+  { mode: 'stock',        icon: 'layers',        title: 'Склад — партии: что лежит, где и чьё' },
+  { mode: 'locations',    icon: 'location',      title: 'Локации — места хранения: Центральный склад и наши кабинеты' },
 ]
 
 // Глиф строки контрагента: ось СТОРОНЫ (единственная его ось — замка у справочника
 // нет). Семейство `fold-*` (решение Ивана 2026-07-30): одна форма с направлением
 // внутри — `fold-down` (к нам едет), `fold-up` (от нас уходит), `fold` (в обе
 // стороны). Направление читается СРАВНЕНИЕМ строк списка, а не припоминанием иконки,
-// и глифы не занимают формы, уже говорящие о другом (`inbox`/`export` — виды ордера,
-// `arrow-swap` — требование).
+// и глифы не занимают формы, уже говорящие о другом (`inbox`/`export` — виды ордера).
 //
 // Ф3: сторона — ФАКТ (движок считает по документам), а не заявленная роль. Пустой
 // контрагент — нейтральный `fold`: он заведён, но с ним ещё ничего не было, и это
@@ -597,7 +637,10 @@ const KBD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K'
 
 // Единый список режима (§7): призрачный «＋ Новая…» первым, строка = глиф · моно-код
 // (подписи нет), фильтр-строка и — где есть проект — дропдаун по проекту.
-interface ListRow { id: number; code: string; name: string; glyph: ReactNode; projectCode?: string; category?: string }
+interface ListRow {
+  id: number; code: string; name: string; glyph: ReactNode; projectCode?: string; category?: string
+  tag?: string                 // подпись справа (роль строки — «центральный»)
+}
 // Ф12e: `newSel` больше нет — «Новый» не выбирает форму создания, а рождает
 // сущность и уводит в её каноничную форму, так что подсвечивать нечего.
 function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilter, categoryFilter, headAction }: {
@@ -663,8 +706,88 @@ function ModeList({ heading, newLabel, onNew, rows, selId, onSelect, projectFilt
             onClick={() => onSelect(r.id)}>
             {r.glyph}
             <span className="code" title={r.code}>{r.code}</span>
+            {r.tag && <span className="row-tag">{r.tag}</span>}
           </div>
         ))}
+        {shown.length === 0 && <div className="list-empty">ничего не найдено</div>}
+      </div>
+    </>
+  )
+}
+
+// Список режима «Склад» (волна 27): партии. Строка = глиф партии (форма — изделие/
+// компонент, цвет — как дела: минус > ждёт Требования > есть > исчерпана) · PN (пусто —
+// наименование) · остаток справа. Фильтры: категория (обе стороны справочника — на
+// складе всё вместе), локация («в каком кабинете искать»), проект («чья») и наличие
+// (по умолчанию — что лежит; исчерпанные — чтобы открыть паспорт старой партии).
+const STOCK_STATES = [
+  { value: 'live', label: 'на складе' },
+  { value: 'exhausted', label: 'исчерпанные' },
+  { value: 'all', label: 'все партии' },
+]
+
+function StockList({ rows, locations, selId, onSelect }: {
+  rows: StockRow[]; locations: LocationRow[]
+  selId: number | null; onSelect: (id: number) => void
+}) {
+  const [q, setQ] = useState('')
+  const [cat, setCat] = useState('')
+  const [loc, setLoc] = useState('')
+  const [proj, setProj] = useState('')
+  const [state, setState] = useState('live')
+
+  const catOptions = useMemo(() =>
+    [...new Set(rows.map(r => r.category).filter((x): x is string => !!x))].sort(), [rows])
+  const projOptions = useMemo(() =>
+    [...new Set(rows.map(r => r.project_code))].sort(), [rows])
+  const locOptions = useMemo(() =>
+    [...locations].sort((a, b) => Number(b.central) - Number(a.central)), [locations])
+
+  const shown = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return rows.filter(r =>
+      (state === 'all' || (state === 'live') !== r.exhausted) &&
+      (!cat || r.category === cat) &&
+      (!proj || r.project_code === proj) &&
+      (!loc || r.places.some(p => String(p.location_id) === loc)) &&
+      (!s || [r.code, r.description, r.item_code].some(x => x.toLowerCase().includes(s))))
+  }, [rows, q, cat, proj, loc, state])
+
+  return (
+    <>
+      <h2>Склад</h2>
+      <div className="list-filters">
+        <input className="list-filter" value={q} placeholder="фильтр — PN, наименование, код"
+          onChange={e => setQ(e.target.value)} />
+        <div className="list-filter-row">
+          <Dropdown className="list-proj" value={state} onPick={v => setState(String(v))}
+            options={STOCK_STATES} />
+          <Dropdown className="list-proj" value={loc} onPick={v => setLoc(String(v))}
+            options={[{ value: '', label: 'все локации' },
+              ...locOptions.map(l => ({ value: String(l.id), label: l.code }))]} />
+        </div>
+        <div className="list-filter-row">
+          <Dropdown className="list-proj" value={cat} onPick={v => setCat(String(v))}
+            options={[{ value: '', label: 'все категории' },
+              ...catOptions.map(c => ({ value: c, label: c }))]} />
+          <Dropdown className="list-proj" value={proj} onPick={v => setProj(String(v))}
+            options={[{ value: '', label: 'все проекты' },
+              ...projOptions.map(p => ({ value: p, label: p }))]} />
+        </div>
+      </div>
+      <div className="list-scroll">
+        {shown.map(r => {
+          const code = r.code || r.description || `#${r.id}`
+          return (
+            <div key={r.id} className={'tree-item' + (selId === r.id ? ' sel' : '')}
+              onClick={() => onSelect(r.id)}
+              title={[r.item_code, r.description, r.project_code].filter(Boolean).join(' · ')}>
+              <LotGlyph native={r.item_native} liveQty={r.live_qty} central={r.on_central} />
+              <span className="code">{code}</span>
+              <span className="row-tag">{num(r.live_qty)} {r.uom}</span>
+            </div>
+          )
+        })}
         {shown.length === 0 && <div className="list-empty">ничего не найдено</div>}
       </div>
     </>

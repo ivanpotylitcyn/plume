@@ -200,7 +200,7 @@ body { overflow: hidden; }
 .ci-references::before      { content: '\eb36'; }  /* таб «Где применяется» */
 .ci-files::before           { content: '\eaf0'; }  /* таб «Файлы» */
 /* волна 19 Ф12c — глифы партии по origin (LotGlyph; коды сверены с codicon.ttf) */
-.ci-git-branch::before      { content: '\ec6f'; }  /* партия отпочкована требованием */
+.ci-git-branch::before      { content: '\ec6f'; }  /* партия переведена из другого проекта */
 .ci-archive::before         { content: '\ea98'; }  /* таб «Списанные» (инвентаризация) */
 .ci-new-file::before        { content: '\ea7f'; }  /* команда шапки «Загрузить» */
 .ci-download::before        { content: '\ec74'; }  /* строка вложения: «Скачать» */
@@ -557,10 +557,10 @@ table.grid th { text-align: left; color: var(--fg-dim); font-weight: 400;
 table.grid td { padding: 3px 10px; border-bottom: 1px solid var(--border); }
 /* ОСЬ «ИДЕНТИЧНОСТЬ / КОНТЕКСТ» (Ф3, волна 21): цвет ячейки задаёт РОЛЬ, а не рука.
    Правило сложилось само и давно (приглушены описание, дата, имя контрагента, имя
-   проекта, part_number, lot_name, автор; полным цветом — коды, номера, числа), но
+   проекта, lot_code, lot_description, автор; полным цветом — коды, номера, числа), но
    жило 62 инлайнами. Разъехалось оно из ИМЕНИ КЛАССА: `.c-key`/`.c-desc` названы по
    роли, а `.c-fit` — по вёрстке («жмётся по содержимому»), и в неё свалили и коды, и
-   даты, и имена — цвет каждой пришлось дописывать по одной ячейке (`lot_name` и
+   даты, и имена — цвет каждой пришлось дописывать по одной ячейке (`lot_description` и
    `contractor_name` встречались и приглушёнными, и нет — один смысл, два вида).
    Инвертируем умолчание: КОНТЕКСТ — базовый цвет ячейки, ПОЛНЫЙ ЦВЕТ — свойство
    идентичности и счёта. Та же ось, по которой уже разведены шрифты (§3).
@@ -1034,6 +1034,8 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
 .empty { color: var(--fg-dim); padding: 40px 0; text-align: center; }
 a.link { color: var(--link); cursor: pointer; text-decoration: none; }
 a.link:hover { text-decoration: underline; }
+/* Глиф партии как ссылка на форму лота (в27): цвет остаётся у глифа — он «как дела». */
+a.lot-link { cursor: pointer; text-decoration: none; }
 
 /* ---- формы / действия ---- */
 .kit-actions { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; flex-wrap: wrap; }

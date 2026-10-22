@@ -2,7 +2,8 @@
 // (§13.4a) и колонка команд с корзиной (§5). Раскладку шапки собирает не этот модуль,
 // а канон формы (`FormShell`, §13) — сюда он приходит за частями.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { api, type Authored, type UserRow, type ProjectRow } from './api'
+import { api, type Authored, type UserRow, type ProjectRow, type LocationHead,
+  type LocationRow } from './api'
 import { Field, TextField } from './FormField'
 import { Dropdown } from './Dropdown'
 import { AnchoredMenu } from './AnchoredMenu'
@@ -179,6 +180,29 @@ export function ProjectField({ projectId, projectLabel, locked, busy, onChange, 
       view={projectId && onOpen
         ? <EntityLink kind="project" id={projectId} open={onOpen}>{projectLabel}</EntityLink>
         : projectLabel} />
+  )
+}
+
+// «Куда» (волна 27) — локация, в которую ордер кладёт партии: рождённые (поставка,
+// комплектация, инвентаризация) или выданные с Центрального (требование). Якорь вида —
+// стоит в слоте `anchors` сразу за проектом. `own` — только наши локации (Центральный
+// принимает лишь поставки). Под замком — код ссылкой на форму локации. Список мест
+// грузим на каждое открытие: локации заводят по ходу работы, кэш врал бы.
+export function LocationField({ c, locked, busy, own, onChange, onOpen }: {
+  c: LocationHead; locked: boolean; busy?: boolean; own?: boolean
+  onChange: (id: number | null) => void
+  onOpen?: (id: number) => void
+}) {
+  const [locs, setLocs] = useState<LocationRow[]>([])
+  useEffect(() => { api.locations().then(setLocs) }, [])
+  return (
+    <AnchorSelect label="Куда" id={c.location_id} currentLabel={c.location_code}
+      options={locs.filter(l => !own || !l.central).map(l => ({ id: l.id, label: l.code }))}
+      locked={locked} busy={busy} placeholder="локация…"
+      onChange={id => onChange(id)} onClear={() => onChange(null)}
+      view={c.location_id && onOpen
+        ? <EntityLink kind="location" id={c.location_id} open={onOpen}>{c.location_code}</EntityLink>
+        : c.location_code} />
   )
 }
 

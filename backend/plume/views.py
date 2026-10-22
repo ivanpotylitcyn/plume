@@ -116,6 +116,26 @@ def _resolve_contractor(data):
     return models.Counterparty.objects.get(pk=cid) if cid else None
 
 
+def _resolve_location(data, key='location_id'):
+    """Локация из PATCH-тела (волна 27, «Куда»): ключа нет → `_UNSET`; пусто → `None`
+    (очистить черновику); иначе `Location`. Неизвестная — дружелюбным отказом."""
+    if key not in data:
+        return engine._UNSET
+    if not data[key]:
+        return None
+    try:
+        return models.Location.objects.get(pk=data[key])
+    except (models.Location.DoesNotExist, ValueError, TypeError):
+        raise ValidationError('Локация не найдена.')
+
+
+def _optional_location(data, key='location_id'):
+    """Место строки расхода из тела (волна 27, «выбор лота = выбор места»): не прислали
+    → `None`, движок выведет место сам (`engine._line_location`)."""
+    loc = _resolve_location(data, key)
+    return None if loc is engine._UNSET else loc
+
+
 def _optional_contractor(data):
     """Контрагент из тела запроса — необязательный (Ф12e).
 
@@ -368,7 +388,8 @@ def projects(request):
 
 
 def _location_row(loc):
-    return {'id': loc.id, 'code': loc.code, 'description': loc.description, 'kind': loc.kind}
+    return {'id': loc.id, 'code': loc.code, 'description': loc.description,
+            'central': bool(loc.central)}
 
 
 @api_view(['GET', 'POST'])
@@ -378,8 +399,7 @@ def locations(request):
     if request.method == 'POST':
         d = request.data
         try:
-            loc = engine.create_location(d.get('code'), d.get('description'),
-                                         kind=d.get('kind') or '')
+            loc = engine.create_location(d.get('code'), d.get('description'))
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(_location_row(loc), status=http.HTTP_201_CREATED)
@@ -400,8 +420,7 @@ def location_detail(request, pk):
             engine.update_location(
                 loc,
                 code=d['code'] if 'code' in d else None,
-                description=d['description'] if 'description' in d else None,
-                kind=d['kind'] if 'kind' in d else None)
+                description=d['description'] if 'description' in d else None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.location_form(loc))
@@ -580,8 +599,8 @@ def _item_detail_payload(item):
         {'id': lot.id, 'project_code': lot.project.code, 'origin': lot.origin_kind,
          'origin_locked': lot.origin.locked,
          'qty_born': lot.qty, 'live_qty': engine.lot_live_qty(lot),
-         'cost': lot.cost, 'unit_cost': lot.unit_cost, 'part_number': lot.part_number,
-         'lot_name': lot.lot_name}
+         'cost': lot.cost, 'unit_cost': lot.unit_cost, 'lot_code': lot.code,
+         'lot_description': lot.description}
         for lot in item.lots.select_related('project', 'origin')
     ]
     return {
@@ -754,7 +773,7 @@ def kitting_detail(request, pk):
                 k, qty=_dec(d['qty']) if 'qty' in d else None,
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
                 project=_resolve_project(d), target_item=_resolve_item(d, 'target_id'),
-                **_code_kw(d))
+                location=_resolve_location(d), **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except models.Item.DoesNotExist:
@@ -775,6 +794,7 @@ def kitting_lines(request, pk):
         component = models.Item.objects.get(pk=d['component_id'])
         lot = models.Lot.objects.get(pk=d['lot_id'])
         engine.add_kitting_line(k, component, lot, _dec(d.get('qty')),
+                                location=_optional_location(d),
                                 date=timezone.localdate())
     except (KeyError, models.Item.DoesNotExist, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны component_id, lot_id, qty ({e}).')
@@ -934,7 +954,8 @@ def receipt_detail(request, pk):
                 r, number=d['number'] if 'number' in d else None,
                 contractor=_resolve_contractor(d),
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
-                project=_resolve_project(d), **_code_kw(d))
+                project=_resolve_project(d), location=_resolve_location(d),
+                **_code_kw(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except models.Counterparty.DoesNotExist:
@@ -956,8 +977,8 @@ def receipt_lots(request, pk):
         engine.add_receipt_lot(
             r, item, _dec(d.get('qty')),
             cost=_dec(d.get('cost')) or engine.ZERO,
-            lot_name=d.get('lot_name') or '',
-            part_number=d.get('part_number') or '')
+            lot_description=d.get('lot_description') or '',
+            lot_code=d.get('lot_code') or '')
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
@@ -982,8 +1003,8 @@ def receipt_lot_detail(request, pk):
                 lot,
                 qty=_dec(d['qty']) if 'qty' in d else None,
                 cost=_dec(d['cost']) if 'cost' in d else None,
-                lot_name=d['lot_name'] if 'lot_name' in d else None,
-                part_number=d['part_number'] if 'part_number' in d else None)
+                lot_description=d['lot_description'] if 'lot_description' in d else None,
+                lot_code=d['lot_code'] if 'lot_code' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.receipt_form(receipt))
@@ -1252,7 +1273,8 @@ def transfer_lines(request, pk):
     try:
         lot = models.Lot.objects.get(pk=d['lot_id'])
         engine.add_transfer_line(t, lot, _dec(d.get('qty')),
-                                 display_name=d.get('display_name') or '')
+                                 display_name=d.get('display_name') or '',
+                                 location=_optional_location(d))
     except (KeyError, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны lot_id, qty ({e}).')
     except ValidationError as e:
@@ -1430,11 +1452,139 @@ def relocation_source_lots(request, pk):
 
 
 # --------------------------------------------------------------------------- #
-#  Закрытие проекта (волна 6): списание / требование + панель + мягкий замок
+#  Склад и форма лота (волна 27)
+# --------------------------------------------------------------------------- #
+@api_view(['GET'])
+def stock(request):
+    """Список режима «Склад»: партии с местами и флагами (фильтры — на клиенте)."""
+    return Response(engine.stock_lots())
+
+
+@api_view(['GET'])
+def stock_lot(request, pk):
+    """Форма лота — только чтение (идентичность правится в origin-ордере)."""
+    lot = get_object_or_404(models.Lot.objects.select_related(
+        'item', 'project', 'origin', 'predecessor__item'), pk=pk)
+    return Response(engine.lot_form(lot))
+
+
+# --------------------------------------------------------------------------- #
+#  Требование / Requisition (волна 27): официальная выдача Центральный → «Куда».
+#  Строка = пара знаковых строк (−q@Центральный, +q@«Куда»), ключ строки — лот.
+# --------------------------------------------------------------------------- #
+def _requisition_row(r):
+    """Строка списка требований для смешанного дерева ордеров."""
+    return {
+        'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
+        'project_code': r.project.code, 'locked': r.locked,
+        'location_code': r.location.code if r.location_id else '',
+        'lines': r.lines.filter(qty__lt=0).count(),
+    }
+
+
+@api_view(['GET', 'POST'])
+def requisitions(request):
+    """Список требований (дерево) / рождение нового по клику."""
+    if request.method == 'POST':
+        d = request.data
+        try:
+            r = engine.create_requisition(
+                _anchor_project(d), _actor(request), d.get('number') or '',
+                date=d.get('date') or None)
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+        return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
+    rows = [_requisition_row(r) for r in models.Requisition.objects
+            .select_related('project', 'location').order_by('-id')]
+    return Response(rows)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def requisition_detail(request, pk):
+    """Форма требования. PATCH — шапка (№ / дата / «Куда» / автор / проект). DELETE —
+    удаление черновика."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    if request.method == 'DELETE':
+        return _delete_order(r)
+    if request.method == 'PATCH':
+        d = request.data
+        try:
+            engine.update_requisition(
+                r, number=d['number'] if 'number' in d else None,
+                date=d['date'] if 'date' in d else None,
+                user=_resolve_author(d), project=_resolve_project(d),
+                location=_resolve_location(d), **_code_kw(d))
+        except models.Project.DoesNotExist:
+            return _bad('Проект не найден.')
+        except User.DoesNotExist:
+            return _bad('Пользователь не найден.')
+        except ValidationError as e:
+            return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_form(r))
+
+
+@api_view(['POST'])
+def requisition_lines(request, pk):
+    """Добавить строку требования — лот с Центрального в «Куда»."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    d = request.data
+    try:
+        lot = models.Lot.objects.get(pk=d['lot_id'])
+        engine.add_requisition_line(r, lot, _dec(d.get('qty')))
+    except (KeyError, models.Lot.DoesNotExist) as e:
+        return _bad(f'Нужны lot_id, qty ({e}).')
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+def requisition_line_detail(request, pk, lot_pk):
+    """Автосейв кол-ва строки (PATCH) / удаление строки (DELETE). Ключ строки — лот."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    lot = get_object_or_404(models.Lot, pk=lot_pk)
+    try:
+        if request.method == 'DELETE':
+            engine.remove_requisition_line(r, lot)
+        else:
+            engine.update_requisition_line(r, lot, _dec(request.data.get('qty')))
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_form(r))
+
+
+@api_view(['POST'])
+def requisition_lock(request, pk):
+    """Зафиксировать требование — выдача видна складу (мягкий замок)."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    try:
+        engine.lock_requisition(r)
+    except ValidationError as e:
+        return _bad(e.messages[0] if e.messages else e)
+    return Response(engine.requisition_form(r))
+
+
+@api_view(['POST'])
+def requisition_unlock(request, pk):
+    """Снять замок требования — снова разрешить правку."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    engine.unlock_requisition(r)
+    return Response(engine.requisition_form(r))
+
+
+@api_view(['GET'])
+def requisition_source_lots(request, pk):
+    """Лоты проекта требования, лежащие на Центральном, — пикер строки."""
+    r = get_object_or_404(models.Requisition, pk=pk)
+    return Response(engine.requisition_source_lots(r))
+
+
+# --------------------------------------------------------------------------- #
+#  Закрытие проекта (волна 6): списание / перевод + панель + мягкий замок
 # --------------------------------------------------------------------------- #
 @api_view(['GET'])
 def available_lots(request):
-    """Лоты всех проектов с остатком > 0 — сквозной пикер источника требования."""
+    """Лоты всех проектов с остатком > 0 — сквозной пикер источника перевода."""
     return Response(engine.all_available_lots())
 
 
@@ -1496,7 +1646,8 @@ def writeoff_lines(request, pk):
     d = request.data
     try:
         lot = models.Lot.objects.get(pk=d['lot_id'])
-        engine.add_writeoff_line(w, lot, _dec(d.get('qty')))
+        engine.add_writeoff_line(w, lot, _dec(d.get('qty')),
+                                 location=_optional_location(d))
     except (KeyError, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны lot_id, qty ({e}).')
     except ValidationError as e:
@@ -1540,8 +1691,8 @@ def writeoff_unlock(request, pk):
     return Response(engine.writeoff_form(w))
 
 
-# ── Требование / Requisition ──
-def _requisition_row(r):
+# ── Перевод / Reassignment ──
+def _reassignment_row(r):
     return {
         'id': r.id, 'code': r.code, 'number': r.number, 'date': r.date,
         'project_code': r.project.code, 'locked': r.locked,
@@ -1550,34 +1701,34 @@ def _requisition_row(r):
 
 
 @api_view(['GET', 'POST'])
-def requisitions(request):
-    """Список требований (дерево) / рождение нового по клику (Ф12e)."""
+def reassignments(request):
+    """Список переводов (дерево) / рождение нового по клику (Ф12e)."""
     if request.method == 'POST':
         d = request.data
         try:
-            r = engine.create_requisition(
+            r = engine.create_reassignment(
                 _anchor_project(d), _actor(request), d.get('number') or '',
                 date=d.get('date') or None)
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-        return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
+        return Response(engine.reassignment_form(r), status=http.HTTP_201_CREATED)
 
-    rows = [_requisition_row(r) for r in models.Requisition.objects
+    rows = [_reassignment_row(r) for r in models.Reassignment.objects
             .select_related('project').order_by('-id')]
     return Response(rows)
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-def requisition_detail(request, pk):
-    """Форма требования: строки (источник → потомок) + живой остаток источника.
+def reassignment_detail(request, pk):
+    """Форма перевода: строки (источник → потомок) + живой остаток источника.
     PATCH — правка шапки (№ / дата) прямо в форме. DELETE — удаление."""
-    r = get_object_or_404(models.Requisition, pk=pk)
+    r = get_object_or_404(models.Reassignment, pk=pk)
     if request.method == 'DELETE':
         return _delete_order(r)
     if request.method == 'PATCH':
         d = request.data
         try:
-            engine.update_requisition(
+            engine.update_reassignment(
                 r, number=d['number'] if 'number' in d else None,
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
                 project=_resolve_project(d), **_code_kw(d))
@@ -1587,58 +1738,59 @@ def requisition_detail(request, pk):
             return _bad('Пользователь не найден.')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_form(r))
+    return Response(engine.reassignment_form(r))
 
 
 @api_view(['POST'])
-def requisition_lines(request, pk):
-    """Добавить строку требования — отпочкование (`−ISSUE` источника + `+RECEIPT`)."""
-    r = get_object_or_404(models.Requisition, pk=pk)
+def reassignment_lines(request, pk):
+    """Добавить строку перевода — отпочкование (`−ISSUE` источника + `+RECEIPT`)."""
+    r = get_object_or_404(models.Reassignment, pk=pk)
     d = request.data
     try:
         source = models.Lot.objects.get(pk=d['source_lot_id'])
-        engine.add_requisition_line(r, source, _dec(d.get('qty')))
+        engine.add_reassignment_line(r, source, _dec(d.get('qty')),
+                                     location=_optional_location(d))
     except (KeyError, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны source_lot_id, qty ({e}).')
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_form(r), status=http.HTTP_201_CREATED)
+    return Response(engine.reassignment_form(r), status=http.HTTP_201_CREATED)
 
 
 @api_view(['PATCH', 'DELETE'])
-def requisition_line_detail(request, pk):
-    """Автосейв количества строки требования (PATCH) / удаление строки (DELETE)."""
+def reassignment_line_detail(request, pk):
+    """Автосейв количества строки перевода (PATCH) / удаление строки (DELETE)."""
     line = get_object_or_404(
         models.StockLine.objects.select_related('document', 'lot'),
-        pk=pk, document__kind=models.StockDocument.Kind.REQUISITION)
-    requisition = line.document
+        pk=pk, document__kind=models.StockDocument.Kind.REASSIGNMENT)
+    reassignment = line.document
     try:
         if request.method == 'DELETE':
-            engine.remove_requisition_line(line)
+            engine.remove_reassignment_line(line)
         else:
-            engine.update_requisition_line(line, _dec(request.data.get('qty')))
+            engine.update_reassignment_line(line, _dec(request.data.get('qty')))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_form(requisition))
+    return Response(engine.reassignment_form(reassignment))
 
 
 @api_view(['POST'])
-def requisition_lock(request, pk):
-    """Провести требование — форма read-only (единый мягкий замок)."""
-    r = get_object_or_404(models.Requisition, pk=pk)
+def reassignment_lock(request, pk):
+    """Провести перевод — форма read-only (единый мягкий замок)."""
+    r = get_object_or_404(models.Reassignment, pk=pk)
     try:
-        engine.lock_requisition(r)
+        engine.lock_reassignment(r)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
-    return Response(engine.requisition_form(r))
+    return Response(engine.reassignment_form(r))
 
 
 @api_view(['POST'])
-def requisition_unlock(request, pk):
-    """Снять замок требования — снова разрешить правку."""
-    r = get_object_or_404(models.Requisition, pk=pk)
-    engine.unlock_requisition(r)
-    return Response(engine.requisition_form(r))
+def reassignment_unlock(request, pk):
+    """Снять замок перевода — снова разрешить правку."""
+    r = get_object_or_404(models.Reassignment, pk=pk)
+    engine.unlock_reassignment(r)
+    return Response(engine.reassignment_form(r))
 
 
 # ── Инвентаризация / Inventory (записываемое ядро, волна 9) ──
@@ -1685,7 +1837,7 @@ def inventory_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                project=_resolve_project(d))
+                project=_resolve_project(d), location=_resolve_location(d))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except User.DoesNotExist:
@@ -1713,15 +1865,15 @@ def inventory_lots(request, pk):
         cost = _dec(d.get('cost'))
         if pred is not None:
             item = pred.item
-            lot_name = d['lot_name'] if 'lot_name' in d else pred.lot_name
-            part_number = d['part_number'] if 'part_number' in d else pred.part_number
+            lot_description = d['lot_description'] if 'lot_description' in d else pred.description
+            lot_code = d['lot_code'] if 'lot_code' in d else pred.code
         else:
             item = models.Item.objects.get(pk=d['item_id'])
-            lot_name = d.get('lot_name') or ''
-            part_number = d.get('part_number') or ''
+            lot_description = d.get('lot_description') or ''
+            lot_code = d.get('lot_code') or ''
         engine.add_inventory_lot(
             i, item, _dec(d.get('qty')), cost=cost,
-            lot_name=lot_name, part_number=part_number,
+            lot_description=lot_description, lot_code=lot_code,
             predecessor=pred)
     except (KeyError, models.Item.DoesNotExist, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны item_id (или predecessor_id), qty ({e}).')
@@ -1747,8 +1899,8 @@ def inventory_lot_detail(request, pk):
                 lot,
                 qty=_dec(d['qty']) if 'qty' in d else None,
                 cost=_dec(d['cost']) if 'cost' in d else None,
-                lot_name=d['lot_name'] if 'lot_name' in d else None,
-                part_number=d['part_number'] if 'part_number' in d else None)
+                lot_description=d['lot_description'] if 'lot_description' in d else None,
+                lot_code=d['lot_code'] if 'lot_code' in d else None)
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.inventory_form(inventory))
@@ -1809,7 +1961,7 @@ def project_stock_lot(request, pk):
     d = request.data
     try:
         lot = models.Lot.objects.get(pk=d['lot_id'])
-        engine.requisition_lot(project, lot, _dec(d.get('qty')), _actor(request))
+        engine.reassignment_lot(project, lot, _dec(d.get('qty')), _actor(request))
     except (KeyError, models.Lot.DoesNotExist) as e:
         return _bad(f'Нужны lot_id, qty ({e}).')
     except ValidationError as e:
