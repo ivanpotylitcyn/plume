@@ -1,4 +1,5 @@
 // Сквозной словарь статусов (единый везде): значок + цвет текста, не заливка.
+import type { CSSProperties } from 'react'
 import type { CostStatus, Status } from './api'
 import { EntityLink } from './EntityLink'
 
@@ -221,10 +222,14 @@ export function visibleTree<T extends { depth: number; is_leaf: boolean }>(
   return visible
 }
 
-// Стоимость строки — всегда в колонке таблицы, поэтому без рубля (`moneyCol`). (2026-08-07) — одинаково в «Строках» закупки (на обоих её уровнях) и
-// в составе изделия (2026-10-20). Знак берём у движка (`cost_status`), сами ничего не
-// решаем: красный — взято больше чем в полтора раза от нужды, оранжевый — по Парето:
-// строка из тех, что вместе дают 80% стоимости набора. Цены нет — прочерк, а не ноль (неизвестное ≠ бесплатное).
+export function paretoCostColumn(costs: (number | null)[]): CSSProperties {
+  const width = costs.reduce<number>((max, cost) =>
+    cost === null ? max : Math.max(max, moneyCol(cost).length), 0)
+  return { '--pareto-cost-width': `${width}ch` } as CSSProperties
+}
+
+// Стоимость строки выводим через `moneyCol`. У позиций Парето ставим ₽ перед суммой,
+// для перебора сохраняем красный тон. Если оценки нет, выводим прочерк.
 // Подсказка красного называет ПОРОГ числом, а не правилом: «можно было до 20» отвечает
 // на вопрос закупщика сразу, тогда как «полторы нормы, округлённые вверх» он должен был
 // бы ещё посчитать. Порог считает движок (`overpay_at`) — вью его только произносит.
@@ -233,14 +238,17 @@ export function Cost({ cost, status, overpayAt, uom }: {
   overpayAt?: number; uom?: string
 }) {
   if (cost === null) return <span className="dim" title="у изделия нет оценки">—</span>
-  const tone = status === 'overpaid' ? 'g-to_order' : status === 'costly' ? 'g-on_order' : ''
+  const tone = status === 'overpaid' ? 'g-to_order' : undefined
   const title = status === 'overpaid'
     ? (overpayAt !== undefined
         ? `перебор: без красного можно было до ${num(overpayAt)}${uom ? ' ' + uom : ''}`
         : 'взято сверх потребности с запасом')
     : status === 'costly' ? 'дорогая: вместе с более дорогими даёт 80% стоимости'
     : undefined
-  return <span className={tone} title={title}>{moneyCol(cost)}</span>
+  const amount = moneyCol(cost)
+  return status === 'costly'
+    ? <span className="pareto-cost" title={title}>₽<span>{amount}</span></span>
+    : <span className={tone} title={title}>{amount}</span>
 }
 
 // Номера строк документа (2026-10-16): постоянный адрес строки — позиция в ПОЛНОМ

@@ -17,7 +17,7 @@
 // однопроектная, область счёта — её проект.
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type Demand } from './api'
-import { NeedHead, NeedRow, NeedSums, needPass, useNeedFilters } from './NeedTable'
+import { NeedHead, NeedRow, NeedSums, needCostColumn, needPass, useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
 import { rowNumbers } from './status'
 
@@ -60,8 +60,8 @@ export function DemandRows({ st, editable, empty, openItem, take }: {
   const shown = byCat.shown.filter(r => needPass(r, f))
   const no = rowNumbers(d.rows)          // постоянный номер строки — по полному своду
   return (
-    <div className="pgrid pgrid--acts">
-      <NeedSums rows={shown} acts outside={d.outside_spent}
+    <div className="pgrid pgrid--acts" style={needCostColumn(shown)}>
+      <NeedSums rows={shown} acts outside={d.outside_plan}
         filtered={shown.length !== d.rows.length} />
       <NeedHead f={f} catHead={byCat.head} acts />
       {shown.length === 0

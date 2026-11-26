@@ -838,7 +838,7 @@ tr.row { border-left: 2px solid transparent; }
      справа.
      2026-10-20: «Оценка» хвостовым треком (128px: «10 650 600,24» с копейками, рубль в
      заголовке, и воздух слева — длинное число не липнет к глифу «Баланса»): деньги
-     строки, Парето-тон. «Ед.» переехала сразу за описание (правка
+     строки с отметкой Парето. «Ед.» переехала сразу за описание (правка
      Ивана): дальше идут числа в единицах строки, а над ними в строке «Деньги» — тысячи
      рублей сплошным рядом, без разрыва над единицей. */
   grid-template-columns: var(--col-rn) calc(var(--col-key) + 8px) var(--prow-desc)
@@ -994,6 +994,9 @@ table.grid th:has(.col-filter) { white-space: nowrap; }
 /* тоны статусов (текст) */
 .g-to_order { color: var(--st-order); }
 .g-on_order { color: var(--st-wip); }
+.money-incomplete { color: var(--st-wip); }
+.pareto-cost { display: inline-flex; gap: 1ch; white-space: nowrap; }
+.pareto-cost > span { min-inline-size: var(--pareto-cost-width, 0ch); text-align: right; }
 .g-available { color: var(--st-ok); }
 /* Единый StatusGlyph (Ф1b): codicon-замок оси фиксации. Базовый размер 13px (иначе
    .ci=18px разъедет в таблицах/строках); tone-класс красит. Компаунд `.ci.sg-*`

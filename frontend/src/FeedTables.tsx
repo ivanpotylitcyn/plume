@@ -16,8 +16,8 @@ import { ORDER_LABEL, type OrderKind } from './orders'
 import { EntityLink } from './EntityLink'
 
 // Лента закупок-планов. Глиф = фиксация плана (своей оси покрытия у него нет).
-export function ProcurementFeed({ rows, empty, open }: {
-  rows: FeedProcurementRow[]; empty: string; open: (id: number) => void
+export function ProcurementFeed({ rows, empty, open, showMoney = false }: {
+  rows: FeedProcurementRow[]; empty: string; open: (id: number) => void; showMoney?: boolean
 }) {
   if (rows.length === 0) return <div className="tab-empty">{empty}</div>
   return (
@@ -27,6 +27,7 @@ export function ProcurementFeed({ rows, empty, open }: {
         <th className="c-desc">Описание</th><th className="c-date">Дата</th>
         <th className="num">Строк</th>
         <th className="num">Кол-во</th>
+        {showMoney && <th className="num c-money">План, ₽</th>}
       </tr></thead>
       <tbody>{rows.map((p, i) => (
         <tr key={p.id} className="row">
@@ -41,6 +42,12 @@ export function ProcurementFeed({ rows, empty, open }: {
             {p.date ? viewDate(p.date) : ''}</td>
           <td className="num">{p.lines}</td>
           <td className="num">{num(p.qty)}</td>
+          {showMoney && <td className="num c-money" title={p.rest_unestimated?.length
+            ? `Нет оценки: ${p.rest_unestimated.join(', ')}` : undefined}>
+            <span className={p.rest_unestimated?.length ? 'money-incomplete' : undefined}>
+              {p.total == null ? '—' : moneyCol(p.total)}
+            </span>
+          </td>}
         </tr>
       ))}</tbody>
     </table>

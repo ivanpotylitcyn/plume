@@ -231,7 +231,7 @@ export type OrderHeadPatch = Partial<{
 }>
 
 export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, anchors,
-  projectLocked, children }: {
+  projectLocked, beforeProject, children }: {
   c: OrderHead
   locked: boolean
   busy: boolean
@@ -239,6 +239,7 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
   numberLabel?: string          // «№ поставки» / «№ акта» / «№» — у комплектации номера нет
   openProject?: (id: number) => void
   anchors?: ReactNode           // якори вида — сразу за проектом (§13.4a)
+  beforeProject?: ReactNode
   projectLocked?: boolean       // проект выводится, а не правится (заказ — волна 24)
   children?: ReactNode          // атрибуты вида — хвостом, после автора
 }) {
@@ -249,8 +250,7 @@ export function OrderFields({ c, locked, busy, patch, numberLabel, openProject, 
       {/* Единственное длинное поле шапки (§13.3). */}
       <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
         onCommit={v => patch({ description: v })} />
-      {/* Проект — ВЕРХНИЙ якорь всего закупочного контура (§13.4a): связи сущности
-          важнее её атрибутов, и порядок один на все три уровня. */}
+      {beforeProject}
       <ProjectField projectId={c.project_id} projectLabel={c.project_code}
         locked={locked || !!projectLocked} busy={busy} onOpen={openProject}
         onChange={id => patch({ project_id: id })} />
@@ -425,8 +425,7 @@ function DownloadMenu({ download }: { download: Download }) {
 // Корзина только в режиме ПРАВКИ: просмотр чист, случайное удаление структурно
 // невозможно. Выгрузка от неё не зависит и стоит НАД ней (корзина остаётся самой
 // нижней командой формы); показывать ли «Скачать» вообще — решает форма тем, даёт
-// она `download` или нет (у закупки бланк только у зафиксированной, у изделия —
-// всегда: состав нужен и до фиксации, а покупной компонент не фиксируется вовсе).
+// она `download` или нет.
 export function FormCornerCommand({ fixed, unlocked, onDelete, download }: FormCommandProps) {
   return (
     <>

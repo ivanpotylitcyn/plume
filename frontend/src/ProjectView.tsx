@@ -12,7 +12,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, type Budget, type Deficit, type DeficitDemand,
   type DeficitTreeNode, type ItemRow, type ProjectClosure, type ProjectDetail,
   type ProjectSupply, type ResidualLot } from './api'
-import { Anomaly, Balance, Chevron, Cost, LotGlyph, count, money, num, ItemGlyph, paretoKeys, pct,
+import { Anomaly, Balance, Chevron, Cost, LotGlyph, count, money, num, ItemGlyph, paretoCostColumn, paretoKeys, pct,
   rowNumbers, visibleTree, type VisibleNode,
   signedPct } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
@@ -22,7 +22,7 @@ import { FormShell, type FormTab } from './FormShell'
 import { TextField } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { ProcurementFeed, PurchaseFeed, ReceiptFeed } from './FeedTables'
-import { BalanceCells, Member, NeedHead, NeedRow, NeedSums, needPass,
+import { BalanceCells, Member, NeedHead, NeedRow, NeedSums, needCostColumn, needPass,
   useNeedFilters } from './NeedTable'
 import { useCategoryFilter } from './ColumnFilter'
 import { ItemPicker } from './Picker'
@@ -134,8 +134,8 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
     { key: 'need', label: 'Потребность', icon: 'chip',
       content: data.components.length === 0
         ? <div className="tab-empty">Нет компонентов — задайте приборы и их составы.</div>
-        : <div className="pgrid">
-            <NeedSums rows={shown} outside={data.outside_spent}
+        : <div className="pgrid" style={needCostColumn(shown)}>
+            <NeedSums rows={shown} outside={data.outside_plan}
               filtered={shown.length !== data.components.length} />
             <NeedHead f={filters} catHead={byCat.head} />
             {shown.length === 0
@@ -155,7 +155,7 @@ export function ProjectView({ projectId, items, isNew, openItem, openOrder, open
   // заводят в своих режимах.
   tabs.push(
     { key: 'procurements', label: 'Закупки', icon: 'law',
-      content: <ProcurementFeed rows={supply?.procurements ?? []} open={openProcurement}
+      content: <ProcurementFeed rows={supply?.procurements ?? []} open={openProcurement} showMoney
         empty="Закупок по этому проекту нет." /> },
     { key: 'purchases', label: 'Заказы', icon: 'package',
       content: <PurchaseFeed rows={supply?.purchases ?? []} side="project"
@@ -326,7 +326,7 @@ function BudgetPanel({ projectId, rev }: { projectId: number; rev: number }) {
   // под курсором, чтобы было видно, откуда перерасход.
   const overNeedTitle = `план ${money(b.plan)} против чистой потребности ${money(b.need)}`
     + ` (нужда по BOM × оценка, без запаса):\n· запас закупок ${money(b.reserve)}`
-    + `\n· куплено вне BOM ${money(b.outside)}`
+    + `\n· план и расходы вне BOM ${money(b.outside)}`
     + `\n· разница цен счёта с оценкой и прочее ${money(b.price_gap)}`
   return (
     <StatPanel>
@@ -399,7 +399,8 @@ function DevicesGrid({ demands, editable, busy, openItem, run }: {
   return (
     // Колонка команд — только в правке (2026-10-20, как у «Строк» закупки): в просмотре
     // корзины нет, а пустой трек 44px поджимал «Оценку» к «Балансу».
-    <div className={'pgrid' + (editable ? ' pgrid--acts' : '')}>
+    <div className={'pgrid' + (editable ? ' pgrid--acts' : '')}
+      style={paretoCostColumn(frontier.filter(r => costly.has(r.key)).map(r => r.cost))}>
       <NeedHead lead="Прибор" tree acts={editable} />
       {demands.map((d, i) => <DeviceRow key={d.demand_id} d={d} no={i + 1}
         open={open.has(d.demand_id)} onToggle={() => toggleDevice(d.demand_id)}
@@ -454,7 +455,7 @@ function DeviceRow({ d, no, open, onToggle, costly, editable, busy, openItem, ru
             title="сколько приборов ещё не начато" />
         </span>
         {/* 2026-10-20: кол-во × оценка прибора по составу (по оценке: счета между
-            приборами не делятся); оранжевые — Парето по проекту. */}
+            приборами не делятся); знак ₽ перед суммой — Парето по проекту. */}
         <span className="pnum"><Cost cost={d.cost} status={costly ? 'costly' : null} /></span>
         {editable && <span className="act">
           <button className="fh-ctl icon fh-del" title="Убрать прибор из потребности"

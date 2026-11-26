@@ -1025,15 +1025,30 @@ class PurchaseXlsxTests(EngineTestBase):
         screen = [ln['item_code'] for ln in engine.purchase_form(p)['rows']]
         self.assertEqual([r[1] for r in rows[table + 1:]], screen)
 
-    def test_zero_line_stays_inside(self):
-        """Нулевая строка в бланк не идёт (2026-08-19) — то же правило, что у закупки:
-        ноль внутри продукта — состояние черновика, наружу уходит только решённое."""
+    def test_draft_xlsx_highlights_zero_line(self):
+        from copy import copy
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+
         p = self.make_purchase(date='2026-08-19')
         _line(p, self.make_item('R900'), D(12))
-        _line(p, self.make_item('R100'), D(0))   # «беру, думаю»
-        _title, rows = self._sheet(p)
-        table = rows.index(['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'])
-        self.assertEqual([r[1] for r in rows[table + 1:]], ['R900'])
+        _line(p, self.make_item('R100'), D(0))
+        for document, download in ((p, engine.purchase_xlsx),
+                                   (p.procurement, engine.procurement_xlsx)):
+            with self.subTest(document=type(document)):
+                sheet = load_workbook(BytesIO(download(document))).active
+                zero = next(row for row in sheet.iter_rows() if row[1].value == 'R100')
+                positive = next(row for row in sheet.iter_rows() if row[1].value == 'R900')
+                self.assertEqual(zero[3].value, 0)
+                for marked, normal in zip(zero, positive, strict=True):
+                    marked_font, normal_font = copy(marked.font), copy(normal.font)
+                    self.assertEqual(marked_font.color.rgb, 'FFC00000')
+                    marked_font.color = normal_font.color
+                    self.assertEqual(marked_font, normal_font)
+                document.locked = True
+                sheet = load_workbook(BytesIO(download(document))).active
+                self.assertNotIn('R100', [row[1] for row in sheet.values])
 
 
 class ReceiptFromPurchaseTests(EngineTestBase):
@@ -1195,10 +1210,12 @@ class PurchaseContractorTests(EngineTestBase):
                        content_type='application/json')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()['contractor_id'], self.supplier.id)
-        # Волна 24: закупку заказа PATCH не трогает — она задаётся при рождении
+        # Закупку можно сменить, но нельзя снять.
         resp = c.patch(f'/api/purchases/{p.id}/', {'procurement_id': None},
                        content_type='application/json')
-        self.assertEqual(resp.json()['procurement_id'], p.procurement_id)
+        self.assertEqual(resp.status_code, 400)
+        p.refresh_from_db()
+        self.assertIsNotNone(p.procurement_id)
         # несуществующий контрагент → дружелюбный 400 (не 500)
         bad = c.patch(f'/api/purchases/{p.id}/', {'contractor_id': 99999},
                       content_type='application/json')
@@ -3194,12 +3211,7 @@ class ProcurementHttpTests(TestCase):
         self.assertTrue(xlsx['Content-Disposition'].startswith('attachment'))
         self.assertTrue(xlsx.content[:2] == b'PK')      # zip-сигнатура xlsx
 
-    def test_purchase_xlsx_is_gated_by_fixation_and_named_by_code_and_date(self):
-        """Бланк ЗАКАЗА (2026-08-10): только у зафиксированного, имя — как у закупки.
-
-        Гейт стоит и на бэкенде, не только в кнопке: у формы адрес есть, и прямой запрос
-        по нему обязан отвечать так же, как интерфейс.
-        """
+    def test_purchase_xlsx_is_available_in_draft_and_named_by_code_and_date(self):
         cp = models.Counterparty.objects.create(description='АО «Поставщик»')
         pid = self.c.post('/api/procurements/', {'project_id': self.prj.id},
             content_type='application/json').json()['id']
@@ -3214,8 +3226,8 @@ class ProcurementHttpTests(TestCase):
             {'item_id': self.scr.id, 'qty': 10, 'price': '35.00'},
             content_type='application/json')
         draft = self.c.get(f'/api/purchases/{oid}/xlsx/')
-        self.assertEqual(draft.status_code, 400)
-        self.assertIn('не зафиксирован', draft.json()['detail'])
+        self.assertEqual(draft.status_code, 200)
+        self.assertEqual(draft.content[:2], b'PK')
         self.c.post(f'/api/purchases/{oid}/lock/')
         r = self.c.get(f'/api/purchases/{oid}/xlsx/')
         self.assertEqual(r.status_code, 200)
@@ -3798,6 +3810,26 @@ class ProjectBudgetTests(EngineTestBase):
 
         b = engine.project_budget(self.prj)
         self.assertEqual(b['spent'], D(2400))   # только 3×800; заём не в счёт
+
+    def test_off_bom_plan_is_counted_without_double_counting_orders(self):
+        part = self.make_item('OUTSIDE')
+        part.estimated_cost = D(10)
+        part.save(update_fields=['estimated_cost'])
+        plan = engine.create_procurement(self.prj, self.user, date=DAY)
+        engine.add_procurement_line(plan, part, D(5))
+        engine.lock_procurement(plan)
+        order = engine.create_purchase(plan, self.user, date=DAY)
+        order.contractor = self.supplier
+        order.save(update_fields=['contractor'])
+        engine.add_purchase_line(order, part, D(2), price=D(24))
+        engine.lock_purchase(order)
+
+        budget = engine.project_budget(self.prj)
+        self.assertEqual((budget['spent'], budget['plan'], budget['outside']), (D(24), D(54), D(54)))
+        self.assertEqual(engine.project_supply(self.prj)['procurements'][0]['total'], D(54))
+        demand = engine.scope_demand([self.prj])
+        self.assertEqual(demand['rows'], [])
+        self.assertEqual(demand['outside_plan'], D(54))
 
     def test_plan_estimate_then_replaced_by_fact(self):
         device = self.make_item('DEV', manufactured=True, kind='device')
@@ -5890,21 +5922,47 @@ class OrderAnchorTests(EngineTestBase):
         self.assertEqual(k.target_item_id, dev.id)
 
     # ── Purchase: проект и закупка (волна 24) ──────────────────────────────
-    def test_purchase_project_follows_its_procurement(self):
-        """Проект заказа — свойство его закупки: меняется вместе с ней, пока заказов…
-        нет; у закупки с заказами проект заперт (иначе увели бы и их поставки)."""
-        p = _purchase(self.prj, self.user)
-        self.assertEqual(p.project_id, self.prj.id)
-        with self.assertRaises(ValidationError):
-            engine.update_procurement(p.procurement, project=self.prj2)
+    def test_purchase_project_follows_confirmed_procurement_move(self):
+        p = self.make_purchase()
+        _line(p, self.make_item('PART'), D(2), price=D(25))
+        engine.lock_purchase(p)
 
-    def test_purchase_procurement_is_fixed_at_birth(self):
-        p = _purchase(self.prj, self.user)
-        proc = p.procurement_id
-        with self.assertRaises(TypeError):                 # параметра больше нет
-            engine.update_purchase(p, procurement=engine.create_procurement(self.prj, self.user))
+        c = Client()
+        c.force_login(self.user)
+        path = f'/api/procurements/{p.procurement_id}/'
+        unconfirmed = c.patch(path, {'project_id': self.prj2.id}, content_type='application/json')
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertIn('Подтвердите перенос', unconfirmed.json()['detail'])
+
+        confirmed = c.patch(path, {'project_id': self.prj2.id, 'project_order_ids': [p.id]},
+                            content_type='application/json')
+        self.assertEqual(confirmed.status_code, 200)
         p.refresh_from_db()
-        self.assertEqual(p.procurement_id, proc)
+        self.assertEqual(p.project_id, self.prj2.id)
+        self.assertTrue(p.locked)
+
+        receipt = engine.create_receipt_from_purchase(p, self.user)
+        blocked = c.patch(path, {'project_id': self.prj.id, 'project_order_ids': [p.id]},
+                          content_type='application/json')
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('блокируют связанные поставки', blocked.json()['detail'])
+        p.refresh_from_db()
+        self.assertEqual(p.project_id, receipt.project_id)
+
+    def test_draft_purchase_can_move_to_plan_with_its_items(self):
+        p = _purchase(self.prj, self.user)
+        part = self.make_item('PART')
+        line = _line(p, part, D(2), price=D(25))
+        new_plan = engine.create_procurement(self.prj2, self.user)
+
+        with self.assertRaisesMessage(ValidationError, 'В выбранной закупке нет позиций: PART'):
+            engine.update_purchase(p, procurement=new_plan)
+        engine.add_procurement_line(new_plan, part, D(2))
+        engine.update_purchase(p, procurement=new_plan)
+        p.refresh_from_db()
+        self.assertEqual(p.project_id, self.prj2.id)
+        self.assertEqual(p.lines.get().id, line.id)
+        self.assertEqual(p.lines.get().price, D(25))
 
     # ── HTTP-срез ──────────────────────────────────────────────────────────
     def test_patch_project_id_http(self):

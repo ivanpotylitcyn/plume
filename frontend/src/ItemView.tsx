@@ -6,8 +6,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemMoney, type ItemRow, type Category, type RollupResult } from './api'
 import { Chevron, Cost, num, money, moneyCol, count, CounterpartyRef, ItemGlyph, LotGlyph,
-  ProcurementGlyph, PurchaseGlyph, StatusGlyph, paretoKeys, rowNumbers,
-  unitMoney, visibleTree } from './status'
+  ProcurementGlyph, PurchaseGlyph, StatusGlyph, paretoCostColumn, paretoKeys, rowNumbers,
+  moneyField, parseMoney, unitMoney, visibleTree } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -119,7 +119,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
             <th className="c-desc">Описание</th>
             <th className="num">Кол-во</th><th className="uom">Ед.</th>
             {/* 2026-10-20: во сколько строка обойдётся (кол-во × оценка; у своего
-                компонента — живой роллап). Оранжевые — Парето: дают 80% стоимости. */}
+                компонента — живой роллап). Знак ₽ перед числом отмечает позиции Парето. */}
             <th className="num c-money" title="кол-во × оценка компонента; оранжевые — строки, дающие 80% стоимости прибора">Оценка, ₽</th>
             {!locked && <th className="act" />}</tr></thead>
           <BomBody lines={bomFilter.shown} no={b => bomNo.get(b)} locked={locked}
@@ -392,10 +392,10 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
           onCommit={v => run(api.updateItem(d.id, { temperature: v }))} />
         {/* «Оценка» без «₽» в подписи: рубль приезжает со значением в просмотре. */}
         <TextField label="Оценка" locked={priceLocked} busy={busy}
-          value={d.estimated_cost != null ? String(d.estimated_cost) : ''}
+          value={d.estimated_cost != null ? moneyField(d.estimated_cost) : ''}
           view={d.estimated_cost != null ? money(d.estimated_cost) : ''}
-          onCommit={v => run(api.updateItem(d.id, { estimated_cost: v.trim() === '' ? null : Number(v) }))}
-          validate={v => v.trim() === '' || Number(v) >= 0} />
+          validate={v => { const price = parseMoney(v); return price === null || (Number.isFinite(price) && price >= 0) }}
+          onCommit={v => run(api.updateItem(d.id, { estimated_cost: parseMoney(v) }))} />
       </>}
       extra={<ItemMoneyBlock m={d.money} />}
       tabs={tabs}
@@ -436,7 +436,7 @@ function BomBody({ lines, no, locked, busy, openItem, run }: {
       if (!(v.hasChildren && v.isExp)) frontier.push({ key: `n${b.id}:${v.i}`, cost: v.n.cost })
   }
   const costly = paretoKeys(frontier)
-  return <tbody>{lines.map(b => {
+  return <tbody style={paretoCostColumn(frontier.filter(r => costly.has(r.key)).map(r => r.cost))}>{lines.map(b => {
     const isOpen = open.has(b.id)
     return <Fragment key={b.id}>
       <tr className="row">

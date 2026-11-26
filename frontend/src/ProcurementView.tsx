@@ -7,7 +7,7 @@
 // Волна 19 (Ф12c): форма по канону §13. Табы — Строки · Потребность · Заказы · Файлы
 // (разбор в комментарии к `tabs`).
 import { useEffect, useState } from 'react'
-import { api, type ProcurementForm, type AllocationRow } from './api'
+import { api, type ProcurementForm, type AllocationRow, type ItemRow } from './api'
 import { AuthorField, ProjectField, useFormLock } from './FormHeader'
 import { ProcurementMoney } from './ProcurementMoney'
 import { FormShell, type FormTab } from './FormShell'
@@ -17,13 +17,11 @@ import { AllocationRows, PurchaseFan, useAllocation } from './AllocationPanel'
 import { DemandRows, useDemand } from './DemandPanel'
 import { DialogBox } from './DialogHost'
 import { count, num, sumByUom } from './status'
-import { ask } from './dialog'
+import { ask, tell } from './dialog'
 
-// `items` (справочник изделий) форме не нужен: своего пикера у неё нет — позицию
-// выбирают в «Потребности», из того, что проект действительно просит.
-export function ProcurementView({ procurementId, isNew, openItem,
+export function ProcurementView({ procurementId, items, isNew, openItem,
   openProject, openPurchase, openCounterparty, onPurchaseBorn, onChanged, onDeleted }: {
-  procurementId: number; isNew: boolean
+  procurementId: number; items: ItemRow[]; isNew: boolean
   openItem: (id: number) => void; openProject: (id: number) => void
   openPurchase: (id: number) => void; openCounterparty: (id: number) => void
   onPurchaseBorn: (id: number) => void   // «Новый заказ» родил заказ — открыть его в правке
@@ -72,6 +70,25 @@ export function ProcurementView({ procurementId, isNew, openItem,
   const fixed = !editable                  // зафиксирована — read-only
   const locked = !editable || !unlocked
 
+  const changeProject = async (id: number) => {
+    if (id === c.project_id) return
+    if (c.project_receipts.length) {
+      await tell({
+        title: 'Поставки блокируют смену проекта',
+        lines: [...c.project_receipts.map(r => r.code),
+          'У этих поставок и их партий уже задан проект. Проверьте связь с заказом в форме поставки.'],
+      })
+      return
+    }
+    const orders = c.project_orders
+    if (orders.length && !(await ask({
+      title: 'Перенести закупку и её заказы в выбранный проект?',
+      lines: orders.map(o => o.code),
+      verb: 'Перенести',
+    }))) return
+    run(api.updateProcurement(c.id, { project_id: id, project_order_ids: orders.map(o => o.id) }))
+  }
+
   // «Новый заказ» (волна 24): окно выбора позиций → черновой заказ остатком → его форма.
   // Закупку он не меняет, поэтому доступен и у зафиксированной, и в просмотре — фиксация
   // плана инструмент работы с планом, а не блок для заказа (решение Ивана).
@@ -96,13 +113,15 @@ export function ProcurementView({ procurementId, isNew, openItem,
   // Два масштаба, и это главное в пересборке. «Потребность» — ТЕЛЕСКОП: весь контур
   // разом, состояние складов и заказов, помогает выбрать ПОЗИЦИЮ. «Строки» — МИКРОСКОП:
   // один компонент, его баланс и раскладка по заказам, помогает выбрать КОЛИЧЕСТВО.
-  // Отсюда и разделение команд: взять позицию можно только в телескопе, набрать
-  // количество — только в микроскопе, и ни один экран не делает работу другого.
+  // «Потребность» даёт быстрый набор по BOM. В «Строках» доступны и компоненты
+  // вне BOM, а количество можно указать сразу или набрать позже.
   const tabs: FormTab[] = [
     // Правимость вкладок — по полному замку (`!locked`), а не по одной фиксации:
     // в просмотре форма не предлагает ни править количество, ни брать позиции.
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <AllocationRows st={alloc} procurementId={c.id} editable={!locked}
+        items={items} busy={busy}
+        onAdd={(itemId, qty) => run(api.addProcurementLine(c.id, { item_id: itemId, qty }))}
         openItem={openItem} openPurchase={openPurchase} openCounterparty={openCounterparty}
         onQty={(lineId, qty) => run(api.updateProcurementLine(lineId, qty))}
         onDelete={lineId => run(api.deleteProcurementLine(lineId))} /> },
@@ -140,13 +159,8 @@ export function ProcurementView({ procurementId, isNew, openItem,
       fixateTitle="Зафиксировать закупку — строки станут read-only"
       onUnfix={() => run(api.unlockProcurement(c.id))}
       fixation={`procurements/${c.id}`}
-      /* Бланк наружу отдаём только у ЗАФИКСИРОВАННОЙ закупки: до фиксации план ещё
-         не решение (правило переехало сюда 2026-07-30, когда «Скачать» перестала
-         быть исключительно «командой запертого» — у изделия она есть всегда). */
-      download={fixed
-        ? { href: api.xlsxUrl(c.id),
-            title: 'Скачать xlsx-бланк для поставщика (имя файла = код закупки)' }
-        : undefined}
+      download={{ href: api.xlsxUrl(c.id),
+        title: fixed ? 'Скачать xlsx-бланк для поставщика' : 'Скачать состав черновика в XLSX' }}
       actions={[
         { onClick: () => setPicking(true), label: 'Новый заказ', icon: 'ci-package',
           title: 'Родить заказ из позиций плана — количество по остатку',
@@ -159,13 +173,8 @@ export function ProcurementView({ procurementId, isNew, openItem,
           onCommit={v => run(api.updateProcurement(c.id, { code: v }))} />
         <TextField label="Описание" wide value={c.description} locked={locked} busy={busy}
           onCommit={v => run(api.updateProcurement(c.id, { description: v }))} />
-        {/* Порядок — канон §13.4a (Ф17): идентичность → якори (проект, контрагент) →
-            внешние атрибуты → автор. Волна 24: верхний якорь — ПРОЕКТ, как у заказа и
-            поставки (вычисляемый охват снят). Меняется, пока заказов нет: у них проект
-            выводится отсюда. */}
         <ProjectField projectId={c.project_id} projectLabel={c.project_code}
-          locked={locked || !c.project_editable} busy={busy} onOpen={openProject}
-          onChange={id => run(api.updateProcurement(c.id, { project_id: id }))} />
+          locked={locked} busy={busy} onOpen={openProject} onChange={changeProject} />
         {/* Контрагента у закупки нет (волна 24, решение Ивана): закупка — внутреннее
             планирование, контрагент появляется только у заказа — обязательства. */}
         <TextField label="Дата" type="date" value={c.date ?? ''} locked={locked}
@@ -243,6 +252,5 @@ function NewPurchaseDialog({ rows, code, onConfirm, onClose }: {
 }
 
 // `LineRow` и `GhostRow` плоского таба «Строки» сняты 2026-08-11 вместе с ним самим:
-// строку плана показывает `AllocationPanel` (тот же план, но с раскладкой по заказам и
-// балансом проекта), а рождает её витрина «Потребность» — нулём. Двух вёрсток одной
-// строки в форме больше нет.
+// Строку плана и призрак показывает `AllocationPanel`, рядом с раскладкой по заказам
+// и балансом проекта.

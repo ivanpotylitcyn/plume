@@ -16,7 +16,8 @@
 // «Скомплектовано» распирало колонку под слово, которое ни одно число не заполняет.
 import { useState, type ReactNode } from 'react'
 import type { DeficitComponent, Status } from './api'
-import { Anomaly, Balance, Cost, balanceTitle, count, money, num, orderTitle, ItemGlyph } from './status'
+import { Anomaly, Balance, Cost, balanceTitle, count, money, num, orderTitle, ItemGlyph,
+  paretoCostColumn } from './status'
 import { ColumnFilter } from './ColumnFilter'
 import { EntityLink } from './EntityLink'
 
@@ -228,7 +229,7 @@ function PlanSumCell({ spent, ahead, reserve, outside, filtered }: {
           ? <span className="note">фильтр: показана часть плана проекта</span>
           : <>
               {outside !== 0 && <>
-                <span className="all">вне потребности (куплено не по BOM)</span>
+                <span className="all">вне потребности (закупки и расходы)</span>
                 <span className="all">{money(outside)}</span>
               </>}
               <span>= план (прогноз) проекта</span>
@@ -354,6 +355,14 @@ export function BalanceCells({ code, need, kitted, inStock, onOrder, planned = 0
 // Строка компонента в своде: те же пять чисел, read-only. Команда строки приходит
 // СНАРУЖИ (`action`) — витрина сама ничего не умеет, она показывает и помогает выбрать.
 // У проекта команды нет вовсе; у закупки это «взять в план» / отметка «уже взято».
+export function needCostColumn(rows: DeficitComponent[]) {
+  return paretoCostColumn(rows.filter(r => r.cost_status === 'costly').map(needPlanCost))
+}
+
+function needPlanCost(row: DeficitComponent) {
+  return row.unestimated && row.spent_cost === 0 ? null : row.plan_cost
+}
+
 export function NeedRow({ ln, no, openItem, action }: {
   ln: DeficitComponent; no?: number; openItem: (id: number) => void; action?: ReactNode
 }) {
@@ -380,7 +389,7 @@ export function NeedRow({ ln, no, openItem, action }: {
       {/* 2026-10-20: план позиции — по счёту, где под обязательством, остальное по оценке.
           Без оценки и без трат — прочерк: неизвестное ≠ бесплатное. */}
       <span className="pnum">
-        <Cost cost={ln.unestimated && ln.spent_cost === 0 ? null : ln.plan_cost}
+        <Cost cost={needPlanCost(ln)}
           status={ln.cost_status} /></span>
       {action !== undefined && <span className="act">{action}</span>}
     </div>

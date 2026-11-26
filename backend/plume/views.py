@@ -880,7 +880,8 @@ def counterparties(request):
         try:
             c = engine.create_counterparty(
                 code=(d.get('code') or '').strip() or description,
-                description=description, inn=(d.get('inn') or '').strip())
+                description=description, inn=(d.get('inn') or '').strip(),
+                website=d.get('website') or '', contact_person=d.get('contact_person') or '')
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
         return Response(_counterparty_row(c), status=http.HTTP_201_CREATED)
@@ -902,7 +903,7 @@ def counterparty_detail(request, pk):
             engine.update_counterparty(
                 c, code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
-                inn=d['inn'] if 'inn' in d else None)
+                inn=d.get('inn'), website=d.get('website'), contact_person=d.get('contact_person'))
         except ValidationError as e:
             return _bad(e.messages[0] if e.messages else e)
     return Response(engine.counterparty_form(c))
@@ -1090,7 +1091,11 @@ def purchase_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                contractor=_resolve_contractor(d))    # Ф17: у кого заказано
+                contractor=_resolve_contractor(d),
+                procurement=(models.Procurement.objects.get(pk=d['procurement_id'])
+                             if 'procurement_id' in d else engine._UNSET))
+        except models.Procurement.DoesNotExist:
+            return _bad('Закупка не найдена.')
         except models.Counterparty.DoesNotExist:
             return _bad('Контрагент не найден.')
         except User.DoesNotExist:
@@ -2047,7 +2052,7 @@ def procurement_detail(request, pk):
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
-                project=_resolve_project(d))          # волна 24: закупка проектная
+                project=_resolve_project(d), project_order_ids=d.get('project_order_ids'))
         except models.Project.DoesNotExist:
             return _bad('Проект не найден.')
         except User.DoesNotExist:
@@ -2130,15 +2135,8 @@ def procurement_xlsx(request, pk):
 
 @api_view(['GET'])
 def purchase_xlsx(request, pk):
-    """Выгрузка xlsx-бланка ЗАКАЗА — тот же документ, что у закупки (2026-08-10).
-
-    Гейт — как у закупки: бланк отдаём только у ЗАФИКСИРОВАННОГО заказа (черновик ещё
-    не обязательство, наружу ему рано). Вью прячет кнопку, здесь — тот же отказ на
-    случай прямого запроса по адресу.
-    """
+    """Выгрузка xlsx-бланка заказа, включая черновики."""
     p = get_object_or_404(models.Purchase, pk=pk)
-    if not p.locked:
-        return _bad('Заказ не зафиксирован — бланк отдаём только по утверждённому.')
     return _xlsx_response(engine.purchase_xlsx(p), p.code, f'заказ-{p.id}')
 
 

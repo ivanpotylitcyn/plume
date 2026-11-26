@@ -152,6 +152,12 @@ export function CounterpartyView({ counterpartyId, isNew, openPurchase,
           onCommit={v => run(api.updateCounterparty(c.id, { description: v }))} />
         <TextField label="ИНН" value={c.inn} locked={locked} busy={busy}
           onCommit={v => run(api.updateCounterparty(c.id, { inn: v }))} />
+        <TextField label="Сайт" value={c.website} locked={locked} busy={busy}
+          view={c.website && <a className="link" href={c.website} target="_blank"
+            rel="noopener noreferrer">{c.website}</a>}
+          onCommit={v => run(api.updateCounterparty(c.id, { website: v }))} />
+        <TextField label="Контакт" value={c.contact_person} locked={locked} busy={busy}
+          onCommit={v => run(api.updateCounterparty(c.id, { contact_person: v }))} />
       </>}
       extra={<>
         {/* Мягкое напоминание (2026-08-05): с этой правки контрагент показывается во

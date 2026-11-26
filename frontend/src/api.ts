@@ -4,9 +4,9 @@ import type { OrderKind } from './orders'
 
 export type Status = 'available' | 'on_order' | 'to_order'
 
-// Цвет-смысл денег строки (2026-08-07): `overpaid` — взято больше чем в полтора раза от
+// Смысл стоимости строки (2026-08-07): `overpaid` — взято больше чем в полтора раза от
 // нужды (красный), `costly` — по Парето: строки, вместе дающие 80% стоимости набора
-// (оранжевый; с 2026-10-20 вместо «верхней четверти»), `null` —
+// (₽ перед суммой), `null` —
 // ничего примечательного. Считает движок, знак выбирает вью ([[engine-view-seam]]).
 export type CostStatus = 'overpaid' | 'costly' | null
 
@@ -92,7 +92,7 @@ export interface DeficitComponent {
   // покрытое по оценке — то же правило, что «план» бюджета. `unestimated` — непокрытое
   // есть, а оценки нет (тот же признак, что «без оценки» в шапке проекта).
   spent_cost: number; plan_cost: number; unestimated: boolean
-  // 2026-10-20: колонка «Оценка» = `plan_cost`, Парето-тон; над «Потр.» — Σ `need_cost`
+  // 2026-10-20: колонка «Оценка» = `plan_cost`, отметка Парето; над «Потр.» — Σ `need_cost`
   // (чистая потребность: нужда × оценка, без запаса; `null` — без оценки).
   need_cost: number | null; cost_status: CostStatus
 }
@@ -101,7 +101,7 @@ export interface Deficit {
   demands: DeficitDemand[]
   components: DeficitComponent[]
   // Траты вне потребности (куплено не по BOM): Σ `plan_cost` строк + это = план бюджета.
-  outside_spent: number
+  outside_spent: number; outside_plan: number
   // Масштаб работы (волна 23, Ф4): штуки наших изделий по дереву, по категориям канона;
   // `forms` — формы числа (один / два / пять) для склонения в мете.
   scale: { category: string | null; count: number; forms: [string, string, string] }[]
@@ -166,7 +166,7 @@ export interface ItemDetail {
          component_category: string | null;
          component_native: boolean; component_synced: boolean; component_locked: boolean;
          qty: number
-         // 2026-10-20: оценка строки (кол-во × оценка/роллап компонента) + Парето-тон.
+         // 2026-10-20: оценка строки (кол-во × оценка/роллап компонента) + отметка Парето.
          cost: number | null; cost_status: CostStatus
          tree: BomTreeNode[] }[]   // поддерево своего компонента (аккордеон, 2026-10-20)
   where_used: { parent_id: number; parent_code: string; parent_description: string; qty: number
@@ -318,6 +318,7 @@ export interface FeedProcurementRow {
   date: string | null; locked: boolean; lines: number; qty: number
   project_code: string                   // волна 24: закупка проектная
   closed: boolean                        // закрыта обязательствами (цвет замка)
+  total?: number; rest_unestimated?: string[]
 }
 // Обе стороны — в строке: лента контрагента показывает проект, лента проекта —
 // поставщика. Деньги заказа — ОЦЕНКА (`Σ qty × estimated_cost`), позиции без неё
@@ -342,6 +343,7 @@ export interface CpTransferRow {
 }
 export interface CounterpartyForm {
   id: number; code: string | null; description: string; inn: string
+  website: string; contact_person: string
   supply: CounterpartySupply | null
   shipment: CounterpartyShipment | null
   purchases: FeedPurchaseRow[]          // волна 24: закупок у контрагента нет
@@ -665,7 +667,7 @@ export interface ProjectClosure {
 export interface DemandRow extends DeficitComponent {
   in_lines: boolean
 }
-export interface Demand { rows: DemandRow[]; outside_spent: number }
+export interface Demand { rows: DemandRow[]; outside_spent: number; outside_plan: number }
 
 // ── Закупка (волна 7; с волны 24 — источник правды, однопроектная) ──
 
@@ -686,7 +688,8 @@ export interface ProcurementForm extends Authored {
   // Волна 24: проект — верхний якорь; меняется, пока у закупки нет заказов. Контрагента
   // у закупки нет — он только у заказа.
   project_id: number; project_code: string; project_name: string
-  project_editable: boolean
+  project_orders: { id: number; code: string }[]
+  project_receipts: { id: number; code: string }[]
   total_qty: number
   // Панель бюджета — см. `PurchaseForm`. Нужда — по проекту закупки.
   demand: number; estimate: number; overpay: number; unestimated: string[]
@@ -967,7 +970,7 @@ export const api = {
   // Волна 20 — режим «Контрагенты»: форма стороны документооборота.
   counterparty: (id: number) => get<CounterpartyForm>(`/api/counterparties/${id}/`),
   updateCounterparty: (id: number, b: Partial<{
-    code: string | null; description: string; inn: string
+    code: string | null; description: string; inn: string; website: string; contact_person: string
   }>) => send<CounterpartyForm>('PATCH', `/api/counterparties/${id}/`, b),
   deleteCounterparty: (id: number) => send<void>('DELETE', `/api/counterparties/${id}/`),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
@@ -991,7 +994,7 @@ export const api = {
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseForm>(`/api/purchases/${id}/`),
   updatePurchase: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number
-      contractor_id: number | null }>) =>
+      contractor_id: number | null; procurement_id: number }>) =>
     send<PurchaseForm>('PATCH', `/api/purchases/${id}/`, b),
   deletePurchase: (id: number) => send<void>('DELETE', `/api/purchases/${id}/`),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
@@ -1132,7 +1135,7 @@ export const api = {
   procurements: () => get<ProcurementRow[]>('/api/procurements/'),
   procurement: (id: number) => get<ProcurementForm>(`/api/procurements/${id}/`),
   deleteProcurement: (id: number) => send<void>('DELETE', `/api/procurements/${id}/`),
-  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; project_id: number }>) =>
+  updateProcurement: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number; project_id: number; project_order_ids: number[] }>) =>
     send<ProcurementForm>('PATCH', `/api/procurements/${id}/`, b),
   addProcurementLine: (id: number, b: { item_id: number; qty: number }) =>
     send<ProcurementForm>('POST', `/api/procurements/${id}/lines/`, b),

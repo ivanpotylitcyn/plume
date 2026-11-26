@@ -493,6 +493,8 @@ class Counterparty(models.Model):
     code = models.CharField('код', max_length=64, unique=True, null=True, blank=True)
     description = models.CharField('описание', max_length=255)
     inn = models.CharField('ИНН', max_length=16, blank=True, default='')
+    website = models.URLField('сайт', max_length=255, blank=True, default='')
+    contact_person = models.CharField('контактное лицо', max_length=255, blank=True, default='')
 
     class Meta:
         verbose_name = 'контрагент'

@@ -544,15 +544,15 @@ export default function App() {
             onDeleted={() => { reloadOrderKind(o.kind); setSel(null) }} />
         })()}
         {sel?.kind === 'purchase' &&
-          <PurchaseView purchaseId={sel.id} items={items} openItem={openItem}
+          <PurchaseView purchaseId={sel.id} items={items} procurements={procurements} openItem={openItem}
             isNew={isFresh('purchase', sel.id)}
             openReceipt={openReceipt} openProject={openProject}
             openCounterparty={openCounterparty}
             openProcurement={id => { reloadProcurements(); openProcurement(id) }}
-            onChanged={reloadPurchases}
+            onChanged={() => { reloadPurchases(); reloadProcurements() }}
             onDeleted={() => { reloadPurchases(); setSel(null) }} />}
         {sel?.kind === 'procurement' &&
-          <ProcurementView procurementId={sel.id}
+          <ProcurementView procurementId={sel.id} items={items}
             openItem={openItem} openProject={openProject}
             openCounterparty={openCounterparty}
             isNew={isFresh('procurement', sel.id)}
@@ -561,7 +561,7 @@ export default function App() {
             // как рождение по «＋ Новый».
             onPurchaseBorn={id => { reloadPurchases(); setJustCreated({ kind: 'purchase', id })
               openPurchase(id) }}
-            onChanged={reloadProcurements}
+            onChanged={() => { reloadProcurements(); reloadPurchases() }}
             onDeleted={() => { reloadProcurements(); setSel(null) }} />}
         {sel?.kind === 'lot' &&
           <LotView lotId={sel.id} openItem={openItem} openProject={openProject}

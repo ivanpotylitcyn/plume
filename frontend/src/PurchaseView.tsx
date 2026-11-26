@@ -14,19 +14,19 @@
 // а не в заказе (решение Ивана — «отучить планировать в Заказе»).
 import { useEffect, useMemo, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type PurchaseCandidate, type PurchaseForm,
-  type PurchaseFormLine } from './api'
+  type PurchaseFormLine, type ProcurementRow } from './api'
 import { CommitInput } from './CommitInput'
-import { OrderFields, useFormLock } from './FormHeader'
+import { AnchorSelect, OrderFields, useFormLock } from './FormHeader'
 import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { Cost, CounterpartyRef, ItemGlyph, StatusGlyph,
-  count, money, moneyField, num, parseMoney, rowNumbers } from './status'
+  count, money, moneyField, num, parseMoney, paretoCostColumn, rowNumbers } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
-import { ask } from './dialog'
+import { ask, tell } from './dialog'
 
 // Фильтр поступления: главный вопрос к заказу — «что ещё не приехало». Словарь тот же по
 // духу, что у фильтров «Потребности»: первый вариант нейтральный, дальше — состояния
@@ -36,9 +36,9 @@ const REST_OPTS: [string, string][] = [
   ['any', 'все'], ['open', 'ждём'], ['closed', 'закрыто'],
 ]
 
-export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, openProject,
+export function PurchaseView({ purchaseId, items, procurements, isNew, openItem, openReceipt, openProject,
   openProcurement, openCounterparty, onChanged, onDeleted }: {
-  purchaseId: number; items: ItemRow[]; isNew: boolean
+  purchaseId: number; items: ItemRow[]; procurements: ProcurementRow[]; isNew: boolean
   openItem: (id: number) => void; openReceipt: (id: number) => void
   openProject: (id: number) => void
   openProcurement: (id: number) => void   // якорь «Закупка» кликабелен под замком (§8)
@@ -152,7 +152,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
               {!locked && <th className="act" />}
             </tr>
           </thead>
-          <tbody>
+          <tbody style={paretoCostColumn(byCat.shown.filter(ln => ln.cost_status === 'costly')
+            .map(ln => ln.price))}>
             {byCat.shown.map(ln => (
               <LineRow key={ln.id} no={no.get(ln)} ln={ln} editable={!locked} busy={busy}
                 openItem={openItem} run={run} />
@@ -224,13 +225,8 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
       </>}
       unlocked={unlocked} onToggleLock={toggle}
       onDelete={del}
-      /* Бланк наружу — как у закупки: только у ЗАФИКСИРОВАННОГО заказа (черновик ещё
-         не обязательство). Один и тот же документ у двух форм контура: шапка запроса
-         (поставщик · заказчик · дата · автор с контактами) + нумерованные позиции. */
-      download={fixed
-        ? { href: api.purchaseXlsxUrl(c.id),
-            title: 'Скачать xlsx-бланк для поставщика (имя файла = код заказа и дата)' }
-        : undefined}
+      download={{ href: api.purchaseXlsxUrl(c.id),
+        title: fixed ? 'Скачать xlsx-бланк для поставщика' : 'Скачать состав черновика в XLSX' }}
       fixed={fixed}
       onFixate={() => run(api.lockPurchase(c.id))}
       fixateTitle="Зафиксировать заказ — строки станут read-only"
@@ -244,19 +240,32 @@ export function PurchaseView({ purchaseId, items, isNew, openItem, openReceipt, 
           disabled: att.busy }]}
       fields={
         <OrderFields c={c} locked={locked} busy={busy} openProject={openProject}
-          // Волна 24: проект заказа — проект его закупки, правится там (пока у неё
-          // нет заказов), а здесь только ссылка.
           projectLocked
           patch={b => run(api.updatePurchase(c.id, b))}
-          // Якори вида — сразу за Проектом (§13.4a): Проект → Закупка → Контрагент,
-          // затем внешние атрибуты и автор. Порядок один на все три уровня контура.
+          beforeProject={<AnchorSelect label="Закупка" id={c.procurement_id}
+            currentLabel={c.procurement_code || `Закупка #${c.procurement_id}`}
+            locked={locked} busy={busy}
+            options={procurements.map(p => ({ id: p.id,
+              label: `${p.code || `Закупка #${p.id}`} · ${p.project_code}` }))}
+            view={<EntityLink kind="procurement" id={c.procurement_id}
+              open={openProcurement}>{c.procurement_code || `Закупка #${c.procurement_id}`}
+            </EntityLink>}
+            onChange={async id => {
+              if (id === c.procurement_id) return
+              if (c.receipts.length) {
+                await tell({ title: 'Поставки блокируют смену закупки',
+                  lines: ['Проверьте связанные документы во вкладке «Поставки».'] })
+                return
+              }
+              const target = procurements.find(p => p.id === id)
+              if (target && target.project_code !== c.project_code && !(await ask({
+                title: 'Перенести заказ в другую закупку?',
+                lines: [`Проект заказа изменится с «${c.project_code}» на «${target.project_code}».`],
+                verb: 'Перенести',
+              }))) return
+              run(api.updatePurchase(c.id, { procurement_id: id }))
+            }} />}
           anchors={<>
-            {/* Закупка — источник заказа (волна 24): задана при рождении и не
-                меняется, поэтому поле — всегда ссылка (§8: кликабельно то, что названо). */}
-            <Field label="Закупка" locked
-              view={<EntityLink kind="procurement" id={c.procurement_id}
-                open={openProcurement}>{c.procurement_code || `Закупка #${c.procurement_id}`}
-              </EntityLink>} />
             {/* «У кого купили» — только у заказа (волна 24: у закупки контрагента нет,
                 сравнивать не с чем). Обязательно к ФИКСАЦИИ (движок откажет внятно). */}
             <Field label="Контрагент" locked={locked}
@@ -349,7 +358,7 @@ function LineRow({ no, ln, editable, busy, openItem, run }: {
               disabled={busy} numeric
               onCommit={v => run(api.updatePurchaseLine(ln.id, { price: parseMoney(v) }))}
               validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />
-          // 2026-10-20: Парето — оранжевые строки дают 80% суммы заказа («тяжёлое»).
+          // 2026-10-20: Парето отмечает строки, дающие 80% суммы заказа.
           : ln.price === null ? <span className="sub">—</span>
             : <Cost cost={ln.price} status={ln.cost_status} />}
       </td>

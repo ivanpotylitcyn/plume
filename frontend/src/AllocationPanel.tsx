@@ -11,11 +11,12 @@
 // было нельзя, и колонка у строки плана пустовала).
 import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
-import { api, type Allocation, type AllocationRow, type AllocationCell } from './api'
+import { api, type Allocation, type AllocationRow, type AllocationCell, type ItemRow } from './api'
 import { useCategoryFilter } from './ColumnFilter'
-import { Balance, Chevron, Cost, CounterpartyRef, PurchaseGlyph, balanceTitle, num,
+import { Balance, Chevron, Cost, CounterpartyRef, PurchaseGlyph, balanceTitle, num, paretoCostColumn,
   rowNumbers } from './status'
 import { EntityLink } from './EntityLink'
+import { ItemPicker } from './Picker'
 
 // Состояние распределения: загрузка по id и обновление на `rev` (мутации формы
 // закупки). Живёт у формы — табы «Строки», «Заказы» и окно «Новый заказ» смотрят в одни
@@ -46,8 +47,10 @@ export type AllocationState = ReturnType<typeof useAllocation>
 // обоих уровнях значит «сколько в ЭТОМ документе», но поле ввода — только у строки
 // плана («хочу»), у строки заказа это число для чтения.
 export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
-  openItem, openPurchase, openCounterparty }: {
+  openItem, openPurchase, openCounterparty, items, busy, onAdd }: {
   st: AllocationState; procurementId: number
+  items: ItemRow[]; busy: boolean
+  onAdd: (itemId: number, qty: number) => void
   editable: boolean                            // закупка расфиксирована — план правится
   onQty: (lineId: number, qty: number) => void // правка строки ПЛАНА (мимо st: ответ
                                                // сервера — форма закупки, не распределение)
@@ -59,15 +62,16 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
   // Фильтр по классу изделия — общий движок (2026-08-10), тот же, что в остальном контуре.
   const byCat = useCategoryFilter(p?.rows, r => r.item_category, procurementId)
   const no = rowNumbers(p?.rows)        // постоянный номер строки плана
-  if (!p) return <div className="tab-empty">Загрузка…</div>
-  if (p.rows.length === 0)
+  if (!p) return <div className="tab-empty">{err || 'Загрузка…'}</div>
+  if (!editable && p.rows.length === 0)
     return <div className="tab-empty">
       В плане нет строк — возьмите позиции в табе «Потребность».
     </div>
   return (
     <>
       {err && <div className="anomaly">{err}</div>}
-      <div className={'pgrid pgrid--alloc' + (editable ? ' pgrid--acts' : '')}>
+      <div className={'pgrid pgrid--alloc' + (editable ? ' pgrid--acts' : '')}
+        style={paretoCostColumn(byCat.shown.filter(r => r.cost_status === 'costly').map(r => r.cost))}>
         {/* Заголовок ведущей колонки отступает на раскрыватель и глиф (`head--tree`,
             §7a): подпись начинается ровно над первым символом кода. */}
         <div className="prow prow--head head--tree">
@@ -92,8 +96,53 @@ export function AllocationRows({ st, procurementId, editable, onQty, onDelete,
             onDelete={onDelete} openItem={openItem} openPurchase={openPurchase}
             openCounterparty={openCounterparty} />
         ))}
+        {editable && <ProcurementGhost key={procurementId}
+          items={items} rows={p.rows} busy={busy} onAdd={onAdd} />}
       </div>
     </>
+  )
+}
+
+function ProcurementGhost({ items, rows, busy, onAdd }: {
+  items: ItemRow[]; rows: AllocationRow[]; busy: boolean
+  onAdd: (itemId: number, qty: number) => void
+}) {
+  const [itemId, setItemId] = useState<number | ''>('')
+  const [qty, setQty] = useState('')
+  const alreadyAdded = new Set(rows.map(r => r.item_id))
+  const offer = items.filter(i => !i.native && !alreadyAdded.has(i.id))
+  const item = offer.find(i => i.id === itemId)
+  const quantity = Number(qty.trim().replace(',', '.'))
+  const canAdd = !!item && !busy && Number.isFinite(quantity) && quantity >= 0
+  const clear = () => { setItemId(''); setQty('') }
+  const add = () => {
+    if (!canAdd || !item) return
+    onAdd(item.id, quantity)
+    clear()
+  }
+  return (
+    <div className="prow ghost">
+      <span className="rn" />
+      <div className="tree-cell">
+        <ItemPicker items={offer} value={itemId} onPick={setItemId} disabled={busy}
+          placeholder="Компонент…" onEnter={add} onClear={clear} />
+      </div>
+      <span className="name cell-ellip" title={item?.description}>{item?.description}</span>
+      <span />
+      <span className="pnum">
+        <input className="qty-in" value={qty} disabled={busy} placeholder="0"
+          aria-label="Количество" inputMode="decimal"
+          onChange={e => setQty(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }} />
+      </span>
+      <span />
+      <span className="puom">{item?.uom}</span>
+      <span />
+      <span className="act">
+        <button className="fh-ctl icon fh-add" title="Добавить строку закупки"
+          disabled={!canAdd} onClick={add}><span className="ci ci-add" /></button>
+      </span>
+    </div>
   )
 }
 

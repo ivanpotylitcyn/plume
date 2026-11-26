@@ -125,9 +125,9 @@ from uuid import uuid4
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.core.validators import EmailValidator
+from django.core.validators import EmailValidator, URLValidator
 from django.db import transaction
-from django.db.models import Count, Exists, F, OuterRef, Q, Sum
+from django.db.models import Count, Exists, F, OuterRef, Prefetch, Q, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
@@ -891,7 +891,7 @@ class ProjectSupply:
             return qty_rest, cost_rest
         return self._get('purchase_rest', build)
 
-    def planned(self, item):
+    def _planned_by_item(self):
         """В плане (волна 24): Σ по ЗАФИКСИРОВАННЫМ закупкам проекта
         `max(0, строка плана − Σ строк её ЗАФИКСИРОВАННЫХ заказов)` по Item.
 
@@ -915,7 +915,22 @@ class ProjectSupply:
                 rest = max(ZERO, qty - covered.get((proc_id, item_id), ZERO))
                 total[item_id] = total.get(item_id, ZERO) + rest
             return total
-        return self._get('planned', build).get(item.id, ZERO)
+        return self._get('planned', build)
+
+    def planned(self, item):
+        return self._planned_by_item().get(item.id, ZERO)
+
+    def outside_plan(self, item_ids):
+        """Прогноз остатка закупок вне BOM и коды позиций без оценки."""
+        outside = {pk: qty for pk, qty in self._planned_by_item().items()
+                   if pk not in item_ids and qty > ZERO}
+        cost, unestimated = ZERO, []
+        for item in models.Item.objects.filter(pk__in=outside).order_by('code'):
+            if item.estimated_cost is None:
+                unestimated.append(item.code)
+            else:
+                cost += outside[item.pk] * item.estimated_cost
+        return cost, unestimated
 
     def spent(self, item):
         """«Потрачено» по Item — то же правило, что у бюджета проекта (`_project_spent`),
@@ -1314,7 +1329,7 @@ def _money_fields(item, kitted_cost, in_stock_cost, ordered_cost, spent_cost, ah
     совпадать»): `plan_cost` = потрачено по позиции (`spent_cost`, по счёту/УПД) + деньги
     впереди (`ahead` — план закупки с запасом, сборка, нехватка; `plan_ahead`) по оценке —
     ровно то правило, по которому бюджет считает «план» шапки. Сумма `plan_cost` по всем
-    строкам + траты вне потребности (`outside_spent` проекции) = план проекта до рубля.
+    строкам + план и траты вне потребности (`outside_plan` проекции) = план проекта до рубля.
     `unestimated` — позиция, у которой деньги впереди есть, а оценки нет: тот же признак,
     что «N поз. без оценки — план неполон» в шапке."""
     price = item.estimated_cost
@@ -1463,14 +1478,17 @@ def project_deficit(project, with_tree=True, bom=None):
     # строки с запасом; внутри — по коду.
     components.sort(key=lambda c: (-_WORST_RANK[c['status']], c['component_code']))
 
+    leaf_ids = {leaf.id for leaf in need_by_leaf}
+    outside_spent = supply.spent_outside(leaf_ids)
     return {
         'project_id': project.id,
         'project_code': project.code,
         'project_name': project.description,
         'demands': demands,
         'components': components,
-        # Траты вне потребности (2026-10-19): Σ `plan_cost` строк + это = план бюджета.
-        'outside_spent': supply.spent_outside({leaf.id for leaf in need_by_leaf}),
+        # Σ `plan_cost` строк + `outside_plan` = план бюджета.
+        'outside_spent': outside_spent,
+        'outside_plan': outside_spent + supply.outside_plan(leaf_ids)[0],
         # Масштаб для меты формы (Ф4) — только детальной форме, список проектов его не ждёт.
         'scale': _project_scale(demand_rows, bom) if with_tree else [],
     }
@@ -1607,10 +1625,11 @@ def project_budget(project):
       закупок с запасом, сборка, нехватка); тот же, что сумма над «Потр.» таба;
     - `spent_of_budget` / `spent_of_plan` — доли освоения (отчёт по контракту / ход
       работы); компас `budget − план` = запас/перерасход;
+    - Остаток зафиксированных закупок вне BOM входит в план по оценке.
     - **сверх потребности** — `план / чистая потребность − 1`, где чистая потребность =
       нужда по BOM × оценка, без запаса. Честно смешивает причины; раскладка: запас
-      закупок количеством (`reserve`, то же правило, что «в т.ч. запас» таба), куплено вне
-      BOM (`outside`), остальное — разница цен счёта с оценкой и прочее (`price_gap`).
+      закупок количеством (`reserve`, то же правило, что «в т.ч. запас» таба), план и траты
+      вне BOM (`outside`), остальное — разница цен счёта с оценкой и прочее (`price_gap`).
     Покупные листья без оценки с деньгами впереди — `unestimated` (план неполон).
 
     Себестоимость и экономия сняты (волна 26 → BACKLOG): своего не паяем ещё полгода.
@@ -1633,8 +1652,11 @@ def project_budget(project):
             row = supply.balance(leaf, need)
             if row['planned'] > 0 and row['balance'] > 0:
                 reserve += min(row['planned'], row['balance']) * price
-    plan = spent + ahead
-    outside = supply.spent_outside({leaf.id for leaf in leaves})
+    leaf_ids = {leaf.id for leaf in leaves}
+    outside_ahead, outside_unestimated = supply.outside_plan(leaf_ids)
+    plan = spent + ahead + outside_ahead
+    outside = supply.spent_outside(leaf_ids) + outside_ahead
+    unestimated.extend(outside_unestimated)
     budget = project.budget
     return {
         'project_id': project.id,
@@ -2246,6 +2268,7 @@ def unlock_receipt(receipt):
     return unlock_document(receipt)
 
 
+@transaction.atomic
 def set_receipt_purchase(receipt, purchase):
     """Связать приход с заказом (гасит строки заказа) или отвязать (`None`).
 
@@ -2254,6 +2277,11 @@ def set_receipt_purchase(receipt, purchase):
     Лоты не двигает — `rebuild_movements` не нужен; на «заказано» влияет через
     `_line_received` (проекция).
     """
+    if purchase is not None:
+        purchase.refresh_from_db(fields=['procurement'], from_queryset=(
+            models.Purchase.objects.select_for_update()))
+        purchase.procurement = models.Procurement.objects.select_for_update().get(
+            pk=purchase.procurement_id)
     if purchase is not None and purchase.project_id != receipt.project_id:
         raise ValidationError(
             'Заказ другого проекта — приход закрывает только заказ своего проекта.')
@@ -2268,6 +2296,7 @@ PURCHASE_CLOSED_NO_RECEIPT = (
     'Заказ закрыт полностью — по нему нечего принимать.')
 
 
+@transaction.atomic
 def create_receipt_from_purchase(purchase, user, number='', date=None):
     """Родить черновик УПД по заказу: строки — ОСТАТКОМ заказа (волна 19, Ф6).
 
@@ -2294,6 +2323,10 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
 
     Всё рождённое — черновик: до фиксации на складе ничего не лежит (Ф15).
     """
+    purchase.refresh_from_db(fields=['procurement', 'locked'], from_queryset=(
+        models.Purchase.objects.select_for_update()))
+    purchase.procurement = models.Procurement.objects.select_for_update().get(
+        pk=purchase.procurement_id)
     if not purchase.locked:
         raise ValidationError(PURCHASE_DRAFT_NO_RECEIPT)
     # Черновая накладная заказ не гасит (Ф6-правка `_line_received`), поэтому повторный
@@ -2330,6 +2363,7 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
 # --------------------------------------------------------------------------- #
 #  Форма заказа / Purchase (волна 4): строки-обязательства + гашение приходом
 # --------------------------------------------------------------------------- #
+@transaction.atomic
 def create_purchase(procurement, user, item_ids=(), date=None, code=None, description=''):
     """Родить черновой заказ из закупки (волна 24) — единственный путь рождения заказа.
 
@@ -2342,6 +2376,7 @@ def create_purchase(procurement, user, item_ids=(), date=None, code=None, descri
     Работает и на черновой закупке — фиксация плана не блок для заказа (решение Ивана).
     Пустой код — фолбэком «Заказ 12» (Ф12e).
     """
+    procurement = models.Procurement.objects.select_for_update().get(pk=procurement.pk)
     require_unique_code(models.Purchase, code)
     plan = {ln.item_id: ln for ln in procurement.lines.order_by('id')}
     chosen = [iid for iid in plan if iid in set(item_ids)]
@@ -2544,7 +2579,7 @@ def procurements_closed(procurements):
     return closed
 
 
-def procurement_money(procurement, lines=None):
+def procurement_money(procurement, lines=None, order_lines=None):
     """Деньги закупки (волна 26) — главное число и его поддержка.
 
     **Закупка** = обязательства по счёту там, где позиции закрыты заказами, + оценка
@@ -2565,8 +2600,10 @@ def procurement_money(procurement, lines=None):
         lines = list(procurement.lines.select_related('item'))
     ordered_qty, ordered = {}, ZERO
     invoice, invoice_est = ZERO, ZERO
-    for pl in models.PurchaseLine.objects.filter(
-            purchase__procurement=procurement, purchase__locked=True).select_related('item'):
+    if order_lines is None:
+        order_lines = models.PurchaseLine.objects.filter(
+            purchase__procurement=procurement, purchase__locked=True).select_related('item')
+    for pl in order_lines:
         ordered_qty[pl.item_id] = ordered_qty.get(pl.item_id, ZERO) + pl.qty
         price = pl.price or ZERO
         ordered += price
@@ -2820,6 +2857,7 @@ PURCHASE_LOCKED = 'Строки правятся только в чернови�
 PURCHASE_QTY_NEGATIVE = 'Количество заказа не может быть отрицательным.'
 
 
+@transaction.atomic
 def add_purchase_line(purchase, item, qty, price=None):
     """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна.
 
@@ -2828,14 +2866,17 @@ def add_purchase_line(purchase, item, qty, price=None):
     беру, количество ещё думаю»), а количество набирают следом в «Строках», глядя на
     баланс проекта по этому компоненту. Черновик заказа — рабочее состояние, а не
     обязательство: обязательством он становится на фиксации. Отрицательное невозможно.
-    В бланк поставщику нулевые строки не идут (`purchase_xlsx`).
+    В бланке черновика нулевые строки выделены (`purchase_xlsx`).
     """
+    purchase.refresh_from_db(fields=['procurement', 'locked'], from_queryset=(
+        models.Purchase.objects.select_for_update()))
     _require_unlocked(purchase, PURCHASE_LOCKED)
     if qty is None or qty < 0:
         raise ValidationError(PURCHASE_QTY_NEGATIVE)
     # Волна 24: строка заказа ⊆ план — иначе распределение закупки её не увидит, и
     # «закупка — источник правды» тихо перестанет быть правдой.
-    if not purchase.procurement.lines.filter(item=item).exists():
+    procurement = models.Procurement.objects.select_for_update().get(pk=purchase.procurement_id)
+    if not procurement.lines.filter(item=item).exists():
         raise ValidationError(
             f'Изделия {item.code} нет в закупке — сперва добавьте его в закупку.')
     if purchase.lines.filter(item=item).exists():
@@ -3988,7 +4029,7 @@ def project_supply(project):
     него обычно нет, но запрет на поставку прямо в склад из модели не следует.
     """
     return {
-        'procurements': _procurement_rows(project.procurements),     # волна 24
+        'procurements': _procurement_rows(project.procurements, with_money=True),     # волна 24
         'purchases': _purchase_rows(
             models.Purchase.objects.filter(procurement__project=project)),
         'receipts': _receipt_rows(models.Receipt.objects.filter(project=project)),
@@ -4467,8 +4508,9 @@ def update_receipt(receipt, **kw):
     return update_document(receipt, **kw)
 
 
+@transaction.atomic
 def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UNSET,
-                    contractor=_UNSET):
+                    contractor=_UNSET, procurement=_UNSET):
     """Правка шапки заказа (дата / код / описание / автор / контрагент). Только в
     черновике.
 
@@ -4476,13 +4518,29 @@ def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UN
     документов с обязательной датой). `code` — часовой `_UNSET` (пустой → NULL, чтобы
     несколько заказов без кода не конфликтовали по unique).
 
-    Волна 24: ни проекта, ни закупки здесь нет — закупка задаётся при рождении и не
-    меняется, проект выводится через неё. `contractor` — часовой (Ф17): не передан → не
-    трогаем, сущность → выставить, `None` → снять; обязателен к ФИКСАЦИИ, а не к правке.
+    Проект выводится из закупки. Закупку можно сменить, если у заказа нет
+    поставок и все его позиции есть в новом плане.
     """
+    if procurement is not _UNSET:
+        purchase.refresh_from_db(fields=['procurement', 'locked'], from_queryset=(
+            models.Purchase.objects.select_for_update()))
     _require_unlocked(purchase, PURCHASE_LOCKED)
-    _set_author(purchase, user)
     fields = []
+    if procurement is not _UNSET and procurement.pk != purchase.procurement_id:
+        plans = {p.pk: p for p in models.Procurement.objects.select_for_update().filter(
+            pk__in=[procurement.pk, purchase.procurement_id]).order_by('pk')}
+        if models.Receipt.objects.filter(purchase=purchase).exists():
+            raise ValidationError(
+                'Смену закупки блокируют связанные поставки. Откройте вкладку «Поставки».')
+        absent = list(purchase.lines.exclude(item_id__in=procurement.lines.values('item_id'))
+                      .order_by('item__code').values_list('item__code', flat=True))
+        if absent:
+            codes = ', '.join(absent)
+            raise ValidationError(
+                f'В выбранной закупке нет позиций: {codes}. Сначала добавьте их в её план.')
+        purchase.procurement = plans[procurement.pk]
+        fields.append('procurement')
+    _set_author(purchase, user)
     if contractor is not _UNSET:
         purchase.contractor = contractor
         fields.append('contractor')
@@ -4590,14 +4648,16 @@ def scope_demand(projects, active_only=True):
     в этом проекте» задают форме проекта, где перенеттивать нечего.
     """
     acc = {}  # item_id → агрегат по Item через проекты
-    outside = ZERO  # траты вне потребности (2026-10-19) — для сверки с планом бюджета
+    outside, outside_ahead = ZERO, ZERO
     bom = BomIndex()
     for project in projects:
         if active_only and not counts_in_scope(project):
             continue
         supply = ProjectSupply(project)
         need_by_item, _incomplete = project_leaf_demand(project, bom)
-        outside += supply.spent_outside({item.id for item in need_by_item})
+        leaf_ids = {item.id for item in need_by_item}
+        outside += supply.spent_outside(leaf_ids)
+        outside_ahead += supply.outside_plan(leaf_ids)[0]
         for item, need in need_by_item.items():
             row = acc.setdefault(item.id, {
                 'item': item,
@@ -4644,7 +4704,7 @@ def scope_demand(projects, active_only=True):
     mark_pareto(rows, key='plan_cost')      # 2026-10-20: что определяет стоимость
     # Тот же порядок, что в «Потребности» проекта: горит вперёд, внутри — по коду.
     rows.sort(key=lambda r: (-_WORST_RANK[r['status']], r['component_code']))
-    return {'rows': rows, 'outside_spent': outside}
+    return {'rows': rows, 'outside_spent': outside, 'outside_plan': outside + outside_ahead}
 
 
 def _mark_taken(data, lines):
@@ -4705,9 +4765,8 @@ def procurement_form(procurement):
         'date': procurement.date,
         'project_id': project.id, 'project_code': project.code,
         'project_name': project.description,
-        # Проект меняется, только пока заказов нет: у заказов он выводится отсюда, и
-        # смена увела бы их (и их поставки) в чужой проект.
-        'project_editable': not procurement.purchases.exists(),
+        'project_orders': procurement_project_orders(procurement),
+        'project_receipts': procurement_project_receipts(procurement),
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'total_qty': total_qty,
         **money,          # demand / estimate / overpay / unestimated — панель бюджета
@@ -4738,10 +4797,12 @@ def add_procurement_line(procurement, item, qty):
     **Ноль разрешён** (2026-08-11, решение Ивана): строка рождается кликом из витрины
     «Потребность» именно с нулём — «позицию беру, количество ещё думаю». Это рабочее
     состояние плана, а не брак: количество набирают следом, в «Строках», глядя на баланс
-    конкретного компонента. Отрицательное по-прежнему невозможно. В бланк поставщику
-    нулевые строки не попадают (`procurement_xlsx`).
+    конкретного компонента. Отрицательное количество невозможно.
+    В бланке черновика нулевые строки выделены (`procurement_xlsx`).
     """
     _require_unlocked(procurement, PROCUREMENT_LOCKED)
+    if item.native:
+        raise ValidationError('В закупку можно добавить только покупной компонент.')
     if qty is None or qty < 0:
         raise ValidationError(PROCUREMENT_QTY_NEGATIVE)
     if procurement.lines.filter(item=item).exists():
@@ -4766,14 +4827,16 @@ def update_procurement_line(line, qty):
     return line
 
 
+@transaction.atomic
 def remove_procurement_line(line):
     """Удалить строку закупки-плана (только в черновике).
 
     Волна 24: строку, которую разбирают заказы, не удаляем — иначе их строки повисли
     бы вне плана (инвариант «строка заказа ⊆ план»).
     """
-    _require_unlocked(line.procurement, PROCUREMENT_LOCKED)
-    if models.PurchaseLine.objects.filter(purchase__procurement=line.procurement,
+    procurement = models.Procurement.objects.select_for_update().get(pk=line.procurement_id)
+    _require_unlocked(procurement, PROCUREMENT_LOCKED)
+    if models.PurchaseLine.objects.filter(purchase__procurement=procurement,
                                           item=line.item_id).exists():
         raise ValidationError(
             f'Позицию {line.item.code} уже взяли заказы — сперва уберите её из заказов.')
@@ -4805,28 +4868,46 @@ def unlock_procurement(procurement):
     return procurement
 
 
+def procurement_project_orders(procurement):
+    return [{'id': pk, 'code': code or f'Заказ {pk}'}
+            for pk, code in procurement.purchases.order_by('pk').values_list('pk', 'code')]
+
+
+def procurement_project_receipts(procurement):
+    return [{'id': pk, 'code': code or number or f'Поставка {pk}'}
+            for pk, code, number in models.Receipt.objects.filter(
+                purchase__procurement=procurement).order_by('pk').values_list(
+                    'pk', 'code', 'number')]
+
+
+@transaction.atomic
 def update_procurement(procurement, date=None, code=_UNSET, description=None, user=_UNSET,
-                       project=_UNSET):
-    """Правка шапки закупки-плана (дата / код / описание / автор / контрагент). Только в черновике.
+                       project=_UNSET, project_order_ids=()):
+    """Правка шапки черновика. Пустые дата и код сохраняются как NULL.
 
-    Дата закупки nullable — пустая строка очищает её в NULL (как заказ). `code` —
-    часовой `_UNSET` (пустой → NULL, чтобы несколько закупок без кода не конфликтовали
-    по unique). `contractor` — часовой (волна 19, Ф4): не передан → не трогаем;
-    `Counterparty` → выставить; `None` → снять (nullable).
-
-    `project` (волна 24) — обязателен; меняется, только пока у закупки нет заказов:
-    их проект выводится отсюда, и смена молча увела бы их вместе с поставками.
+    Проект наследуется заказами. Для переноса подтверждают список заказов,
+    а связанные поставки блокируют перенос.
     """
+    if project is not _UNSET:
+        current = models.Procurement.objects.select_for_update().get(pk=procurement.pk)
+        procurement.project_id = current.project_id
+        procurement.locked = current.locked
     _require_unlocked(procurement, PROCUREMENT_LOCKED)
     _set_author(procurement, user)
     fields = []
     if project is not _UNSET:
         if project is None:
             raise ValidationError('Проект закупки обязателен.')
-        if project.pk != procurement.project_id and procurement.purchases.exists():
-            raise ValidationError(
-                'У закупки есть заказы — их проект выводится из закупки; '
-                'сменить проект можно, пока заказов нет.')
+        if project.pk != procurement.project_id:
+            receipts = procurement_project_receipts(procurement)
+            if receipts:
+                codes = ', '.join(r['code'] for r in receipts)
+                raise ValidationError(f'Смену проекта блокируют связанные поставки: {codes}.')
+            orders = procurement_project_orders(procurement)
+            if [o['id'] for o in orders] != project_order_ids and orders:
+                raise ValidationError(
+                    'Подтвердите перенос всех связанных заказов. Если список изменился, '
+                    'обновите форму закупки и повторите выбор проекта.')
         procurement.project = project
         fields.append('project')
     if date is not None:
@@ -4950,11 +5031,12 @@ def _xlsx_sheet(ws, title, head, headers, rows, widths, alerts=None, foot=None,
     колонкой, а не ячейкой: колонка — это одна графа документа, и разнобой внутри неё
     читается как ошибка.
     """
+    from copy import copy
+
     from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
 
     bold = Font(bold=True)
-    alert = Font(color='FFC00000')      # тот же красный, каким горит строка на экране
     middle = Alignment(horizontal='center')
     to_number = Alignment(horizontal='right')
     ws.title = title
@@ -4980,7 +5062,9 @@ def _xlsx_sheet(ws, title, head, headers, rows, widths, alerts=None, foot=None,
         ws.append([n, *row])
         if alerts and alerts[n - 1]:
             for cell in ws[ws.max_row]:
-                cell.font = alert
+                font = copy(cell.font)
+                font.color = 'FFC00000'
+                cell.font = font
     if foot:
         ws.append(foot)
         for cell in ws[ws.max_row]:
@@ -5022,77 +5106,30 @@ def _blank_head(contractor, date, user):
     ]
 
 
-def procurement_xlsx(procurement):
-    """Сгенерировать xlsx-бланк закупки-плана (bytes) — файл поставщику.
-
-    **Документ наружу** (с 2026-07-20 уходит реальным контрагентам), поэтому состав
-    меняется осознанно и разом, а не побочным эффектом правки формы. Волна 19, Ф4b —
-    первое такое изменение: над таблицей появилась шапка запроса (кто просит, у кого,
-    когда, кто автор), а у позиций — порядковый номер.
-
-    Шапка — общая с бланком заказа (`_blank_head`): поставщик (`Procurement.contractor`
-    — намерение плана, у кого собираемся купить) · заказчик (мы) · дата запроса · автор
-    с контактами. Незаданные строки **не рисуются вовсе**: пустая графа во внешнем
-    документе читается как брак, а не как «значение не задано» (внутри продукта правило
-    обратное, §13 — там прочерк честнее).
-
-    **Порядок позиций = порядок на экране** (`order_by('id')`, тот же, что у
-    `procurement_form`): нумерация в файле обязана совпадать с тем, что видит человек,
-    иначе «позиция 3» в переписке означает разное у нас и у поставщика.
-
-    **Нулевые строки в бланк не идут** (2026-08-11, решение Ивана). Ноль внутри продукта
-    — рабочее состояние черновика («позицию беру, количество думаю»), но спрашивать у
-    поставщика цену на «0 шт» бессмысленно: наружу уходит только то, что решено. Фиксация
-    нулей при этом не запрещает — план вправе быть зафиксирован с недодуманной строкой,
-    просто она не покидает контур.
-
-    Синхронно в запросе (файл небольшой, тяжёлых рантаймов нет). openpyxl — импорт
-    ленивый (зависимость только ради экспорта).
-    """
+def _purchase_blank(document, contractor):
+    """Общий бланк. Черновик включает нулевые позиции и выделяет их красным."""
     from openpyxl import Workbook
 
+    lines = document.lines.select_related('item').order_by('id')
+    if document.locked:
+        lines = lines.filter(qty__gt=0)
+    rows = [(line.item.code, line.item.description, line.qty, line.item.uom)
+            for line in lines]
     wb = Workbook()
     _xlsx_sheet(
-        wb.active, 'Заказ',
-        # Волна 24: у закупки контрагента нет — строка «Поставщик» в шапке не рисуется.
-        head=_blank_head(None, procurement.date, procurement.user),
+        wb.active, 'Заказ', head=_blank_head(contractor, document.date, document.user),
         headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
-        rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
-              for line in procurement.lines.select_related('item').order_by('id')
-              if line.qty > 0],
-        widths=[5, 22, 48, 12, 8])       # «№» узкая; остальные — по содержимому
+        rows=rows, widths=[5, 22, 48, 12, 8],
+        alerts=[qty == ZERO for _, _, qty, _ in rows])
     return _xlsx_bytes(wb)
+
+
+def procurement_xlsx(procurement):
+    return _purchase_blank(procurement, None)
 
 
 def purchase_xlsx(purchase):
-    """Сгенерировать xlsx-бланк ЗАКАЗА (bytes) — тот же файл, что у закупки-плана.
-
-    Решение Ивана 2026-08-10: закупка и заказ отдают наружу один и тот же документ —
-    шапка запроса + нумерованные позиции. Разница только в источнике строк: у закупки
-    это план (`ProcurementLine`), у заказа — обязательство перед конкретным поставщиком
-    (`PurchaseLine`). Подписи шапки и имя листа НЕ разводим по видам (решение того же
-    дня): получателю приходит бланк одной формы, чем бы он ни был у нас внутри.
-
-    Порядок позиций — `order_by('id')`, тот же, что в табе «Строки»: нумерация в файле
-    обязана совпадать с экраном, иначе «позиция 3» в переписке значит разное.
-
-    **Нулевые строки в бланк не идут** — то же правило, что у закупки (2026-08-19, когда
-    ноль стал законным и в заказе): ноль внутри продукта — состояние черновика, а наружу
-    уходит только решённое.
-    """
-    from openpyxl import Workbook
-
-    wb = Workbook()
-    _xlsx_sheet(
-        wb.active, 'Заказ',
-        head=_blank_head(purchase.contractor if purchase.contractor_id else None,
-                         purchase.date, purchase.user),
-        headers=['№', 'Артикул', 'Наименование', 'Кол-во', 'Ед.'],
-        rows=[(line.item.code, line.item.description, float(line.qty), line.item.uom)
-              for line in purchase.lines.select_related('item').order_by('id')
-              if line.qty > 0],
-        widths=[5, 22, 48, 12, 8])
-    return _xlsx_bytes(wb)
+    return _purchase_blank(purchase, purchase.contractor if purchase.contractor_id else None)
 
 
 # Копейка (`KOPECK`, объявлена в шапке модуля) — шаг округления денег и в выгрузке.
@@ -5536,7 +5573,7 @@ def _counterparty_shipment(counterparty):
     }
 
 
-def _procurement_rows(queryset):
+def _procurement_rows(queryset, with_money=False):
     """Строки ленты закупок-планов — таб «Закупки» ЛЮБОЙ формы, где эта лента нужна.
 
     Волна 21: функция берёт **queryset**, а не контрагента. У формы контрагента лента
@@ -5544,8 +5581,16 @@ def _procurement_rows(queryset):
     одна и та же, и второго словаря под тот же смысл заводить незачем.
     """
     rows = []
-    qs = list(queryset.select_related('project').prefetch_related('lines').order_by('-id'))
+    lines_qs = models.ProcurementLine.objects.select_related('item')
+    qs = list(queryset.select_related('project').prefetch_related(
+        Prefetch('lines', queryset=lines_qs)).order_by('-id'))
     closed = procurements_closed(qs)
+    order_lines = {}
+    if with_money:
+        for line in models.PurchaseLine.objects.filter(
+                purchase__procurement__in=qs, purchase__locked=True
+        ).select_related('item', 'purchase'):
+            order_lines.setdefault(line.purchase.procurement_id, []).append(line)
     for p in qs:
         lines = list(p.lines.all())
         rows.append({
@@ -5555,6 +5600,9 @@ def _procurement_rows(queryset):
             'project_code': p.project.code,              # волна 24: закупка проектная
             'lines': len(lines), 'qty': sum((ln.qty for ln in lines), ZERO),
         })
+        if with_money:
+            totals = procurement_money(p, lines, order_lines.get(p.pk, []))
+            rows[-1].update(total=totals['total'], rest_unestimated=totals['rest_unestimated'])
     return rows
 
 
@@ -5650,6 +5698,7 @@ def counterparty_form(counterparty):
     return {
         'id': counterparty.id, 'code': counterparty.code,
         'description': counterparty.description, 'inn': counterparty.inn,
+        'website': counterparty.website, 'contact_person': counterparty.contact_person,
         # Стороны: интеграл или `None` («движений нет» решает движок, не вью). Отдельных
         # `has_*` здесь нет намеренно — «сторона есть» это и есть «интеграл не `None`»,
         # и два источника одной правды в одной проекции разошлись бы (Ф3).
@@ -5663,7 +5712,7 @@ def counterparty_form(counterparty):
     }
 
 
-def create_counterparty(code=None, description='', inn=''):
+def create_counterparty(code=None, description='', inn='', website='', contact_person=''):
     """Завести контрагента. Пустой код — фолбэком «Контрагент 12» (Ф12e).
 
     Волна 19 (Ф10) оставила `code` контрагента без авто-фолбэка: заводили его только
@@ -5675,17 +5724,39 @@ def create_counterparty(code=None, description='', inn=''):
     """
     code = (code or '').strip() or None
     require_unique_code(models.Counterparty, code)
-    fields = dict(description=(description or '').strip(), inn=(inn or '').strip())
+    fields = dict(description=(description or '').strip(), inn=(inn or '').strip(),
+                  website=_counterparty_website(website), contact_person=_contact_name(contact_person))
     if code:
         return models.Counterparty.objects.create(code=code, **fields)
     return create_with_fallback_code(models.Counterparty, 'Контрагент', **fields)
 
 
-def update_counterparty(counterparty, code=_UNSET, description=None, inn=None):
-    """Правка ДНК контрагента под интерфейсным замком формы (волна 20).
+def _counterparty_website(value):
+    if not isinstance(value, str):
+        raise ValidationError('Укажите действительный адрес сайта.')
+    value = value.strip()
+    if not value:
+        return ''
+    if '://' not in value:
+        value = f'https://{value}'
+    if len(value) > 255:
+        raise ValidationError('Сайт: максимум 255 символов.')
+    URLValidator(schemes=['http', 'https'], message='Укажите действительный адрес сайта.')(value)
+    return value
 
-    ДНК теперь ровно три поля — код, описание, ИНН (роль снесена, Ф3): всё остальное,
-    что справочник «знает» о контрагенте, он знает из документов и правке не подлежит.
+
+def _contact_name(value):
+    if not isinstance(value, str):
+        raise ValidationError('Укажите контакт текстом.')
+    value = value.strip()
+    if len(value) > 255:
+        raise ValidationError('Контакт: максимум 255 символов.')
+    return value
+
+
+def update_counterparty(counterparty, code=_UNSET, description=None, inn=None,
+                        website=None, contact_person=None):
+    """Правка ДНК контрагента под интерфейсным замком формы (волна 20).
 
     `code` — часовой `_UNSET` (не прислали → не трогаем; пустой → NULL, как у
     документов: колонка nullable, и очистка кода не должна ловить IntegrityError).
@@ -5699,6 +5770,10 @@ def update_counterparty(counterparty, code=_UNSET, description=None, inn=None):
         counterparty.description = description.strip()
     if inn is not None:
         counterparty.inn = inn.strip()
+    if website is not None:
+        counterparty.website = _counterparty_website(website)
+    if contact_person is not None:
+        counterparty.contact_person = _contact_name(contact_person)
     counterparty.save()
     return counterparty
 
