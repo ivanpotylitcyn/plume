@@ -125,7 +125,7 @@ export function PurchaseView({ purchaseId, items, procurements, isNew, openItem,
   const tabs: FormTab[] = [
     { key: 'lines', label: 'Строки', icon: 'checklist',
       content: <>
-        <table className="grid">
+        <table className="grid purchase-lines">
           <thead>
             <tr>
               <th className="rn">№</th><th className="gl" /><th className="c-key">Компонент{byCat.head}</th>

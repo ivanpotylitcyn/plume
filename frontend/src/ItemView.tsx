@@ -22,10 +22,11 @@ import { EntityLink } from './EntityLink'
 import { ask } from './dialog'
 
 export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcurement,
-  openPurchase, openCounterparty, openLot, onChanged, onDeleted }:
+  openPurchase, openProject, openCounterparty, openLot, onChanged, onDeleted }:
   { itemId: number; items: ItemRow[]; isNew: boolean; openItem: (id: number) => void
     openOrder: (kind: OrderKind, id: number) => void   // лента движений кликабельна (§8)
     openProcurement: (id: number) => void; openPurchase: (id: number) => void
+    openProject: (id: number) => void
     openCounterparty: (id: number) => void
     openLot: (id: number) => void                      // в27: партии таба «Склад» — ссылки
     onChanged?: () => void; onDeleted?: () => void }) {
@@ -66,7 +67,7 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
   }
 
   // «Взять в оценку» (волна 26): оценка покупного ← последняя цена по счёту, одним
-  // кликом. Команда видна, только когда блок «Деньги» поднял расхождение.
+  // кликом. Команда видна при наличии заказа, независимо от порога предупреждения.
   const adopt = () => run(api.adoptPrice(itemId))
 
   // Удаление изделия (WAVE14 Ф2) под замком: confirm + friendly-guard бэка → сброс выбора.
@@ -211,7 +212,9 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
                 <td className="c-key">
                   <EntityLink kind="purchase" id={p.id} open={openPurchase}>
                     {p.code || `Заказ #${p.id}`}</EntityLink></td>
-                <td className="c-cp code">{p.project_code}</td>
+                <td className="c-cp code">
+                  <EntityLink kind="project" id={p.project_id} open={openProject}>
+                    {p.project_code}</EntityLink></td>
                 <td className="c-cp">
                   <CounterpartyRef code={p.contractor_code} name={p.contractor_name}
                     id={p.contractor_id} open={openCounterparty} /></td>
@@ -356,9 +359,11 @@ export function ItemView({ itemId, items, isNew, openItem, openOrder, openProcur
         ...(d.native ? [{ onClick: recalc, label: 'Переоценить', icon: 'ci-symbol-operator',
           title: 'Пересчитать стоимость: оценка = Σ(компонент × кол-во), рекурсивно по BOM до листьев',
           disabled: busy }] : []),
-        ...(!d.native && d.money.last != null && d.money.estimate_off
+        ...(!d.native && d.purchases.length > 0
           ? [{ onClick: adopt, label: 'Взять в оценку', icon: 'ci-arrow-swap',
-            title: 'Оценка ← последняя цена по счёту (до копейки)', disabled: busy }] : []),
+            title: d.money.last == null ? 'Нет последней цены по зафиксированным документам'
+              : 'Оценка ← последняя цена по счёту (до копейки)',
+            disabled: busy || d.money.last == null }] : []),
         { onClick: att.pick, label: 'Загрузить', icon: 'ci-new-file',
           title: 'Загрузить файл (datasheet, КД) — появится в табе «Файлы»',
           disabled: att.busy },

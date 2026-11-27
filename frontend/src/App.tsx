@@ -527,7 +527,7 @@ export default function App() {
         {sel?.kind === 'item' && <ItemView itemId={sel.id} items={items}
           isNew={isFresh('item', sel.id)}
           openItem={openItem} openOrder={openOrder}
-          openProcurement={openProcurement} openPurchase={openPurchase}
+          openProcurement={openProcurement} openPurchase={openPurchase} openProject={openProject}
           openCounterparty={openCounterparty} openLot={openLot} onChanged={reloadItems}
           onDeleted={() => setSel(null)} />}
         {sel?.kind === 'library-sync' &&

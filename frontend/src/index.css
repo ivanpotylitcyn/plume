@@ -659,7 +659,9 @@ table.grid :is(th, td).c-key:not([colspan]) {
 }
 /* В закупке ярлык заказа длиннее артикула: отдаём ему ещё половину ширины. */
 table.purchase-fan { --col-key: 300px; }
-.fs-list[data-fit="5"] table.purchase-fan { --col-key: var(--col-key-min); }
+/* В строках заказа коду компонента добавляем треть исходной ширины. */
+table.purchase-lines { --col-key: calc(200px * 4 / 3); }
+.fs-list[data-fit="5"] :is(table.purchase-fan, table.purchase-lines) { --col-key: var(--col-key-min); }
 /* ДЛИННОЕ ИМЯ (`.c-name`) — идентичность, которую задаёт не Plume: имя файла (так назвал
    скан тот, кто сканировал счёт, 2026-10-21) и ярлык ордера в ленте партии («Счёт-фактура
    № 86325 от 22.09.2026», 2026-10-22). В 200px колонки кода оно не помещается, поэтому

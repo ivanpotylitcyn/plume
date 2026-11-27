@@ -157,7 +157,14 @@ if [ "$QUICK" = "1" ]; then
     warn "перед реальным деплоем прогони полную проверку без --quick"
 else
     step "7/7  Тесты бэкенда"
-    if (cd "$BACKEND" && DB_USER=root DB_PASSWORD=root "$PY" manage.py test plume 2>&1 | tail -5 | tee /tmp/plume-tests.log | grep -q '^OK'); then
+    # --noinput: оставшаяся после --keepdb тестовая БД пересоздаётся без вопроса.
+    # Поток виден сразу; pipefail проверяет код Django, а не наличие слова OK в логе.
+    if (
+        cd "$BACKEND" || exit 1
+        set -o pipefail
+        DB_USER=root DB_PASSWORD=root "$PY" -u manage.py test plume --noinput </dev/null 2>&1 \
+            | tee /tmp/plume-tests.log
+    ); then
         ok "сюита зелёная"
     else
         bad "тесты упали:"

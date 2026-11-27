@@ -3159,7 +3159,7 @@ def item_purchases(item):
     coverage = purchases_coverage([ln.purchase for ln in lines])   # закрытость ВСЕГО заказа
     return _newest_first([{
         'id': p.id, 'code': p.code, 'description': p.description,
-        'project_code': p.project.code, 'date': p.date,
+        'project_id': p.project_id, 'project_code': p.project.code, 'date': p.date,
         'locked': p.locked, 'files': ln.file_count, 'coverage': coverage[p.id],
         **_contractor_view(p.contractor),
         'qty': ln.qty, 'received': received.get((p.id, item.id), ZERO), 'price': ln.price,

@@ -191,7 +191,7 @@ export interface ItemProcurementRow {
 // Строка заказа позиции с шапкой заказа: `received` — по зафиксированным поставкам,
 // `price` — цена всей строки по счёту (`null` — ещё не известна).
 export interface ItemPurchaseRow {
-  id: number; code: string | null; description: string; project_code: string
+  id: number; code: string | null; description: string; project_id: number; project_code: string
   date: string | null; locked: boolean; files: number
   coverage: Status   // закрытость ВСЕГО заказа поставками (печать), не этой строки
   contractor_id: number | null; contractor_code: string; contractor_name: string
