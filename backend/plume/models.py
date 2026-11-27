@@ -18,6 +18,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
+from .vat import VatDocument, VatFacts
+
 
 # Денежные и количественные поля — DecimalField (не float), под MySQL.
 def money(**kw):
@@ -127,7 +129,7 @@ ITEM_CATEGORY_SIDE = ('Категория с другой стороны спр�
 # `choices` не проверяются в `.save()`, а `tinyint(1)` мусор принять не может.
 
 
-class StockDocument(models.Model):
+class StockDocument(VatDocument):
     """**Единая таблица** складского ордера (Поставка/Комплектация/Инвентаризация/
     Перевод/Передача/Списание/Перемещение) — «Ордер» в UI (волна 13, Ф2a).
 
@@ -258,7 +260,7 @@ class StockDocument(models.Model):
     class Meta:
         verbose_name = 'ордер'
         verbose_name_plural = 'ордера'
-        constraints = [
+        constraints = [*VatDocument.Meta.constraints,
             # --- обязательность у СВОЕГО вида: гейт на фиксации, не на рождении ---
             models.CheckConstraint(
                 condition=(~Q(kind=DocumentKind.RECEIPT) | Q(locked=False)
@@ -675,7 +677,7 @@ class ProcurementLine(models.Model):
         return f'{self.item.code} ×{self.qty}'
 
 
-class Purchase(models.Model):
+class Purchase(VatDocument):
     """Заказ — обязательство перед контрагентом, рождённое работой с Закупкой.
 
     **Волна 24:** заказ рождается только из закупки (`procurement` NOT NULL), а проект
@@ -723,7 +725,7 @@ class Purchase(models.Model):
     class Meta:
         verbose_name = 'заказ'
         verbose_name_plural = 'заказы'
-        constraints = [
+        constraints = [*VatDocument.Meta.constraints,
             # Ф17: зафиксированного заказа без контрагента не существует — черновик
             # имеет право быть неполным. Тот же приём, что у `Item.category` (Ф12e)
             # и специфики ордера (Ф14).
@@ -751,7 +753,7 @@ class Purchase(models.Model):
         return f'Заказ #{self.pk} ({self.project.code})' + (' 🔒' if self.locked else '')
 
 
-class PurchaseLine(models.Model):
+class PurchaseLine(VatFacts):
     purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE,
                                  related_name='lines')
     item = models.ForeignKey(Item, on_delete=models.PROTECT,
@@ -764,12 +766,17 @@ class PurchaseLine(models.Model):
     # (обязательства без цены не бывает; 0 законен — образцы). Держит прикладной гейт
     # `engine.lock_purchase`: CHECK строки не видит замок заказа. При рождении поставки из
     # заказа партия получает свою ДОЛЮ этой суммы (`Lot.cost`, волна 26) — не цену штуки.
+    # С НДС: совместимая проекция; исходные числа — VatFacts.document_amount/vat_amount.
     price = money(verbose_name='цена строки (по счёту)', null=True, blank=True)
 
     class Meta:
         verbose_name = 'строка заказа'
         verbose_name_plural = 'строки заказа'
-        constraints = [
+        constraints = [*VatFacts.Meta.constraints,
+            models.CheckConstraint(condition=Q(document_amount__isnull=True)
+                | Q(vat_mode='included', price=models.F('document_amount'))
+                | Q(vat_mode='excluded', price=models.F('document_amount') + models.F('vat_amount')),
+                name='purchaseline_vat_gross'),
             models.UniqueConstraint(fields=['purchase', 'item'],
                                     name='purchaseline_uniq_purchase_item'),
         ]
@@ -901,7 +908,7 @@ class Requisition(StockDocument):
 # --------------------------------------------------------------------------- #
 #  Партия и движения склада
 # --------------------------------------------------------------------------- #
-class Lot(models.Model):
+class Lot(VatFacts):
     """Партия — физическое воплощение изделия, главная учётная единица склада.
     Ровно один origin-документ (`origin` → `StockDocument`).
 
@@ -925,6 +932,8 @@ class Lot(models.Model):
     # округлял: 10 000 резисторов за 3 519,78 ₽ становились партией на 3 500,00 ₽.
     # Расход делит стоимость накопительным округлением (`engine.lot_line_values`):
     # исчерпанная партия списывается ровно в ноль — «последний забирает остаток».
+    # У поставок налоговые факты лежат отдельно в VatFacts; сейчас cost — полная
+    # стоимость. Будущая политика оценки не должна переписывать эти исходные числа.
     cost = money(verbose_name='стоимость партии', default=0)
     # Идентичность партии — пара `code` + `description`, как у всех сущностей (волна 27,
     # решение Ивана 2026-10-21; до того `part_number` + `lot_name`, Волна 13, Ф2f). Обе —
@@ -942,6 +951,12 @@ class Lot(models.Model):
     class Meta:
         verbose_name = 'партия'
         verbose_name_plural = 'партии'
+        constraints = [*VatFacts.Meta.constraints,
+            models.CheckConstraint(condition=Q(document_amount__isnull=True)
+                | Q(vat_amount__isnull=True) | Q(vat_mode='excluded')
+                | Q(document_amount__gte=models.F('vat_amount')),
+                name='lot_vat_within_total'),
+        ]
 
     @property
     def origin_kind(self):

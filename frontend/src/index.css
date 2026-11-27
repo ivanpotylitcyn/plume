@@ -1246,3 +1246,26 @@ tr.row.ghost td { color: var(--fg-dim); }
 .palette-row .p-kind { margin-left: auto; font-family: var(--font-base); font-size: 10px;
   text-transform: uppercase; letter-spacing: .5px; color: var(--fg-dim); flex: 0 0 auto; }
 .palette-empty { padding: 16px; color: var(--fg-dim); font-size: 13px; text-align: center; }
+
+/* НДС: исходные суммы остаются в строках, подробности — в отдельном табе. */
+.vat-panel { min-width: 0; }
+.vat-defaults { display: flex; flex-wrap: wrap; gap: .6rem 1rem; align-items: center; padding: .75rem 1rem; }
+.vat-defaults > .picker { width: 12rem; max-width: 100%; }
+.vat-defaults label { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.vat-defaults label > input { width: 9rem; }
+.vat-rate { display: inline-flex; gap: .25rem; align-items: center; }
+.vat-rate > input { width: 4rem; }
+/* В таблице каждое значение и подпись остаются в одной строке. */
+.vat-line-amount, .vat-line-tax { display: inline-flex; align-items: center; gap: .7ch; white-space: nowrap; vertical-align: top; }
+.vat-defaults .vat-rate > input { width: 4rem; }
+table.vat-grid :is(th, td) { padding-inline: 6px; white-space: nowrap; }
+.vat-line-tax { display: inline-grid; width: 100%; grid-template-columns: minmax(max-content, 1fr) max-content; column-gap: 12px; }
+.vat-line-tax > :first-child { justify-self: center; }
+.vat-tax-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.vat-line-tax .vat-terms-button { gap: 2px; padding-inline: 0; }
+.vat-terms-button .ci { font-size: 11px; }
+.vat-terms-menu { width: 15rem; padding: .6rem; }
+.vat-terms-menu .picker { display: block; width: 100%; margin-bottom: .4rem; }
+.vat-terms-menu .picker input { width: 100%; }
+.vat-terms-menu .vat-rate { margin-bottom: .4rem; }
+.vat-terms-menu .sub { margin-top: .4rem; font-size: .85em; }

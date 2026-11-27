@@ -8362,3 +8362,201 @@ class Wave27SeedTests(TestCase):
         places = {p['code']: p['qty'] for p in engine.lot_locations(case_lot)}
         self.assertEqual(places, {'103': D(8), '105': D(4)})
         self.assertEqual(models.Requisition.objects.filter(locked=True).count(), 2)
+
+
+class VatDocumentFactsTests(EngineTestBase):
+    """Исходные суммы документов, полная стоимость и независимость УПД от счёта."""
+
+    def invoice(self, amounts=('10517', '8305', '5832', '5828', '5895'), qty='1'):
+        purchase = self.make_purchase(date=DAY)
+        lines = [_line(purchase, self.make_item(f'VAT-{i}'), D(qty), price=D(value))
+                 for i, value in enumerate(amounts)]
+        return purchase, lines
+
+    def set_tax(self, purchase, **kw):
+        return engine.update_purchase(purchase, vat_data={
+            'vat_category': 'taxable', 'vat_rate': '22', 'vat_mode': 'excluded',
+            'apply_to_lines': True, **kw})
+
+    def test_invoice_from_pdf_and_gross_budget(self):
+        p, lines = self.invoice()
+        self.set_tax(p, document_total='44379.94', document_vat_total='8002.94')
+        form = engine.purchase_form(p)
+        self.assertEqual(form['estimate'], D('44379.94'))
+        self.assertEqual(form['vat']['net_amount'], '36377.00')
+        self.assertEqual(form['vat']['vat_amount'], '8002.94')
+        self.assertEqual(form['vat']['total_gap'], '0.00')
+        engine.lock_purchase(p)
+        # Та же денежная база в существующем бюджете, не только в панели заказа.
+        self.assertEqual(sum((engine.ProjectSupply(self.prj).spent(line.item) for line in lines), D(0)), D('44379.94'))
+        for line, source in zip(p.lines.order_by('id'), ('10517', '8305', '5832', '5828', '5895')):
+            self.assertEqual(line.document_amount, D(source))
+
+    def test_document_defaults_and_unpriced_draft(self):
+        p, _ = self.invoice(amounts=())
+        self.set_tax(p)
+        item = self.make_item('unpriced')
+        models.ProcurementLine.objects.create(procurement=p.procurement, item=item, qty=D(1))
+        line = engine.add_purchase_line(p, item, D(1))
+        self.assertIsNone(line.price)
+        engine.update_purchase_line(line, vat_data={'document_amount': '100'})
+        self.assertEqual(line.price, D('122'))
+        self.assertEqual(line.vat_amount, D('22'))
+
+    def test_included_tax_preserves_original_total_and_manual_correction(self):
+        p, (line,) = self.invoice(('10',))
+        self.set_tax(p, vat_rate='21', vat_mode='included')
+        line.refresh_from_db()
+        self.assertEqual(line.document_amount, D('10'))
+        self.assertEqual(line.price, D('10'))
+        self.assertEqual(line.vat_amount, D('1.74'))
+        engine.update_purchase_line(line, vat_data={'vat_amount': '1.73'})
+        self.assertEqual(engine.purchase_form(p)['rows'][0]['vat_difference'], '-0.01')
+        line.refresh_from_db()
+        self.assertEqual(line.vat_amount, D('1.73'))
+        self.assertTrue(line.vat_amount_manual)
+        engine.update_purchase_line(line, vat_data={'document_amount': '11'})
+        self.assertEqual(line.vat_amount, D('1.73'))
+        engine.update_purchase_line(line, vat_data={'document_amount': '10'})
+        engine.update_purchase_line(line, qty=D(2))
+        self.assertEqual(line.vat_amount, D('1.73'))
+        self.assertEqual(line.document_amount, D('10'))
+
+    def test_legacy_gross_api_keeps_exact_amount_in_excluded_mode(self):
+        p, (line,) = self.invoice(('10',))
+        self.set_tax(p, vat_rate='21')
+        line.refresh_from_db()
+        engine.update_purchase_line(line, price=D('10'))
+        self.assertEqual(line.price, D('10'))
+        self.assertEqual(line.document_amount, D('8.26'))
+        self.assertEqual(line.vat_amount, D('1.74'))
+
+    def test_mixed_rates_exempt_zero_and_unknown(self):
+        p, lines = self.invoice(('100', '100', '100', '100'))
+        self.set_tax(p)
+        for line in lines:
+            line.refresh_from_db()
+        engine.update_purchase_line(lines[1], vat_data={'vat_rate': '10'})
+        engine.update_purchase_line(lines[2], vat_data={'vat_category': 'exempt'})
+        engine.update_purchase_line(lines[3], vat_data={'vat_rate': '0'})
+        totals = engine.purchase_form(p)['vat']
+        self.assertEqual(totals['vat_amount'], '32.00')
+        self.assertEqual(totals['gross_amount'], '432.00')
+        self.assertEqual(lines[2].vat_category, 'exempt')
+        self.assertEqual(lines[3].vat_category, 'taxable')
+        engine.update_purchase_line(lines[3], vat_data={
+            'vat_category': 'unknown', 'vat_mode': 'included'})
+        self.assertIsNone(engine.purchase_form(p)['vat']['vat_amount'])
+        self.assertEqual(lines[3].price, D('100'))
+
+    def test_partial_receipts_preserve_tax_and_total_to_last_kopeck(self):
+        p, (line,) = self.invoice(('1',), qty='3')
+        self.set_tax(p, vat_mode='included')
+        line.refresh_from_db()
+        engine.lock_purchase(p)
+        receipt = engine.create_receipt_from_purchase(p, self.user, number='VAT-1', date=DAY)
+        lot = receipt.lots.get()
+        # Первая накладная на одну из трёх штук: числа именно из этого УПД.
+        engine.update_receipt_lot(lot, qty=D(1), vat_data={
+            'document_amount': '0.33', 'vat_amount': '0.06'})
+        engine.lock_receipt(receipt)
+        second = engine.create_receipt_from_purchase(p, self.user, number='VAT-2', date=DAY)
+        other = second.lots.get()
+        self.assertEqual(other.qty, D(2))
+        self.assertEqual(other.document_amount, D('0.67'))
+        self.assertEqual(lot.cost + other.cost, line.price)
+        self.assertEqual(lot.vat_amount + other.vat_amount, line.vat_amount)
+        engine.update_receipt_lot(other, vat_data={'document_amount': '0.68'})
+        line.refresh_from_db()
+        self.assertEqual(line.price, D(1))
+        self.assertEqual(engine.receipt_form(second)['order_gap'], D('0.01'))
+
+    def test_receipt_without_order_uses_gross_stock_cost(self):
+        receipt = engine.create_receipt(self.prj, self.user, number='VAT', date=DAY,
+                                        contractor=self.supplier)
+        engine.update_receipt(receipt, vat_data={
+            'vat_category': 'taxable', 'vat_rate': '22', 'vat_mode': 'excluded'})
+        lot = engine.add_receipt_lot(receipt, self.make_item('receipt-tax'), D(2),
+                                   vat_data={'document_amount': '100'})
+        self.assertEqual(lot.cost, D('122'))
+        engine.lock_receipt(receipt)
+        self.assertEqual(lot.movements.get().cost, D('122'))
+        engine.unlock_receipt(receipt)
+        engine.update_receipt_lot(lot, qty=D(1))
+        self.assertEqual(lot.cost, D('122'))  # число УПД не меняется от правки количества
+
+    def test_expected_totals_gate_fixation_and_locked_edits(self):
+        p, (line,) = self.invoice(('100',))
+        self.set_tax(p, document_total='123')
+        with self.assertRaises(ValidationError):
+            engine.lock_purchase(p)
+        engine.update_purchase(p, vat_data={'document_total': '122', 'document_vat_total': '22'})
+        engine.lock_purchase(p)
+        with self.assertRaises(ValidationError):
+            engine.update_purchase(p, vat_data={'vat_rate': '10', 'apply_to_lines': True})
+        line.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            engine.update_purchase_line(line, vat_data={'vat_amount': '10'})
+
+    def test_legacy_data_stays_unknown_and_unchanged(self):
+        p, (line,) = self.invoice(('123.45',))
+        self.assertEqual(line.price, D('123.45'))
+        self.assertEqual(line.vat_category, 'unknown')
+        self.assertIsNone(line.vat_amount)
+        self.assertIsNone(engine.purchase_form(p)['vat']['net_amount'])
+        engine.lock_purchase(p)  # старые записи не требуют угадать ставку
+
+    def test_bad_numeric_and_tax_values_rejected_atomically(self):
+        p, (line,) = self.invoice(('100',))
+        for patch in ({'vat_rate': 'NaN'}, {'vat_rate': 'Infinity'}, {'vat_rate': '-1'},
+                      {'vat_rate': '101'}, {'document_amount': 'bad'}):
+            with self.assertRaises(ValidationError):
+                self.set_tax(p, **patch)
+            p.refresh_from_db()
+            line.refresh_from_db()
+            self.assertEqual(line.price, D('100'))
+            self.assertEqual(p.vat_category, 'unknown')
+        self.set_tax(p, vat_mode='included')
+        line.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            engine.update_purchase_line(line, vat_data={'vat_amount': '101'})
+
+    def test_manual_tax_reset_overflow_and_empty_receipt_amount(self):
+        p, (line,) = self.invoice(('100',))
+        self.set_tax(p)
+        line.refresh_from_db()
+        engine.update_purchase_line(line, vat_data={'vat_amount': '21.99'})
+        self.assertTrue(line.vat_amount_manual)
+        engine.update_purchase_line(line, vat_data={'vat_amount': None})
+        self.assertFalse(line.vat_amount_manual)
+        self.assertEqual(line.vat_amount, D('22'))
+        with self.assertRaises(ValidationError):
+            engine.update_purchase_line(line, vat_data={'document_amount': '999999999999.99'})
+        receipt = engine.create_receipt(self.prj, self.user)
+        lot = engine.add_receipt_lot(receipt, self.make_item('zero-vat'), D(1))
+        with self.assertRaises(ValidationError):
+            engine.update_receipt_lot(lot, vat_data={'document_amount': None})
+
+    def test_purchase_admin_cannot_bypass_money_engine(self):
+        p, _ = self.invoice()
+        view = admin.admin.site._registry[models.Purchase]
+        self.assertFalse(view.has_add_permission(None))
+        self.assertFalse(view.has_change_permission(None, p))
+        self.assertFalse(view.has_delete_permission(None, p))
+
+    def test_vat_api_uses_decimal_strings_and_rejects_bad_payload(self):
+        p, (line,) = self.invoice(('100',))
+        client = Client()
+        client.force_login(self.user)
+        response = client.patch(f'/api/purchases/{p.pk}/', data=json.dumps({'vat': {
+            'vat_category': 'taxable', 'vat_rate': '22', 'vat_mode': 'excluded',
+            'apply_to_lines': True}}), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['rows'][0]['gross_amount'], '122.00')
+        response = client.patch(f'/api/purchase-lines/{line.pk}/', data=json.dumps({
+            'vat': {'document_amount': '0.01'}}), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['rows'][0]['document_amount'], '0.01')
+        response = client.patch(f'/api/purchases/{p.pk}/', data=json.dumps({'vat': []}),
+                                content_type='application/json')
+        self.assertEqual(response.status_code, 400)

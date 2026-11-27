@@ -40,6 +40,13 @@ def _dec(value):
         return None
 
 
+def _vat_data(data):
+    value = data.get('vat')
+    if value is not None and not isinstance(value, dict):
+        raise ValidationError('Налоговые данные должны быть объектом.')
+    return value
+
+
 def _actor(request):
     """Автор документа — залогиненный пользователь.
 
@@ -952,7 +959,7 @@ def receipt_detail(request, pk):
         d = request.data
         try:
             engine.update_receipt(
-                r, number=d['number'] if 'number' in d else None,
+                r, vat_data=_vat_data(d), number=d['number'] if 'number' in d else None,
                 contractor=_resolve_contractor(d),
                 date=d['date'] if 'date' in d else None, user=_resolve_author(d),
                 project=_resolve_project(d), location=_resolve_location(d),
@@ -979,7 +986,7 @@ def receipt_lots(request, pk):
             r, item, _dec(d.get('qty')),
             cost=_dec(d.get('cost')) or engine.ZERO,
             lot_description=d.get('lot_description') or '',
-            lot_code=d.get('lot_code') or '')
+            lot_code=d.get('lot_code') or '', vat_data=_vat_data(d))
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
@@ -1005,7 +1012,7 @@ def receipt_lot_detail(request, pk):
                 qty=_dec(d['qty']) if 'qty' in d else None,
                 cost=_dec(d['cost']) if 'cost' in d else None,
                 lot_description=d['lot_description'] if 'lot_description' in d else None,
-                lot_code=d['lot_code'] if 'lot_code' in d else None)
+                lot_code=d['lot_code'] if 'lot_code' in d else None, vat_data=_vat_data(d))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.receipt_form(receipt))
@@ -1087,7 +1094,7 @@ def purchase_detail(request, pk):
         d = request.data
         try:
             engine.update_purchase(
-                p, date=d['date'] if 'date' in d else None,
+                p, vat_data=_vat_data(d), date=d['date'] if 'date' in d else None,
                 code=d['code'] if 'code' in d else engine._UNSET,
                 description=d['description'] if 'description' in d else None,
                 user=_resolve_author(d),
@@ -1112,7 +1119,8 @@ def purchase_lines(request, pk):
     d = request.data
     try:
         item = models.Item.objects.get(pk=d['item_id'])
-        engine.add_purchase_line(p, item, _dec(d.get('qty')), price=_dec(d.get('price')))
+        engine.add_purchase_line(p, item, _dec(d.get('qty')), price=_dec(d.get('price')),
+                                 vat_data=_vat_data(d))
     except (KeyError, models.Item.DoesNotExist) as e:
         return _bad(f'Нужны item_id, qty ({e}).')
     except ValidationError as e:
@@ -1143,7 +1151,8 @@ def purchase_line_detail(request, pk):
             engine.update_purchase_line(
                 line,
                 qty=_dec(d.get('qty')) if 'qty' in d else engine._UNSET,
-                price=_dec(d.get('price')) if 'price' in d else engine._UNSET)
+                price=_dec(d.get('price')) if 'price' in d else engine._UNSET,
+                vat_data=_vat_data(d))
     except ValidationError as e:
         return _bad(e.messages[0] if e.messages else e)
     return Response(engine.purchase_form(purchase))

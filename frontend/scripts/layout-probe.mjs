@@ -39,6 +39,7 @@
 //   --hover SEL      селектор для режима hover (по умолчанию `.prow--sums .sumtip-host`)
 //   --shots DIR      сохранять снимки экрана в DIR
 //   --strict         код выхода 1, если хоть где-то переполнение / наезд / вылет вбок
+//   --single-line    проверить, что строки table.grid имеют стандартную высоту
 //   --min-grid 692   критерий приёмки волны 25 (Ф4): прокрутка таблицы таба — нарушение
 //   --min-prow 968   только при рабочей области не уже порога своей семьи списков
 //                    (`table.grid` / сетка `.prow`); уже — законная страховка, «·» в выводе
@@ -60,7 +61,7 @@ const MODE = argv[0] && !argv[0].startsWith('--') ? argv.shift() : 'matrix'
 const opt = {}
 for (let i = 0; i < argv.length; i++) {
   const k = argv[i].replace(/^--/, '')
-  const flag = ['edit', 'strict'].includes(k)
+  const flag = ['edit', 'strict', 'single-line'].includes(k)
   opt[k] = flag ? true : argv[++i]
 }
 if (!['matrix', 'cols', 'ghost', 'hover'].includes(MODE) || !opt.forms) {
@@ -144,6 +145,11 @@ const MEASURE = `(() => {
   const list = document.querySelector('.fs-list')
   if (list) { out.listX = list.scrollWidth - list.clientWidth; out.fit = list.dataset.fit ?? 0
     out.family = list.querySelector('.pgrid') ? 'prow' : 'grid' }
+  const gridRows = [...document.querySelectorAll('.fs-list table.grid tbody tr.row:not(.ghost)')]
+    .filter(el => r(el).height > 0)
+  out.rowMax = Math.max(0, ...gridRows.map(el => r(el).height))
+  const cell = gridRows[0]?.querySelector('td')
+  out.rowStandard = cell ? parseFloat(getComputedStyle(cell).lineHeight) + 7 : 0
   // торчит за правый край .work и НЕ внутри собственной прокрутки — вылет рамки
   const edge = W.right - (work.offsetWidth - work.clientWidth) + 0.5
   const stick = new Set()
@@ -225,12 +231,13 @@ try {
             // прокрутка списка уже порога своей семьи — законная страховка (критерий Ф4)
             const scroll = m.listX > 0, allowed = scroll && m.workW < MIN[m.family]
             const fail = m.workX > 0 || m.headX > 0 || (scroll && !allowed) ||
-              m.overlap?.length || m.stickOut?.length
+              m.overlap?.length || m.stickOut?.length ||
+              (opt['single-line'] && m.rowMax > m.rowStandard + 1)
             if (fail) bad++
             console.log([...tag.slice(0, 4), String(tag[4]).padEnd(12), fail ? '✗' : allowed ? '·' : '✓',
               `work ${m.workW}`, `workX ${m.workX}`, `поля ${m.fieldsW}/команды ${m.cmdW}`,
               `headX ${m.headX}`, `listX ${m.listX ?? '-'}`, `fit ${m.fit ?? '-'}`, `список ${m.sideW}px ✂ ${m.sideClipped}/${m.sideRows}`,
-              `табы ${m.tabsH}px`, m.overlap?.length ? 'наезд ' + m.overlap.join(' ') : '',
+              `табы ${m.tabsH}px`, opt['single-line'] ? `строки ${m.rowMax}/${m.rowStandard}px` : '', m.overlap?.length ? 'наезд ' + m.overlap.join(' ') : '',
               m.stickOut?.length ? 'вылет ' + m.stickOut.join(' ') : ''].join('  '))
           } else if (MODE === 'cols') {
             console.log(tag.join(' '), '::', await ev(COLS))

@@ -356,7 +356,27 @@ export interface ReceiptRow {
   contractor_code: string; contractor_name: string
   project_code: string; locked: boolean; lines: number
 }
-export interface ReceiptLot {
+export interface VatTerms {
+  vat_mode: 'included' | 'excluded'
+  vat_category: 'unknown' | 'exempt' | 'taxable'
+  vat_rate: string | null
+}
+export interface VatFacts extends VatTerms {
+  document_amount: string | null; vat_amount: string | null
+  vat_amount_manual: boolean
+  net_amount: string | null; gross_amount: string | null; vat_difference: string | null
+}
+export interface VatSummary extends VatTerms {
+  document_total: string | null; document_vat_total: string | null
+  net_amount: string | null; vat_amount: string | null; gross_amount: string
+  unknown_rows: number; total_gap: string | null; vat_gap: string | null
+}
+export type VatPatch = Partial<VatTerms & {
+  document_amount: string | null; vat_amount: string | null
+  document_total: string | null; document_vat_total: string | null
+  apply_to_lines: boolean
+}>
+export interface ReceiptLot extends VatFacts {
   item_native: boolean          // волна 27: глиф партии — изделие/компонент
   id: number; item_id: number; item_code: string; item_description: string; uom: string
   item_category: string | null           // класс изделия — фильтр колонки
@@ -365,6 +385,7 @@ export interface ReceiptLot {
   lot_code: string; consumed: boolean
 }
 export interface ReceiptForm extends Authored, LocationHead {
+  vat: VatSummary
   id: number; number: string; date: string
   code: string | null; description: string
   contractor_id: number | null; contractor_code: string; contractor_name: string
@@ -384,7 +405,7 @@ export interface PurchaseRow {
   files: number      // 2026-10-20: вложения — подтверждение из оффлайна (цвет печати)
   coverage: Status   // покрытие лотами: `available` — закрыт поставками (печать заполнена)
 }
-export interface PurchaseFormLine {
+export interface PurchaseFormLine extends VatFacts {
   id: number; item_id: number; item_code: string; item_description: string; uom: string
   item_category: string | null           // класс изделия — фильтр колонки
   item_native: boolean; item_synced: boolean; item_locked: boolean
@@ -403,6 +424,7 @@ export interface PurchaseReceiptRow {
   locked: boolean; contractor_code: string; contractor_name: string; lines: number
 }
 export interface PurchaseForm extends Authored {
+  vat: VatSummary
   id: number; locked: boolean; project_id: number; project_code: string
   // Волна 24: заказ рождается из закупки (она обязательна), проект — через неё.
   // Контрагент — только у заказа («у кого купили»), выбирается в его форме.
@@ -975,14 +997,14 @@ export const api = {
   deleteCounterparty: (id: number) => send<void>('DELETE', `/api/counterparties/${id}/`),
   receipts: () => get<ReceiptRow[]>('/api/receipts/'),
   receipt: (id: number) => get<ReceiptForm>(`/api/receipts/${id}/`),
-  updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string; location_id: number | null }>) =>
+  updateReceipt: (id: number, b: Partial<{ number: string; date: string; contractor_id: number | null; user_id: number; project_id: number; code: string | null; description: string; location_id: number | null; vat: VatPatch }>) =>
     send<ReceiptForm>('PATCH', `/api/receipts/${id}/`, b),
   addReceiptLot: (id: number, b: {
-    item_id: number; qty: number; cost?: number
+    item_id: number; qty: number; cost?: number; vat?: VatPatch
     lot_description?: string; lot_code?: string
   }) => send<ReceiptForm>('POST', `/api/receipts/${id}/lots/`, b),
   updateReceiptLot: (id: number, b: Partial<{
-    qty: number; cost: number; lot_description: string; lot_code: string
+    qty: number; cost: number; lot_description: string; lot_code: string; vat: VatPatch
   }>) => send<ReceiptForm>('PATCH', `/api/lots/${id}/`, b),
   deleteReceiptLot: (id: number) => send<ReceiptForm>('DELETE', `/api/lots/${id}/`),
   lockReceipt: (id: number) => send<ReceiptForm>('POST', `/api/receipts/${id}/lock/`),
@@ -994,13 +1016,13 @@ export const api = {
   purchases: () => get<PurchaseRow[]>('/api/purchases/'),
   purchase: (id: number) => get<PurchaseForm>(`/api/purchases/${id}/`),
   updatePurchase: (id: number, b: Partial<{ date: string; code: string | null; description: string; user_id: number
-      contractor_id: number | null; procurement_id: number }>) =>
+      contractor_id: number | null; procurement_id: number; vat: VatPatch }>) =>
     send<PurchaseForm>('PATCH', `/api/purchases/${id}/`, b),
   deletePurchase: (id: number) => send<void>('DELETE', `/api/purchases/${id}/`),
   addPurchaseLine: (id: number, b: { item_id: number; qty: number }) =>
     send<PurchaseForm>('POST', `/api/purchases/${id}/lines/`, b),
   // Автосейв строки заказа: количество и/или цена по счёту (`null` стирает цену).
-  updatePurchaseLine: (id: number, b: { qty?: number; price?: number | null }) =>
+  updatePurchaseLine: (id: number, b: { qty?: number; price?: number | null; vat?: VatPatch }) =>
     send<PurchaseForm>('PATCH', `/api/purchase-lines/${id}/`, b),
   deletePurchaseLine: (id: number) =>
     send<PurchaseForm>('DELETE', `/api/purchase-lines/${id}/`),
@@ -1071,7 +1093,7 @@ export const api = {
     cost?: number; lot_description?: string; lot_code?: string
   }) => send<InventoryForm>('POST', `/api/inventories/${id}/lots/`, b),
   updateInventoryLot: (id: number, b: Partial<{
-    qty: number; cost: number; lot_description: string; lot_code: string
+    qty: number; cost: number; lot_description: string; lot_code: string; vat: VatPatch
   }>) => send<InventoryForm>('PATCH', `/api/inventory-lots/${id}/`, b),
   deleteInventoryLot: (id: number) =>
     send<InventoryForm>('DELETE', `/api/inventory-lots/${id}/`),

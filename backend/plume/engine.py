@@ -131,7 +131,7 @@ from django.db.models import Count, Exists, F, OuterRef, Prefetch, Q, Sum
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
-from . import models
+from . import models, vat
 
 ZERO = Decimal('0')
 KOPECK = Decimal('0.01')   # шаг округления денег (волна 26: и доли стоимости партии)
@@ -2102,7 +2102,7 @@ def receipt_form(receipt):
             by_order = (by_order or ZERO) + shares[lot.id]
             matched += lot.cost
         lots.append({
-            'id': lot.id, 'item_id': lot.item_id, 'item_code': lot.item.code,
+            'id': lot.id, **vat.facts(lot, 'cost'), 'item_id': lot.item_id, 'item_code': lot.item.code,
             'item_description': lot.item.description, 'uom': lot.item.uom,
             'item_category': category_code(lot.item),   # фильтр колонки
             'item_native': lot.item.native,
@@ -2126,6 +2126,7 @@ def receipt_form(receipt):
         'project_name': receipt.project.description,
         'purchase_id': receipt.purchase_id,   # связанный заказ (закрытие строк)
         'locked': receipt.locked, 'total_cost': total,
+        'vat': vat.wire(vat.summary(receipt, receipt_lots, 'cost')),
         # Волна 26: «по заказу на эти позиции» и расхождение УПД со счётом (`None` — не из
         # заказа или сравнивать нечего).
         'by_order': by_order,
@@ -2134,8 +2135,9 @@ def receipt_form(receipt):
     }
 
 
+@transaction.atomic
 def add_receipt_lot(receipt, item, qty, cost=ZERO, lot_description='',
-                    lot_code=''):
+                    lot_code='', vat_data=None, vat_inferred=False):
     """Добавить строку УПД: рождается партия (`+RECEIPT`) в проекте прихода.
     `cost` — стоимость строки УПД целиком (волна 26), а не цена штуки."""
     _require_unlocked(receipt)
@@ -2143,11 +2145,13 @@ def add_receipt_lot(receipt, item, qty, cost=ZERO, lot_description='',
         raise ValidationError('Количество прихода должно быть положительным.')
     if cost is not None and cost < 0:
         raise ValidationError('Стоимость не может быть отрицательной.')
-    lot = models.Lot.objects.create(
+    lot = models.Lot(
         item=item, project=receipt.project, origin=receipt, qty=qty,
-        cost=cost or ZERO, description=lot_description or '',
-        code=lot_code or '',
-    )
+        cost=cost or ZERO, description=lot_description or '', code=lot_code or '')
+    vat.apply_facts(lot, 'cost', {**vat.terms(receipt), **(vat_data or {})}, gross_changed=True)
+    if vat_inferred:
+        lot.vat_amount_manual = False
+    lot.save()
     rebuild_movements(lot)
     return lot
 
@@ -2207,20 +2211,22 @@ def _purchase_shares(purchase, lots):
     return out
 
 
+@transaction.atomic
 def update_receipt_lot(lot, qty=None, cost=None, lot_description=None,
-                       lot_code=None):
+                       lot_code=None, vat_data=None):
     """Автосейв строки УПД (кол-во/стоимость/название/PN). Правка до замка.
 
     Кол-во не клампим по потреблению: уронить ниже списанного можно — живой остаток
     уйдёт в минус (недостача информативнее, в духе мутабельной ДНК). Правка количества
-    без стоимости сохраняет цену штуки (`_rescaled_cost`); явная стоимость — главнее.
+    без стоимости сохраняет цену штуки только у строк с неизвестным НДС; у строк
+    с известными налоговыми фактами сумма документа сохраняется.
     """
     _require_unlocked(lot.origin)
     fields = []
     if qty is not None:
         if qty <= 0:
             raise ValidationError('Количество прихода должно быть положительным.')
-        if cost is None and qty != lot.qty:
+        if cost is None and qty != lot.qty and lot.vat_category == 'unknown':
             lot.cost = _rescaled_cost(lot, qty)
             fields.append('cost')
         lot.qty = qty
@@ -2237,8 +2243,11 @@ def update_receipt_lot(lot, qty=None, cost=None, lot_description=None,
     if lot_code is not None:
         lot.code = lot_code
         fields.append('code')
+    if vat_data or 'cost' in fields:
+        vat.apply_facts(lot, 'cost', vat_data or {}, gross_changed='cost' in fields)
+        fields.extend([*vat.FIELDS, 'cost'])
     if fields:
-        lot.save(update_fields=fields)
+        lot.save(update_fields=list(set(fields)))
         rebuild_movements(lot)
     return lot
 
@@ -2257,6 +2266,7 @@ def lock_receipt(receipt):
     """Поставить замок «сверено со сканом» — форма прихода read-only, партии УПД
     ложатся на склад (Ф15). Ф15 заодно сняла рукописную копию `lock_document`:
     поставка ходит общей дорогой, как остальные пять ордеров."""
+    vat.check_totals(receipt, receipt.lots.all(), 'cost')
     return lock_document(receipt, receipt.lots,
                          'Нельзя сверить пустой приход — добавьте строку.')
 
@@ -2348,14 +2358,22 @@ def create_receipt_from_purchase(purchase, user, number='', date=None):
     receipt = _born_order(
         models.Receipt, purchase.project, user, number, date,
         contractor=purchase.contractor, purchase=purchase)
+    for key, value in vat.terms(purchase).items():
+        setattr(receipt, key, value)
+    receipt.save(update_fields=list(vat.TERMS))
     for line, rest in remaining:
         # Волна 26: партия получает свою ДОЛЮ цены строки накопительным округлением —
         # поставки частями в сумме дают счёт до копейки (раньше цена штуки округлялась).
         received = line.qty - rest
-        add_receipt_lot(receipt, line.item, rest,
-                        cost=(_share(line.price, line.qty, line.qty)
-                              - _share(line.price, line.qty, received)
-                              if line.price is not None else ZERO),
+        gross = (_share(line.price, line.qty, line.qty)
+                 - _share(line.price, line.qty, received) if line.price is not None else ZERO)
+        tax = (_share(line.vat_amount, line.qty, line.qty)
+               - _share(line.vat_amount, line.qty, received)
+               if line.vat_amount is not None else None)
+        source = gross - (tax or ZERO) if line.vat_mode == 'excluded' else gross
+        add_receipt_lot(receipt, line.item, rest, cost=gross,
+                        vat_data={**vat.terms(line), 'document_amount': source, 'vat_amount': tax},
+                        vat_inferred=True,
                         lot_description=line.item.description)
     return receipt
 
@@ -2817,6 +2835,7 @@ def purchase_form(purchase):
             'status': st,
             # Цена всей строки по счёту (волна 24) и выведенная из неё цена штуки.
             'price': line.price, 'unit_price': purchase_unit_price(line),
+            **vat.facts(line, 'price'),
             'receipts': closed_by,     # Ф6: какими накладными строка закрыта
         })
     receipts = [
@@ -2844,6 +2863,7 @@ def purchase_form(purchase):
         'editable': editable,                       # строки правятся только пока не зафиксировано
         'worst_status': _worst_of(statuses),      # worst-of закрытости строк
         'total_ordered': total_ordered, 'total_received': total_received,
+        'vat': vat.wire(vat.summary(purchase, lines, 'price')),
         **money,          # estimate (сумма по счёту) / unestimated — блок «Деньги»
         # Волна 26: ход поставки в деньгах по счёту; получено + ждём = сумма заказа.
         'received_money': received_money, 'awaiting_money': awaiting_money,
@@ -2858,7 +2878,7 @@ PURCHASE_QTY_NEGATIVE = 'Количество заказа не может бы�
 
 
 @transaction.atomic
-def add_purchase_line(purchase, item, qty, price=None):
+def add_purchase_line(purchase, item, qty, price=None, vat_data=None):
     """Добавить строку заказа (только в черновике). `(purchase, item)` уникальна.
 
     **Ноль разрешён** (2026-08-19, решение Ивана) — на тех же основаниях, что и в
@@ -2883,8 +2903,10 @@ def add_purchase_line(purchase, item, qty, price=None):
         raise ValidationError(
             f'Изделие {item.code} уже в заказе — правьте существующую строку.')
     price = _check_price(price)
-    return models.PurchaseLine.objects.create(purchase=purchase, item=item, qty=qty,
-                                              price=price)
+    line = models.PurchaseLine(purchase=purchase, item=item, qty=qty, price=price)
+    vat.apply_facts(line, 'price', {**vat.terms(purchase), **(vat_data or {})}, gross_changed=True)
+    line.save()
+    return line
 
 
 PURCHASE_PRICE_NEGATIVE = 'Цена не может быть отрицательной.'
@@ -2900,7 +2922,8 @@ def _check_price(price):
     return price.quantize(KOPECK, rounding=ROUND_HALF_UP)
 
 
-def update_purchase_line(line, qty=_UNSET, price=_UNSET):
+@transaction.atomic
+def update_purchase_line(line, qty=_UNSET, price=_UNSET, vat_data=None):
     """Автосейв строки заказа — количества и/или цены строки по счёту (только в черновике).
 
     Ноль количества допустим на тех же основаниях, что при рождении строки: вернуть
@@ -2918,8 +2941,11 @@ def update_purchase_line(line, qty=_UNSET, price=_UNSET):
     if price is not _UNSET:
         line.price = _check_price(price)
         fields.append('price')
+    if vat_data or price is not _UNSET:
+        vat.apply_facts(line, 'price', vat_data or {}, gross_changed=price is not _UNSET)
+        fields.extend([*vat.FIELDS, 'price'])
     if fields:
-        line.save(update_fields=fields)
+        line.save(update_fields=list(set(fields)))
     return line
 
 
@@ -2957,6 +2983,7 @@ def lock_purchase(purchase):
         raise ValidationError(
             'Перед фиксацией укажите цену по счёту у всех строк — нет у '
             + ', '.join(unpriced[:3]) + more + '.')
+    vat.check_totals(purchase, purchase.lines.all(), 'price')
     purchase.locked = True
     purchase.save(update_fields=['locked'])
     return purchase
@@ -4503,14 +4530,40 @@ def update_document(doc, number=None, date=None, code=_UNSET, description=None,
     })
 
 
-def update_receipt(receipt, **kw):
-    """Шапка поставки: № УПД / дата / код / описание / автор / проект-якорь."""
-    return update_document(receipt, **kw)
+def _update_vat_document(doc, patch):
+    if not patch:
+        return
+    if set(patch) - {*vat.HEADER, 'apply_to_lines'}:
+        raise ValidationError('Неизвестные налоговые поля шапки документа.')
+    if 'apply_to_lines' in patch and not isinstance(patch['apply_to_lines'], bool):
+        raise ValidationError('Применение ко всем строкам задаётся логическим значением.')
+    _require_unlocked(doc)
+    vat.set_terms(doc, patch)
+    for key in ('document_total', 'document_vat_total'):
+        if key in patch:
+            setattr(doc, key, vat.decimal(patch[key]))
+    doc.save(update_fields=list(vat.HEADER))
+    if patch.get('apply_to_lines') is True:
+        purchase = isinstance(doc, models.Purchase)
+        rows = doc.lines.all() if purchase else doc.lots.all()
+        for row in rows:
+            if purchase:
+                update_purchase_line(row, vat_data=vat.terms(doc))
+            else:
+                update_receipt_lot(row, vat_data=vat.terms(doc))
+
+
+@transaction.atomic
+def update_receipt(receipt, vat_data=None, **kw):
+    """Шапка поставки и исходные итоги УПД."""
+    update_document(receipt, **kw)
+    _update_vat_document(receipt, vat_data)
+    return receipt
 
 
 @transaction.atomic
 def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UNSET,
-                    contractor=_UNSET, procurement=_UNSET):
+                    contractor=_UNSET, procurement=_UNSET, vat_data=None):
     """Правка шапки заказа (дата / код / описание / автор / контрагент). Только в
     черновике.
 
@@ -4556,6 +4609,7 @@ def update_purchase(purchase, date=None, code=_UNSET, description=None, user=_UN
         fields.append('description')
     if fields:
         purchase.save(update_fields=fields)
+    _update_vat_document(purchase, vat_data)
     return purchase
 
 

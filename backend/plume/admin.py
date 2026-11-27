@@ -18,7 +18,8 @@
    можно и нужно (это и есть разбор полётов), менять — через движок.
 
 Справочники (`Item`/`Project`/`Counterparty`/`Location`/`Category`) и планирование
-закупок (`Procurement`/`Purchase`) правятся как раньше: движений они не порождают.
+закупок (`Procurement`) правятся как раньше. Заказы — витрина: денежные факты
+и фиксация принадлежат движку.
 """
 from django.contrib import admin
 
@@ -83,9 +84,10 @@ class ProcurementLineInline(admin.TabularInline):
     extra = 0
 
 
-class PurchaseLineInline(admin.TabularInline):
+class PurchaseLineInline(_ReadOnlyInline):
     model = models.PurchaseLine
-    extra = 0
+    fields = ('item', 'qty', 'document_amount', 'vat_mode', 'vat_category',
+              'vat_rate', 'vat_amount', 'vat_amount_manual', 'price')
 
 
 # --- инлайны ордера (витрины: строки и партии принадлежат движку) --------- #
@@ -199,7 +201,8 @@ class ProcurementAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.Purchase)
-class PurchaseAdmin(admin.ModelAdmin):
+class PurchaseAdmin(_ReadOnlyAdmin):
+    # Денежные факты, их проекция и фиксация проходят только через движок.
     # Ф17: контрагент — у всех трёх уровней контура; у заказа он и есть «у кого купили».
     # Волна 24: проект — через закупку (поле снято с заказа).
     list_display = ('__str__', 'procurement', 'locked', 'contractor', 'date', 'user')

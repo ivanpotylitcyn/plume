@@ -146,9 +146,9 @@ cd frontend && npx tsc --noEmit && npm run build && npm run lint
 flowchart TD
   P["Проект (НИР / контракт)<br/>+ бюджет на материалы"] --> D["Потребность: N изделий<br/>(ProjectDemand)"]
   D --> B["Разузлование BOM<br/>→ потребность в компонентах"]
-  B --> ORD["Закупка (Procurement) = ЧТО купить для проекта — источник правды, xlsx-бланк<br/>«Новый заказ» → Заказы (Purchase) = У КОГО купить: обязательство, цены оффлайн"]
+  B --> ORD["Закупка (Procurement) = ЧТО купить для проекта — источник правды, xlsx-бланк<br/>«Новый заказ» → Заказы (Purchase) = У КОГО купить: обязательство, суммы счёта + НДС"]
   CP["Контрагент: реквизиты, сайт, контактное лицо"] -.-> ORD
-  ORD --> UPD["Поставка по УПД = КТО привёз<br/>(Receipt → партии Lot)"]
+  ORD --> UPD["Поставка по УПД = КТО привёз<br/>(Receipt → партии Lot)<br/>Суммы УПД и НДС — независимые факты; сейчас затраты = полная стоимость"]
   UPD --> W
 
   UPD -.->|"«Куда» = Центральный склад<br/>(в норме пуст — лот ждёт Требования)"| CS[("Центральный склад")]
@@ -298,12 +298,18 @@ erDiagram
   }
   LOT {
     int id PK
+    string vat_mode "included / excluded: режим ввода сумм"
+    string vat_category "unknown / exempt / taxable (0% отличается от Без НДС)"
+    decimal vat_rate "снимок ставки, nullable"
+    decimal document_amount "исходная сумма строки в режиме ввода, nullable у старых данных"
+    decimal vat_amount "НДС строки: подсказка расчёта или число из документа, nullable если неизвестен"
+    bool vat_amount_manual "сумма НДС введена из документа; false — расчёт или преднабивка"
     int item_id FK
     int project_id FK "home-проект (immutable)"
     int origin_id FK "origin-ордер → StockDocument (вид = origin.kind); дуга схлопнута в один FK (Ф2b)"
     int predecessor_id FK "лот-предшественник при закрытии (nullable)"
     decimal qty "рождённое кол-во (origin-количество; живой остаток = qty + Σ движений)"
-    decimal cost "стоимость партии (волна 26: сумма строки УПД / себестоимость сборки; цена штуки = cost / qty, не хранится)"
+    decimal cost "стоимость партии; для УПД сейчас полная сумма с НДС — проекция фактов документа; для сборки себестоимость; штука = cost / qty"
     string code "PN с коробки (MPN / децимальный); НЕуникален — факт, не ключ (волна 27: был part_number)"
     string description "наименование из УПД / заводские № (волна 27: был lot_name)"
   }
@@ -351,6 +357,11 @@ erDiagram
   }
   PURCHASE {
     int id PK
+    string vat_mode "included / excluded: режим ввода сумм"
+    string vat_category "unknown / exempt / taxable (0% отличается от Без НДС)"
+    decimal vat_rate "снимок ставки, nullable"
+    decimal document_total "полный итог из документа для сверки, nullable"
+    decimal document_vat_total "итог НДС из документа для сверки, nullable"
     string code "наш ярлык, uniq, nullable (Ф10)"
     string description "развёрнутое имя (Ф10; note удалён)"
     bool locked "единый мягкий замок; зафиксирован = обязательство возникло (зелёные в Потребности)"
@@ -361,13 +372,24 @@ erDiagram
   }
   PURCHASELINE {
     int id PK
+    string vat_mode "included / excluded: режим ввода сумм"
+    string vat_category "unknown / exempt / taxable (0% отличается от Без НДС)"
+    decimal vat_rate "снимок ставки, nullable"
+    decimal document_amount "исходная сумма строки в режиме ввода, nullable у старых данных"
+    decimal vat_amount "НДС строки: подсказка расчёта или число из документа, nullable если неизвестен"
+    bool vat_amount_manual "сумма НДС введена из документа; false — расчёт или преднабивка"
     int purchase_id FK
     int item_id FK "uniq в рамках заказа; ⊆ строк плана закупки (волна 24)"
     decimal qty "заказано"
-    decimal price "цена ВСЕЙ строки по счёту (nullable в черновике, обязательна к фиксации); партия поставки из заказа получает долю price (Lot.cost)"
+    decimal price "полная стоимость строки с НДС — проекция исходных сумм (nullable в черновике); доля копируется в Lot.cost"
   }
   STOCKDOCUMENT {
     int id PK "единый id ордера — ОДНА таблица на все восемь видов (Ф14: MTI снят)"
+    string vat_mode "included / excluded: режим ввода сумм"
+    string vat_category "unknown / exempt / taxable (0% отличается от Без НДС)"
+    decimal vat_rate "снимок ставки, nullable"
+    decimal document_total "полный итог из документа для сверки, nullable"
+    decimal document_vat_total "итог НДС из документа для сверки, nullable"
     string kind "receipt/kitting/inventory/reassignment/requisition/transfer/writeoff/relocation — дискриминатор (в27: reassignment = бывший requisition)"
     string code "наш ярлык (напр. Нева ДЗЗ 1), uniq, nullable — общий (Ф10)"
     string description "развёрнутое имя — общее (Ф10; note удалён)"

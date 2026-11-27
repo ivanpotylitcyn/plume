@@ -8,12 +8,13 @@
 // «Название из УПД»): пользователь видит, что куда переписывать. Описание изделия — в
 // подсказке к коду. Просмотр чист (§7): текст вместо погашенных полей, колонка команд
 // строки — только в правке, как у заказа.
+import { decimalInput, VatAmount, VatPanel, VatStats } from './VatPanel'
 import { type KeyboardEvent, useEffect, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type ProjectPurchaseRow,
   type ReceiptForm, type ReceiptLot } from './api'
 import { CommitInput } from './CommitInput'
 import { num, money, count, sumByUom, CounterpartyRef, LotGlyph,
-  MismatchGlyph, gapMoney, moneyCol, moneyField, parseMoney, perUnitTitle, rowNumbers } from './status'
+  MismatchGlyph, gapMoney, perUnitTitle, rowNumbers } from './status'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
 import { LocationField, OrderFields, useOrderForm } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -90,6 +91,10 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
         {c.lots.length === 0 && locked &&
           <div className="tab-empty">Поставка пуста.</div>}
       </> },
+    { key: 'vat', label: 'НДС', icon: 'symbol-operator', content: <VatPanel
+      value={c.vat} rows={c.lots} locked={locked} busy={busy}
+      patch={vat => run(api.updateReceipt(c.id, { vat }))}
+      patchRow={(id, vat) => run(api.updateReceiptLot(id, { vat }))} /> },
     { key: 'files', label: 'Файлы', icon: 'files',
       content: <AttachmentList att={att} locked={locked} /> },
   ]
@@ -163,8 +168,9 @@ export function ReceiptView({ receiptId, items, isNew, openItem, openPurchase, o
           </>} />}
       // Блок «Деньги» (волна 26): ★ сумма по УПД; поставка из заказа сверяется с его счётом
       // (тем же правилом доли, что родило партии) — расхождение видно сразу.
-      extra={<MoneyBlock label="поставка" value={c.total_cost}
+      extra={<MoneyBlock label="поставка с НДС" value={c.total_cost}
         title="Сумма стоимостей строк УПД (факт)">
+        <VatStats value={c.vat} />
         {c.by_order !== null && <StatGroup>
           <Stat label="по заказу" value={money(c.by_order)}
             title="Что эти позиции стоят по счёту заказа (доля цены строки)" />
@@ -227,10 +233,7 @@ function LotRow({ no, lot, locked, draft, busy, openItem, openLot, run }: {
           Пустой ввод — ноль: у партии стоимость есть всегда. В просмотре — деньгами, как
           цена строки заказа (поле с «20054,26» читается хуже «20 054,26 ₽»). */}
       <td className="num c-money" title={perUnitTitle(lot.cost, lot.qty)}>
-        {locked ? moneyCol(lot.cost)
-          : <CommitInput value={moneyField(lot.cost)} disabled={busy} numeric
-              onCommit={v => save({ cost: parseMoney(v) ?? 0 })}
-              validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />}
+        <VatAmount value={lot} locked={locked} busy={busy} patch={vat => save({ vat })} />
       </td>
       {/* Команда строки — только в правке (§7). Потреблённую партию (расфиксированная
           поставка, партия уже ушла ниже) убрать нельзя — вместо корзины объяснение. */}
@@ -268,7 +271,7 @@ function GhostRow({ receiptId, items, busy, run }: {
     if (!itemId || !(q > 0)) return
     run(api.addReceiptLot(receiptId, {
       item_id: itemId, qty: q,
-      cost: parseMoney(cost) ?? undefined,
+      vat: { document_amount: decimalInput(cost) ?? '0' },
       lot_code: pn || undefined,
       lot_description: name || undefined,
     }))

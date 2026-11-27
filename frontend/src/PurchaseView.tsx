@@ -12,6 +12,7 @@
 // закупкой. Рождается только из неё («Новый заказ»), проект выводит через неё, строки
 // берёт только из её позиций. Таб «Потребность» (2026-08-19) снят: планируют в закупке,
 // а не в заказе (решение Ивана — «отучить планировать в Заказе»).
+import { VatAmount, VatPanel, VatStats } from './VatPanel'
 import { useEffect, useMemo, useState } from 'react'
 import { api, type CounterpartyRow, type ItemRow, type PurchaseCandidate, type PurchaseForm,
   type PurchaseFormLine, type ProcurementRow } from './api'
@@ -21,8 +22,8 @@ import { Stat, StatGroup, StatPanel, StatWarn } from './StatPanel'
 import { FormShell, type FormTab } from './FormShell'
 import { Field } from './FormField'
 import { AttachmentList, useAttachments } from './AttachmentPanel'
-import { Cost, CounterpartyRef, ItemGlyph, StatusGlyph,
-  count, money, moneyField, num, parseMoney, paretoCostColumn, rowNumbers } from './status'
+import { CounterpartyRef, ItemGlyph, StatusGlyph,
+  count, money, num, paretoCostColumn, rowNumbers } from './status'
 import { ColumnFilter, useCategoryFilter } from './ColumnFilter'
 import { CounterpartyPicker, ItemPicker } from './Picker'
 import { EntityLink } from './EntityLink'
@@ -148,7 +149,7 @@ export function PurchaseView({ purchaseId, items, procurements, isNew, openItem,
                   ОДНА денежная колонка — цена всей строки, как в счёте: рубли и копейки
                   за строку сходятся со счётом до копейки, цена штуки выводится делением
                   (в подсказке). Стоимость-по-оценке снята: в заказе оценки нет. */}
-              <th className="num c-money" title="цена всей строки по счёту / КП">Цена, ₽</th>
+              <th className="num c-money" title="цена всей строки по счёту / КП">Сумма, ₽</th>
               {!locked && <th className="act" />}
             </tr>
           </thead>
@@ -172,6 +173,10 @@ export function PurchaseView({ purchaseId, items, procurements, isNew, openItem,
         </table>
         {c.rows.length === 0 && locked && <div className="tab-empty">Заказ пуст.</div>}
       </> },
+    { key: 'vat', label: 'НДС', icon: 'symbol-operator', content: <VatPanel
+      value={c.vat} rows={c.rows} locked={locked} busy={busy}
+      patch={vat => run(api.updatePurchase(c.id, { vat }))}
+      patchRow={(id, vat) => run(api.updatePurchaseLine(id, { vat }))} /> },
     { key: 'receipts', label: 'Поставки', icon: 'inbox',
       content: c.receipts.length === 0
         ? <div className="tab-empty">Заказ ещё не закрыт ни одной поставкой.</div>
@@ -287,7 +292,7 @@ export function PurchaseView({ purchaseId, items, procurements, isNew, openItem,
       // оффлайн-счёта, ★ сумма по счёту; рядом — ход поставки в тех же деньгах: получено +
       // ждём = счёт до копейки. Оценки нет — это язык закупки.
       extra={<StatPanel>
-        <Stat main label="заказ" value={money(c.estimate)}
+        <Stat main label="заказ с НДС" value={money(c.estimate)}
           title="Сумма цен строк по счёту — сходится со счётом до копейки" />
         <StatGroup>
           <Stat label="получено" value={money(c.received_money)} dim={c.received_money === 0}
@@ -296,6 +301,7 @@ export function PurchaseView({ purchaseId, items, procurements, isNew, openItem,
             dim={c.awaiting_money === 0}
             title="Оплаченное или обещанное по счёту, но ещё не поставленное" />
         </StatGroup>
+        <VatStats value={c.vat} />
         {c.unestimated.length > 0 &&
           <StatWarn title={'без цены: ' + c.unestimated.join(', ')}>
             {count(c.unestimated.length, 'позиция', 'позиции', 'позиций')} без цены — сумма неполна
@@ -350,17 +356,8 @@ function LineRow({ no, ln, editable, busy, openItem, run }: {
       <td className="num c-money"
         title={ln.unit_price === null ? undefined
           : `за штуку ${money(Math.round(ln.unit_price * 100) / 100)}`}>
-        {editable
-          /* Всегда два знака после запятой — и в поле, и в просмотре (решение Ивана):
-             числа с разным числом знаков глазами не сравнить. Ввод — с точкой или
-             запятой, лишнее округляется до копейки. */
-          ? <CommitInput value={ln.price === null ? '' : moneyField(ln.price)}
-              disabled={busy} numeric
-              onCommit={v => run(api.updatePurchaseLine(ln.id, { price: parseMoney(v) }))}
-              validate={v => v.trim() === '' || (parseMoney(v) ?? -1) >= 0} />
-          // 2026-10-20: Парето отмечает строки, дающие 80% суммы заказа.
-          : ln.price === null ? <span className="sub">—</span>
-            : <Cost cost={ln.price} status={ln.cost_status} />}
+        <VatAmount value={ln} locked={!editable} busy={busy} status={ln.cost_status}
+          patch={vat => run(api.updatePurchaseLine(ln.id, { vat }))} />
       </td>
       {editable && <td className="act">
         <button className="fh-ctl icon fh-del" title="Убрать строку заказа"
