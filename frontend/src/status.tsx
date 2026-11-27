@@ -280,12 +280,6 @@ export function money(x: number): string {
   return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽'
 }
 
-// Цена штуки (волна 26): производная величина, бывает в долях копейки (10 000 резисторов
-// за 3 519,78 ₽ → 0,352 ₽) — до четырёх знаков, не меньше двух.
-export function unitMoney(x: number): string {
-  return x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + ' ₽'
-}
-
 // Деньги в КОЛОНКЕ таблицы (2026-10-20, правка Ивана): копейки есть, знака рубля нет —
 // он повторялся в каждой строке и съедал место; рубль один раз в заголовке («Оценка, ₽»).
 // Отдельные числа (статы, подсказки) остаются с рублём — `money`.

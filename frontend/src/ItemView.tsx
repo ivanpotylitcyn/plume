@@ -7,7 +7,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, type ItemDetail, type ItemMoney, type ItemRow, type Category, type RollupResult } from './api'
 import { Chevron, Cost, num, money, moneyCol, count, CounterpartyRef, ItemGlyph, LotGlyph,
   ProcurementGlyph, PurchaseGlyph, StatusGlyph, paretoCostColumn, paretoKeys, rowNumbers,
-  moneyField, parseMoney, unitMoney, visibleTree } from './status'
+  moneyField, parseMoney, visibleTree } from './status'
 import { ORDER_LABEL, type OrderKind } from './orders'
 import { useFormLock } from './FormHeader'
 import { FormShell, type FormTab } from './FormShell'
@@ -530,16 +530,16 @@ function ItemMoneyBlock({ m }: { m: ItemMoney }) {
   const drift = m.estimate_drift ?? null
   return (
     <StatPanel>
-      <Stat main label="последняя цена" value={m.last != null ? unitMoney(m.last) : '—'}
+      <Stat main label="последняя цена" value={m.last != null ? money(m.last) : '—'}
         dim={m.last == null}
         note={doc ? `${doc.date ? viewDate(doc.date) : ''} · ${doc.contractor_code || doc.contractor_name}`
           : 'счетов ещё не было'}
         title={doc ? `за штуку · ${doc.kind === 'purchase' ? 'заказ' : 'поставка без заказа'} ${doc.code ?? ''}`
           : undefined} />
       <StatGroup>
-        <Stat label="средняя" value={m.avg != null ? unitMoney(m.avg) : '—'} dim={m.avg == null}
+        <Stat label="средняя" value={m.avg != null ? money(m.avg) : '—'} dim={m.avg == null}
           title={`взвешенная по количеству: все деньги ÷ все штуки (${m.facts ?? 0} док., образцы с нулевой ценой не в счёт)`} />
-        <Stat label="максимальная" value={m.max != null ? unitMoney(m.max) : '—'}
+        <Stat label="максимальная" value={m.max != null ? money(m.max) : '—'}
           dim={m.max == null} title="потолок цены за штуку — риск для плана" />
         {stock}
       </StatGroup>
