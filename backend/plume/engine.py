@@ -5435,6 +5435,7 @@ def procurement_allocation(procurement):
     """
     allocations = _plan_allocations(procurement)
     orders = list(procurement.purchases.select_related('contractor')
+                  .prefetch_related('lines__item')
                   .annotate(file_count=Count('attachments')).order_by('id'))
     coverage = purchases_coverage(orders)          # печать заказа: закрыт ли поставками
     project = procurement.project
@@ -5479,13 +5480,17 @@ def procurement_allocation(procurement):
             'orders': cells,
         })
     mark_costs(rows)                   # `cost_status` строк плана: overpaid > costly
-    fan = [{
-        'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
-        'locked': pu.locked, 'files': pu.file_count, 'coverage': coverage[pu.id],
-        **_contractor_view(pu.contractor),
-        'lines': pu.lines.count(),
-        'total': pu.lines.aggregate(s=Sum('qty'))['s'] or ZERO,
-    } for pu in orders]
+    fan = []
+    for pu in orders:
+        lines = list(pu.lines.all())
+        fan.append({
+            'purchase_id': pu.id, 'purchase_code': pu.code or f'Заказ {pu.id}',
+            'locked': pu.locked, 'files': pu.file_count, 'coverage': coverage[pu.id],
+            **_contractor_view(pu.contractor),
+            'lines': len(lines),
+            'total': sum((line.qty for line in lines), ZERO),
+            **purchase_money(lines),  # полная сумма с НДС, как в форме заказа
+        })
     return {
         'id': procurement.id, 'locked': procurement.locked,
         'rows': rows, 'fan': fan,

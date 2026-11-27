@@ -40,6 +40,8 @@
 //   --shots DIR      сохранять снимки экрана в DIR
 //   --strict         код выхода 1, если хоть где-то переполнение / наезд / вылет вбок
 //   --single-line    проверить, что строки table.grid имеют стандартную высоту
+//   --input-text S   проверить, помещается ли S в поля --input-selector (без записи)
+//   --input-selector CSS  поля для --input-text (по умолчанию денежные поля строк)
 //   --min-grid 692   критерий приёмки волны 25 (Ф4): прокрутка таблицы таба — нарушение
 //   --min-prow 968   только при рабочей области не уже порога своей семьи списков
 //                    (`table.grid` / сетка `.prow`); уже — законная страховка, «·» в выводе
@@ -150,6 +152,20 @@ const MEASURE = `(() => {
   out.rowMax = Math.max(0, ...gridRows.map(el => r(el).height))
   const cell = gridRows[0]?.querySelector('td')
   out.rowStandard = cell ? parseFloat(getComputedStyle(cell).lineHeight) + 7 : 0
+  const inputText = ${JSON.stringify(opt['input-text'] || '')}
+  out.inputFits = []
+  if (inputText) {
+    const ctx = document.createElement('canvas').getContext('2d')
+    for (const input of document.querySelectorAll(${JSON.stringify(opt['input-selector'] || '.vat-line-amount > input')})) {
+      const style = getComputedStyle(input)
+      // Сокращённый style.font бывает пустым при font-variant-numeric: tabular-nums.
+      ctx.font = style.fontStyle + ' ' + style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily
+      const needed = ctx.measureText(inputText).width
+      const available = r(input).width - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth)
+        - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      out.inputFits.push({ needed, available, fits: needed <= available })
+    }
+  }
   // торчит за правый край .work и НЕ внутри собственной прокрутки — вылет рамки
   const edge = W.right - (work.offsetWidth - work.clientWidth) + 0.5
   const stick = new Set()
@@ -232,12 +248,14 @@ try {
             const scroll = m.listX > 0, allowed = scroll && m.workW < MIN[m.family]
             const fail = m.workX > 0 || m.headX > 0 || (scroll && !allowed) ||
               m.overlap?.length || m.stickOut?.length ||
+              m.inputFits?.some(input => !input.fits) ||
               (opt['single-line'] && m.rowMax > m.rowStandard + 1)
             if (fail) bad++
             console.log([...tag.slice(0, 4), String(tag[4]).padEnd(12), fail ? '✗' : allowed ? '·' : '✓',
               `work ${m.workW}`, `workX ${m.workX}`, `поля ${m.fieldsW}/команды ${m.cmdW}`,
               `headX ${m.headX}`, `listX ${m.listX ?? '-'}`, `fit ${m.fit ?? '-'}`, `список ${m.sideW}px ✂ ${m.sideClipped}/${m.sideRows}`,
               `табы ${m.tabsH}px`, opt['single-line'] ? `строки ${m.rowMax}/${m.rowStandard}px` : '', m.overlap?.length ? 'наезд ' + m.overlap.join(' ') : '',
+              opt['input-text'] ? 'ввод ' + JSON.stringify(m.inputFits) : '',
               m.stickOut?.length ? 'вылет ' + m.stickOut.join(' ') : ''].join('  '))
           } else if (MODE === 'cols') {
             console.log(tag.join(' '), '::', await ev(COLS))

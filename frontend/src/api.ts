@@ -745,6 +745,7 @@ export interface AllocationFanRow {
   coverage: Status
   contractor_id: number | null; contractor_code: string; contractor_name: string
   lines: number; total: number
+  estimate: number; unestimated: string[]
 }
 // Позиция, которую заказ может взять строкой-призраком (волна 24): строка его закупки
 // с остатком > 0, которой в заказе ещё нет. `remaining` — количество по умолчанию.

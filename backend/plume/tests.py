@@ -2851,6 +2851,22 @@ class AllocationTests(EngineTestBase):
         fan = {f['purchase_id']: f for f in engine.procurement_allocation(self.plan)['fan']}
         self.assertEqual(fan[a.id]['total'], D(30))
 
+    def test_fan_money_matches_order_with_vat_and_missing_prices(self):
+        purchase = self._order([self.scr.id, self.nut.id])
+        line = purchase.lines.get(item=self.scr)
+        engine.update_purchase_line(line, vat_data={
+            'document_amount': '100', 'vat_category': 'taxable',
+            'vat_rate': '22', 'vat_mode': 'excluded'})
+        fan = engine.procurement_allocation(self.plan)['fan'][0]
+        self.assertEqual(fan['estimate'], D('122'))
+        self.assertEqual(fan['estimate'], engine.purchase_form(purchase)['estimate'])
+        self.assertEqual(fan['unestimated'], [self.nut.code])
+        engine.update_purchase_line(purchase.lines.get(item=self.nut), price=D(0))
+        engine.lock_purchase(purchase)
+        fan = engine.procurement_allocation(self.plan)['fan'][0]
+        self.assertEqual(fan['estimate'], D('122'))
+        self.assertEqual(fan['unestimated'], [])
+
     def test_plan_row_carries_project_balance_with_planned(self):
         """Строка плана несёт баланс проекта: черновая закупка не считается, фиксация —
         позиция «в плане» (оранжевая), фиксация заказа — обязательство (зелёная)."""

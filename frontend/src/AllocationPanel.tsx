@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
 import { CommitInput } from './CommitInput'
 import { api, type Allocation, type AllocationRow, type AllocationCell, type ItemRow } from './api'
 import { useCategoryFilter } from './ColumnFilter'
-import { Balance, Chevron, Cost, CounterpartyRef, PurchaseGlyph, balanceTitle, num, paretoCostColumn,
+import { Balance, Chevron, Cost, CounterpartyRef, PurchaseGlyph, balanceTitle, moneyCol, num, paretoCostColumn,
   rowNumbers } from './status'
 import { EntityLink } from './EntityLink'
 import { ItemPicker } from './Picker'
@@ -158,12 +158,13 @@ export function PurchaseFan({ st, openPurchase, openCounterparty }: {
       Заказов ещё нет — заведите заказ кнопкой «Новый заказ».
     </div>
   return (
-    <table className="grid">
+    <table className="grid purchase-fan">
       <thead><tr>
         <th className="rn">№</th><th className="gl" /><th className="c-key">Заказ</th>
         <th className="c-desc">Контрагент</th>
         <th className="num">Строк</th>
         <th className="num">Всего</th>
+        <th className="num c-money">Сумма, ₽</th>
       </tr></thead>
       <tbody>
         {p.fan.map((f, i) => (
@@ -178,6 +179,12 @@ export function PurchaseFan({ st, openPurchase, openCounterparty }: {
                 id={f.contractor_id} open={openCounterparty} /></td>
             <td className="num">{f.lines}</td>
             <td className="num">{num(f.total)}</td>
+            <td className="num c-money" title={f.unestimated.length
+              ? 'Сумма неполна — без цены: ' + f.unestimated.join(', ')
+              : 'Полная сумма заказа с НДС'}>
+              <span className={f.unestimated.length ? 'money-incomplete' : undefined}>
+                {moneyCol(f.estimate)}</span>
+            </td>
           </tr>
         ))}
       </tbody>

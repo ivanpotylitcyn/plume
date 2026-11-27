@@ -657,6 +657,9 @@ table.grid :is(th, td).c-key:not([colspan]) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* В закупке ярлык заказа длиннее артикула: отдаём ему ещё половину ширины. */
+table.purchase-fan { --col-key: 300px; }
+.fs-list[data-fit="5"] table.purchase-fan { --col-key: var(--col-key-min); }
 /* ДЛИННОЕ ИМЯ (`.c-name`) — идентичность, которую задаёт не Plume: имя файла (так назвал
    скан тот, кто сканировал счёт, 2026-10-21) и ярлык ордера в ленте партии («Счёт-фактура
    № 86325 от 22.09.2026», 2026-10-22). В 200px колонки кода оно не помещается, поэтому
@@ -1257,6 +1260,7 @@ tr.row.ghost td { color: var(--fg-dim); }
 .vat-rate > input { width: 4rem; }
 /* В таблице каждое значение и подпись остаются в одной строке. */
 .vat-line-amount, .vat-line-tax { display: inline-flex; align-items: center; gap: .7ch; white-space: nowrap; vertical-align: top; }
+.vat-line-amount > .qty-in { width: calc(10ch + 12px); }
 .vat-defaults .vat-rate > input { width: 4rem; }
 table.vat-grid :is(th, td) { padding-inline: 6px; white-space: nowrap; }
 .vat-line-tax { display: inline-grid; width: 100%; grid-template-columns: minmax(max-content, 1fr) max-content; column-gap: 12px; }
